@@ -76,7 +76,7 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 | `GITHUB_APP_PRIVATE_KEY`     | Secret                | GitHub App private key (must be PKCS#8 format)                                      |
 | `GITHUB_APP_INSTALLATION_ID` | Secret                | GitHub App installation ID for token exchange                                       |
 | `GITHUB_WEBHOOK_SECRET`      | Secret                | Shared secret for verifying webhook signatures                                      |
-| `INTERNAL_CALLBACK_SECRET`   | Secret                | Shared secret for HMAC auth to the control plane                                    |
+| `SERVICE_AUTH_SECRET`        | Secret                | Per-service sig1 signing secret for control-plane requests                          |
 | `LOG_LEVEL`                  | Plain text (optional) | Log level override (`debug`, `info`, `warn`, `error`)                               |
 
 ### GitHub App Configuration
@@ -189,8 +189,10 @@ for RSA key import.
 
 ### Control Plane Auth
 
-Requests to the control plane use HMAC tokens generated from `INTERNAL_CALLBACK_SECRET` (same
-mechanism as the Slack bot). The token is sent as a `Bearer` token in the `Authorization` header.
+Requests to the control plane are signed per-request with the bot's `SERVICE_AUTH_SECRET` (the
+`sig1` per-service signature, same mechanism as the Slack bot). The signature binds the method, URL,
+body, and asserted actor, and is sent in the `X-OpenInspect-Service-Signature` header alongside
+`X-OpenInspect-Service: github-bot`.
 
 ## Prompt Construction
 

@@ -2,10 +2,24 @@
 
 import { useEffect, useState, type RefObject } from "react";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
+import { MobileSessionActions } from "@/components/mobile-session-actions";
+import type { SessionActionProps } from "@/components/session-actions";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
+
+const SANDBOX_STATUS_COLORS: Record<string, string> = {
+  pending: "text-muted-foreground",
+  warming: "text-warning",
+  spawning: "text-warning",
+  syncing: "text-accent",
+  ready: "text-success",
+  running: "text-accent",
+  stopped: "text-muted-foreground",
+  stale: "text-muted-foreground",
+  failed: "text-destructive",
+};
 
 export type SessionHeaderProps = {
   sessionState: SessionSocketState["sessionState"];
@@ -18,7 +32,10 @@ export type SessionHeaderProps = {
   connecting: boolean;
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
+  actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onOpenMobileDetails: () => void;
+  actions: SessionActionProps;
   renameSession: (title: string) => Promise<boolean | undefined>;
 };
 
@@ -29,7 +46,10 @@ export function SessionHeader({
   connecting,
   isDetailsOpen,
   detailsButtonRef,
+  actionsButtonRef,
   onToggleDetails,
+  onOpenMobileDetails,
+  actions,
   renameSession,
 }: SessionHeaderProps) {
   const { isOpen } = useSidebarContext();
@@ -101,6 +121,7 @@ export function SessionHeader({
             {isRenaming ? (
               <input
                 autoFocus
+                aria-label="Session title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onFocus={(e) => e.currentTarget.select()}
@@ -141,13 +162,19 @@ export function SessionHeader({
             ref={detailsButtonRef}
             type="button"
             onClick={onToggleDetails}
-            className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
+            className="hidden md:block lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
             aria-label="Toggle session details"
             aria-controls="session-details-dialog"
             aria-expanded={isDetailsOpen}
           >
             Details
           </button>
+          <MobileSessionActions
+            {...actions}
+            triggerRef={actionsButtonRef}
+            onOpenDetails={onOpenMobileDetails}
+            onOpenMedia={onOpenMobileDetails}
+          />
           <div className="md:hidden">
             <CombinedStatusDot
               connected={connected}
@@ -168,13 +195,7 @@ export function SessionHeader({
   );
 }
 
-export function ConnectionStatus({
-  connected,
-  connecting,
-}: {
-  connected: boolean;
-  connecting: boolean;
-}) {
+function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
   if (connecting) {
     return (
       <span className="flex items-center gap-1 text-xs text-warning">
@@ -201,7 +222,7 @@ export function ConnectionStatus({
   );
 }
 
-export function SandboxStatus({
+function SandboxStatus({
   status,
   dashboardUrl,
 }: {
@@ -210,19 +231,7 @@ export function SandboxStatus({
 }) {
   if (!status) return null;
 
-  const colors: Record<string, string> = {
-    pending: "text-muted-foreground",
-    warming: "text-warning",
-    spawning: "text-warning",
-    syncing: "text-accent",
-    ready: "text-success",
-    running: "text-accent",
-    stopped: "text-muted-foreground",
-    stale: "text-muted-foreground",
-    failed: "text-destructive",
-  };
-
-  const className = `text-xs ${colors[status] || colors.pending}`;
+  const className = `text-xs ${SANDBOX_STATUS_COLORS[status] || SANDBOX_STATUS_COLORS.pending}`;
   const label = `Sandbox: ${status}`;
 
   if (dashboardUrl) {
@@ -245,7 +254,7 @@ export function SandboxStatus({
   return <span className={className}>{label}</span>;
 }
 
-export function CombinedStatusDot({
+function CombinedStatusDot({
   connected,
   connecting,
   sandboxStatus,

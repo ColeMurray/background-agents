@@ -6,7 +6,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, UserPreferences, AgentSessionWebhook } from "./types";
+import type { Env, AgentSessionWebhook } from "./types";
 import {
   buildOAuthAuthorizeUrl,
   completeLinearOAuthInstallation,
@@ -14,19 +14,9 @@ import {
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import {
-  resolveAppName,
-  userPreferencesRequestSchema,
-  verifyInternalToken,
-} from "@open-inspect/shared";
+import { resolveAppName } from "@open-inspect/shared";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
-import {
-  getTeamRepoMapping,
-  getProjectRepoMapping,
-  getTriggerConfig,
-  getUserPreferences,
-  isDuplicateEvent,
-} from "./kv-store";
+import { isDuplicateEvent } from "./kv-store";
 
 // Re-export pure functions for existing test imports
 export {
@@ -188,91 +178,6 @@ app.post("/webhook", async (c) => {
 
   log.debug("webhook.skipped", { trace_id: traceId, type: eventType, action });
   return c.json({ ok: true, skipped: true, reason: `unhandled event type: ${eventType}` });
-});
-
-// ─── Config Auth Middleware ───────────────────────────────────────────────────
-
-app.use("/config/*", async (c, next) => {
-  const secret = c.env.INTERNAL_CALLBACK_SECRET;
-  if (!secret) return c.json({ error: "Auth not configured" }, 500);
-  const isValid = await verifyInternalToken(c.req.header("Authorization") ?? null, secret);
-  if (!isValid) return c.json({ error: "Unauthorized" }, 401);
-  return next();
-});
-
-// ─── Config Endpoints ────────────────────────────────────────────────────────
-
-app.get("/config/team-repos", async (c) => {
-  return c.json(await getTeamRepoMapping(c.env));
-});
-
-app.put("/config/team-repos", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "invalid request body" }, 400);
-  }
-  await c.env.LINEAR_KV.put("config:team-repos", JSON.stringify(body));
-  return c.json({ ok: true });
-});
-
-app.get("/config/triggers", async (c) => {
-  return c.json(await getTriggerConfig(c.env));
-});
-
-app.put("/config/triggers", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "invalid request body" }, 400);
-  }
-  await c.env.LINEAR_KV.put("config:triggers", JSON.stringify(body));
-  return c.json({ ok: true });
-});
-
-app.get("/config/project-repos", async (c) => {
-  return c.json(await getProjectRepoMapping(c.env));
-});
-
-app.put("/config/project-repos", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: "invalid request body" }, 400);
-  }
-  await c.env.LINEAR_KV.put("config:project-repos", JSON.stringify(body));
-  return c.json({ ok: true });
-});
-
-app.get("/config/user-prefs/:userId", async (c) => {
-  const userId = c.req.param("userId");
-  const prefs = await getUserPreferences(c.env, userId);
-  if (!prefs) return c.json({ error: "not found" }, 404);
-  return c.json(prefs);
-});
-
-app.put("/config/user-prefs/:userId", async (c) => {
-  const userId = c.req.param("userId");
-  let rawBody: unknown;
-  try {
-    rawBody = await c.req.json();
-  } catch {
-    return c.json({ error: "invalid request body" }, 400);
-  }
-  const parsedBody = userPreferencesRequestSchema.safeParse(rawBody);
-  if (!parsedBody.success) return c.json({ error: "invalid request body" }, 400);
-  const body = parsedBody.data;
-  const prefs: UserPreferences = {
-    userId,
-    model: body.model || c.env.DEFAULT_MODEL,
-    reasoningEffort: body.reasoningEffort,
-    updatedAt: Date.now(),
-  };
-  await c.env.LINEAR_KV.put(`user_prefs:${userId}`, JSON.stringify(prefs));
-  return c.json({ ok: true });
 });
 
 // Mount callbacks router

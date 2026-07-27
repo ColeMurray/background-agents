@@ -42,6 +42,7 @@ def _request(**overrides) -> dict:
         "build_id": "imgb-1",
         "callback_url": "https://cp.test/image-builds/build-complete",
         "failure_callback_url": "https://cp.test/image-builds/build-failed",
+        "callback_token": "cb-token-1",
     }
     request.update(overrides)
     return {key: value for key, value in request.items() if value is not None}
@@ -113,6 +114,7 @@ async def test_build_forwards_scope_and_repositories(monkeypatch):
         {"build_id": None},
         {"callback_url": None},
         {"failure_callback_url": None},
+        {"callback_token": None},
         {"repositories": None},
         {"repositories": []},
         {"repositories": [{"repo_owner": "acme"}]},
@@ -122,8 +124,9 @@ async def test_build_forwards_scope_and_repositories(monkeypatch):
     ],
 )
 async def test_build_requires_core_fields(monkeypatch, overrides):
-    """Validation rejects missing build_id/callback_url/failure_callback_url and
-    any repository entry lacking repo_owner/repo_name/branch before spawning."""
+    """Validation rejects missing build_id/callback_url/failure_callback_url/
+    callback_token and any repository entry lacking repo_owner/repo_name/branch
+    before spawning — a tokenless build could never report its outcome."""
     captured = {}
     _patch_auth(monkeypatch)
     _patch_build_image(monkeypatch, captured)

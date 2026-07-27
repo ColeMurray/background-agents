@@ -4,9 +4,12 @@
 
 import { decodeRepositoryPathSegments } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
+import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { RequestMetrics } from "../db/instrumented-d1";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
+import type { BetterAuthRuntime } from "../auth/user/runtime";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -19,8 +22,24 @@ import {
  */
 export type RequestContext = CorrelationContext & {
   metrics: RequestMetrics;
+  /**
+   * The request's database handle (the DB binding wrapped with query
+   * instrumentation). Route handlers must use this instead of the raw binding
+   * so every query is timed — an ESLint rule forbids `.DB` access under
+   * src/routes and src/webhooks.
+   */
+  db: SqlDatabase;
   /** Worker ExecutionContext for waitUntil (background tasks). */
   executionCtx?: ExecutionContext;
+  /** Lazy runtime dependency used by user-session authentication and credential access. */
+  getUserAuth?: () => BetterAuthRuntime;
+  /**
+   * The request's verified principal. Absent only on public routes and CORS
+   * preflights — every authenticated request carries one.
+   */
+  principal?: Principal;
+  /** Authentication provenance, separate from the principal being authorized. */
+  authentication?: AuthenticationContext;
 };
 
 /**

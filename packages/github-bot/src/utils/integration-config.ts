@@ -1,6 +1,7 @@
+import { encodeRepositoryPathSegments, parseRepositoryFullName } from "@open-inspect/shared";
 import type { Env } from "../types";
+import { signedControlPlaneFetch } from "../internal-auth";
 import type { Logger } from "../logger";
-import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import { z } from "zod";
 
 export interface ResolvedGitHubConfig {
@@ -41,15 +42,18 @@ export async function getGitHubConfig(
   repo: string,
   log?: Logger
 ): Promise<ResolvedGitHubConfig> {
-  const [owner, name] = repo.split("/");
-  const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET);
+  // Owners may be nested namespaces — split on the last slash and encode the
+  // owner as a single route segment (see the repo-owner gotcha in AGENTS.md).
+  const repository = parseRepositoryFullName(repo);
+  if (!repository) {
+    log?.warn("config.invalid_repo", { repo, fallback: "fail_closed" });
+    return { ...FAIL_CLOSED, model: env.DEFAULT_MODEL };
+  }
+  const url = `https://internal/integration-settings/github/resolved/${encodeRepositoryPathSegments(repository)}`;
 
   let response: Response;
   try {
-    response = await env.CONTROL_PLANE.fetch(
-      `https://internal/integration-settings/github/resolved/${owner}/${name}`,
-      { headers }
-    );
+    response = await signedControlPlaneFetch(env, { method: "GET", url });
   } catch (err) {
     log?.warn("config.fetch_error", {
       repo,

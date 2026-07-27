@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { serverMessageSchema } from "@open-inspect/shared";
 import type { ServerMessage } from "@open-inspect/shared";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 // WebSocket URL (should come from env in production)
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
@@ -98,8 +99,12 @@ export function useSessionTransport(
   const connectingEpochRef = useRef<number | null>(null);
 
   // Latest-handler ref so connect() stays stable across renders.
-  const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  const { onMessage, onClose } = handlers;
+  const handlersRef = useRef({ onMessage, onClose });
+
+  useEffect(() => {
+    handlersRef.current = { onMessage, onClose };
+  }, [onMessage, onClose]);
 
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -108,7 +113,7 @@ export function useSessionTransport(
 
   const fetchWsToken = useCallback(async (): Promise<string | null> => {
     try {
-      const response = await fetch(`/api/sessions/${sessionId}/ws-token`, {
+      const response = await browserApiFetch(`/api/sessions/${sessionId}/ws-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

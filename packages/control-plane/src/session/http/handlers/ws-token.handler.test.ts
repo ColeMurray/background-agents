@@ -44,14 +44,19 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const handler = createWsTokenHandler({
+  const wsTokenHandler = createWsTokenHandler({
     repository,
     getParticipantByUserId,
     generateId,
     hashToken,
     now,
-    getLog: () => log,
   });
+
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    generateWsToken: (request: Request) => wsTokenHandler.generateWsToken(request, log),
+  };
 
   return {
     handler,

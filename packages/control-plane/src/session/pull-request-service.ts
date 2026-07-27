@@ -1,4 +1,4 @@
-import { generateBranchName, toDisplayStatus, type SessionArtifact } from "@open-inspect/shared";
+import { generateBranchName, toDisplayStatus } from "@open-inspect/shared";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -12,6 +12,7 @@ import {
   type GitPushAuthContext,
   type GitPushSpec,
 } from "../source-control";
+import type { SessionMessenger } from "./messenger";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import {
   mergeSnapshotMetadata,
@@ -113,11 +114,7 @@ export interface PullRequestServiceDeps {
   log: Logger;
   generateId: () => string;
   pushBranchToRemote: (pushSpec: GitPushSpec) => Promise<PushBranchResult>;
-  broadcastSessionBranch: (
-    branchName: string,
-    repo: { repoOwner: string; repoName: string }
-  ) => void;
-  broadcastArtifactCreated: (artifact: SessionArtifact) => void;
+  messenger: SessionMessenger;
   /** Display name used in the PR body footer (e.g. "Created with [name](url)"). */
   appName: string;
   /**
@@ -269,7 +266,12 @@ export class SessionPullRequestService {
       }
       // Broadcast even when the stored branch is already current so connected clients converge
       // after missed or out-of-order updates.
-      this.deps.broadcastSessionBranch(sanitizedHeadBranch, targetRepo);
+      this.deps.messenger.broadcast({
+        type: "session_branch",
+        branchName: sanitizedHeadBranch,
+        repoOwner: targetRepo.repoOwner,
+        repoName: targetRepo.repoName,
+      });
 
       // Use user OAuth if available, otherwise fall back to GitHub App token
       // (e.g. sessions triggered from Linear or other integrations without user GitHub OAuth)
@@ -317,13 +319,16 @@ export class SessionPullRequestService {
         snapshotToRecord(snapshot, { artifactId, sessionId, createdAt: now, updatedAt: now })
       );
 
-      this.deps.broadcastArtifactCreated({
-        id: artifactId,
-        type: "pr",
-        url: prResult.webUrl,
-        metadata: artifactMetadata,
-        createdAt: now,
-        updatedAt: now,
+      this.deps.messenger.broadcast({
+        type: "artifact_created",
+        artifact: {
+          id: artifactId,
+          type: "pr",
+          url: prResult.webUrl,
+          metadata: artifactMetadata,
+          createdAt: now,
+          updatedAt: now,
+        },
       });
 
       return {

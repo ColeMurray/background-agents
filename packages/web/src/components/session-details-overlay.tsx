@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type RefObject,
   type TouchEvent,
 } from "react";
 import {
@@ -18,7 +17,7 @@ interface SessionDetailsOverlayProps extends SessionRightSidebarContentProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   isPhone: boolean;
-  returnFocusRef?: RefObject<HTMLElement | null>;
+  onReturnFocus?: () => void;
 }
 
 const FOCUSABLE_SELECTOR = [
@@ -34,7 +33,7 @@ export function SessionDetailsOverlay({
   open,
   onOpenChange,
   isPhone,
-  returnFocusRef,
+  onReturnFocus,
   sessionId,
   sessionState,
   participants,
@@ -43,6 +42,10 @@ export function SessionDetailsOverlay({
   terminalOpen,
   onToggleTerminal,
   onOpenMedia,
+  diffState,
+  diffLoading,
+  selectedDiff,
+  onOpenDiff,
 }: SessionDetailsOverlayProps) {
   const [sheetDragY, setSheetDragY] = useState(0);
   const sheetDragYRef = useRef(0);
@@ -58,8 +61,8 @@ export function SessionDetailsOverlay({
   const closeOverlay = useCallback(() => {
     onOpenChange(false);
     resetSheetDragState();
-    returnFocusRef?.current?.focus();
-  }, [onOpenChange, resetSheetDragState, returnFocusRef]);
+    onReturnFocus?.();
+  }, [onOpenChange, onReturnFocus, resetSheetDragState]);
 
   const handleSheetTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
     const startY = event.touches[0]?.clientY;
@@ -166,6 +169,10 @@ export function SessionDetailsOverlay({
       terminalOpen={terminalOpen}
       onToggleTerminal={onToggleTerminal}
       onOpenMedia={onOpenMedia}
+      diffState={diffState}
+      diffLoading={diffLoading}
+      selectedDiff={selectedDiff}
+      onOpenDiff={onOpenDiff}
     />
   );
 

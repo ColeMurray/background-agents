@@ -230,6 +230,8 @@ describe("PR sync button", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/pull-requests/refresh", {
         method: "POST",
+        mode: "same-origin",
+        credentials: "same-origin",
       });
     });
   });

@@ -27,6 +27,13 @@ function flattenOptions<T>(items: ComboboxOption<T>[] | ComboboxGroup<T>[]): Com
   return items;
 }
 
+function defaultFilter<T>(option: ComboboxOption<T>, query: string): boolean {
+  return (
+    option.label.toLowerCase().includes(query) ||
+    (option.description?.toLowerCase().includes(query) ?? false)
+  );
+}
+
 interface ComboboxProps<T = string> {
   value: T;
   onChange: (value: T) => void;
@@ -92,10 +99,6 @@ export function Combobox<T = string>({
   }, [open, searchable]);
 
   const normalizedQuery = query.trim().toLowerCase();
-
-  const defaultFilter = (option: ComboboxOption<T>, q: string) =>
-    option.label.toLowerCase().includes(q) ||
-    (option.description?.toLowerCase().includes(q) ?? false);
 
   const filterOption = filterFn || defaultFilter;
 

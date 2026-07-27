@@ -77,6 +77,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
   return (
     <div className="py-0.5">
       <button
+        type="button"
         onClick={onToggle}
         className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
       >

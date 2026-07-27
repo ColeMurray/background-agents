@@ -17,13 +17,13 @@ async function handleSentryWebhook(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const automationId = match.groups?.id;
   if (!automationId) return error("Automation ID required", 400);
 
   // 1. Look up the automation
-  const store = new AutomationStore(env.DB);
+  const store = new AutomationStore(ctx.db);
   const automation = await store.getById(automationId);
   if (!automation || automation.trigger_type !== "sentry") {
     return error("Not found", 404);

@@ -19,7 +19,7 @@ import type { Env } from "./types";
 import { isChannelTriggerCandidate } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";
 import { getBotUserId } from "./bot-identity";
-import { getAuthHeaders } from "./internal-auth";
+import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { z } from "zod";
 
@@ -127,12 +127,9 @@ async function forwardSlackEvent(
 ): Promise<void> {
   const startTime = Date.now();
   try {
-    const headers = await getAuthHeaders(env, traceId);
-    const response = await env.CONTROL_PLANE.fetch("https://internal/internal/slack-event", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(event),
-    });
+    const url = "https://internal/internal/slack-event";
+    const body = JSON.stringify(event);
+    const response = await signedControlPlaneFetch(env, { method: "POST", url, body, traceId });
 
     if (!response.ok) {
       log.error("slack_trigger.forward", {

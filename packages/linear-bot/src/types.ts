@@ -2,6 +2,9 @@
  * Type definitions for the Linear bot.
  */
 
+import type { LinearCallbackContext } from "@open-inspect/shared";
+import { z } from "zod";
+
 /**
  * Cloudflare Worker environment bindings.
  */
@@ -30,7 +33,7 @@ export interface Env {
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
   ANTHROPIC_API_KEY: string;
-  INTERNAL_CALLBACK_SECRET?: string;
+  SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }
 
@@ -87,16 +90,6 @@ export interface ProjectRepoMapping {
   [projectId: string]: { owner: string; name: string } | { environmentId: string };
 }
 
-/**
- * Trigger configuration stored in KV under "config:triggers".
- */
-export interface TriggerConfig {
-  triggerLabel: string;
-  triggerAssignee?: string;
-  autoTriggerOnCreate: boolean;
-  triggerCommand?: string;
-}
-
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 
 export interface IssueSession {
@@ -115,7 +108,6 @@ export interface IssueSession {
 
 // Re-export CallbackContext types from shared
 export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
-import type { LinearCallbackContext } from "@open-inspect/shared";
 
 /**
  * Completion callback payload from control-plane.
@@ -166,20 +158,81 @@ export type { UserPreferences } from "@open-inspect/shared";
 
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 
-export interface LinearIssueDetails {
-  id: string;
-  identifier: string;
-  title: string;
-  description?: string | null;
-  url: string;
-  priority: number;
-  priorityLabel: string;
-  labels: Array<{ id: string; name: string }>;
-  project?: { id: string; name: string } | null;
-  assignee?: { id: string; name: string } | null;
-  team: { id: string; key: string; name: string };
-  comments: Array<{ body: string; user?: { name: string } }>;
-}
+const linearNameSchema = z.object({ id: z.string(), name: z.string() });
+const linearCommentSchema = z.object({
+  body: z.string(),
+  user: z.object({ name: z.string() }).nullable().optional(),
+});
+
+export const linearIssueDetailsSchema = z
+  .object({
+    id: z.string(),
+    identifier: z.string(),
+    title: z.string(),
+    description: z.string().nullable().optional(),
+    url: z.string(),
+    priority: z.number(),
+    priorityLabel: z.string(),
+    labels: z
+      .object({ nodes: z.array(linearNameSchema) })
+      .nullable()
+      .optional(),
+    project: linearNameSchema.nullable().optional(),
+    assignee: linearNameSchema.nullable().optional(),
+    team: z.object({ id: z.string(), key: z.string(), name: z.string() }),
+    comments: z
+      .object({ nodes: z.array(linearCommentSchema) })
+      .nullable()
+      .optional(),
+  })
+  .transform(({ labels, comments, ...issue }) => ({
+    ...issue,
+    labels: labels?.nodes ?? [],
+    comments: comments?.nodes ?? [],
+  }));
+
+export type LinearIssueDetails = z.infer<typeof linearIssueDetailsSchema>;
+
+export const linearIssueDetailsResponseSchema = z.object({
+  data: z
+    .object({
+      issue: linearIssueDetailsSchema.nullable().optional(),
+    })
+    .optional(),
+});
+
+export const linearRepoSuggestionsResponseSchema = z.object({
+  data: z
+    .object({
+      issueRepositorySuggestions: z
+        .object({
+          suggestions: z.array(
+            z.object({
+              repositoryFullName: z.string(),
+              confidence: z.number(),
+            })
+          ),
+        })
+        .nullable()
+        .optional(),
+    })
+    .optional(),
+});
+
+export const linearUserResponseSchema = z.object({
+  data: z
+    .object({
+      user: z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          email: z.string().nullable().optional(),
+        })
+        .nullable()
+        .optional(),
+    })
+    .optional(),
+});
 
 // ─── Webhook Payload Types ──────────────────────────────────────────────────
 
@@ -213,6 +266,7 @@ export interface AgentSessionWebhook {
   };
   agentActivity?: {
     userId?: string;
+    signal?: string;
     content?: {
       type?: string;
       body?: string;

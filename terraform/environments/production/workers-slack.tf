@@ -2,6 +2,20 @@
 # Slack Bot Worker
 # =============================================================================
 
+resource "cloudflare_queue" "slack_completion_delivery" {
+  count = var.enable_slack_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-slack-completion-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "slack_completion_delivery_dlq" {
+  count = var.enable_slack_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-slack-completion-dlq-${local.name_suffix}"
+}
+
 # Build slack-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "slack_bot_build" {
   count = var.enable_slack_bot ? 1 : 0
@@ -43,6 +57,13 @@ module "slack_bot_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
+  queue_bindings = [
+    {
+      binding_name = "SLACK_COMPLETION_QUEUE"
+      queue_name   = cloudflare_queue.slack_completion_delivery[0].queue_name
+    }
+  ]
+
   plain_text_bindings = [
     { name = "CONTROL_PLANE_URL", value = local.control_plane_url },
     { name = "WEB_APP_URL", value = local.web_app_url },
@@ -59,11 +80,30 @@ module "slack_bot_worker" {
     { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
     { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
     { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
-    { name = "INTERNAL_CALLBACK_SECRET", value = var.internal_callback_secret },
+    { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
   ]
 
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
   depends_on = [null_resource.slack_bot_build[0], module.slack_kv[0]]
+}
+
+resource "cloudflare_queue_consumer" "slack_completion_delivery" {
+  count = var.enable_slack_bot ? 1 : 0
+
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.slack_completion_delivery[0].queue_id
+  type              = "worker"
+  script_name       = module.slack_bot_worker[0].worker_name
+  dead_letter_queue = cloudflare_queue.slack_completion_delivery_dlq[0].queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 1
+    retry_delay      = 15
+  }
+
+  depends_on = [module.slack_bot_worker]
 }

@@ -104,6 +104,7 @@ export default function SettingsPage() {
             <header className="border-b border-border-muted flex-shrink-0">
               <div className="px-4 py-3">
                 <button
+                  type="button"
                   onClick={toggle}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
@@ -126,6 +127,7 @@ export default function SettingsPage() {
             <header className="border-b border-border-muted flex-shrink-0">
               <div className="px-4 py-3 flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={toggle}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
@@ -134,6 +136,7 @@ export default function SettingsPage() {
                   <SidebarIcon className="w-4 h-4" />
                 </button>
                 <button
+                  type="button"
                   onClick={() => setMobileView("list")}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   aria-label="Back to settings"

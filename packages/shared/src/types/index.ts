@@ -5,8 +5,25 @@
  * through this barrel. Keep internal schemas out of this export surface.
  */
 
-export { attachmentSchema, clientMessageSchema } from "./websocket";
-export type { Attachment, ClientMessage } from "./websocket";
+export {
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  sessionAttachmentMimeTypeSchema,
+  sessionAttachmentIdSchema,
+  sessionAttachmentReferenceSchema,
+  sessionAttachmentReferencesSchema,
+  resolvedSessionAttachmentSchema,
+  resolvedSessionAttachmentsSchema,
+} from "./session-attachments";
+export type {
+  SessionAttachmentMimeType,
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "./session-attachments";
+
+export { clientMessageSchema } from "./websocket";
+export type { ClientMessage } from "./websocket";
 
 export { sessionStatusSchema } from "./statuses";
 export type {
@@ -70,6 +87,7 @@ export type {
   ListArtifactsResponse,
   ToolCallSummary,
   ArtifactInfo,
+  MediaArtifactInfo,
   AgentResponse,
 } from "./artifacts";
 
@@ -89,7 +107,50 @@ export { serverMessageSchema } from "./server-messages";
 export type { ServerMessage } from "./server-messages";
 
 export {
-  userPreferencesRequestSchema,
+  SESSION_DIFF_VERSION,
+  SESSION_DIFF_MAX_FILES,
+  SESSION_DIFF_MAX_FILE_PATCH_BYTES,
+  SESSION_DIFF_MAX_TOTAL_PATCH_BYTES,
+  SESSION_DIFF_MAX_BUNDLE_BYTES,
+  SESSION_DIFF_FAILURE_BODY_MAX_BYTES,
+  SESSION_DIFF_MAX_ERROR_LENGTH,
+  SESSION_DIFF_REFRESH_TIMEOUT_MS,
+  SESSION_DIFF_ID_PATTERN,
+  SESSION_DIFF_REVISION_STALE_CODE,
+  SESSION_DIFF_FILE_NOT_FOUND_CODE,
+  SESSION_DIFF_ERROR_CODES,
+  isSessionDiffErrorCode,
+  diffRenderStateSchema,
+  diffFileStatusSchema,
+  sessionDiffBaselineRepositorySchema,
+  sessionDiffFileUploadSchema,
+  sessionDiffFileSchema,
+  sessionDiffRepositoryUploadSchema,
+  sessionDiffRepositorySchema,
+  sessionDiffUploadSchema,
+  storedSessionDiffBundleSchema,
+  sessionDiffManifestSchema,
+  sessionDiffStateSchema,
+  sessionDiffFailureSchema,
+  toSessionDiffManifest,
+} from "./session-diffs";
+export type {
+  SessionDiffErrorCode,
+  DiffRenderState,
+  DiffFileStatus,
+  SessionDiffBaselineRepository,
+  SessionDiffFileUpload,
+  SessionDiffFile,
+  SessionDiffRepositoryUpload,
+  SessionDiffRepository,
+  SessionDiffUpload,
+  StoredSessionDiffBundle,
+  SessionDiffManifest,
+  SessionDiffState,
+  SessionDiffFailure,
+} from "./session-diffs";
+
+export {
   linearCallbackContextSchema,
   linearStartCallbackSchema,
   createSessionRequestSchema,
@@ -98,11 +159,11 @@ export {
   createSessionResponseSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
+  cancelChildSessionRequestSchema,
   spawnContextSchema,
 } from "./session-api";
 export type {
   UserPreferences,
-  UserPreferencesRequest,
   SlackCallbackContext,
   LinearCallbackContext,
   LinearStartCallback,
@@ -115,6 +176,7 @@ export type {
   SendPromptResponse,
   ListSessionsResponse,
   SpawnChildSessionRequest,
+  CancelChildSessionRequest,
   SpawnContext,
   ChildSessionFinalResponse,
   ChildSessionTrajectory,
@@ -188,5 +250,14 @@ export type {
   AnalyticsPullRequestSourceEntry,
   AnalyticsPullRequestsResponse,
 } from "./analytics";
+
+export {
+  MAX_COMMIT_SIGNING_PRIVATE_KEY_LENGTH,
+  commitSigningMetadataSchema,
+  commitSigningWriteRequestSchema,
+} from "./commit-signing";
+export type { CommitSigningMetadata, CommitSigningWriteRequest } from "./commit-signing";
+
+export { formatGitHubNoreplyEmail, githubLoginSchema } from "./github-identity";
 
 export * from "./integrations";

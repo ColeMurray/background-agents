@@ -251,12 +251,38 @@ Dashboards and alerts must migrate `image_build.start`, `image_build.success`, a
 | `slack.app_home`                  | error       | `user_id`, `outcome`, `slack_error`                                                           | App Home publish failed          |
 | `kv.get` / `kv.put` / `kv.delete` | error, warn | `key_prefix`, contextual IDs                                                                  | KV storage operation failed      |
 
+#### Attachments (`component: "attachments"`)
+
+| Event                              | Level | Key Fields                                                    | Description                              |
+| ---------------------------------- | ----- | ------------------------------------------------------------- | ---------------------------------------- |
+| `slack.attachment.untrusted_url`   | warn  | `trace_id`, `file_id`, `file_mode`                            | Non-Slack or remote file rejected        |
+| `slack.attachment.download_failed` | warn  | `trace_id`, `file_id`, `http_status`                          | Slack file download returned an error    |
+| `slack.attachment.download_error`  | warn  | `trace_id`, `file_id`, `error`                                | Slack file download threw or timed out   |
+| `slack.attachment.size_rejected`   | warn  | `trace_id`, `file_id`, `size_bytes`                           | Download response failed the byte cap    |
+| `slack.attachment.too_large`       | warn  | `trace_id`, `file_id`, `size_bytes`                           | Slack metadata exceeded the byte cap     |
+| `slack.attachment.upload_failed`   | warn  | `trace_id`, `session_id`, `file_id`, `http_status` or `error` | Session attachment upload was rejected   |
+| `slack.attachment.upload_error`    | warn  | `trace_id`, `session_id`, `file_id`, `error`                  | Session attachment upload threw          |
+| `slack.attachment.notify_failed`   | warn  | `trace_id`, `channel`, `slack_error`                          | Could not post the dropped-image warning |
+
 #### Callback (`component: "callback"`)
 
-| Event               | Level       | Key Fields                                                                                                             | Description                   |
-| ------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `http.request`      | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `session_id`, `message_id`, `outcome`, `duration_ms`            | One per /callbacks/complete   |
-| `callback.complete` | info, error | `trace_id`, `session_id`, `message_id`, `channel`, `agent_success`, `tool_call_count`, `artifact_count`, `duration_ms` | Completion callback processed |
+| Event                          | Level       | Key Fields                                                                                                                                     | Description                            |
+| ------------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `http.request`                 | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `session_id`, `message_id`, `delivery_id`, `outcome`, `duration_ms`                     | Completion callback validated/enqueued |
+| `slack.completion.enqueue`     | error       | `trace_id`, `session_id`, `message_id`, `delivery_id`, `error`                                                                                 | Queue send failed                      |
+| `slack.completion.job_invalid` | error       | `queue_message_id`, `issues`                                                                                                                   | Invalid queued payload discarded       |
+| `slack.completion.unhandled`   | error       | `delivery_id`, `session_id`, `message_id`, `error`                                                                                             | Unexpected consumer error              |
+| `callback.complete`            | info, error | `trace_id`, `session_id`, `message_id`, `channel`, `agent_success`, `tool_call_count`, `artifact_count`, `media_artifact_count`, `duration_ms` | Queued completion delivery processed   |
+
+#### Completion Media (`component: "completion-media"`)
+
+| Event                         | Level | Key Fields                                                                                                      | Description                        |
+| ----------------------------- | ----- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `slack.media.fetch`           | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `artifact_type`, `http_status`, `outcome`                | Protected media retrieval failed   |
+| `slack.media.get_upload_url`  | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                                 | Slack upload ticket request failed |
+| `slack.media.upload_bytes`    | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                                 | Byte upload failed                 |
+| `slack.media.complete_upload` | warn  | `trace_id`, `session_id`, `message_id`, `slack_file_ids`, `slack_error`, `outcome`                              | Batch file sharing failed          |
+| `slack.media.delivery`        | info  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `size_bytes`, `uploaded`, `failed`, `omitted`, `outcome` | Media attached or skipped          |
 
 #### Extractor (`component: "extractor"`)
 
@@ -279,6 +305,30 @@ Dashboards and alerts must migrate `image_build.start`, `image_build.success`, a
 ---
 
 ## Debugging Scenarios
+
+### "Why did an attached Slack image not reach the agent?"
+
+Follow the request by `trace_id` through file discovery, download, session upload, and prompt
+submission.
+
+```
+# 1. Could the bot recover and trust the Slack file metadata?
+service="slack-bot" trace_id="<TRACE_ID>" msg="slack.attachment.file_lookup_failed"
+service="slack-bot" trace_id="<TRACE_ID>" msg="slack.attachment.untrusted_url"
+
+# 2. Did the Slack-hosted download fail or exceed 10 MiB?
+service="slack-bot" component="attachments" trace_id="<TRACE_ID>" msg="slack.attachment.*"
+
+# 3. Did the control plane accept the session attachment before the prompt?
+service="slack-bot" component="attachments" trace_id="<TRACE_ID>" msg="slack.attachment.upload*"
+service="slack-bot" component="handler" trace_id="<TRACE_ID>" msg="control_plane.send_prompt"
+```
+
+`slack.attachment.file_lookup_failed` is emitted by `handler` or `target-selection`, depending on
+whether lookup failed during initial handling or after repository clarification. An HTTP failure
+while downloading often means the bot lacks `files:read` or was not reinstalled after the scope was
+added. Size events enforce 10 MiB per image; the bot forwards at most six images per message. If a
+text-plus-image request loses images, the text still runs and the bot attempts an in-thread warning.
 
 ### "What happened to message X?"
 
@@ -434,7 +484,8 @@ service="modal-infra" msg="opencode.crash"
 The following must **never** appear in logs:
 
 - Authorization headers
-- HMAC tokens (`INTERNAL_CALLBACK_SECRET` derivatives)
+- HMAC tokens derived from `MODAL_API_SECRET` (control plane → Modal), and sig1 service signatures
+  derived from the per-service `SERVICE_AUTH_SECRET`s
 - GitHub App private keys or installation tokens
 - GitHub OAuth access/refresh tokens
 - Sandbox auth tokens

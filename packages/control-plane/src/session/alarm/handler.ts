@@ -10,7 +10,8 @@ export interface AlarmHandlerDeps {
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   executionTimeoutMs: number;
   now: () => number;
-  getLog: () => Logger;
+  /** Session-scoped logger — alarms run outside any request, so there is no request correlation. */
+  log: Logger;
 }
 
 export interface AlarmHandler {
@@ -39,7 +40,7 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
           now
         );
         if (result.isTimedOut) {
-          deps.getLog().warn("Execution timeout: message stuck in processing", {
+          deps.log.warn("Execution timeout: message stuck in processing", {
             event: "execution.timeout",
             message_id: processing.id,
             elapsed_ms: result.elapsedMs,

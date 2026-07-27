@@ -3,7 +3,7 @@
  */
 
 import type {
-  Attachment,
+  ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
   GitSyncStatus,
@@ -17,6 +17,14 @@ import type {
 import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
+
+export type PromptGitIdentity =
+  | {
+      mode: "attributed-user";
+      name: string;
+      email: string;
+    }
+  | { mode: "agent-only" };
 
 export interface SessionRow {
   id: string;
@@ -86,6 +94,16 @@ export interface MessageRow {
   completed_at: number | null;
 }
 
+export interface SessionAttachmentRow {
+  id: string;
+  mime_type: string;
+  size_bytes: number;
+  object_key: string;
+  message_id: string | null; // Set once a prompt references this upload
+  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
+  created_at: number;
+}
+
 export interface EventRow {
   id: string;
   type: EventType;
@@ -136,10 +154,9 @@ export interface PromptCommand {
   reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
-    scmName: string | null;
-    scmEmail: string | null;
+    gitIdentity: PromptGitIdentity;
   };
-  attachments?: Attachment[];
+  attachments?: ResolvedSessionAttachment[];
 }
 
 export interface StopCommand {
@@ -164,13 +181,18 @@ export interface PushCommand {
   pushSpec: GitPushSpec;
 }
 
+export interface RefreshDiffCommand {
+  type: "refresh_diff";
+}
+
 export type SandboxCommand =
   | PromptCommand
   | StopCommand
   | SnapshotCommand
   | ShutdownCommand
   | AckCommand
-  | PushCommand;
+  | PushCommand
+  | RefreshDiffCommand;
 
 // Internal session update types
 

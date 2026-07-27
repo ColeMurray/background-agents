@@ -41,7 +41,7 @@ const CONDITION_LABELS: Record<string, string> = {
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
-export const CHECK_CONCLUSION_OPTIONS = [
+const CHECK_CONCLUSION_OPTIONS = [
   "success",
   "failure",
   "neutral",

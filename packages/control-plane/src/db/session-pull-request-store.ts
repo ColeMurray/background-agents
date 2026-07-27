@@ -1,4 +1,5 @@
 import type { PullRequestLifecycleState, PullRequestSummary } from "@open-inspect/shared";
+import type { SqlDatabase } from "./sql-database";
 
 /**
  * One session's pull request as stored in D1 — the queryable authority record
@@ -100,7 +101,7 @@ function toRecord(row: SessionPullRequestRow): SessionPullRequestRecord {
  * the SQL-side monotonic guard, not from claims or fencing (design §2.6).
  */
 export class SessionPullRequestStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Insert the record, or update it in place when it already exists (by

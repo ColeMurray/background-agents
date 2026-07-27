@@ -1,4 +1,5 @@
 import type { Session } from "@open-inspect/shared";
+import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
@@ -32,7 +33,7 @@ export function buildSessionsPageKey({
   status?: string;
   excludeStatus?: string;
   createdBy?: readonly string[];
-}) {
+}): BrowserApiPath {
   const searchParams = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),

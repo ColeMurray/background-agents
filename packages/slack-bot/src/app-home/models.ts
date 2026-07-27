@@ -1,12 +1,12 @@
 import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
-  buildInternalAuthHeaders,
   isValidModel,
   normalizeValidModels,
   type SlackGlobalConfig,
 } from "@open-inspect/shared";
 import type { Env } from "../types";
+import { signedControlPlaneFetch } from "../internal-auth";
 import type { ModelOption } from "./slack-types";
 
 const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
@@ -22,20 +22,10 @@ function getDefaultModelOptions(): ModelOption[] {
   return defaultOptions.length > 0 ? defaultOptions : ALL_MODELS;
 }
 
-async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-}
-
 export async function getAvailableModels(env: Env, traceId?: string): Promise<ModelOption[]> {
   try {
-    const headers = await getAuthHeaders(env, traceId);
-    const response = await env.CONTROL_PLANE.fetch("https://internal/model-preferences", {
-      method: "GET",
-      headers,
-    });
+    const url = "https://internal/model-preferences";
+    const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
 
     if (response.ok) {
       const data = (await response.json()) as { enabledModels?: unknown };
@@ -62,11 +52,8 @@ export async function getSlackDefaultModel(
   traceId?: string
 ): Promise<string | undefined> {
   try {
-    const headers = await getAuthHeaders(env, traceId);
-    const response = await env.CONTROL_PLANE.fetch("https://internal/integration-settings/slack", {
-      method: "GET",
-      headers,
-    });
+    const url = "https://internal/integration-settings/slack";
+    const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
 
     if (!response.ok) {
       return undefined;

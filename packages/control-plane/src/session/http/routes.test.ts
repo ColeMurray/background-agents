@@ -15,6 +15,7 @@ describe("createSessionInternalRoutes", () => {
       stop: noopHandler(),
       sandboxEvent: noopHandler(),
       createMediaArtifact: noopHandler(),
+      recordAttachment: noopHandler(),
       listParticipants: noopHandler(),
       addParticipant: noopHandler(),
       listEvents: noopHandler(),
@@ -35,6 +36,11 @@ describe("createSessionInternalRoutes", () => {
       childSummary: noopHandler(),
       cancel: noopHandler(),
       childSessionUpdate: noopHandler(),
+      diffState: noopHandler(),
+      diffStore: noopHandler(),
+      diffFailure: noopHandler(),
+      diffResolveFile: noopHandler(),
+      diffRetry: noopHandler(),
     });
 
     const methodPathSet = new Set(routes.map((route) => `${route.method} ${route.path}`));
@@ -47,6 +53,7 @@ describe("createSessionInternalRoutes", () => {
         `POST ${SessionInternalPaths.stop}`,
         `POST ${SessionInternalPaths.sandboxEvent}`,
         `POST ${SessionInternalPaths.createMediaArtifact}`,
+        `POST ${SessionInternalPaths.attachments}`,
         `GET ${SessionInternalPaths.participants}`,
         `POST ${SessionInternalPaths.participants}`,
         `GET ${SessionInternalPaths.events}`,
@@ -67,6 +74,11 @@ describe("createSessionInternalRoutes", () => {
         `GET ${SessionInternalPaths.childSummary}`,
         `POST ${SessionInternalPaths.cancel}`,
         `POST ${SessionInternalPaths.childSessionUpdate}`,
+        `GET ${SessionInternalPaths.diffState}`,
+        `POST ${SessionInternalPaths.diffStore}`,
+        `POST ${SessionInternalPaths.diffFailure}`,
+        `GET ${SessionInternalPaths.diffResolveFile}`,
+        `POST ${SessionInternalPaths.diffRetry}`,
       ])
     );
   });

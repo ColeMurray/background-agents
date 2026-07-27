@@ -27,4 +27,4 @@ WORKER_URL = ""        # Your worker's public URL (e.g. https://open-inspect-lin
 # Secrets (set via `wrangler secret put`):
 # - LINEAR_CLIENT_SECRET
 # - LINEAR_WEBHOOK_SECRET
-# - INTERNAL_CALLBACK_SECRET
+# - SERVICE_AUTH_SECRET

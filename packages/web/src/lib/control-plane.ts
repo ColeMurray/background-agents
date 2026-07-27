@@ -1,13 +1,14 @@
 /**
  * Control Plane API utilities.
  *
- * Handles authentication and communication with the control plane.
- * On Cloudflare Workers, uses a service binding to avoid same-account
- * worker-to-worker fetch restrictions (error 1042). Falls back to
- * URL-based fetch for Vercel / local development.
+ * Attaches the request credential and delegates transport (service binding
+ * vs. URL-based fetch) to `control-plane-transport.ts`.
  */
 
-import { buildInternalAuthHeaders } from "@open-inspect/shared";
+import { buildServiceAuthHeaders } from "@open-inspect/shared";
+import { cookies } from "next/headers";
+import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
+import { dispatchControlPlaneFetch, getControlPlaneUrl } from "@/lib/control-plane-transport";
 import { createLogger } from "@/lib/logger";
 import { getCorrelationLogFields } from "@/lib/request-correlation";
 import { getRequestCorrelation } from "@/lib/request-context";
@@ -15,107 +16,105 @@ import { getRequestCorrelation } from "@/lib/request-context";
 const log = createLogger("control-plane-client");
 
 /**
- * Get the control plane URL from environment.
- * Throws if not configured.
- */
-function getControlPlaneUrl(): string {
-  const url = process.env.CONTROL_PLANE_URL;
-  if (!url) {
-    console.error("[control-plane] CONTROL_PLANE_URL not configured");
-    throw new Error("CONTROL_PLANE_URL not configured");
-  }
-  return url;
-}
-
-/**
- * Get the shared secret for control plane authentication.
- * Throws if not configured.
- */
-function getInternalSecret(): string {
-  const secret = process.env.INTERNAL_CALLBACK_SECRET;
-  if (!secret) {
-    console.error("[control-plane] INTERNAL_CALLBACK_SECRET not configured");
-    throw new Error("INTERNAL_CALLBACK_SECRET not configured");
-  }
-  return secret;
-}
-
-/**
- * Create authenticated headers for control plane requests.
+ * Return the exact body representation accepted by sig1.
  *
- * @returns Headers object with Content-Type and Authorization
+ * Fetch can serialize several higher-level BodyInit variants. Reject those
+ * here because signing a value before Fetch serializes it would authenticate
+ * different bytes than the control plane receives.
  */
-async function getControlPlaneHeaders(traceId: string): Promise<HeadersInit> {
-  const secret = getInternalSecret();
-  return {
-    "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(secret, traceId)),
-  };
+function getSignableBody(
+  body: BodyInit | null | undefined
+): ArrayBuffer | Uint8Array | string | undefined {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === "string" || body instanceof ArrayBuffer || body instanceof Uint8Array) {
+    return body;
+  }
+  throw new Error("Unsupported control-plane request body");
 }
 
 /**
- * A minimal interface for a Cloudflare service binding's fetch method.
+ * Combine web's channel identity with the opaque browser-session credential.
+ * Both are required by browser-authenticated control-plane routes.
  */
-interface ServiceBinding {
-  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+async function getControlPlaneHeaders(request: {
+  method: string;
+  url: string;
+  traceId: string;
+  body: ArrayBuffer | Uint8Array | string | undefined;
+}): Promise<Headers | null> {
+  const cookieHeader = serializeBrowserSessionCookies((await cookies()).getAll());
+  if (!cookieHeader) {
+    log.warn("auth.user_session_missing", {
+      event: "auth.user_session_missing",
+      http_path: new URL(request.url).pathname,
+      http_method: request.method,
+      trace_id: request.traceId,
+    });
+    return null;
+  }
+
+  const secret = process.env.SERVICE_AUTH_SECRET;
+  if (!secret) {
+    throw new Error("SERVICE_AUTH_SECRET not configured");
+  }
+
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    Cookie: cookieHeader,
+  });
+  const serviceHeaders = await buildServiceAuthHeaders({
+    service: "web",
+    secret,
+    method: request.method,
+    url: request.url,
+    body: request.body,
+    traceId: request.traceId,
+  });
+  for (const [name, value] of Object.entries(serviceHeaders)) {
+    headers.set(name, value);
+  }
+  return headers;
 }
 
-function isServiceBinding(value: unknown): value is ServiceBinding {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "fetch" in value &&
-    typeof value.fetch === "function"
+function unauthorizedResponse(correlation: { requestId: string; traceId: string }): Response {
+  return Response.json(
+    { error: "Unauthorized" },
+    {
+      status: 401,
+      headers: {
+        "x-request-id": correlation.requestId,
+        "x-trace-id": correlation.traceId,
+      },
+    }
   );
 }
 
-/**
- * Try to get the Cloudflare Workers service binding for the control plane.
- * Returns null when not running on Cloudflare Workers.
- */
-async function getServiceBinding(
-  correlationFields: Record<string, string>
-): Promise<ServiceBinding | null> {
-  // In local development, always use URL-based fetch — the service binding
-  // resolves to a local wrangler proxy that won't be running.
-  // In local development (next dev), always use URL-based fetch. When
-  // @opennextjs/cloudflare is loaded in a Node.js dev server it can return a
-  // stub service binding whose fetch fails with a "no local dev session" error.
-  if (process.env.NODE_ENV === "development") {
-    return null;
-  }
+function mergeAuthenticatedHeaders(
+  callerHeaders: HeadersInit | undefined,
+  authenticatedHeaders: Headers
+): Headers {
+  const headers = new Headers(callerHeaders);
+  headers.delete("Authorization");
+  headers.delete("Cookie");
+  headers.delete("X-OpenInspect-Actor");
+  headers.delete("X-OpenInspect-Service");
+  headers.delete("X-OpenInspect-Service-Signature");
 
-  try {
-    const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-    const ctx = await getCloudflareContext({ async: true });
-    const binding = (ctx as { env?: { CONTROL_PLANE_WORKER?: unknown } }).env?.CONTROL_PLANE_WORKER;
-    return isServiceBinding(binding) ? binding : null;
-  } catch (err) {
-    // Expected on non-Cloudflare runtimes (missing package). Log on edge
-    // so binding misconfigurations don't silently fall back to URL fetch.
-    if (typeof caches !== "undefined") {
-      log.warn("control_plane.binding_lookup_failed", {
-        ...correlationFields,
-        outcome: "fallback",
-        error: err instanceof Error ? err : new Error(String(err)),
-      });
-    }
-    return null;
+  const callerContentType = headers.get("Content-Type");
+  authenticatedHeaders.forEach((value, name) => headers.set(name, value));
+  if (callerContentType !== null) {
+    headers.set("Content-Type", callerContentType);
   }
+  return headers;
 }
 
 /**
- * Make an authenticated request to the control plane.
+ * Make a browser-session-authenticated request to the control plane.
  *
- * On Cloudflare Workers, uses the CONTROL_PLANE_WORKER service binding
- * to avoid error 1042 (same-account worker-to-worker restriction).
- * Falls back to URL-based fetch on other platforms.
- *
- * @param path - API path (e.g., "/sessions")
- * @param options - Fetch options (method, body, etc.)
- * @returns Fetch Response
+ * Every request carries both a fresh `service:web` signature and the opaque
+ * Better Auth session cookie. Caller-supplied identity headers are discarded.
  */
-export async function controlPlaneFetch(
+export async function controlPlaneUserFetch(
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
@@ -124,28 +123,25 @@ export async function controlPlaneFetch(
   const correlationFields = getCorrelationLogFields(correlation);
 
   try {
-    const headers = await getControlPlaneHeaders(correlation.traceId);
-    const mergedHeaders = new Headers(headers);
-    const optionHeaders = new Headers(options.headers);
-    optionHeaders.forEach((value, key) => {
-      mergedHeaders.set(key, value);
+    const url = `${getControlPlaneUrl()}${normalizedPath}`;
+    const method = options.method ?? "GET";
+    const body = getSignableBody(options.body);
+    const authenticatedHeaders = await getControlPlaneHeaders({
+      method,
+      url,
+      traceId: correlation.traceId,
+      body,
     });
+    if (!authenticatedHeaders) return unauthorizedResponse(correlation);
 
-    const fetchOptions: RequestInit = {
-      ...options,
-      headers: mergedHeaders,
-    };
-
-    // On Cloudflare Workers, use the service binding to call the control plane
-    const binding = await getServiceBinding(correlationFields);
-    if (binding) {
-      const baseUrl = getControlPlaneUrl().replace(/\/+$/, "");
-      return binding.fetch(`${baseUrl}${normalizedPath}`, fetchOptions);
-    }
-
-    // Fallback: direct fetch (works on Vercel / local dev)
-    const baseUrl = getControlPlaneUrl().replace(/\/+$/, "");
-    return fetch(`${baseUrl}${normalizedPath}`, fetchOptions);
+    return await dispatchControlPlaneFetch(
+      url,
+      {
+        ...options,
+        headers: mergeAuthenticatedHeaders(options.headers, authenticatedHeaders),
+      },
+      correlationFields
+    );
   } catch (error) {
     log.error("control_plane.fetch_failed", {
       ...correlationFields,

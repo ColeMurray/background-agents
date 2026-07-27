@@ -132,7 +132,7 @@ describe("resolveScopeTarget", () => {
       ],
     });
 
-    const target = await resolveScopeTarget(envWith(db), ENV_SCOPE);
+    const target = await resolveScopeTarget(envWith(db), db, ENV_SCOPE);
 
     expect(target.repositories).toEqual([
       { repoOwner: "acme", repoName: "web", baseBranch: "main" },
@@ -149,7 +149,7 @@ describe("resolveScopeTarget", () => {
   it("throws scope-not-found for a missing environment", async () => {
     const db = fakeDb({ environment: null });
 
-    await expect(resolveScopeTarget(envWith(db), ENV_SCOPE)).rejects.toBeInstanceOf(
+    await expect(resolveScopeTarget(envWith(db), db, ENV_SCOPE)).rejects.toBeInstanceOf(
       ImageBuildScopeNotFoundError
     );
   });
@@ -157,7 +157,7 @@ describe("resolveScopeTarget", () => {
   it("fails planning on an environment without repositories", async () => {
     const db = fakeDb({ environment: { id: "env_1" }, repositories: [] });
 
-    await expect(resolveScopeTarget(envWith(db), ENV_SCOPE)).rejects.toBeInstanceOf(
+    await expect(resolveScopeTarget(envWith(db), db, ENV_SCOPE)).rejects.toBeInstanceOf(
       ImageBuildPlanningError
     );
   });
@@ -170,7 +170,7 @@ describe("resolveScopeTarget", () => {
       defaultBranch: "develop",
     });
 
-    const target = await resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE);
+    const target = await resolveScopeTarget(envWith(fakeDb({})), fakeDb({}), REPO_SCOPE);
 
     expect(scmProvider.checkRepositoryAccess).toHaveBeenCalledWith({
       owner: "acme",
@@ -197,6 +197,7 @@ describe("resolveScopeTarget", () => {
 
     const target = await resolveScopeTarget(
       envWith(fakeDb({})),
+      fakeDb({}),
       repoImageBuildScope("group/subgroup", "web")
     );
 
@@ -212,22 +213,22 @@ describe("resolveScopeTarget", () => {
   it("throws scope-not-found when the repository is not installed", async () => {
     scmProvider.checkRepositoryAccess.mockResolvedValue(null);
 
-    await expect(resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE)).rejects.toBeInstanceOf(
-      ImageBuildScopeNotFoundError
-    );
+    await expect(
+      resolveScopeTarget(envWith(fakeDb({})), fakeDb({}), REPO_SCOPE)
+    ).rejects.toBeInstanceOf(ImageBuildScopeNotFoundError);
   });
 
   it("fails planning when repository resolution fails", async () => {
     scmProvider.checkRepositoryAccess.mockRejectedValue(new Error("github unavailable"));
 
-    await expect(resolveScopeTarget(envWith(fakeDb({})), REPO_SCOPE)).rejects.toBeInstanceOf(
-      ImageBuildPlanningError
-    );
+    await expect(
+      resolveScopeTarget(envWith(fakeDb({})), fakeDb({}), REPO_SCOPE)
+    ).rejects.toBeInstanceOf(ImageBuildPlanningError);
   });
 
   it("fails planning on a malformed repo scope id without touching source control", async () => {
     await expect(
-      resolveScopeTarget(envWith(fakeDb({})), { kind: "repo", id: "not-a-pair" })
+      resolveScopeTarget(envWith(fakeDb({})), fakeDb({}), { kind: "repo", id: "not-a-pair" })
     ).rejects.toBeInstanceOf(ImageBuildPlanningError);
     expect(scmProvider.checkRepositoryAccess).not.toHaveBeenCalled();
   });
@@ -302,7 +303,7 @@ describe("listEnabledScopeUnits", () => {
       enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
     });
 
-    const units = await listEnabledScopeUnits(envWith(db));
+    const units = await listEnabledScopeUnits(envWith(db), db);
 
     expect(units).toHaveLength(2);
     expect(units[0].scope).toEqual({ kind: "environment", id: "env_1" });
@@ -323,7 +324,7 @@ describe("listEnabledScopeUnits", () => {
       enabledRepos: [{ repo_owner: "acme", repo_name: "web" }],
     });
 
-    const units = await listEnabledScopeUnits(envWith(db));
+    const units = await listEnabledScopeUnits(envWith(db), db);
 
     expect(units.map((unit) => unit.scope.kind)).toEqual(["environment"]);
   });
@@ -356,9 +357,9 @@ describe("loadScopeBuildSecrets", () => {
   const encryptedEnv = (db: D1Database) => envWith(db, { REPO_SECRETS_ENCRYPTION_KEY: "key" });
 
   it("returns undefined without an encryption key", async () => {
-    expect(await loadScopeBuildSecrets(envWith(fakeDb({})), REPO_SCOPE, repoTarget())).toBe(
-      undefined
-    );
+    expect(
+      await loadScopeBuildSecrets(envWith(fakeDb({})), fakeDb({}), REPO_SCOPE, repoTarget())
+    ).toBe(undefined);
     expect(secretsStores.global).not.toHaveBeenCalled();
   });
 
@@ -366,7 +367,7 @@ describe("loadScopeBuildSecrets", () => {
     secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_ONLY: "g" });
     secretsStores.environment.mockResolvedValue({ SHARED: "environment" });
 
-    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), ENV_SCOPE, {
+    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), fakeDb({}), ENV_SCOPE, {
       kind: "environment",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
       repositoriesFingerprint: "fp-env",
@@ -381,7 +382,12 @@ describe("loadScopeBuildSecrets", () => {
     secretsStores.global.mockResolvedValue({ SHARED: "global", GLOBAL_ONLY: "g" });
     secretsStores.repo.mockResolvedValue({ SHARED: "repo", REPO_ONLY: "r" });
 
-    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget());
+    const merged = await loadScopeBuildSecrets(
+      encryptedEnv(fakeDb({})),
+      fakeDb({}),
+      REPO_SCOPE,
+      repoTarget()
+    );
 
     expect(secretsStores.repo).toHaveBeenCalledWith(123);
     expect(secretsStores.environment).not.toHaveBeenCalled();
@@ -392,14 +398,19 @@ describe("loadScopeBuildSecrets", () => {
     secretsStores.global.mockResolvedValue({ GLOBAL_ONLY: "g" });
     secretsStores.repo.mockRejectedValue(new Error("decrypt failed"));
 
-    const merged = await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget());
+    const merged = await loadScopeBuildSecrets(
+      encryptedEnv(fakeDb({})),
+      fakeDb({}),
+      REPO_SCOPE,
+      repoTarget()
+    );
 
     expect(merged).toEqual({ GLOBAL_ONLY: "g" });
   });
 
   it("returns undefined when the fold is empty", async () => {
-    expect(await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), REPO_SCOPE, repoTarget())).toBe(
-      undefined
-    );
+    expect(
+      await loadScopeBuildSecrets(encryptedEnv(fakeDb({})), fakeDb({}), REPO_SCOPE, repoTarget())
+    ).toBe(undefined);
   });
 });

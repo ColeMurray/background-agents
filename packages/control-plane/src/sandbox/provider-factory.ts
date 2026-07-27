@@ -1,9 +1,16 @@
 import { createModalClient } from "./client";
 import { createDaytonaRestClient } from "./daytona-rest-client";
+import { createE2BRestClient } from "./e2b-rest-client";
 import { createOpenComputerRestClient } from "./opencomputer-rest-client";
 import { resolveSandboxBackendName, type SandboxBackendName } from "./provider-name";
 import type { SandboxProvider } from "./provider";
 import { createDaytonaProvider, type DaytonaSandboxProvider } from "./providers/daytona-provider";
+import {
+  createE2BProvider,
+  DEFAULT_E2B_AUTO_PAUSE,
+  DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS,
+  type E2BSandboxProvider,
+} from "./providers/e2b-provider";
 import { createModalProvider, type ModalSandboxProvider } from "./providers/modal-provider";
 import {
   createOpenComputerProvider,
@@ -112,7 +119,31 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
   });
 }
 
+function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
+  if (!env.E2B_API_KEY || !env.E2B_TEMPLATE_ID) {
+    throw new Error("E2B_API_KEY and E2B_TEMPLATE_ID are required when SANDBOX_PROVIDER=e2b");
+  }
+
+  const client = createE2BRestClient({
+    apiUrl: env.E2B_API_URL || "https://api.e2b.app",
+    apiKey: env.E2B_API_KEY,
+    templateId: env.E2B_TEMPLATE_ID,
+  });
+
+  return createE2BProvider(client, {
+    scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
+    codeServerPasswordSecret: env.E2B_API_KEY,
+    sandboxTimeoutSeconds: parseNumericEnv(
+      "E2B_SANDBOX_TIMEOUT_SECONDS",
+      env.E2B_SANDBOX_TIMEOUT_SECONDS,
+      DEFAULT_E2B_SANDBOX_TIMEOUT_SECONDS
+    ),
+    autoPause: parseBooleanEnv("E2B_AUTO_PAUSE", env.E2B_AUTO_PAUSE, DEFAULT_E2B_AUTO_PAUSE),
+  });
+}
+
 export function createSandboxProviderFromEnv(env: Env, backend: "daytona"): DaytonaSandboxProvider;
+export function createSandboxProviderFromEnv(env: Env, backend: "e2b"): E2BSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalSandboxProvider;
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
 export function createSandboxProviderFromEnv(
@@ -134,6 +165,8 @@ export function createSandboxProviderFromEnv(
       return createVercelProviderFromEnv(env);
     case "opencomputer":
       return createOpenComputerProviderFromEnv(env);
+    case "e2b":
+      return createE2BProviderFromEnv(env);
     case "modal":
       return createModalProviderFromEnv(env);
   }
@@ -148,4 +181,12 @@ function parseNumericEnv(name: string, value: string | undefined, defaultValue: 
     throw new Error(`${name} must be a valid number`);
   }
   return parsed;
+}
+
+function parseBooleanEnv(name: string, value: string | undefined, defaultValue: boolean): boolean {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return defaultValue;
+  if (raw === "true" || raw === "1") return true;
+  if (raw === "false" || raw === "0") return false;
+  throw new Error(`${name} must be a valid boolean`);
 }

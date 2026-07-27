@@ -5,13 +5,28 @@ import { startSessionAndSendPrompt } from "./session-launcher";
 import { getAvailableModels, getSlackDefaultModel } from "../app-home/models";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { getResolvedUserPreferences } from "../user-preferences";
-import { createSession, sendPrompt } from "./control-plane-client";
+import { createSession } from "./control-plane-client";
+import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { getUserInfo, postMessage } from "@open-inspect/shared";
+import {
+  notifyDroppedAttachments,
+  prepareImageAttachments,
+  type SlackImageAttachment,
+} from "../attachments";
 
 vi.mock("@open-inspect/shared", () => ({
   getUserInfo: vi.fn(),
   postMessage: vi.fn(),
+}));
+
+vi.mock("../attachments", () => ({
+  prepareImageAttachments: vi.fn(async () => ({ files: [], dropped: [] })),
+  notifyDroppedAttachments: vi.fn(async () => {}),
+}));
+
+vi.mock("./prompt-delivery", () => ({
+  deliverPrompt: vi.fn(),
 }));
 
 vi.mock("../app-home/models", () => ({
@@ -29,7 +44,6 @@ vi.mock("../user-preferences", () => ({
 
 vi.mock("./control-plane-client", () => ({
   createSession: vi.fn(),
-  sendPrompt: vi.fn(),
 }));
 
 vi.mock("./thread-session-store", () => ({
@@ -104,7 +118,8 @@ describe("startSessionAndSendPrompt", () => {
       },
     } as Awaited<ReturnType<typeof getUserInfo>>);
     vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
-    vi.mocked(sendPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
+    vi.mocked(prepareImageAttachments).mockResolvedValue({ files: [], dropped: [] });
+    vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
     vi.mocked(buildThreadSession).mockReturnValue({
       sessionId: "session-1",
       repoId: "acme/app",
@@ -148,14 +163,16 @@ describe("startSessionAndSendPrompt", () => {
       actorDisplayName: "Display Name",
       actorEmail: "user@example.com",
     });
-    expect(sendPrompt).toHaveBeenCalledWith(
-      env,
-      "session-1",
-      "Slack channel context:\n---\nChannel: #engineering\nDescription: Build and deploy discussion\n---\n\n" +
+    expect(deliverPrompt).toHaveBeenCalledWith(env, {
+      sessionId: "session-1",
+      content:
+        "Slack channel context:\n---\nChannel: #engineering\nDescription: Build and deploy discussion\n---\n\n" +
         "Context from the Slack thread:\n---\n[Alice]: Earlier request\n[Bot]: Earlier response\n---\n\n" +
         "Fix the failing deploy",
-      "slack:U123",
-      {
+      authorId: "slack:U123",
+      attachments: { files: [], dropped: [] },
+      imageOnly: false,
+      callbackContext: {
         source: "slack",
         channel: "C123",
         threadTs: "111.222",
@@ -163,8 +180,10 @@ describe("startSessionAndSendPrompt", () => {
         model: "openai/gpt-5.4",
         reasoningEffort: "high",
       },
-      "trace-1"
-    );
+      channel: "C123",
+      threadTs: "111.222",
+      traceId: "trace-1",
+    });
     expect(buildThreadSession).toHaveBeenCalledWith(
       "session-1",
       repositoryTarget,
@@ -198,13 +217,12 @@ describe("startSessionAndSendPrompt", () => {
       env,
       expect.objectContaining({ target: environmentTarget, branch: undefined })
     );
-    expect(sendPrompt).toHaveBeenCalledWith(
+    expect(deliverPrompt).toHaveBeenCalledWith(
       env,
-      "session-1",
-      "Inspect production",
-      "slack:U123",
-      expect.objectContaining({ repoFullName: "Production Debug" }),
-      undefined
+      expect.objectContaining({
+        content: "Inspect production",
+        callbackContext: expect.objectContaining({ repoFullName: "Production Debug" }),
+      })
     );
   });
 
@@ -228,12 +246,12 @@ describe("startSessionAndSendPrompt", () => {
       "Sorry, I couldn't create a session. Please try again.",
       { thread_ts: "111.222" }
     );
-    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(deliverPrompt).not.toHaveBeenCalled();
     expect(storeThreadSession).not.toHaveBeenCalled();
   });
 
   it("notifies Slack and avoids storing thread state when prompt delivery fails", async () => {
-    vi.mocked(sendPrompt).mockResolvedValue({ ok: false, reason: "transient" });
+    vi.mocked(deliverPrompt).mockResolvedValue({ ok: false, reason: "transient" });
     const env = makeEnv();
 
     await expect(
@@ -252,6 +270,127 @@ describe("startSessionAndSendPrompt", () => {
       "Session created but failed to send prompt. Please try again.",
       { thread_ts: "111.222" }
     );
+    expect(storeThreadSession).not.toHaveBeenCalled();
+  });
+
+  it("downloads message images before session creation and hands them to delivery", async () => {
+    const images: SlackImageAttachment[] = [
+      {
+        id: "F1",
+        name: "screenshot.png",
+        mimetype: "image/png",
+        downloadUrl: "https://files.slack.com/x",
+      },
+    ];
+    const prepared = {
+      files: [{ attachment: images[0]!, bytes: new Uint8Array(4) }],
+      dropped: ["download_failed" as const],
+    };
+    vi.mocked(prepareImageAttachments).mockResolvedValue(prepared);
+    const env = makeEnv();
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "What is wrong in this screenshot?",
+        userId: "U123",
+        images,
+        traceId: "trace-1",
+      })
+    ).resolves.toEqual({ sessionId: "session-1" });
+
+    expect(prepareImageAttachments).toHaveBeenCalledWith(env, images, "trace-1");
+    const prepareOrder = vi.mocked(prepareImageAttachments).mock.invocationCallOrder[0]!;
+    const createOrder = vi.mocked(createSession).mock.invocationCallOrder[0]!;
+    expect(prepareOrder).toBeLessThan(createOrder);
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        sessionId: "session-1",
+        content: expect.stringContaining("What is wrong in this screenshot?"),
+        attachments: prepared,
+        imageOnly: false,
+      })
+    );
+  });
+
+  it("never creates a session for an image-only request whose images were all lost", async () => {
+    vi.mocked(prepareImageAttachments).mockResolvedValue({
+      files: [],
+      dropped: ["download_failed"],
+    });
+    const env = makeEnv();
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "See the attached image(s).",
+        userId: "U123",
+        images: [
+          {
+            id: "F1",
+            name: "screenshot.png",
+            mimetype: "image/png",
+            downloadUrl: "https://files.slack.com/x",
+          },
+        ],
+        imageOnly: true,
+      })
+    ).resolves.toBeNull();
+
+    expect(createSession).not.toHaveBeenCalled();
+    expect(deliverPrompt).not.toHaveBeenCalled();
+    expect(notifyDroppedAttachments).toHaveBeenCalledWith(
+      env,
+      "C123",
+      "111.222",
+      { references: [], dropped: ["download_failed"] },
+      { traceId: undefined, nothingSent: true }
+    );
+  });
+
+  it("posts no extra error when delivery already notified an image-only total loss", async () => {
+    vi.mocked(deliverPrompt).mockResolvedValue({ ok: false, reason: "no_images_delivered" });
+    vi.mocked(prepareImageAttachments).mockResolvedValue({
+      files: [
+        {
+          attachment: {
+            id: "F1",
+            name: "screenshot.png",
+            mimetype: "image/png",
+            downloadUrl: "https://files.slack.com/x",
+          },
+          bytes: new Uint8Array(4),
+        },
+      ],
+      dropped: [],
+    });
+    const env = makeEnv();
+
+    await expect(
+      startSessionAndSendPrompt(env, {
+        target: repositoryTarget,
+        channel: "C123",
+        threadTs: "111.222",
+        messageText: "See the attached image(s).",
+        userId: "U123",
+        images: [
+          {
+            id: "F1",
+            name: "screenshot.png",
+            mimetype: "image/png",
+            downloadUrl: "https://files.slack.com/x",
+          },
+        ],
+        imageOnly: true,
+      })
+    ).resolves.toBeNull();
+
+    expect(postMessage).not.toHaveBeenCalled();
     expect(storeThreadSession).not.toHaveBeenCalled();
   });
 });

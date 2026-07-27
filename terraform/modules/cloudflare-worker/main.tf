@@ -28,6 +28,12 @@ locals {
       name        = r2.binding_name
       bucket_name = r2.bucket_name
     }],
+    # Queue producer bindings
+    [for queue in var.queue_bindings : {
+      type       = "queue"
+      name       = queue.binding_name
+      queue_name = queue.queue_name
+    }],
     # Plain text bindings (environment variables)
     [for pt in var.plain_text_bindings : {
       type = "plain_text"

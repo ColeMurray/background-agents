@@ -165,8 +165,9 @@ statuses are `building | ready | failed | superseded`.
 
 Build callbacks authenticate in one of two modes, decided per provider: Modal builders call back
 with the deployment-wide internal HMAC token, while Vercel/OpenComputer build sandboxes use a
-single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row,
-bound to the provider session, and consumed on the first success or failure callback.
+single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row and
+bound to the provider session. Success callbacks verify it before payload validation and consume it
+atomically when accepted; failure callbacks consume it while marking the build failed.
 
 ### Automations
 
@@ -315,6 +316,22 @@ Automations:
 - `automation_runs`: one row per repository per invocation, linked by `invocation_id`, carrying the
   firing-time repository snapshot (`repo_owner/repo_name/repo_id/base_branch`) and the session
   linkage. Firing keys live on the invocation, not the run.
+
+## Browser Authentication
+
+The control plane is the browser authentication authority and runs exact-pinned Better Auth. The
+Next.js web app is a BFF: it proxies a small `/api/auth/*` allowlist with its `sig1` service
+credential and never stores provider secrets.
+
+Browser resource requests require both the signed `service:web` channel and Better Auth's opaque
+session cookie. The application principal is the canonical `users.id`, and the authentication
+context contains only the browser-session and signed-channel evidence. Provider-specific credential
+authorities resolve linked accounts on demand for workflows such as GitHub SCM enrichment; linked
+accounts do not participate in browser-session authentication.
+
+Terraform configures `WEB_APP_URL`, provider credentials, admission allowlists, and
+`BROWSER_AUTH_SECRET` on this worker. `WEB_APP_URL` must be the exact browser-visible HTTPS origin,
+except that an HTTP loopback origin is accepted for local development.
 
 ## Token Encryption
 

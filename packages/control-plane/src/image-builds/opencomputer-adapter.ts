@@ -67,11 +67,25 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
   }
 
   async cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void> {
-    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
+    // Keep the secret store. A successful build was checkpointed in
+    // finalizeSuccessfulBuild, and an OpenComputer checkpoint retains its build
+    // sandbox's secret store as a base layer that every from-checkpoint fork
+    // re-merges. Deleting it here is what made spawns from the image fail with
+    // "secret store not found". The store is cheap encrypted-KV metadata; one
+    // that outlives its image is reclaimed by the orphaned-store sweep, not at
+    // build teardown (the sandbox is gone by the time the image is deleted, so
+    // there is no attachment left to delete it through).
+    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation, {
+      deleteSecretStore: false,
+    });
   }
 
   async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
-    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation);
+    // A failed build produced no checkpoint, so nothing references its store —
+    // delete it with the sandbox.
+    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation, {
+      deleteSecretStore: true,
+    });
   }
 
   async deleteImage(input: DeleteImageInput): Promise<void> {
@@ -84,10 +98,13 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
   private async deleteBuildSandbox(
     buildId: string,
     providerSessionId: string,
-    correlation: FinalizeImageBuildInput["correlation"]
+    correlation: FinalizeImageBuildInput["correlation"],
+    options: { deleteSecretStore: boolean }
   ): Promise<void> {
     try {
-      await this.provider.deleteSandbox(providerSessionId, { deleteSecretStore: true });
+      await this.provider.deleteSandbox(providerSessionId, {
+        deleteSecretStore: options.deleteSecretStore,
+      });
     } catch (error) {
       logger.warn("image_build.opencomputer_build_cleanup_failed", {
         build_id: buildId,

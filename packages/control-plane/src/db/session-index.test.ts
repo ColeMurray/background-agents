@@ -54,6 +54,7 @@ const QUERY_PATTERNS = {
   DELETE_SESSION: /^DELETE FROM sessions WHERE id = \?$/,
   SELECT_BY_PARENT:
     /^SELECT \* FROM sessions WHERE parent_session_id = \? ORDER BY created_at DESC$/,
+  SELECT_ACTIVE_DESCENDANTS: /^WITH RECURSIVE descendants/,
   SELECT_1_CHILD: /^SELECT 1 FROM sessions WHERE id = \? AND parent_session_id = \?$/,
   SELECT_SPAWN_DEPTH: /^SELECT spawn_depth FROM sessions WHERE id = \?$/,
 } as const;
@@ -138,6 +139,26 @@ class FakeD1Database {
         .filter((r) => r.parent_session_id === parentId)
         .sort((a, b) => b.created_at - a.created_at);
       return children;
+    }
+
+    if (QUERY_PATTERNS.SELECT_ACTIVE_DESCENDANTS.test(normalized)) {
+      const terminalStatuses = new Set(["completed", "failed", "archived", "cancelled"]);
+      const descendants: Array<{ row: SessionRow; depth: number }> = [];
+      let parents = [args[0] as string];
+      let depth = 1;
+      // Mirrors the CTE's MAX_DESCENDANT_DEPTH cycle guard.
+      while (parents.length > 0 && depth <= 10) {
+        const children = Array.from(this.rows.values()).filter((row) =>
+          parents.includes(row.parent_session_id ?? "")
+        );
+        descendants.push(...children.map((row) => ({ row, depth })));
+        parents = children.map((row) => row.id);
+        depth += 1;
+      }
+      return descendants
+        .filter(({ row }) => !terminalStatuses.has(row.status))
+        .sort((a, b) => b.depth - a.depth)
+        .map(({ row }) => ({ id: row.id }));
     }
 
     if (QUERY_PATTERNS.SELECT_SESSION_REPOS.test(normalized)) {
@@ -812,6 +833,29 @@ describe("SessionIndexStore", () => {
       it("returns empty array when no children exist", async () => {
         const children = await store.listByParent("no-children");
         expect(children).toEqual([]);
+      });
+    });
+
+    describe("listActiveDescendantIds", () => {
+      it("returns active descendants deepest-first through terminal ancestors", async () => {
+        await store.create(
+          makeSession({
+            id: "grandchild-1",
+            status: "active",
+            parentSessionId: "child-2",
+            spawnSource: "agent",
+            spawnDepth: 2,
+          })
+        );
+
+        await expect(store.listActiveDescendantIds(parentId)).resolves.toEqual([
+          "grandchild-1",
+          "child-1",
+        ]);
+      });
+
+      it("returns an empty array when no descendants exist", async () => {
+        await expect(store.listActiveDescendantIds("no-children")).resolves.toEqual([]);
       });
     });
 

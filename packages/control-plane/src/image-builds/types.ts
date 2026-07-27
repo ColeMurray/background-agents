@@ -54,6 +54,7 @@ interface BaseImageBuildPlan {
 export interface ModalImageBuildPlan extends BaseImageBuildPlan {
   provider: "modal";
   callbackMode: "provider_image";
+  callbackToken: string;
 }
 
 /** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
@@ -82,16 +83,11 @@ export type ImageBuildPlan =
   | VercelImageBuildPlan
   | OpenComputerImageBuildPlan;
 
-export type PlannedImageBuild =
-  | { plan: ModalImageBuildPlan; callbackAuth: { type: "none" } }
-  | {
-      plan: VercelImageBuildPlan;
-      callbackAuth: { type: "bearer_token"; tokenHash: string; expiresAt: number };
-    }
-  | {
-      plan: OpenComputerImageBuildPlan;
-      callbackAuth: { type: "bearer_token"; tokenHash: string; expiresAt: number };
-    };
+export interface PlannedImageBuild {
+  plan: ImageBuildPlan;
+  /** Registration side of the callback token every build authenticates with. */
+  callbackAuth: { tokenHash: string; expiresAt: number };
+}
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
 export interface ImageBuildStartCallbacks {

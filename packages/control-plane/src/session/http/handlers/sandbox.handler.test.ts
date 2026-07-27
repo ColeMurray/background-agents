@@ -18,6 +18,7 @@ function createHandler() {
   const isOpenAISecretsConfigured = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
+  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
 
@@ -29,7 +30,7 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const handler = createSandboxHandler({
+  const sandboxHandler = createSandboxHandler({
     repository,
     processSandboxEvent,
     getSandbox,
@@ -38,11 +39,20 @@ function createHandler() {
     refreshOpenAIToken,
     isOpenAISecretsConfigured,
     getScmCredentials,
-    broadcast,
+    messenger,
     generateId,
     now,
-    getLog: () => log,
   });
+
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    ...sandboxHandler,
+    verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
+    openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
+    scmCredentials: () => sandboxHandler.scmCredentials(log),
+    tunnelUrls: () => sandboxHandler.tunnelUrls(log),
+  };
 
   return {
     handler,
@@ -128,6 +138,54 @@ describe("createSandboxHandler", () => {
       role: "member",
       joinedAt: 1234,
     });
+  });
+
+  it("adds participant with a parsed owner role", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", role: "owner" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-1", role: "owner" })
+    );
+  });
+
+  it("rejects malformed participant bodies", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid participant body" });
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid participant roles", async () => {
+    const { handler, repository } = createHandler();
+
+    const response = await handler.addParticipant(
+      new Request("http://internal/internal/participants", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "user-1", role: "admin" }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(repository.createParticipant).not.toHaveBeenCalled();
   });
 
   it("creates a media artifact row and matching timeline event", async () => {
@@ -443,7 +501,8 @@ describe("createSandboxHandler", () => {
   });
 
   it("returns openai access token payload on success", async () => {
-    const { handler, getSession, isOpenAISecretsConfigured, refreshOpenAIToken } = createHandler();
+    const { handler, getSession, isOpenAISecretsConfigured, refreshOpenAIToken, log } =
+      createHandler();
     const session = { id: "session-1" } as SessionRow;
     getSession.mockReturnValue(session);
     isOpenAISecretsConfigured.mockReturnValue(true);
@@ -462,7 +521,7 @@ describe("createSandboxHandler", () => {
       expires_in: 3600,
       account_id: "acct_123",
     });
-    expect(refreshOpenAIToken).toHaveBeenCalledWith(session);
+    expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log);
   });
 
   it("returns 404 when scm credentials have no session", async () => {

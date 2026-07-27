@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import { ModelPreferencesStore } from "../../src/db/model-preferences";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSession, queryDO, seedSandboxAuth } from "./helpers";
@@ -17,6 +18,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     parentSessionId?: string;
     spawnSource?: "user" | "agent";
     environmentId?: string | null;
+    model?: string;
+    reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const { stub } = await initNamedSession(parentName, {
@@ -25,6 +28,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       ...(opts?.repoId != null && { repoId: opts.repoId }),
       ...(opts?.userId != null && { userId: opts.userId }),
       ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
+      ...(opts?.model != null && { model: opts.model }),
+      ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
     });
 
     const sandboxToken = `sb-tok-${Date.now()}`;
@@ -37,8 +42,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       title: "Parent",
       repoOwner: "acme",
       repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
+      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
+      reasoningEffort: opts?.reasoningEffort ?? null,
       baseBranch: null,
       status: "active",
       parentSessionId: opts?.parentSessionId ?? null,
@@ -191,6 +196,75 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       "SELECT environment_id FROM session"
     );
     expect(session.environment_id).toBe("env_parent");
+  });
+
+  it("rejects a disabled model override for grandchildren", async () => {
+    const { parentName, sandboxToken } = await setupParent();
+
+    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-sonnet-4-6"]);
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Spawn another child" }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = await childRes.json<{ sessionId: string }>();
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(child.sessionId));
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${child.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Grandchild",
+          prompt: "Use a disabled model",
+          model: "opencode/kimi-k2.5",
+        }),
+      }
+    );
+
+    expect(grandchildRes.status).toBe(400);
+    await expect(grandchildRes.json()).resolves.toEqual({
+      error: 'Model "opencode/kimi-k2.5" is not enabled',
+    });
+  });
+
+  it("uses an enabled fallback when the inherited parent model was disabled", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      model: "openai/gpt-5.5",
+      reasoningEffort: "xhigh",
+    });
+
+    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-haiku-4-5"]);
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Use an enabled model" }),
+    });
+
+    expect(response.status).toBe(201);
+    const child = await response.json<{ sessionId: string }>();
+    const storedChild = await store.get(child.sessionId);
+    expect(storedChild?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(storedChild?.reasoningEffort).toBeNull();
   });
 
   it("propagates null userId from parent to child", async () => {

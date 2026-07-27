@@ -267,6 +267,85 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("maps bitbucket to the Bitbucket clone identity", async () => {
+    // OpenComputer historically collapsed bitbucket to the GitHub identity (a
+    // pre-Bitbucket-support drift that made bitbucket clones impossible); it
+    // now resolves the real Bitbucket identity like every provider.
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "bitbucket",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      userEnvVars: { VCS_CLONE_TOKEN: "bb-token" },
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      VCS_HOST: "bitbucket.org",
+      VCS_CLONE_USERNAME: "x-token-auth",
+    });
+    expect(client.setSecret).toHaveBeenCalledWith({
+      storeId: "secret-store-1",
+      name: "VCS_CLONE_TOKEN",
+      value: "bb-token",
+      allowedHosts: ["bitbucket.org", "api.bitbucket.org"],
+    });
+  });
+
+  it("keeps GITHUB-named secrets scoped to GitHub hosts on non-GitHub providers", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "bitbucket",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      userEnvVars: { GITHUB_TOKEN: "gh-token" },
+    });
+
+    expect(client.setSecret).toHaveBeenCalledWith({
+      storeId: "secret-store-1",
+      name: "GITHUB_TOKEN",
+      value: "gh-token",
+      allowedHosts: ["github.com", "api.github.com"],
+    });
+  });
+
+  it("uses the Bitbucket clone identity for image builds", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "bitbucket",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.triggerEnvironmentImageBuild({
+      buildId: "build-bb",
+      environmentId: "env_flagship",
+      repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
+      callbackUrl: "https://control.example/image-builds/build-complete",
+      failureCallbackUrl: "https://control.example/image-builds/build-failed",
+      callbackToken: "callback-token",
+      cloneToken: "clone-token",
+      userEnvVars: {},
+      onProviderSessionCreated: vi.fn(async () => undefined),
+    });
+
+    expect(client.createSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          IMAGE_BUILD_MODE: "true",
+          VCS_HOST: "bitbucket.org",
+          VCS_CLONE_USERNAME: "x-token-auth",
+          VCS_CLONE_TOKEN: "clone-token",
+        }),
+      })
+    );
+  });
+
   it("cleans up a created sandbox when runtime startup fails", async () => {
     const client = createMockClient({
       startRuntime: vi.fn(async () => {

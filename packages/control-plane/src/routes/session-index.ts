@@ -52,7 +52,7 @@ async function handleListSessions(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
   const limit = parsePaginationLimit(url.searchParams.get("limit"));
@@ -75,7 +75,7 @@ async function handleListSessions(
     return createdByUserIds;
   }
 
-  const store = new SessionIndexStore(env.DB);
+  const store = new SessionIndexStore(ctx.db);
   const result = await store.list({ status, excludeStatus, createdByUserIds, limit, offset });
 
   return json({
@@ -88,12 +88,12 @@ async function handleDeleteSession(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
   await sessionStore.delete(sessionId);
 
   return json({ status: "deleted", sessionId });

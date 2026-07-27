@@ -70,6 +70,7 @@ brew install node@22
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
+     - Queues: **Edit** (required when the Slack bot is enabled)
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
 
@@ -113,6 +114,14 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 
 - Bot OAuth Token (`xoxb-...`)
 - Signing Secret
+
+The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
+`groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`, `files:write`, and
+`reactions:write`. Reinstall the app after changing scopes.
+
+When upgrading an existing Slack deployment, add **Queues: Edit** to the Cloudflare API token before
+running `terraform apply`. Add `files:write` and `files:read`, reinstall the Slack app, and update
+the deployed bot token if Slack issued a replacement before deploying this version.
 
 ## Quick Start
 
@@ -184,7 +193,6 @@ WEB_PLATFORM # Optional; defaults to vercel
 VERCEL_API_TOKEN
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
-NEXTAUTH_URL # Used by the Vercel web deploy workflow
 
 # Modal
 MODAL_TOKEN_ID
@@ -212,7 +220,7 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
-# GitHub OAuth App
+# GitHub App OAuth credentials
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET
 
@@ -243,8 +251,7 @@ ANTHROPIC_API_KEY
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
-INTERNAL_CALLBACK_SECRET
-NEXTAUTH_SECRET
+NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control
 ALLOWED_USERS
@@ -468,6 +475,7 @@ variables.
    - `Workers KV Storage: Edit`
    - `Workers R2 Storage: Edit`
    - `D1: Edit`
+   - `Queues: Edit` if the Slack bot is enabled
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments

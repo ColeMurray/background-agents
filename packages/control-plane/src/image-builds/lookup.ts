@@ -8,9 +8,10 @@ import { ImageBuildStore } from "../db/image-builds";
 import type { ImageBuildLookup } from "../sandbox/lifecycle/image-selection";
 import type { ImageBuildProvider } from "./model";
 import { resolveScopeEnabled } from "./scope";
+import type { SqlDatabase } from "../db/sql-database";
 
 export function createImageBuildLookup(
-  db: D1Database,
+  db: SqlDatabase,
   provider: ImageBuildProvider
 ): ImageBuildLookup {
   const store = new ImageBuildStore(db);

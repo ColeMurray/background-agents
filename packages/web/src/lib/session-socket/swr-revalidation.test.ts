@@ -61,6 +61,19 @@ describe("swrKeysToRevalidate", () => {
     ).toEqual([`/api/sessions/${SESSION_ID}/children`, isUnarchivedSessionListKey]);
   });
 
+  it("revalidates the canonical diff manifest on diff state changes", () => {
+    expect(
+      swrKeysToRevalidate(
+        {
+          type: "diff_state_changed",
+          revisionId: "revision-2",
+          updatedAt: 200,
+        },
+        SESSION_ID
+      )
+    ).toEqual([`/api/sessions/${SESSION_ID}/diff`]);
+  });
+
   it("returns nothing for view-only messages", () => {
     expect(swrKeysToRevalidate({ type: "pong", timestamp: 1 }, SESSION_ID)).toEqual([]);
     expect(

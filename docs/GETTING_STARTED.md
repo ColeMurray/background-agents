@@ -15,11 +15,11 @@ This guide walks you through deploying your own instance of Open-Inspect using T
 
 Open-Inspect uses Terraform to automate deployment across multiple cloud providers:
 
-| Provider                                                            | Purpose                          | What Terraform Creates                                                                                     |
-| ------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| **Cloudflare**                                                      | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                       |
-| **Vercel** _or_ **Cloudflare Workers**                              | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                          |
-| **Modal**, **Daytona**, **Vercel Sandboxes**, _or_ **OpenComputer** | Sandbox execution infrastructure | Modal app deployment, Daytona API config, Vercel Sandbox API config, _or_ OpenComputer template/API config |
+| Provider                                                                     | Purpose                          | What Terraform Creates                                                                                          |
+| ---------------------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Cloudflare**                                                               | Control plane, session state     | Workers, KV namespaces, Durable Objects, D1 Database                                                            |
+| **Vercel** _or_ **Cloudflare Workers**                                       | Web application                  | Project + env vars (Vercel) _or_ Worker via OpenNext (Cloudflare)                                               |
+| **Modal**, **Daytona**, **Vercel Sandboxes**, **OpenComputer**, _or_ **E2B** | Sandbox execution infrastructure | Modal app deployment, Daytona/Vercel API config, OpenComputer template/API config, _or_ E2B template/API config |
 
 > **Web platform choice**: Set `web_platform` in your `terraform.tfvars` to `"vercel"` (default) or
 > `"cloudflare"`. The Cloudflare option deploys the Next.js app as a Cloudflare Worker using
@@ -44,6 +44,7 @@ Create accounts on these services before continuing:
 | [Daytona](https://app.daytona.io) _(optional)_            | Sandbox infrastructure when `sandbox_provider = "daytona"`      |
 | [Vercel Sandboxes](https://vercel.com) _(optional)_       | Sandbox infrastructure when `sandbox_provider = "vercel"`       |
 | [OpenComputer](https://app.opencomputer.dev) _(optional)_ | Sandbox infrastructure when `sandbox_provider = "opencomputer"` |
+| [E2B](https://e2b.dev) _(optional)_                       | Sandbox infrastructure when `sandbox_provider = "e2b"`          |
 | [GitHub](https://github.com/settings/developers)          | OAuth + repository access                                       |
 | [Anthropic](https://console.anthropic.com)                | Claude API                                                      |
 | [Slack](https://api.slack.com/apps) _(optional)_          | Slack bot integration                                           |
@@ -107,6 +108,7 @@ cd packages/modal-infra && uv sync --frozen && cd -
      - Account | Workers KV Storage | Edit (should be included with template)
      - Account | Workers R2 Storage | Edit (should be included with template)
      - Account | D1 | Edit
+     - Account | Queues | Edit (required when `enable_slack_bot = true`)
    - Set "Account Resources" to include your account
    - Set "Zone Resources" to include all zones from your account
    - Click "Continue to summary" and "Update token"
@@ -226,6 +228,38 @@ for the full runtime, snapshot, and resource configuration model.
 For the full template build and runtime details, see
 [OpenComputer Sandbox Provider](OPENCOMPUTER_PROVIDER.md).
 
+### E2B
+
+> Only required when `sandbox_provider = "e2b"`.
+
+E2B needs a single credential — the **API key** (`e2b_api_key`). The control plane uses it at
+runtime for the E2B REST API, and the `e2b-infra` module uses it to build the sandbox template (via
+the E2B Template SDK). Create it at the [E2B dashboard](https://e2b.dev) → API Keys.
+
+1. Set `sandbox_provider = "e2b"` in `terraform.tfvars`.
+2. Set `e2b_api_key` and `e2b_template_id` (e.g. `open-inspect-sandbox`).
+3. Terraform's `e2b-infra` module builds the template automatically on `terraform apply`, and
+   rebuilds it when `packages/e2b-infra` or `packages/sandbox-runtime` change. To build manually:
+   ```bash
+   cd packages/e2b-infra
+   uv sync --frozen
+   E2B_API_KEY=e2b_… E2B_TEMPLATE_ID=open-inspect-sandbox uv run python build-template.py
+   ```
+
+The control plane calls the E2B REST API directly from Cloudflare Workers. Each session runs in a
+single long-lived sandbox: when its TTL (`e2b_sandbox_timeout_seconds`, default 7200) expires the
+sandbox is **paused** rather than killed (`e2b_auto_pause`, default true), so sessions survive idle
+gaps; the next prompt resumes it through the control plane. On the **Hobby** tier (~1h runtime cap)
+lower `e2b_sandbox_timeout_seconds` to 3300. Set `e2b_auto_pause = false` to kill on timeout
+instead.
+
+For the full runtime, lifecycle, and configuration model, see
+[E2B Sandbox Provider](E2B_SANDBOX_PROVIDER.md).
+
+> **Important**: The E2B provider does not automatically inject LLM API keys into sandboxes. If you
+> plan to use Claude models, add `ANTHROPIC_API_KEY` as a **global secret** in Settings > Secrets
+> after deploying. See [Secrets Management](SECRETS.md) for details.
+
 ### Anthropic
 
 1. Go to [Anthropic Console](https://console.anthropic.com)
@@ -259,6 +293,14 @@ access.
    > **Important**: The callback URL must match your deployed web app URL exactly. The
    > `{deployment_name}` is the unique value you set in `terraform.tfvars` (e.g., your GitHub
    > username or company name).
+
+   > **Keep "User-to-server token expiration" active** (GitHub App → **Optional Features**; it is
+   > the default for newly created Apps, but activate it if yours predates that default). Expiring
+   > user tokens are what make GitHub return a **refresh token** at sign-in, and Open-Inspect stores
+   > that per-user credential so sessions clone, commit, and push **as the signed-in user**. With
+   > expiration deactivated — or on an **OAuth App**, which never issues a refresh token — no
+   > per-user credential is captured and sessions fall back to the shared GitHub App **bot**
+   > identity for repository access.
 
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
@@ -326,12 +368,31 @@ Skip this step if you don't need Slack integration.
    - `groups:read`
    - `im:history`
    - `im:read`
+   - `files:read` (lets the bot read images attached to messages and forward them to sessions)
+   - `files:write`
    - `reactions:write`
 3. Click **"Install to Workspace"**
 4. Note the **Bot Token** (`xoxb-...`)
 
 > **Important**: If you update bot token scopes later, you must **reinstall the app** to your
 > workspace for the new permissions to take effect.
+
+### Upgrade an Existing Slack Deployment
+
+Queued delivery applies to every Slack completion, including text-only replies. Before the first
+`terraform apply` after upgrading:
+
+1. Add **Account | Queues | Edit** to the Cloudflare API token used by Terraform. Terraform needs
+   this permission to create the completion queue, dead-letter queue, Worker binding, and consumer.
+2. Add the Slack bot scopes `files:write` and `files:read` (needed to forward images attached to
+   Slack messages into sessions), reinstall the app once for the workspace, and update
+   `slack_bot_token` if Slack issued a replacement.
+3. Run `terraform apply`, then verify a text completion, an inbound image attached to a prompt, and
+   a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
+   the new resources; grant the permission and rerun the apply.
+
+No individual Slack user needs to reauthorize the app. Teams with `enable_slack_bot = false` do not
+create the Queue resources.
 
 ### Get Signing Secret
 
@@ -376,13 +437,10 @@ echo "token_encryption_key: $(openssl rand -base64 32)"
 # Repo secrets encryption key
 echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 
-# Internal callback secret
-echo "internal_callback_secret: $(openssl rand -base64 32)"
-
 # Modal API secret (use hex for this one)
 echo "modal_api_secret: $(openssl rand -hex 32)"
 
-# NextAuth secret
+# Browser authentication secret (Terraform retains the legacy input name)
 echo "nextauth_secret: $(openssl rand -base64 32)"
 
 # GitHub webhook secret (only if enabling GitHub bot)
@@ -458,6 +516,10 @@ modal_environment_web_suffix = "your-modal-web-suffix" # Lowercase letters, digi
 # vercel_sandbox_runtime    = "node24"
 # vercel_snapshot_expiration_ms = 0
 
+# E2B (only required when sandbox_provider = "e2b")
+# e2b_api_key               = "your-e2b-api-key"        # runtime REST API key (also auths the build)
+# e2b_template_id           = "open-inspect-sandbox"
+
 # GitHub App (used for both OAuth and repository access)
 github_client_id     = "Iv1.abc123..."           # From GitHub App settings
 github_client_secret = "your-client-secret"      # Generated in GitHub App settings
@@ -499,7 +561,6 @@ anthropic_api_key = "sk-ant-..."
 # Security Secrets (from Step 5)
 token_encryption_key          = "your-generated-value"
 repo_secrets_encryption_key   = "your-generated-value"
-internal_callback_secret      = "your-generated-value"
 modal_api_secret         = "your-generated-value"
 nextauth_secret          = "your-generated-value"
 
@@ -761,7 +822,7 @@ cloudflare_custom_domain = "app.example.com" # bare hostname, no scheme
 
 Cloudflare provisions the DNS record and edge certificate automatically. Notes:
 
-- The web app URL — including `NEXTAUTH_URL` and the links the bots send — becomes
+- The canonical browser-auth origin and the links the bots send become
   `https://{your-custom-domain}`, and the workers.dev route for the web Worker is disabled so the
   app has a single canonical origin.
 - Update the GitHub App callback URL (and the Google redirect URI, if Google login is enabled) to
@@ -857,7 +918,6 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_API_TOKEN`               | Vercel API token _(only if `web_platform = "vercel"`)_                                      |
 | `VERCEL_TEAM_ID`                 | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                |
 | `VERCEL_PROJECT_ID`              | Vercel project ID _(only if `web_platform = "vercel"`)_                                     |
-| `NEXTAUTH_URL`                   | Your web app URL                                                                            |
 | `MODAL_TOKEN_ID`                 | Modal token ID                                                                              |
 | `MODAL_TOKEN_SECRET`             | Modal token secret                                                                          |
 | `MODAL_WORKSPACE`                | Modal workspace name                                                                        |
@@ -893,9 +953,8 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `DEEPSEEK_API_KEY`               | DeepSeek API key (optional, required only for DeepSeek models)                              |
 | `TOKEN_ENCRYPTION_KEY`           | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`    | Generated encryption key (repo secrets)                                                     |
-| `INTERNAL_CALLBACK_SECRET`       | Generated callback secret                                                                   |
 | `MODAL_API_SECRET`               | Generated Modal API secret                                                                  |
-| `NEXTAUTH_SECRET`                | Generated NextAuth secret                                                                   |
+| `NEXTAUTH_SECRET`                | Generated browser-auth secret (legacy Actions secret name)                                  |
 | `ALLOWED_USERS`                  | Comma-separated GitHub usernames (or empty for all users)                                   |
 | `ALLOWED_EMAIL_DOMAINS`          | Comma-separated email domains (or empty for all domains)                                    |
 | `ALLOWED_EMAILS`                 | Comma-separated exact email addresses (for individual users on shared domains)              |
@@ -1052,6 +1111,29 @@ If the bot doesn't see the original message when tagged in a thread reply:
    check these scopes and that the bot is invited to the target channel.
 3. If you added missing scopes, **reinstall the app** to your workspace for the new permissions to
    take effect.
+
+### Slack image attachment does not reach the agent
+
+1. Verify the bot has the `files:read` scope and reinstall the app after adding it. The
+   `files:write` scope is for generated media posted back to Slack, not images sent to the agent.
+2. Use PNG, JPEG, WebP, or GIF images no larger than 10 MiB. Open-Inspect forwards at most six
+   images per message.
+3. In a channel, `@mention` the bot with the image. DMs do not require a mention. Watched-channel
+   automations do not forward file attachments.
+4. For channel mentions and replies, verify `channels:history` for public channels or
+   `groups:history` for private channels. Slack may omit files from the mention event, so the bot
+   uses conversation history to retrieve them.
+5. Check the Slack thread for a warning about images that were too large or could not be downloaded
+   or uploaded. Other images and any text are still sent when possible.
+
+### Slack completion does not attach generated media
+
+1. Verify the bot has the `files:write` scope and reinstall the app after adding it.
+2. Confirm the agent registered the image or video as a session artifact; repository files are not
+   uploaded automatically.
+3. Check that the file is PNG, JPEG, WebP, or MP4 and no larger than 10 MiB. A completion attaches
+   at most five files and 25 MiB total; other media remains available through **View Session**.
+4. Check Slack workspace policies for disabled uploads, prohibited file types, or exhausted storage.
 
 ### GitHub bot not responding to webhooks
 

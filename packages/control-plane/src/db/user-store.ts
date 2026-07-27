@@ -1,4 +1,6 @@
 import { generateId } from "../auth/crypto";
+import { isUniqueConstraintError } from "./errors";
+import type { SqlDatabase } from "./sql-database";
 
 // ── Public types ────────────────────────────────────────────────────
 
@@ -106,7 +108,7 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
 // ── UserStore ───────────────────────────────────────────────────────
 
 export class UserStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Core resolution entry point. Finds or creates a canonical user for the
@@ -398,9 +400,4 @@ export class UserStore {
       .bind(...values)
       .run();
   }
-}
-
-function isUniqueConstraintError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.toLowerCase().includes("unique constraint failed");
 }

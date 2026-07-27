@@ -11,6 +11,7 @@ import {
 } from "@/components/automations/automation-form";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -25,7 +26,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     setError("");
 
     try {
-      const res = await fetch(`/api/automations/${id}`, {
+      const res = await browserApiFetch(`/api/automations/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
@@ -57,7 +58,9 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
         <Link href="/automations">
-          <button className="text-sm text-accent hover:underline">Back to Automations</button>
+          <button type="button" className="text-sm text-accent hover:underline">
+            Back to Automations
+          </button>
         </Link>
       </div>
     );

@@ -1,4 +1,5 @@
 import { encryptToken, decryptToken } from "../auth/crypto";
+import type { SqlDatabase } from "./sql-database";
 
 /** Fallback token lifetime when GitHub doesn't provide expires_in (8 hours). */
 export const DEFAULT_TOKEN_LIFETIME_MS = 8 * 60 * 60 * 1000;
@@ -21,7 +22,7 @@ export type CasResult = { ok: true } | { ok: false; reason: "cas_conflict" };
 
 export class UserScmTokenStore {
   constructor(
-    private readonly db: D1Database,
+    private readonly db: SqlDatabase,
     private readonly encryptionKey: string
   ) {}
 

@@ -41,7 +41,7 @@ export async function resolveAutomationSessionTarget(
 ): Promise<AutomationSessionTarget> {
   if (run.environment_id) {
     const environmentInputs = await resolveEnvironmentTarget(
-      new EnvironmentStore(env.DB),
+      new EnvironmentStore(ctx.db),
       run.environment_id
     );
     const repositories = await resolveSessionRepositories(env, environmentInputs, ctx, log);

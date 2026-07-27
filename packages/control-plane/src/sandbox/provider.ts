@@ -38,6 +38,8 @@ export interface SessionRepositoryInfo {
   repoName: string;
   /** Base branch to clone (resolved at session create; never null). */
   baseBranch: string;
+  /** Immutable session-start commit used by the Changes capture protocol. */
+  baseSha?: string | null;
 }
 
 /**

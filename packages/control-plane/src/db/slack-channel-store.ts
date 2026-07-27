@@ -15,9 +15,10 @@
  */
 
 import type { AutomationRow } from "./automation-store";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 export class SlackChannelStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /** Enabled, non-deleted slack_event automations watching a channel (indexed by channel_id). */
   async getSlackAutomationsForChannel(channelId: string): Promise<AutomationRow[]> {
@@ -50,8 +51,8 @@ export class SlackChannelStore {
    * Public so a route can compose them with the automation insert/update into one
    * `db.batch`, keeping the canonical trigger_config and this index atomic.
    */
-  bindChannelStatements(automationId: string, channelIds: string[]): D1PreparedStatement[] {
-    const statements: D1PreparedStatement[] = [
+  bindChannelStatements(automationId: string, channelIds: string[]): SqlStatement[] {
+    const statements: SqlStatement[] = [
       this.db
         .prepare("DELETE FROM automation_slack_channels WHERE automation_id = ?")
         .bind(automationId),

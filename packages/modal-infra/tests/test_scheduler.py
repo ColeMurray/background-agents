@@ -496,7 +496,7 @@ class TestBuildImageCallbackPayloads:
             )
 
         callback.assert_awaited_once()
-        callback_url, payload = callback.await_args.args
+        callback_url, payload, _token = callback.await_args.args
         assert callback_url == "https://cp.test/image-builds/build-complete"
         duration = payload["build_duration_seconds"]
         assert isinstance(duration, float) and duration >= 0
@@ -526,7 +526,7 @@ class TestBuildImageCallbackPayloads:
             )
 
         callback.assert_awaited_once()
-        failure_url, payload = callback.await_args.args
+        failure_url, payload, _token = callback.await_args.args
         assert failure_url == "https://cp.test/image-builds/build-failed"
         assert payload == {
             "build_id": "imgb-1",
@@ -551,7 +551,7 @@ class TestBuildImageCallbackPayloads:
             )
 
         callback.assert_awaited_once()
-        failure_url, payload = callback.await_args.args
+        failure_url, payload, _token = callback.await_args.args
         assert failure_url == "https://cp.test/image-builds/build-failed"
         assert payload["build_id"] == "imgb-1"
         assert "repository_shas/runtime_version" in payload["error"]

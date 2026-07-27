@@ -10,6 +10,7 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo, ServerMessage, ParticipantPresence } from "../types";
+import type { SessionMessenger } from "./messenger";
 
 /**
  * Dependencies injected into PresenceService.
@@ -18,7 +19,7 @@ import type { ClientInfo, ServerMessage, ParticipantPresence } from "../types";
 export interface PresenceServiceDeps {
   getAuthenticatedClients: () => IterableIterator<ClientInfo>;
   getClientInfo: (ws: WebSocket) => ClientInfo | null;
-  broadcast: (message: ServerMessage) => void;
+  messenger: SessionMessenger;
   send: (ws: WebSocket, message: ServerMessage) => boolean;
   getSandboxSocket: () => WebSocket | null;
   isSpawning: () => boolean;
@@ -74,7 +75,7 @@ export class PresenceService {
    */
   broadcastPresence(): void {
     const participants = this.getPresenceList();
-    this.deps.broadcast({ type: "presence_update", participants });
+    this.deps.messenger.broadcast({ type: "presence_update", participants });
   }
 
   /**
@@ -98,7 +99,7 @@ export class PresenceService {
   async handleTyping(): Promise<void> {
     if (!this.deps.getSandboxSocket()) {
       if (!this.deps.isSpawning()) {
-        this.deps.broadcast({ type: "sandbox_warming" });
+        this.deps.messenger.broadcast({ type: "sandbox_warming" });
         await this.deps.spawnSandbox();
       }
     }

@@ -399,8 +399,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Name */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Name</label>
+        <label
+          htmlFor="automation-name"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Name
+        </label>
         <Input
+          id="automation-name"
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -781,10 +787,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Sentry Client Secret (create mode only) */}
       {triggerType === "sentry" && mode === "create" && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">
+          <label
+            htmlFor="sentry-client-secret"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
             Sentry Client Secret
           </label>
           <Input
+            id="sentry-client-secret"
             type="password"
             value={sentryClientSecret}
             onChange={(e) => setSentryClientSecret(e.target.value)}
@@ -824,12 +834,18 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Instructions */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Instructions</label>
+        <label
+          htmlFor="automation-instructions"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Instructions
+        </label>
         <FieldDescription className="mb-1.5">
           Main prompt for the agent when a run starts. For event-based triggers, a short summary of
           the event is inserted above this text.
         </FieldDescription>
         <Textarea
+          id="automation-instructions"
           value={instructions}
           onChange={(e) => setInstructions(e.target.value)}
           placeholder={

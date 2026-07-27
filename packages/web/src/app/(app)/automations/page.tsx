@@ -8,6 +8,7 @@ import { AutomationsList } from "@/components/automations/automations-list";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PlusIcon } from "@/components/ui/icons";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
 export default function AutomationsPage() {
   const { isOpen } = useSidebarContext();
@@ -17,12 +18,12 @@ export default function AutomationsPage() {
 
   const handleAction = async (id: string, action: "pause" | "resume" | "trigger" | "delete") => {
     setActionError(null);
-    const endpoint =
+    const endpoint: BrowserApiPath =
       action === "delete" ? `/api/automations/${id}` : `/api/automations/${id}/${action}`;
     const method = action === "delete" ? "DELETE" : "POST";
 
     try {
-      const res = await fetch(endpoint, { method });
+      const res = await browserApiFetch(endpoint, { method });
       if (!res.ok) {
         setActionError(`Failed to ${action} automation`);
         return;

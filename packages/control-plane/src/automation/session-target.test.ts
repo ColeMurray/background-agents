@@ -27,6 +27,7 @@ const ctx: RequestContext = {
   trace_id: "trace-1",
   request_id: "req-1",
   metrics: {} as RequestContext["metrics"],
+  db: env.DB,
 };
 
 function run(overrides?: Partial<AutomationRunRow>): AutomationRunRow {

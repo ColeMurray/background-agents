@@ -4,6 +4,7 @@
 
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import { createKvCacheStore } from "@open-inspect/shared";
 import type {
   EnrichedRepository,
@@ -42,7 +43,7 @@ interface CachedReposList {
  * Fetch repos via the source control provider, enrich with D1 metadata, and write to KV cache.
  * Runs either in the foreground (cache miss) or background (stale-while-revalidate).
  */
-async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
+async function refreshReposCache(env: Env, db: SqlDatabase, traceId?: string): Promise<void> {
   const provider = createRouteSourceControlProvider(env);
   const cacheStore = createKvCacheStore(env.REPOS_CACHE);
 
@@ -68,7 +69,7 @@ async function refreshReposCache(env: Env, traceId?: string): Promise<void> {
     return;
   }
 
-  const metadataStore = new RepoMetadataStore(env.DB);
+  const metadataStore = new RepoMetadataStore(db);
   let metadataMap: Map<string, RepoMetadata>;
   try {
     metadataMap = await metadataStore.getBatch(
@@ -146,7 +147,7 @@ async function handleListRepos(
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.trace_id));
+      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.db, ctx.trace_id));
     }
 
     return json({
@@ -177,7 +178,7 @@ async function handleListRepos(
     total_repos: repos.length,
   });
 
-  const metadataStore = new RepoMetadataStore(env.DB);
+  const metadataStore = new RepoMetadataStore(ctx.db);
   let metadataMap: Map<string, RepoMetadata>;
   try {
     metadataMap = await metadataStore.getBatch(
@@ -225,7 +226,7 @@ async function handleUpdateRepoMetadata(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
@@ -247,7 +248,7 @@ async function handleUpdateRepoMetadata(
     }).filter(([, v]) => v !== undefined)
   ) as RepoMetadata;
 
-  const metadataStore = new RepoMetadataStore(env.DB);
+  const metadataStore = new RepoMetadataStore(ctx.db);
 
   try {
     await metadataStore.upsert(owner, name, metadata);
@@ -277,14 +278,14 @@ async function handleGetRepoMetadata(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const params = extractRepoParams(match);
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
   const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
-  const metadataStore = new RepoMetadataStore(env.DB);
+  const metadataStore = new RepoMetadataStore(ctx.db);
 
   try {
     const metadata = await metadataStore.get(owner, name);

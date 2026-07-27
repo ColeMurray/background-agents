@@ -55,7 +55,7 @@ module "modal_app" {
       name = "internal-api"
       values = {
         MODAL_API_SECRET            = var.modal_api_secret
-        INTERNAL_CALLBACK_SECRET    = var.internal_callback_secret
+        SERVICE_AUTH_SECRET         = random_password.service_auth_secret_modal.result
         ALLOWED_CONTROL_PLANE_HOSTS = local.control_plane_host
         CONTROL_PLANE_URL           = local.control_plane_url
       }

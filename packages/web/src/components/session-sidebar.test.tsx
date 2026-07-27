@@ -22,8 +22,8 @@ const { mockPush } = vi.hoisted(() => ({
   mockPush: vi.fn(),
 }));
 
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({
     data: {
       user: {
         name: "Test User",
@@ -282,7 +282,11 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("Session 55")).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
+        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 }),
+        {
+          mode: "same-origin",
+          credentials: "same-origin",
+        }
       );
     });
   });
@@ -437,7 +441,10 @@ describe("SessionSidebar", () => {
 
     fireEvent.scroll(scrollContainer);
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey);
+      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey, {
+        mode: "same-origin",
+        credentials: "same-origin",
+      });
     });
 
     fireEvent.click(screen.getByText("Mine"));
@@ -566,7 +573,11 @@ describe("SessionSidebar", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", { method: "POST" });
+      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", {
+        method: "POST",
+        mode: "same-origin",
+        credentials: "same-origin",
+      });
     });
   });
 
@@ -607,7 +618,11 @@ describe("SessionSidebar", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", { method: "POST" });
+      expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/archive", {
+        method: "POST",
+        mode: "same-origin",
+        credentials: "same-origin",
+      });
     });
 
     expect(screen.getByRole("link", { name: /session 1/i })).toBeInTheDocument();

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-import { generateInternalToken } from "./auth/internal";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
 
@@ -11,6 +12,10 @@ const integrationSettingsMocks = vi.hoisted(() => ({
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
+}));
+
+vi.mock("./db/model-preferences", () => ({
+  getEffectiveEnabledModels: vi.fn(),
 }));
 
 vi.mock("./session/integration-settings-resolution", () => integrationSettingsMocks);
@@ -75,21 +80,17 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
 
   async function makeRequest(env: Record<string, unknown>): Promise<Response> {
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET as string);
-
     return handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
         body: JSON.stringify({ title: "Child task", prompt: "Do the thing" }),
+        service: "modal",
       }),
       env as never
     );
@@ -116,7 +117,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -173,7 +174,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -205,7 +206,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -214,15 +215,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-
     const response = await handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        service: "modal",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -238,6 +234,33 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     expect(payload.error).toContain("Valid models:");
   });
 
+  it("returns 503 when enabled model preferences cannot be read", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    vi.mocked(getEffectiveEnabledModels).mockRejectedValue(new Error("D1 unavailable"));
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(spawnContext)),
+    } as never;
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: () => parentStub,
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: "Model preferences unavailable" });
+    expect(store.create).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for a malformed child spawn request", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(function () {
@@ -245,7 +268,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     });
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -254,15 +277,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-
     const response = await handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        service: "modal",
         body: JSON.stringify({ title: "Child task" }),
       }),
       env as never
@@ -284,7 +302,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -317,7 +335,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -359,7 +377,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -387,7 +405,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -396,15 +414,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       },
     };
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET);
-
     const response = await handleRequest(
-      new Request(`https://test.local/sessions/${parentId}/children`, {
+      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        service: "modal",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -432,7 +445,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {
@@ -472,7 +485,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     } as never;
 
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "github",
       DB: {},
       SESSION: {

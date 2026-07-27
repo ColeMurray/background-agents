@@ -106,7 +106,7 @@ function makeEnv(
     CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "secret",
-    INTERNAL_CALLBACK_SECRET: "internal-secret",
+    SERVICE_AUTH_SECRET: "internal-secret",
     SLACK_TRIGGERS_ENABLED: opts.triggersEnabled ? "true" : undefined,
   } as unknown as Env;
 }

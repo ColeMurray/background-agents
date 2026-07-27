@@ -1,0 +1,11 @@
+[project]
+name = "open-inspect-e2b"
+version = "0.1.0"
+description = "E2B sandbox template build for Open-Inspect coding agent"
+requires-python = ">=3.12"
+dependencies = [
+    "e2b>=2.29.1",
+]
+
+[tool.uv]
+package = false

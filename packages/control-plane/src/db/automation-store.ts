@@ -1,7 +1,7 @@
 /**
  * AutomationStore — D1 persistence for automations and automation runs.
  *
- * Follows the same pattern as SessionIndexStore: constructor takes D1Database,
+ * Follows the same pattern as SessionIndexStore: constructor takes SqlDatabase,
  * snake_case rows in the database, camelCase types at the API boundary.
  */
 
@@ -15,6 +15,7 @@ import type {
   AutomationRunStatus,
   TriggerConfig,
 } from "@open-inspect/shared";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 // ─── Internal row types ──────────────────────────────────────────────────────
 
@@ -264,7 +265,7 @@ export function toAutomationInvocation(
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 export class AutomationStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   // --- Automation CRUD ---
 
@@ -272,7 +273,7 @@ export class AutomationStore {
    * Prepared INSERT for an automation row. Public so a route can compose it with
    * `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
-  bindAutomationInsert(row: AutomationRow): D1PreparedStatement {
+  bindAutomationInsert(row: AutomationRow): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO automations
@@ -355,7 +356,7 @@ export class AutomationStore {
    * null when `fields` carries nothing to write. Public so a route can compose it
    * with `SlackChannelStore.bindChannelStatements` into one atomic `db.batch`.
    */
-  bindAutomationUpdate(id: string, fields: Partial<AutomationRow>): D1PreparedStatement | null {
+  bindAutomationUpdate(id: string, fields: Partial<AutomationRow>): SqlStatement | null {
     const setClauses: string[] = [];
     const params: unknown[] = [];
 
@@ -496,7 +497,7 @@ export class AutomationStore {
     automationId: string,
     repositories: AutomationRepositoryInsert[],
     now: number
-  ): D1PreparedStatement[] {
+  ): SqlStatement[] {
     return repositories.map((repository) =>
       this.db
         .prepare(
@@ -559,7 +560,7 @@ export class AutomationStore {
     automationId: string,
     environmentIds: string[],
     now: number
-  ): D1PreparedStatement[] {
+  ): SqlStatement[] {
     return environmentIds.map((environmentId) =>
       this.db
         .prepare(
@@ -576,7 +577,7 @@ export class AutomationStore {
     automationId: string,
     environmentIds: string[],
     now: number
-  ): D1PreparedStatement[] {
+  ): SqlStatement[] {
     return [
       this.db
         .prepare(`DELETE FROM automation_environments WHERE automation_id = ?`)
@@ -590,7 +591,7 @@ export class AutomationStore {
     automationId: string,
     repositories: AutomationRepositoryInsert[],
     now: number
-  ): D1PreparedStatement[] {
+  ): SqlStatement[] {
     return [
       this.db
         .prepare(`DELETE FROM automation_repositories WHERE automation_id = ?`)
@@ -806,7 +807,7 @@ export class AutomationStore {
   }): Promise<{ inserted: boolean }> {
     const invocation = params.invocation;
     const overlap = this.overlapPredicate(invocation.automation_id, params.overlapScope);
-    const statements: D1PreparedStatement[] = [];
+    const statements: SqlStatement[] = [];
 
     statements.push(
       this.db
@@ -892,7 +893,7 @@ export class AutomationStore {
     invocation: AutomationInvocationRow,
     advanceSchedule?: { nextRunAt: number }
   ): Promise<{ inserted: boolean }> {
-    const statements: D1PreparedStatement[] = [
+    const statements: SqlStatement[] = [
       this.db
         .prepare(
           `INSERT OR IGNORE INTO automation_invocations

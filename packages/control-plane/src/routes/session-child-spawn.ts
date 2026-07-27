@@ -4,11 +4,14 @@ import {
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
+  resolveEnabledModel,
   spawnChildSessionRequestSchema,
   spawnContextSchema,
+  type ValidModel,
   VALID_MODELS,
 } from "@open-inspect/shared";
 import { generateId } from "../auth/crypto";
+import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
@@ -43,7 +46,7 @@ async function handleSpawnChild(
     return error("title and prompt are required");
   }
 
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
 
   const parentSession = await sessionStore.get(parentId);
   const parentUserId = parentSession?.userId ?? null;
@@ -52,7 +55,7 @@ async function handleSpawnChild(
   // environment-launched parents, that environment's overrides (design §13.5).
   const childSandboxSettings = parentSession
     ? await resolveSandboxSettings(
-        env.DB,
+        ctx.db,
         parentSession.repoOwner,
         parentSession.repoName,
         parentEnvironmentId
@@ -121,15 +124,32 @@ async function handleSpawnChild(
     }
   }
 
-  const rawModel = body.model ?? spawnContext.model;
+  let enabledModels: ValidModel[];
+  try {
+    enabledModels = await getEffectiveEnabledModels(ctx.db);
+  } catch (e) {
+    logger.error("Failed to resolve enabled models for child session", {
+      event: "session.spawn_child_model_preferences_failed",
+      parent_id: parentId,
+      error: e instanceof Error ? e.message : String(e),
+      trace_id: ctx.trace_id,
+      request_id: ctx.request_id,
+    });
+    return error("Model preferences unavailable", 503);
+  }
   if (body.model !== undefined && !isValidModel(body.model)) {
     return error(`Invalid model "${body.model}". Valid models: ${VALID_MODELS.join(", ")}`, 400);
   }
-  const model = getValidModelOrDefault(rawModel);
+  const requestedModel = getValidModelOrDefault(body.model ?? spawnContext.model);
+  if (body.model !== undefined && !enabledModels.includes(requestedModel)) {
+    return error(`Model "${body.model}" is not enabled`, 400);
+  }
+  const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  const requestedReasoningEffort = body.reasoningEffort ?? spawnContext.reasoningEffort;
   const reasoningEffort =
-    body.reasoningEffort && isValidReasoningEffort(model, body.reasoningEffort)
-      ? body.reasoningEffort
-      : spawnContext.reasoningEffort;
+    requestedReasoningEffort && isValidReasoningEffort(model, requestedReasoningEffort)
+      ? requestedReasoningEffort
+      : null;
 
   const childDepth = parentDepth + 1;
   const childId = generateId();
@@ -143,7 +163,7 @@ async function handleSpawnChild(
   });
 
   const childCodeServerEnabled = await resolveCodeServerEnabled(
-    env.DB,
+    ctx.db,
     spawnContext.repoOwner,
     spawnContext.repoName,
     parentEnvironmentId

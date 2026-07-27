@@ -1,4 +1,10 @@
-import { isValidModel, normalizeValidModels, type ValidModel } from "@open-inspect/shared";
+import {
+  DEFAULT_ENABLED_MODELS,
+  isValidModel,
+  normalizeValidModels,
+  type ValidModel,
+} from "@open-inspect/shared";
+import type { SqlDatabase } from "./sql-database";
 
 export class ModelPreferencesValidationError extends Error {
   constructor(message: string) {
@@ -8,7 +14,7 @@ export class ModelPreferencesValidationError extends Error {
 }
 
 export class ModelPreferencesStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   /**
    * Get the list of enabled model IDs, or null if no preferences stored.
@@ -57,4 +63,13 @@ export class ModelPreferencesStore {
 
     return normalized;
   }
+}
+
+/** Resolve the currently enabled catalog, using defaults only when no usable preferences exist. */
+export async function getEffectiveEnabledModels(db: SqlDatabase): Promise<ValidModel[]> {
+  const stored = await new ModelPreferencesStore(db).getEnabledModels();
+  if (!stored) return DEFAULT_ENABLED_MODELS;
+
+  const normalized = normalizeValidModels(stored);
+  return normalized.length > 0 ? normalized : DEFAULT_ENABLED_MODELS;
 }

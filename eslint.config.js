@@ -65,6 +65,28 @@ export default tseslint.config(
     },
   },
 
+  // Control-plane data-layer boundary: all production code must use the
+  // injected SqlDatabase (ctx.db, a DO's db field, or a db parameter), never
+  // the raw env.DB binding — reading the binding elsewhere would silently
+  // bypass the injection path and, on request paths, query instrumentation.
+  // The only legitimate reads are the composition roots (router.ts and the
+  // two Durable Object constructors), each carrying an inline
+  // eslint-disable with justification.
+  {
+    files: ["packages/control-plane/src/**/*.ts"],
+    ignores: ["packages/control-plane/src/**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: 'MemberExpression[property.name="DB"]',
+          message:
+            "Use the injected SqlDatabase (ctx.db / this.db / a db param) instead of env.DB; the binding is read only at composition roots.",
+        },
+      ],
+    },
+  },
+
   // React-specific configuration for web package
   {
     files: ["packages/web/**/*.{ts,tsx}"],
@@ -88,6 +110,55 @@ export default tseslint.config(
       ...reactHooksPlugin.configs.recommended.rules,
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
+    },
+  },
+
+  // Web code depends on app-owned auth and request seams. OAuth and session
+  // protocol code is owned by the control plane.
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "next-auth",
+              message: "Use the app-owned browser authentication seams.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["next-auth/*"],
+              message: "Use the app-owned browser authentication seams.",
+            },
+            {
+              regex: "(?:^|/)lib/auth$",
+              message: "Use getServerAuthSession from @/lib/server-auth-session.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    ignores: [
+      "**/*.test.{ts,tsx}",
+      "**/*.spec.{ts,tsx}",
+      "packages/web/src/lib/auth.ts",
+      "packages/web/src/lib/browser-api-fetch.ts",
+      "packages/web/src/lib/control-plane-transport.ts",
+      "packages/web/src/lib/github-org-membership.ts",
+    ],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Use an app-owned HTTP transport instead of raw fetch.",
+        },
+      ],
     },
   },
 

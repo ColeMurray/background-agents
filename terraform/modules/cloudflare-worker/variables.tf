@@ -65,6 +65,15 @@ variable "r2_buckets" {
   default = []
 }
 
+variable "queue_bindings" {
+  description = "List of Queue producer bindings"
+  type = list(object({
+    binding_name = string
+    queue_name   = string
+  }))
+  default = []
+}
+
 variable "plain_text_bindings" {
   description = "List of plain text environment variable bindings"
   type = list(object({

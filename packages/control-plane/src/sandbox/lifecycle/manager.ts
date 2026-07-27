@@ -227,7 +227,9 @@ function buildSandboxIdForSession(session: SessionRow, now: number): string {
 function multiRepoSpawnFields(
   repositories: SessionRepositoryInfo[]
 ): Pick<CreateSandboxConfig, "repositories"> {
-  return repositories.length > 1 ? { repositories } : {};
+  return repositories.length > 1 || repositories.some((repository) => repository.baseSha)
+    ? { repositories }
+    : {};
 }
 
 // ==================== MCP Server Lookup ====================
@@ -269,12 +271,22 @@ export interface LifecycleCallbacks {
 // ==================== Manager ====================
 
 /**
+ * The narrow lifecycle surface consumed by collaborators (e.g. the session
+ * message queue) that spawn sandboxes and record activity but don't manage
+ * the rest of the sandbox lifecycle.
+ */
+export interface SandboxLifecycle {
+  spawnSandbox(): Promise<void>;
+  updateLastActivity(timestamp: number): void;
+}
+
+/**
  * Manages sandbox lifecycle operations.
  *
  * Uses dependency injection for all external interactions, enabling unit testing
  * with mocked dependencies.
  */
-export class SandboxLifecycleManager {
+export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * In-memory flag to prevent concurrent spawn attempts within the same request.
    * This is NOT persisted - it protects against multiple spawns in one DO method call.

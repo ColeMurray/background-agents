@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
-import { MessageService } from "./message.service";
+import { enqueuePromptRequestSchema, MessageService } from "./message.service";
 
 function createService() {
   const repository = {
@@ -34,6 +34,38 @@ function createService() {
 }
 
 describe("MessageService", () => {
+  it("parses valid enqueue prompt request bodies", () => {
+    const body = {
+      content: "hello",
+      authorId: "github:123",
+      source: "github",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      attachments: [{ attachmentId: "attachment-1", name: "screenshot.png" }],
+      callbackContext: { source: "automation", runId: "run-1" },
+      scmEnrichment: {
+        userId: "user-1",
+        login: "octocat",
+        name: null,
+        email: null,
+        accessTokenEncrypted: "encrypted-token",
+        refreshTokenEncrypted: null,
+        tokenExpiresAt: null,
+      },
+    };
+
+    expect(enqueuePromptRequestSchema.safeParse(body).success).toBe(true);
+  });
+
+  it("rejects malformed enqueue prompt request bodies", () => {
+    const result = enqueuePromptRequestSchema.safeParse({
+      content: "hello",
+      authorId: "user-1",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("delegates enqueuePrompt to SessionMessageQueue", async () => {
     const { service, messageQueue } = createService();
     vi.mocked(messageQueue.enqueuePromptFromApi).mockResolvedValue({
@@ -175,7 +207,13 @@ describe("MessageService", () => {
         source: "web",
         model: null,
         reasoning_effort: null,
-        attachments: null,
+        attachments: JSON.stringify([
+          {
+            name: "screenshot.png",
+            attachmentId: "attachment-1",
+            mimeType: "image/png",
+          },
+        ]),
         callback_context: null,
         status: "pending",
         error_message: null,
@@ -190,7 +228,7 @@ describe("MessageService", () => {
         source: "web",
         model: null,
         reasoning_effort: null,
-        attachments: null,
+        attachments: "invalid-json",
         callback_context: null,
         status: "pending",
         error_message: null,
@@ -221,10 +259,43 @@ describe("MessageService", () => {
     expect(result.hasMore).toBe(true);
     expect(result.cursor).toBe("2000");
     expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.attachments).toEqual([
+      {
+        name: "screenshot.png",
+        attachmentId: "attachment-1",
+        mimeType: "image/png",
+      },
+    ]);
+    expect(result.messages[1]?.attachments).toBeNull();
     expect(repository.listMessages).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,
       status: "pending",
     });
+  });
+
+  it("returns null attachments for a stored empty array", () => {
+    const { service, repository } = createService();
+    vi.mocked(repository.listMessages).mockReturnValue([
+      {
+        id: "m1",
+        author_id: "p1",
+        content: "hello",
+        source: "web",
+        model: null,
+        reasoning_effort: null,
+        attachments: "[]",
+        callback_context: null,
+        status: "pending",
+        error_message: null,
+        created_at: 1000,
+        started_at: null,
+        completed_at: null,
+      },
+    ]);
+
+    const result = service.listMessages({ cursor: null, limit: 1, status: null });
+
+    expect(result.messages).toEqual([expect.objectContaining({ attachments: null })]);
   });
 });

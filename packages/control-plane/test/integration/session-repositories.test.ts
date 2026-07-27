@@ -4,16 +4,10 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
-import { generateInternalToken } from "../../src/auth/internal";
 import { cleanD1Tables } from "./cleanup";
-import { initSession, queryDO } from "./helpers";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
+import { initSession, queryDO, serviceFetch } from "./helpers";
 
 type MemberRow = {
   position: number;
@@ -200,16 +194,19 @@ describe("D1 session index repositories", () => {
 describe("POST /sessions repository list validation", () => {
   beforeEach(cleanD1Tables);
 
+  // session-create requires a participant identity: sign as a bot with an
+  // asserted actor (the userless web service credential is rejected, 403).
+  const actorAuth = { service: "slack-bot", actor: "slack:U0123" } as const;
+
   it("rejects repositories combined with scalar repo fields", async () => {
-    const res = await SELF.fetch("https://test.local/sessions", {
+    const res = await serviceFetch("https://test.local/sessions", {
       method: "POST",
-      headers: await authHeaders(),
       body: JSON.stringify({
         repoOwner: "acme",
         repoName: "web-app",
         repositories: [{ repoOwner: "acme", repoName: "frontend" }],
-        userId: "user-1",
       }),
+      ...actorAuth,
     });
 
     expect(res.status).toBe(400);
@@ -217,10 +214,10 @@ describe("POST /sessions repository list validation", () => {
   });
 
   it("rejects an empty repositories list", async () => {
-    const res = await SELF.fetch("https://test.local/sessions", {
+    const res = await serviceFetch("https://test.local/sessions", {
       method: "POST",
-      headers: await authHeaders(),
-      body: JSON.stringify({ repositories: [], userId: "user-1" }),
+      body: JSON.stringify({ repositories: [] }),
+      ...actorAuth,
     });
 
     expect(res.status).toBe(400);
@@ -230,16 +227,15 @@ describe("POST /sessions repository list validation", () => {
   it("names every unresolvable repository in the failure", async () => {
     // The test env has no GitHub App configured, so every lookup throws —
     // the resolver must aggregate rather than fail on the first entry.
-    const res = await SELF.fetch("https://test.local/sessions", {
+    const res = await serviceFetch("https://test.local/sessions", {
       method: "POST",
-      headers: await authHeaders(),
       body: JSON.stringify({
         repositories: [
           { repoOwner: "acme", repoName: "frontend" },
           { repoOwner: "acme", repoName: "backend" },
         ],
-        userId: "user-1",
       }),
+      ...actorAuth,
     });
 
     expect(res.status).toBe(500);

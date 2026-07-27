@@ -23,12 +23,13 @@ import {
 import type { SecretsWriteResult } from "./scoped-secrets";
 import { normalizeKey, validateKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const log = createLogger("environment-secrets");
 
 export class EnvironmentSecretsStore {
   constructor(
-    private readonly db: D1Database,
+    private readonly db: SqlDatabase,
     private readonly encryptionKey: string
   ) {}
 
@@ -168,7 +169,7 @@ export class EnvironmentSecretsStore {
     key: string,
     encryptedValue: string,
     now: number
-  ): D1PreparedStatement {
+  ): SqlStatement {
     return this.db
       .prepare(
         `INSERT INTO environment_secrets

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStatus } from "@open-inspect/shared";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 
 const sessionStoreMock = {
@@ -44,6 +45,7 @@ function createCtx(): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
+    db: {} as SqlDatabase,
     metrics: {
       d1Queries: [],
       spans: {},

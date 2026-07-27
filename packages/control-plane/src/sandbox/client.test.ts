@@ -73,22 +73,6 @@ describe("ModalClient", () => {
     vi.restoreAllMocks();
   });
 
-  it("uses the Modal environment web suffix in endpoint URLs", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ success: true, data: { status: "ok", service: "modal" } }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      })
-    );
-
-    const client = createModalClient("secret", "acme", "prod-web");
-    await client.health();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://acme-prod-web--open-inspect-api-health.modal.run"
-    );
-  });
-
   it("routes the restore session_config through buildSessionConfig (carries mcp_servers)", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { sandbox_id: "sb-1" } }), {
@@ -437,6 +421,7 @@ describe("ModalClient", () => {
       buildId: "imgb-1",
       callbackUrl: "https://cp.test/image-builds/build-complete",
       failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+      callbackToken: "cb-token-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       buildTimeoutSeconds: 2400,
     });
@@ -452,6 +437,7 @@ describe("ModalClient", () => {
       build_id: "imgb-1",
       callback_url: "https://cp.test/image-builds/build-complete",
       failure_callback_url: "https://cp.test/image-builds/build-failed",
+      callback_token: "cb-token-1",
       repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "develop" }],
       build_timeout_seconds: 2400,
     });
@@ -475,6 +461,7 @@ describe("ModalClient", () => {
       buildId: "imgb-1",
       callbackUrl: "https://cp.test/image-builds/build-complete",
       failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+      callbackToken: "cb-token-1",
       repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     });
 

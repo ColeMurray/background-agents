@@ -1,16 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SELF, env } from "cloudflare:test";
-import { generateInternalToken } from "../../src/auth/internal";
+import { env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionPullRequestRecord } from "../../src/db/session-pull-request-store";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, queryDO } from "./helpers";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-}
+import { initNamedSession, queryDO, serviceFetch } from "./helpers";
 
 async function createIndexedSession(sessionName: string) {
   const { stub } = await initNamedSession(sessionName);
@@ -113,9 +107,9 @@ function makePullRequestEvent(
 }
 
 async function postGitHubEvent(body: Record<string, unknown>): Promise<Response> {
-  return SELF.fetch("https://test.local/internal/github-event", {
+  return serviceFetch("https://test.local/internal/github-event", {
     method: "POST",
-    headers: await authHeaders(),
+    service: "github-bot",
     body: JSON.stringify(body),
   });
 }
@@ -251,10 +245,9 @@ describe("POST /sessions/:id/pull-requests/refresh", () => {
     const sessionName = `pr-refresh-${Date.now()}`;
     await createIndexedSession(sessionName);
 
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-    const res = await SELF.fetch(
+    const res = await serviceFetch(
       `https://test.local/sessions/${sessionName}/pull-requests/refresh`,
-      { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+      { method: "POST" }
     );
 
     expect(res.status).toBe(202);

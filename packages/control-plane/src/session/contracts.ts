@@ -10,6 +10,7 @@ export const SessionInternalPaths = {
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
   createMediaArtifact: "/internal/create-media-artifact",
+  attachments: "/internal/attachments",
   participants: "/internal/participants",
   events: "/internal/events",
   artifacts: "/internal/artifacts",
@@ -31,6 +32,11 @@ export const SessionInternalPaths = {
   updateTitle: "/internal/update-title",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",
+  diffState: "/internal/diff-state",
+  diffStore: "/internal/diff-store",
+  diffFailure: "/internal/diff-failure",
+  diffResolveFile: "/internal/diff-resolve-file",
+  diffRetry: "/internal/diff-retry",
 } as const;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];

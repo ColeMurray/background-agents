@@ -20,6 +20,7 @@ import {
   type SlackRoutingRule,
 } from "@open-inspect/shared";
 import { normalizeSandboxSettings } from "../sandbox/settings";
+import type { SqlDatabase } from "./sql-database";
 
 type SettingsLevel = "global" | "repo";
 
@@ -48,7 +49,7 @@ export function supportsEnvironmentSettings(
 }
 
 export class IntegrationSettingsStore {
-  constructor(private readonly db: D1Database) {}
+  constructor(private readonly db: SqlDatabase) {}
 
   async getGlobal<K extends IntegrationId>(
     integrationId: K

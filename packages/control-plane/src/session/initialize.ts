@@ -124,7 +124,7 @@ export async function initializeSession(
       : [];
 
   // Step 1: D1 index (must succeed before DO init starts sandbox warming)
-  const sessionStore = new SessionIndexStore(env.DB);
+  const sessionStore = new SessionIndexStore(ctx.db);
   await sessionStore.create({
     id: input.sessionId,
     title: input.title || null,

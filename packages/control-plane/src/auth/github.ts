@@ -2,7 +2,7 @@
  * GitHub authentication utilities.
  */
 
-import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { DEFAULT_APP_NAME, formatGitHubNoreplyEmail } from "@open-inspect/shared";
 import { z } from "zod";
 import { decryptToken, encryptToken } from "./crypto";
 import { githubTokenResponseSchema, type GitHubUser, type GitHubTokenResponse } from "../types";
@@ -10,6 +10,30 @@ import { githubTokenResponseSchema, type GitHubUser, type GitHubTokenResponse } 
 const githubOAuthErrorSchema = z.object({
   error: z.string().optional(),
   error_description: z.string().optional(),
+});
+
+/**
+ * The `/user` fields this service depends on. `id` and `login` are the identity
+ * keys and are validated strictly — a malformed 200 (e.g. no `id`) must fail
+ * closed rather than mint a subject on the literal string "undefined". Display
+ * fields are lenient (absent → null) so a valid-but-partial response still
+ * resolves an identity.
+ */
+const githubUserSchema = z.object({
+  id: z.number(),
+  login: z.string().min(1),
+  name: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  email: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  avatar_url: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? ""),
 });
 
 async function parseGitHubTokenResponse(response: Response): Promise<GitHubTokenResponse> {
@@ -93,12 +117,25 @@ export async function refreshAccessToken(
   return parseGitHubTokenResponse(response);
 }
 
+/** Error from a GitHub API call, carrying the HTTP status for callers that map it. */
+export class GitHubUserApiError extends Error {
+  constructor(readonly status: number) {
+    super(`GitHub API error: ${status}`);
+    this.name = "GitHubUserApiError";
+  }
+}
+
 /**
  * Get current user info from GitHub.
+ *
+ * @throws {GitHubUserApiError} on non-2xx responses, with `status` set.
+ * @throws {Error} on a 2xx response whose body is not a valid user — fail
+ * closed rather than let a malformed identity through.
  */
 export async function getGitHubUser(
   accessToken: string,
-  userAgent: string = DEFAULT_APP_NAME
+  userAgent: string = DEFAULT_APP_NAME,
+  signal?: AbortSignal
 ): Promise<GitHubUser> {
   const response = await fetch("https://api.github.com/user", {
     headers: {
@@ -106,21 +143,42 @@ export async function getGitHubUser(
       Accept: "application/vnd.github.v3+json",
       "User-Agent": userAgent,
     },
+    signal,
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status}`);
+    throw new GitHubUserApiError(response.status);
   }
 
-  return response.json() as Promise<GitHubUser>;
+  const parsed = githubUserSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) {
+    throw new Error("Malformed GitHub user response");
+  }
+  return parsed.data;
 }
+
+const githubUserEmailsSchema = z.array(
+  z.object({
+    email: z.string().min(1),
+    primary: z.boolean(),
+    verified: z.boolean(),
+  })
+);
 
 /**
  * Get user's email addresses from GitHub.
+ *
+ * @throws {GitHubUserApiError} on non-2xx responses, with `status` set — most
+ * often 403 when the GitHub App is missing the "Email addresses" permission,
+ * or 404 when an OAuth token lacks the email scope.
+ * @throws {Error} on a 2xx response whose body is not a valid email list —
+ * email evidence is an identity-linking key, so a malformed body must fail
+ * closed, never read as "no email".
  */
 export async function getGitHubUserEmails(
   accessToken: string,
-  userAgent: string = DEFAULT_APP_NAME
+  userAgent: string = DEFAULT_APP_NAME,
+  signal?: AbortSignal
 ): Promise<Array<{ email: string; primary: boolean; verified: boolean }>> {
   const response = await fetch("https://api.github.com/user/emails", {
     headers: {
@@ -128,13 +186,18 @@ export async function getGitHubUserEmails(
       Accept: "application/vnd.github.v3+json",
       "User-Agent": userAgent,
     },
+    signal,
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub API error: ${response.status}`);
+    throw new GitHubUserApiError(response.status);
   }
 
-  return response.json() as Promise<Array<{ email: string; primary: boolean; verified: boolean }>>;
+  const parsed = githubUserEmailsSchema.safeParse(await response.json().catch(() => null));
+  if (!parsed.success) {
+    throw new Error("Malformed GitHub user emails response");
+  }
+  return parsed.data;
 }
 
 /**
@@ -201,7 +264,7 @@ export async function getValidAccessToken(
  * Generate noreply email for users with private email.
  */
 export function generateNoreplyEmail(githubUser: GitHubUser): string {
-  return `${githubUser.id}+${githubUser.login}@users.noreply.github.com`;
+  return formatGitHubNoreplyEmail(githubUser);
 }
 
 /**

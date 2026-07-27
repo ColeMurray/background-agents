@@ -63,38 +63,3 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     return false;
   }
 }
-
-/**
- * Format file path for display (show basename or last N characters)
- */
-export function formatFilePath(
-  filePath: string,
-  maxLength = 40
-): { display: string; full: string } {
-  if (!filePath) return { display: "", full: "" };
-
-  const parts = filePath.split("/");
-  const basename = parts[parts.length - 1];
-
-  if (basename.length <= maxLength) {
-    return { display: basename, full: filePath };
-  }
-
-  return {
-    display: basename.slice(0, maxLength - 3) + "...",
-    full: filePath,
-  };
-}
-
-/**
- * Format number with +/- prefix for diff stats
- */
-export function formatDiffStat(
-  additions: number,
-  deletions: number
-): { additions: string; deletions: string } {
-  return {
-    additions: additions > 0 ? `+${additions}` : "+0",
-    deletions: deletions > 0 ? `-${deletions}` : "-0",
-  };
-}

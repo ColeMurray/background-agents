@@ -32,8 +32,8 @@ export interface Env {
   /** Webhook secret for verifying GitHub webhook signatures. */
   GITHUB_WEBHOOK_SECRET: string;
 
-  /** Shared secret for HMAC auth to the control plane. */
-  INTERNAL_CALLBACK_SECRET: string;
+  /** Per-service sig1 signing secret. */
+  SERVICE_AUTH_SECRET?: string;
 
   /** Optional log level override. */
   LOG_LEVEL?: string;

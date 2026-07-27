@@ -2,6 +2,7 @@ import { type CodeServerSettings, type SandboxSettings } from "@open-inspect/sha
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import { createLogger } from "../logger";
 import type { RepoIdentity } from "./repository-target";
+import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("session-integration-settings");
 
@@ -12,7 +13,7 @@ const logger = createLogger("session-integration-settings");
  * the allowlist stays evaluated against the repo.
  */
 export async function resolveCodeServerEnabled(
-  db: D1Database | undefined,
+  db: SqlDatabase | undefined,
   repoOwner: string | null,
   repoName: string | null,
   environmentId?: string | null
@@ -47,7 +48,7 @@ export async function resolveCodeServerEnabled(
  * the repo.
  */
 export async function resolveSandboxSettings(
-  db: D1Database | undefined,
+  db: SqlDatabase | undefined,
   repoOwner: string | null,
   repoName: string | null,
   environmentId?: string | null
@@ -121,7 +122,7 @@ export interface SessionScopedSettings {
  * resolvers' null-repo behavior.
  */
 export async function resolveSessionScopedSettings(
-  db: D1Database | undefined,
+  db: SqlDatabase | undefined,
   members: readonly RepoIdentity[],
   environmentId?: string | null
 ): Promise<SessionScopedSettings> {

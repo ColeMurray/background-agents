@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { RepoIcon, ChevronDownIcon } from "@/components/ui/icons";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 interface RepoSecretsResponse {
   secrets: { key: string }[];
@@ -68,7 +69,7 @@ export function EnvironmentSecretsImport({
     setImporting(true);
 
     try {
-      const response = await fetch(`/api/environments/${environmentId}/secrets/import`, {
+      const response = await browserApiFetch(`/api/environments/${environmentId}/secrets/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

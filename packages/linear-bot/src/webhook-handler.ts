@@ -21,7 +21,7 @@ import {
   updateAgentSession,
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
-import { buildInternalAuthHeaders } from "./utils/internal";
+import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
 import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
@@ -41,8 +41,10 @@ const log = createLogger("handler");
 const sessionEventsSummaryResponseSchema = z.object({
   events: z.array(
     z.object({
-      type: z.string(),
-      data: z.record(z.string(), z.unknown()),
+      type: z.literal("token"),
+      data: z.object({
+        content: z.string(),
+      }),
     })
   ),
 });
@@ -130,13 +132,6 @@ export function buildFollowUpPrompt(params: {
   ].join("\n");
 }
 
-async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-}
-
 /**
  * Create a session via the control plane.
  */
@@ -153,15 +148,21 @@ async function createSession(
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
-  const headers = await getAuthHeaders(env, traceId);
-  const response = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
+  const url = "https://internal/sessions";
+  const body = JSON.stringify({
+    ...targetRequestFields(target),
+    title: params.title,
+    model: params.model,
+    reasoningEffort: params.reasoningEffort,
+    actorDisplayName: params.actorDisplayName,
+    actorEmail: params.actorEmail,
+  });
+  const response = await signedControlPlaneFetch(env, {
     method: "POST",
-    headers,
-    body: JSON.stringify({
-      ...targetRequestFields(target),
-      ...params,
-      spawnSource: "linear-bot",
-    }),
+    url,
+    body,
+    actor: params.actorUserId ? `linear:${params.actorUserId}` : undefined,
+    traceId,
   });
 
   if (!response.ok) {
@@ -174,7 +175,7 @@ async function createSession(
     return { ok: false, status: response.status, body };
   }
 
-  const result = createSessionResponseSchema.safeParse(await response.json());
+  const result = createSessionResponseSchema.safeParse(await response.json().catch(() => null));
   if (!result.success) {
     return { ok: false, status: response.status, body: "invalid response" };
   }
@@ -220,12 +221,21 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   if (issueId) {
     const existingSession = await lookupIssueSession(env, issueId);
     if (existingSession) {
-      const headers = await getAuthHeaders(env, traceId);
+      const stopUrl = `https://internal/sessions/${existingSession.sessionId}/stop`;
       try {
-        const stopRes = await env.CONTROL_PLANE.fetch(
-          `https://internal/sessions/${existingSession.sessionId}/stop`,
-          { method: "POST", headers }
-        );
+        const stopRes = await signedControlPlaneFetch(env, {
+          method: "POST",
+          url: stopUrl,
+          traceId,
+        });
+        if (!stopRes.ok) {
+          log.error("agent_session.stop_failed", {
+            trace_id: traceId,
+            session_id: existingSession.sessionId,
+            stop_status: stopRes.status,
+          });
+          return;
+        }
         log.info("agent_session.stopped", {
           trace_id: traceId,
           agent_session_id: agentSessionId,
@@ -239,6 +249,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
           session_id: existingSession.sessionId,
           error: e instanceof Error ? e : new Error(String(e)),
         });
+        return;
       }
       await env.LINEAR_KV.delete(`issue:${issueId}`);
     }
@@ -369,48 +380,46 @@ async function handleFollowUp(
     true
   );
 
-  const headers = await getAuthHeaders(env, traceId);
   let sessionContextSummary = "";
   try {
-    const eventsRes = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${existingSession.sessionId}/events?limit=20`,
-      { method: "GET", headers }
-    );
+    const eventsUrl = `https://internal/sessions/${existingSession.sessionId}/events?type=token&limit=20`;
+    const eventsRes = await signedControlPlaneFetch(env, {
+      method: "GET",
+      url: eventsUrl,
+      traceId,
+    });
     if (eventsRes.ok) {
       const eventsData = sessionEventsSummaryResponseSchema.safeParse(await eventsRes.json());
-      const recentTokens = eventsData.success
-        ? eventsData.data.events.filter((e) => e.type === "token").slice(-1)
-        : [];
-      if (recentTokens.length > 0) {
-        const lastContent = String(recentTokens[0].data.content ?? "");
-        if (lastContent) {
-          sessionContextSummary = lastContent.slice(0, 500);
-        }
+      const latestContent = eventsData.success
+        ? eventsData.data.events[0]?.data.content
+        : undefined;
+      if (latestContent) {
+        sessionContextSummary = latestContent.slice(0, 500);
       }
     }
   } catch {
     /* best effort */
   }
 
-  const promptRes = await env.CONTROL_PLANE.fetch(
-    `https://internal/sessions/${existingSession.sessionId}/prompt`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        content: buildFollowUpPrompt({
-          issueIdentifier: issue.identifier,
-          followUpContent: followUp.content,
-          followUpSource: followUp.source,
-          followUpAuthor: followUp.actorUserId ? "linear" : "unknown",
-          sessionContextSummary,
-        }),
-        authorId: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
-        source: "linear",
-        callbackContext,
-      }),
-    }
-  );
+  const promptUrl = `https://internal/sessions/${existingSession.sessionId}/prompt`;
+  const promptBody = JSON.stringify({
+    content: buildFollowUpPrompt({
+      issueIdentifier: issue.identifier,
+      followUpContent: followUp.content,
+      followUpSource: followUp.source,
+      followUpAuthor: followUp.actorUserId ? "linear" : "unknown",
+      sessionContextSummary,
+    }),
+    source: "linear",
+    callbackContext,
+  });
+  const promptRes = await signedControlPlaneFetch(env, {
+    method: "POST",
+    url: promptUrl,
+    body: promptBody,
+    actor: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
+    traceId,
+  });
 
   if (promptRes.ok) {
     await emitAgentActivity(client, agentSessionId, {
@@ -579,7 +588,6 @@ async function handleNewSession(
     return;
   }
 
-  const headers = await getAuthHeaders(env, traceId);
   const session = sessionResult;
   const callbackContext = buildLinearCallbackContext({
     webhook,
@@ -619,19 +627,19 @@ async function handleNewSession(
     prompt += `\n\n## Additional Instructions\n\n${integrationConfig.issueSessionInstructions}`;
   }
 
-  const promptRes = await env.CONTROL_PLANE.fetch(
-    `https://internal/sessions/${session.sessionId}/prompt`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        content: prompt,
-        authorId: sessionActorUserId ? `linear:${sessionActorUserId}` : undefined,
-        source: "linear",
-        callbackContext,
-      }),
-    }
-  );
+  const promptUrl = `https://internal/sessions/${session.sessionId}/prompt`;
+  const promptBody = JSON.stringify({
+    content: prompt,
+    source: "linear",
+    callbackContext,
+  });
+  const promptRes = await signedControlPlaneFetch(env, {
+    method: "POST",
+    url: promptUrl,
+    body: promptBody,
+    actor: sessionActorUserId ? `linear:${sessionActorUserId}` : undefined,
+    traceId,
+  });
 
   if (!promptRes.ok) {
     let promptErrBody = "";
@@ -693,7 +701,11 @@ export async function handleAgentSessionEvent(
   });
 
   // Stop handling
-  if (webhook.action === "stopped" || webhook.action === "cancelled") {
+  if (
+    webhook.agentActivity?.signal === "stop" ||
+    webhook.action === "stopped" ||
+    webhook.action === "cancelled"
+  ) {
     return handleStop(webhook, env, traceId);
   }
 

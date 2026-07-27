@@ -3,17 +3,21 @@ import type { Env } from "../types";
 import { getLinearConfig } from "./integration-config";
 
 describe("getLinearConfig", () => {
+  function envForFetchResponse(response: Response): Env {
+    const fetch = vi.fn().mockResolvedValue(response);
+    return {
+      SERVICE_AUTH_SECRET: "test-secret",
+      CONTROL_PLANE: { fetch },
+    } as unknown as Env;
+  }
+
   function envForResponse(body: unknown): Env {
-    const fetch = vi.fn().mockResolvedValue(
+    return envForFetchResponse(
       new Response(JSON.stringify(body), {
         status: 200,
         headers: { "content-type": "application/json" },
       })
     );
-    return {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
-      CONTROL_PLANE: { fetch },
-    } as unknown as Env;
   }
 
   it("encodes nested repository owners as one route segment", async () => {
@@ -24,7 +28,7 @@ describe("getLinearConfig", () => {
       })
     );
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      SERVICE_AUTH_SECRET: "test-secret",
       CONTROL_PLANE: { fetch },
     } as unknown as Env;
 
@@ -72,6 +76,28 @@ describe("getLinearConfig", () => {
             allowUserPreferenceOverride: "yes",
           },
         }),
+        "acme/backend"
+      )
+    ).resolves.toEqual({
+      model: null,
+      reasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: true,
+      issueSessionInstructions: null,
+      enabledRepos: null,
+    });
+  });
+
+  it("falls back when the response is invalid JSON", async () => {
+    await expect(
+      getLinearConfig(
+        envForFetchResponse(
+          new Response("{not-json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        ),
         "acme/backend"
       )
     ).resolves.toEqual({

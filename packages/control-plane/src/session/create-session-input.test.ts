@@ -18,30 +18,42 @@ function rawRequest(body: string): Request {
 }
 
 describe("parseCreateSessionInput", () => {
-  it("parses a valid session input with identity fields", async () => {
-    const result = await parseCreateSessionInput(
-      jsonRequest({
-        repoOwner: "open-inspect",
-        repoName: "background-agents",
-        userId: "user-1",
-        authProvider: "github",
-        authUserId: "123",
-        scmToken: "gho_token",
-        scmTokenExpiresAt: 123456,
-      })
-    );
+  it("parses a valid session input with display identity fields", async () => {
+    const fields = {
+      repoOwner: "open-inspect",
+      repoName: "background-agents",
+      scmLogin: "ada",
+      scmName: "Ada Lovelace",
+      scmEmail: "ada@example.com",
+      actorDisplayName: "Ada Lovelace",
+      actorEmail: "ada@example.com",
+      actorAvatarUrl: "https://avatars.example.com/ada.png",
+    };
+    const result = await parseCreateSessionInput(jsonRequest(fields));
 
+    expect(result).toEqual({ ok: true, input: fields, raw: fields });
+  });
+
+  it("strips legacy identity fields from input while preserving them in raw", async () => {
+    const legacyBody = {
+      repoOwner: "open-inspect",
+      repoName: "background-agents",
+      userId: "user-1",
+      spawnSource: "user",
+      authProvider: "github",
+      authUserId: "123",
+      scmToken: "gho_token",
+      scmTokenExpiresAt: 123456,
+    };
+    const result = await parseCreateSessionInput(jsonRequest(legacyBody));
+
+    // Identity/credential fields are no longer part of the schema: strip-mode
+    // drops them from `input`, while `raw` keeps the original keys for the
+    // route's forbidden-field rejection.
     expect(result).toEqual({
       ok: true,
-      input: {
-        repoOwner: "open-inspect",
-        repoName: "background-agents",
-        userId: "user-1",
-        authProvider: "github",
-        authUserId: "123",
-        scmToken: "gho_token",
-        scmTokenExpiresAt: 123456,
-      },
+      input: { repoOwner: "open-inspect", repoName: "background-agents" },
+      raw: legacyBody,
     });
   });
 
@@ -59,13 +71,11 @@ describe("parseCreateSessionInput", () => {
       })
     );
 
-    expect(result).toEqual({
-      ok: true,
-      input: {
-        title: "Incident sweep",
-        model: "anthropic/claude-haiku-4-5",
-      },
-    });
+    const fields = {
+      title: "Incident sweep",
+      model: "anthropic/claude-haiku-4-5",
+    };
+    expect(result).toEqual({ ok: true, input: fields, raw: fields });
   });
 
   it("rejects branch without repository context", async () => {
@@ -104,7 +114,7 @@ describe("parseCreateSessionInput", () => {
     expect(result).toEqual({ ok: false, message: "JSON body must be an object" });
   });
 
-  it("rejects an invalid auth provider instead of preserving it", async () => {
+  it("strips an unrecognized legacy auth provider instead of validating it", async () => {
     const result = await parseCreateSessionInput(
       jsonRequest({
         repoOwner: "open-inspect",
@@ -114,6 +124,17 @@ describe("parseCreateSessionInput", () => {
       })
     );
 
-    expect(result).toEqual({ ok: false, message: "Invalid session request body" });
+    // authProvider is no longer schema-validated; it survives only in `raw`,
+    // where the route rejects it as a forbidden identity field.
+    expect(result).toEqual({
+      ok: true,
+      input: { repoOwner: "open-inspect", repoName: "background-agents" },
+      raw: {
+        repoOwner: "open-inspect",
+        repoName: "background-agents",
+        authProvider: "evil",
+        authUserId: "123",
+      },
+    });
   });
 });

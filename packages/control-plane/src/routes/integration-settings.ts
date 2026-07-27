@@ -21,6 +21,7 @@ import {
 } from "../db/integration-settings";
 import { EnvironmentStore } from "../db/environments";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import { createLogger } from "../logger";
 import {
   type Route,
@@ -47,7 +48,7 @@ function extractIntegrationId(match: RegExpMatchArray): IntegrationId | null {
  * `environments` — an environment that actually exists.
  */
 async function extractEnvironmentSettingsParams(
-  env: Env,
+  db: SqlDatabase,
   match: RegExpMatchArray
 ): Promise<
   | {
@@ -66,32 +67,24 @@ async function extractEnvironmentSettingsParams(
   const environmentId = match.groups?.environmentId;
   if (!environmentId) return error("Environment ID required", 400);
 
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const environmentStore = new EnvironmentStore(env.DB);
+  const environmentStore = new EnvironmentStore(db);
   if (!(await environmentStore.getById(environmentId))) {
     return error("Environment not found", 404);
   }
 
-  return { integrationId: id, environmentId, store: new IntegrationSettingsStore(env.DB) };
+  return { integrationId: id, environmentId, store: new IntegrationSettingsStore(db) };
 }
 
 async function handleGetIntegrationSettings(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!env.DB) {
-    return json({ integrationId: id, settings: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
   const settings = await store.getGlobal(id);
   return json({ integrationId: id, settings });
 }
@@ -105,10 +98,6 @@ async function handleSetIntegrationSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
 
@@ -116,7 +105,7 @@ async function handleSetIntegrationSettings(
     return error("Request body must include settings object", 400);
   }
 
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
 
   try {
     await store.setGlobal(id, body.settings);
@@ -151,11 +140,7 @@ async function handleDeleteIntegrationSettings(
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
 
   try {
     await store.deleteGlobal(id);
@@ -182,16 +167,12 @@ async function handleListRepoSettings(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
 
-  if (!env.DB) {
-    return json({ integrationId: id, repos: [] });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
   const repos = await store.listRepoSettings(id);
   return json({ integrationId: id, repos });
 }
@@ -200,7 +181,7 @@ async function handleGetRepoSettings(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
@@ -211,11 +192,7 @@ async function handleGetRepoSettings(
 
   const repo = `${owner}/${name}`;
 
-  if (!env.DB) {
-    return json({ integrationId: id, repo, settings: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
   const settings = await store.getRepoSettings(id, repo);
   return json({ integrationId: id, repo, settings });
 }
@@ -233,10 +210,6 @@ async function handleSetRepoSettings(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
   const body = await parseJsonBody<{ settings?: Record<string, unknown> }>(request);
   if (body instanceof Response) return body;
 
@@ -244,7 +217,7 @@ async function handleSetRepoSettings(
     return error("Request body must include settings object", 400);
   }
 
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
 
   try {
@@ -285,11 +258,7 @@ async function handleDeleteRepoSettings(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  if (!env.DB) {
-    return error("Integration settings storage is not configured", 503);
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
 
   try {
@@ -318,9 +287,9 @@ async function handleGetEnvironmentSettings(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(env, match);
+  const params = await extractEnvironmentSettingsParams(ctx.db, match);
   if (params instanceof Response) return params;
   const { integrationId, environmentId, store } = params;
 
@@ -334,7 +303,7 @@ async function handleSetEnvironmentSettings(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(env, match);
+  const params = await extractEnvironmentSettingsParams(ctx.db, match);
   if (params instanceof Response) return params;
   const { integrationId, environmentId, store } = params;
 
@@ -376,7 +345,7 @@ async function handleDeleteEnvironmentSettings(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const params = await extractEnvironmentSettingsParams(env, match);
+  const params = await extractEnvironmentSettingsParams(ctx.db, match);
   if (params instanceof Response) return params;
   const { integrationId, environmentId, store } = params;
 
@@ -406,7 +375,7 @@ async function handleGetResolvedConfig(
   _request: Request,
   env: Env,
   match: RegExpMatchArray,
-  _ctx: RequestContext
+  ctx: RequestContext
 ): Promise<Response> {
   const id = extractIntegrationId(match);
   if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
@@ -415,11 +384,7 @@ async function handleGetResolvedConfig(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  if (!env.DB) {
-    return json({ integrationId: id, repo: `${owner}/${name}`, config: null });
-  }
-
-  const store = new IntegrationSettingsStore(env.DB);
+  const store = new IntegrationSettingsStore(ctx.db);
   const repo = `${owner}/${name}`;
   const { enabledRepos, settings } = await store.getResolvedConfig(id, repo);
 

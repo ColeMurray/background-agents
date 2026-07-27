@@ -13,6 +13,7 @@ from sandbox_runtime.repo_config import (
     is_safe_repo_segment,
     load_repo_manifest,
     parse_repositories,
+    read_repo_manifest,
 )
 
 WORKSPACE = Path("/workspace")
@@ -110,6 +111,22 @@ class TestParseRepositories:
             RepoEntry(owner="acme", name="app", branch="dev", path=WORKSPACE / "app")
         ]
 
+    @pytest.mark.parametrize("base_sha", ["abc123", "g" * 40, "a" * 41])
+    def test_rejects_invalid_repository_baselines(self, base_sha):
+        config = _config({"repo_owner": "acme", "repo_name": "app", "base_sha": base_sha})
+
+        with pytest.raises(RepoConfigError, match="base_sha"):
+            parse_repositories(config, workspace_path=WORKSPACE)
+
+    def test_rejects_an_invalid_scalar_baseline(self):
+        with pytest.raises(RepoConfigError, match="base_sha"):
+            parse_repositories(
+                {"base_sha": "not-a-sha"},
+                workspace_path=WORKSPACE,
+                scalar_owner="acme",
+                scalar_name="app",
+            )
+
 
 FIND_ENTRIES = [
     RepoEntry(owner="Acme", name="Frontend", branch="main", path=WORKSPACE / "Frontend"),
@@ -138,12 +155,63 @@ class TestRepoManifest:
 
         assert load_repo_manifest(manifest) == entries
 
+    def test_round_trips_the_immutable_session_diff_baseline(self, tmp_path):
+        baseline = "a" * 40
+        entries = [
+            RepoEntry(
+                owner="acme",
+                name="frontend",
+                branch="main",
+                path=WORKSPACE / "frontend",
+                base_sha=baseline,
+            )
+        ]
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(dump_repo_manifest(entries))
+
+        assert load_repo_manifest(manifest)[0].base_sha == baseline
+
     def test_missing_file_loads_empty(self, tmp_path):
         assert load_repo_manifest(tmp_path / "absent.json") == []
 
     def test_malformed_file_loads_empty(self, tmp_path):
         manifest = tmp_path / "manifest.json"
         manifest.write_text("{not json")
+
+        assert load_repo_manifest(manifest) == []
+
+    def test_strict_reader_accepts_an_explicit_empty_manifest(self, tmp_path):
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text('{"repositories": []}')
+
+        assert read_repo_manifest(manifest) == []
+
+    @pytest.mark.parametrize("content", [None, "{not json", "{}", '{"repositories": {}}'])
+    def test_strict_reader_rejects_missing_or_malformed_manifests(self, tmp_path, content):
+        manifest = tmp_path / "manifest.json"
+        if content is not None:
+            manifest.write_text(content)
+
+        with pytest.raises(RepoConfigError, match="repository manifest"):
+            read_repo_manifest(manifest)
+
+    def test_invalid_baseline_loads_empty(self, tmp_path):
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "repositories": [
+                        {
+                            "owner": "acme",
+                            "name": "app",
+                            "branch": "main",
+                            "path": "/workspace/app",
+                            "baseSha": "not-a-sha",
+                        }
+                    ]
+                }
+            )
+        )
 
         assert load_repo_manifest(manifest) == []
 

@@ -37,6 +37,7 @@ function ThemeRow({
         <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
       </div>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="text-sm bg-background border border-border rounded px-2 py-1.5 text-foreground"

@@ -129,6 +129,77 @@ describe("useSessionSocket", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps sendPrompt pending until the server acknowledges the queued prompt", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    let acknowledgement!: Promise<boolean>;
+    act(() => {
+      acknowledgement = result.current.sendPrompt("Review this", "model-1", "high");
+    });
+
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "prompt",
+        content: "Review this",
+        model: "model-1",
+        reasoningEffort: "high",
+      });
+    });
+
+    let settled = false;
+    void acknowledgement.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    act(() => {
+      socket.receive({ type: "prompt_queued", messageId: "message-1", position: 1 });
+    });
+    await expect(acknowledgement).resolves.toBe(true);
+  });
+
+  it("waits for subscription and reports when a prompt cannot be sent", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1"));
+
+    await waitFor(() => {
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    await expect(result.current.sendPrompt("Too early")).resolves.toBe(false);
+
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+    });
+    const acknowledgement = result.current.sendPrompt("Wait for subscription");
+
+    act(() => {
+      socket.receive(createSubscribedMessage());
+    });
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "prompt",
+        content: "Wait for subscription",
+      });
+    });
+
+    act(() => {
+      socket.close();
+    });
+    await expect(acknowledgement).resolves.toBe(false);
+  });
+
   it("hydrates artifacts from the subscribed payload", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1"));
 

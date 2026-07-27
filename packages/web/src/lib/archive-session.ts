@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 /**
  * Archives a session via the API.
@@ -8,7 +9,9 @@ import { toast } from "sonner";
  */
 export async function archiveSession(sessionId: string): Promise<boolean> {
   try {
-    const response = await fetch(`/api/sessions/${sessionId}/archive`, { method: "POST" });
+    const response = await browserApiFetch(`/api/sessions/${sessionId}/archive`, {
+      method: "POST",
+    });
     if (!response.ok) {
       toast.error("Failed to archive session");
       return false;

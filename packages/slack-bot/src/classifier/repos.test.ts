@@ -21,6 +21,7 @@ function makeEnv(fetchResult: Response | Error): Env {
       put: vi.fn().mockResolvedValue(undefined),
     },
     CONTROL_PLANE: { fetch },
+    SERVICE_AUTH_SECRET: "test-secret",
   } as unknown as Env;
 }
 
@@ -84,6 +85,7 @@ describe("getRoutingRules", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getRoutingRules(env, "trace")).toEqual([
@@ -168,6 +170,7 @@ describe("getAvailableRepos", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
@@ -252,6 +255,7 @@ describe("getWatchedChannels", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getWatchedChannels(env, "trace")).toEqual(new Set(["C7", "C8"]));
@@ -269,6 +273,7 @@ describe("getWatchedChannels", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getWatchedChannels(env, "trace")).toEqual(new Set());
@@ -287,6 +292,7 @@ describe("getWatchedChannels", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(jsonResponse({ channels: ["C1"] })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getWatchedChannels(env)).toEqual(new Set(["C1"]));

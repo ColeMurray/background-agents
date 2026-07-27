@@ -1,0 +1,330 @@
+{
+  "description": "Golden vectors for the sig1 service-auth canonical string and signature. Cross-language contract between packages/shared/src/service-auth.ts and packages/sandbox-runtime/src/sandbox_runtime/auth/service_auth.py. Changing canonicalization requires a sig2, not an edit to these vectors. Regenerate with packages/sandbox-runtime/tests/generate_service_auth_vectors.py.",
+  "vectors": [
+    {
+      "name": "web GET, no query, no body, no actor",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400000,
+      "nonce": "0123456789abcdef",
+      "method": "GET",
+      "url": "https://control-plane.example.com/sessions",
+      "expected": {
+        "pathname": "/sessions",
+        "canonicalQuery": "",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400000\n0123456789abcdef\nGET\n/sessions\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "88bebddcda35db8fdd86992e8d010be6da1114ad7773fffc85edd3c026b428e7",
+        "signatureHeader": "sig1.1753142400000.0123456789abcdef.88bebddcda35db8fdd86992e8d010be6da1114ad7773fffc85edd3c026b428e7"
+      }
+    },
+    {
+      "name": "slack-bot POST, JSON body, slack actor",
+      "service": "slack-bot",
+      "secret": "slack-secret-0002",
+      "timestampMs": 1753142400001,
+      "nonce": "00ff00ff00ff00ff",
+      "method": "POST",
+      "url": "https://control-plane.example.com/sessions",
+      "body": "{\"prompt\":\"fix the bug\",\"repoOwner\":\"acme\",\"repoName\":\"app\"}",
+      "actor": "slack:U0123456",
+      "expected": {
+        "pathname": "/sessions",
+        "canonicalQuery": "",
+        "bodySha256Hex": "5a4c33e58f3233191d75c13ab371e8ace50589cbf2cc4e743f982014eb756651",
+        "canonicalString": "sig1\nslack-bot\n1753142400001\n00ff00ff00ff00ff\nPOST\n/sessions\n\n5a4c33e58f3233191d75c13ab371e8ace50589cbf2cc4e743f982014eb756651\nslack:U0123456",
+        "signatureHex": "8eed0bf0933ab3b21c1a6a19b5f7cb7f377b6d01b128973b19fa8a768d4d2c23",
+        "signatureHeader": "sig1.1753142400001.00ff00ff00ff00ff.8eed0bf0933ab3b21c1a6a19b5f7cb7f377b6d01b128973b19fa8a768d4d2c23"
+      }
+    },
+    {
+      "name": "github-bot POST, JSON body, github actor",
+      "service": "github-bot",
+      "secret": "github-secret-0003",
+      "timestampMs": 1753142400002,
+      "nonce": "aaaaaaaaaaaaaaaa",
+      "method": "POST",
+      "url": "https://control-plane.example.com/sessions/sess-1/prompt",
+      "body": "{\"prompt\":\"review this PR\"}",
+      "actor": "github:583231",
+      "expected": {
+        "pathname": "/sessions/sess-1/prompt",
+        "canonicalQuery": "",
+        "bodySha256Hex": "bf82a8f2c6af9554ca583c4deaeb98fdf6589ae73728bb5be8fdbdd4e3c61a52",
+        "canonicalString": "sig1\ngithub-bot\n1753142400002\naaaaaaaaaaaaaaaa\nPOST\n/sessions/sess-1/prompt\n\nbf82a8f2c6af9554ca583c4deaeb98fdf6589ae73728bb5be8fdbdd4e3c61a52\ngithub:583231",
+        "signatureHex": "52d6deffc4f9035a07af0bd60ac903699706bf52009433e5bd4b50c374a258ef",
+        "signatureHeader": "sig1.1753142400002.aaaaaaaaaaaaaaaa.52d6deffc4f9035a07af0bd60ac903699706bf52009433e5bd4b50c374a258ef"
+      }
+    },
+    {
+      "name": "linear-bot PUT with query params",
+      "service": "linear-bot",
+      "secret": "linear-secret-0004",
+      "timestampMs": 1753142400003,
+      "nonce": "1234abcd5678ef90",
+      "method": "PUT",
+      "url": "https://control-plane.example.com/integration-config?workspace=w1&team=t2",
+      "body": "{\"enabled\":true}",
+      "actor": "linear:usr_42",
+      "expected": {
+        "pathname": "/integration-config",
+        "canonicalQuery": "team=t2&workspace=w1",
+        "bodySha256Hex": "26b3426b2593763c96d0890b4a77a0bbf66d13fc512b0c6b138a23c290f30a2a",
+        "canonicalString": "sig1\nlinear-bot\n1753142400003\n1234abcd5678ef90\nPUT\n/integration-config\nteam=t2&workspace=w1\n26b3426b2593763c96d0890b4a77a0bbf66d13fc512b0c6b138a23c290f30a2a\nlinear:usr_42",
+        "signatureHex": "3e9ddc2b5c9af4b503e44ea4f177a7343a62ea8fcc023888e9bef29bc7fcdbdc",
+        "signatureHeader": "sig1.1753142400003.1234abcd5678ef90.3e9ddc2b5c9af4b503e44ea4f177a7343a62ea8fcc023888e9bef29bc7fcdbdc"
+      }
+    },
+    {
+      "name": "modal POST, JSON body, no actor",
+      "service": "modal",
+      "secret": "modal-secret-0005",
+      "timestampMs": 1753142400004,
+      "nonce": "deadbeefdeadbeef",
+      "method": "POST",
+      "url": "https://control-plane.example.com/internal/image-builds/build-9/callback",
+      "body": "{\"status\":\"succeeded\",\"imageTag\":\"repo:abc123\"}",
+      "expected": {
+        "pathname": "/internal/image-builds/build-9/callback",
+        "canonicalQuery": "",
+        "bodySha256Hex": "95048003710df87067188269f2a12c12eb16d017f1b16c348944cf19b7460d5e",
+        "canonicalString": "sig1\nmodal\n1753142400004\ndeadbeefdeadbeef\nPOST\n/internal/image-builds/build-9/callback\n\n95048003710df87067188269f2a12c12eb16d017f1b16c348944cf19b7460d5e\n",
+        "signatureHex": "19132281d466e5909e23811e74366d0a41132b169a82f09d328d9d2e0fa408cd",
+        "signatureHeader": "sig1.1753142400004.deadbeefdeadbeef.19132281d466e5909e23811e74366d0a41132b169a82f09d328d9d2e0fa408cd"
+      }
+    },
+    {
+      "name": "query order canonicalizes (b before a on the wire)",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400005,
+      "nonce": "0000000000000001",
+      "method": "GET",
+      "url": "https://control-plane.example.com/sessions?limit=10&createdBy=user-1&cursor=abc",
+      "expected": {
+        "pathname": "/sessions",
+        "canonicalQuery": "createdBy=user-1&cursor=abc&limit=10",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400005\n0000000000000001\nGET\n/sessions\ncreatedBy=user-1&cursor=abc&limit=10\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "10133a087ed688a6e424f551663f52818d7a73f28dc53d18c7f17668e2f9fafd",
+        "signatureHeader": "sig1.1753142400005.0000000000000001.10133a087ed688a6e424f551663f52818d7a73f28dc53d18c7f17668e2f9fafd"
+      }
+    },
+    {
+      "name": "query order canonicalizes (same params, reordered)",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400005,
+      "nonce": "0000000000000001",
+      "method": "GET",
+      "url": "https://control-plane.example.com/sessions?cursor=abc&createdBy=user-1&limit=10",
+      "expected": {
+        "pathname": "/sessions",
+        "canonicalQuery": "createdBy=user-1&cursor=abc&limit=10",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400005\n0000000000000001\nGET\n/sessions\ncreatedBy=user-1&cursor=abc&limit=10\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "10133a087ed688a6e424f551663f52818d7a73f28dc53d18c7f17668e2f9fafd",
+        "signatureHeader": "sig1.1753142400005.0000000000000001.10133a087ed688a6e424f551663f52818d7a73f28dc53d18c7f17668e2f9fafd"
+      }
+    },
+    {
+      "name": "duplicate keys sort by value; encoded space and plus",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400006,
+      "nonce": "0000000000000002",
+      "method": "GET",
+      "url": "https://control-plane.example.com/search?tag=zeta&tag=alpha&q=hello%20world&note=a+b",
+      "expected": {
+        "pathname": "/search",
+        "canonicalQuery": "note=a%20b&q=hello%20world&tag=alpha&tag=zeta",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400006\n0000000000000002\nGET\n/search\nnote=a%20b&q=hello%20world&tag=alpha&tag=zeta\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "0fdd2e98b94d65b314d5c1539dddcbe326d718415af0908be1b4bb7e634f2ac6",
+        "signatureHeader": "sig1.1753142400006.0000000000000002.0fdd2e98b94d65b314d5c1539dddcbe326d718415af0908be1b4bb7e634f2ac6"
+      }
+    },
+    {
+      "name": "empty-string value and bare key",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400007,
+      "nonce": "0000000000000003",
+      "method": "GET",
+      "url": "https://control-plane.example.com/sessions?empty=&bare",
+      "expected": {
+        "pathname": "/sessions",
+        "canonicalQuery": "bare=&empty=",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400007\n0000000000000003\nGET\n/sessions\nbare=&empty=\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "00cf563c4250f0e85c6521faadc02e8e16cc285179f762ceb166b49683b47ce2",
+        "signatureHeader": "sig1.1753142400007.0000000000000003.00cf563c4250f0e85c6521faadc02e8e16cc285179f762ceb166b49683b47ce2"
+      }
+    },
+    {
+      "name": "binary body",
+      "service": "modal",
+      "secret": "modal-secret-0005",
+      "timestampMs": 1753142400008,
+      "nonce": "0000000000000004",
+      "method": "POST",
+      "url": "https://control-plane.example.com/internal/blob",
+      "bodyBase64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh///gBiaW5hcnk=",
+      "expected": {
+        "pathname": "/internal/blob",
+        "canonicalQuery": "",
+        "bodySha256Hex": "5f1d34dec4104a1a2477edaae0c0c07f9082355dc17c3223ca1794645f626fcb",
+        "canonicalString": "sig1\nmodal\n1753142400008\n0000000000000004\nPOST\n/internal/blob\n\n5f1d34dec4104a1a2477edaae0c0c07f9082355dc17c3223ca1794645f626fcb\n",
+        "signatureHex": "b111cbb07f8d19f9f2082412f9f3f149aab1b01b6fb0cb183df528bd890a47b7",
+        "signatureHeader": "sig1.1753142400008.0000000000000004.b111cbb07f8d19f9f2082412f9f3f149aab1b01b6fb0cb183df528bd890a47b7"
+      }
+    },
+    {
+      "name": "unicode path (raw) percent-encodes identically",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400009,
+      "nonce": "0000000000000005",
+      "method": "GET",
+      "url": "https://control-plane.example.com/repos/ünïcode/sessions",
+      "expected": {
+        "pathname": "/repos/%C3%BCn%C3%AFcode/sessions",
+        "canonicalQuery": "",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400009\n0000000000000005\nGET\n/repos/%C3%BCn%C3%AFcode/sessions\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "aa9134635475e2801e447fa261390e0903be7215d9f2ab9e9d6a885358219692",
+        "signatureHeader": "sig1.1753142400009.0000000000000005.aa9134635475e2801e447fa261390e0903be7215d9f2ab9e9d6a885358219692"
+      }
+    },
+    {
+      "name": "unicode path (pre-encoded) passes through",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400009,
+      "nonce": "0000000000000005",
+      "method": "GET",
+      "url": "https://control-plane.example.com/repos/%C3%BCn%C3%AFcode/sessions",
+      "expected": {
+        "pathname": "/repos/%C3%BCn%C3%AFcode/sessions",
+        "canonicalQuery": "",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400009\n0000000000000005\nGET\n/repos/%C3%BCn%C3%AFcode/sessions\n\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "aa9134635475e2801e447fa261390e0903be7215d9f2ab9e9d6a885358219692",
+        "signatureHeader": "sig1.1753142400009.0000000000000005.aa9134635475e2801e447fa261390e0903be7215d9f2ab9e9d6a885358219692"
+      }
+    },
+    {
+      "name": "lowercase method normalizes to uppercase",
+      "service": "slack-bot",
+      "secret": "slack-secret-0002",
+      "timestampMs": 1753142400010,
+      "nonce": "0000000000000006",
+      "method": "post",
+      "url": "https://control-plane.example.com/sessions/sess-2/prompt",
+      "body": "{\"prompt\":\"hi\"}",
+      "actor": "slack:U0999999",
+      "expected": {
+        "pathname": "/sessions/sess-2/prompt",
+        "canonicalQuery": "",
+        "bodySha256Hex": "14479f4e87d340fe0ca0d522d87a5b3a028ebb1af24fbb8d3ef4553044fc6db6",
+        "canonicalString": "sig1\nslack-bot\n1753142400010\n0000000000000006\nPOST\n/sessions/sess-2/prompt\n\n14479f4e87d340fe0ca0d522d87a5b3a028ebb1af24fbb8d3ef4553044fc6db6\nslack:U0999999",
+        "signatureHex": "8bfa989aeacd18ed8cd2d54cce2b18cf907a97895edfa1b39e57d474cf9feb75",
+        "signatureHeader": "sig1.1753142400010.0000000000000006.8bfa989aeacd18ed8cd2d54cce2b18cf907a97895edfa1b39e57d474cf9feb75"
+      }
+    },
+    {
+      "name": "unicode query values sort bytewise",
+      "service": "web",
+      "secret": "web-secret-0001",
+      "timestampMs": 1753142400011,
+      "nonce": "0000000000000007",
+      "method": "GET",
+      "url": "https://control-plane.example.com/sessions?name=%C3%A9clair&name=zebra&x=%E2%9C%93",
+      "expected": {
+        "pathname": "/sessions",
+        "canonicalQuery": "name=zebra&name=%C3%A9clair&x=%E2%9C%93",
+        "bodySha256Hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonicalString": "sig1\nweb\n1753142400011\n0000000000000007\nGET\n/sessions\nname=zebra&name=%C3%A9clair&x=%E2%9C%93\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        "signatureHex": "06143b5e9a9605973b270317443ead8f675a9e70cd36439c4882d02c8091570b",
+        "signatureHeader": "sig1.1753142400011.0000000000000007.06143b5e9a9605973b270317443ead8f675a9e70cd36439c4882d02c8091570b"
+      }
+    }
+  ],
+  "malformedHeaders": [
+    {
+      "name": "empty string",
+      "signatureHeader": "",
+      "reason": "format"
+    },
+    {
+      "name": "prefix only",
+      "signatureHeader": "sig1",
+      "reason": "format"
+    },
+    {
+      "name": "wrong format tag",
+      "signatureHeader": "sig2.1753142400000.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "three parts",
+      "signatureHeader": "sig1.1753142400000.0123456789abcdef",
+      "reason": "format"
+    },
+    {
+      "name": "five parts",
+      "signatureHeader": "sig1.1753142400000.0123456789abcdef.abababababababababababababababababababababababababababababababab.extra",
+      "reason": "format"
+    },
+    {
+      "name": "exponent timestamp",
+      "signatureHeader": "sig1.1e3.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "hex timestamp",
+      "signatureHeader": "sig1.0x10.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "padded timestamp",
+      "signatureHeader": "sig1. 1753142400000 .0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "non-ASCII digit timestamp",
+      "signatureHeader": "sig1.١٢٣.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "negative timestamp",
+      "signatureHeader": "sig1.-1.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "zero timestamp",
+      "signatureHeader": "sig1.0.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "17-digit timestamp",
+      "signatureHeader": "sig1.99999999999999999.0123456789abcdef.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "uppercase nonce",
+      "signatureHeader": "sig1.1753142400000.0123456789ABCDEF.abababababababababababababababababababababababababababababababab",
+      "reason": "format"
+    },
+    {
+      "name": "uppercase signature",
+      "signatureHeader": "sig1.1753142400000.0123456789abcdef.ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+      "reason": "format"
+    },
+    {
+      "name": "truncated signature",
+      "signatureHeader": "sig1.1753142400000.0123456789abcdef.abababababababababababababababab",
+      "reason": "format"
+    }
+  ]
+}

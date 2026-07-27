@@ -1,14 +1,16 @@
 /**
- * Instrumented D1 wrapper for per-request query timing.
+ * Instrumented SqlDatabase wrapper for per-request query timing.
  *
- * Wraps a D1Database so that every query's wall-clock time and D1-reported
+ * Wraps a SqlDatabase so that every query's wall-clock time and engine-reported
  * metadata (server duration, rows read/written) are recorded into a
  * RequestMetrics collector. The collector is created once per HTTP request
  * and its summary is spread into the http.request wide event.
  *
- * No changes required to SessionIndexStore, RepoMetadataStore, or
- * RepoSecretsStore — they receive the instrumented DB transparently.
+ * The router injects the instrumented database into RequestContext (`ctx.db`);
+ * stores accept the SqlDatabase port and receive it transparently.
  */
+
+import type { SqlDatabase, SqlResult, SqlStatement } from "./sql-database";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,11 +20,11 @@
 export interface D1QueryRecord {
   /** Wall-clock time in ms (includes network round-trip from Worker to D1 primary). */
   query_ms: number;
-  /** D1-reported server-side execution time in ms (from D1Meta.duration). */
+  /** Engine-reported server-side execution time in ms (from meta.duration). */
   d1_server_ms?: number;
-  /** Rows read, from D1Meta. */
+  /** Rows read, from result meta. */
   rows_read?: number;
-  /** Rows written, from D1Meta. */
+  /** Rows written, from result meta. */
   rows_written?: number;
 }
 
@@ -90,53 +92,42 @@ export function createRequestMetrics(): RequestMetrics {
 }
 
 // ---------------------------------------------------------------------------
-// D1 statement wrapper
+// Statement wrapper
 // ---------------------------------------------------------------------------
 
-/** Symbol used to store the original D1PreparedStatement on instrumented wrappers. */
-const ORIGINAL_STMT = Symbol("originalD1Statement");
+/** Symbol used to store the original SqlStatement on instrumented wrappers. */
+const ORIGINAL_STMT = Symbol("originalSqlStatement");
 
-type WrappedStatement = D1PreparedStatement & { [ORIGINAL_STMT]?: D1PreparedStatement };
+type WrappedStatement = SqlStatement & { [ORIGINAL_STMT]?: SqlStatement };
 
-type RawCapableStatement = D1PreparedStatement & {
-  raw: (options?: Record<string, unknown>) => Promise<unknown[]>;
-};
-
-function hasRawMethod(statement: D1PreparedStatement): statement is RawCapableStatement {
-  return "raw" in statement && typeof statement.raw === "function";
-}
-
-/** Extract the underlying D1PreparedStatement from an instrumented wrapper (or return as-is). */
-function unwrapStatement(stmt: D1PreparedStatement): D1PreparedStatement {
+/** Extract the underlying SqlStatement from an instrumented wrapper (or return as-is). */
+function unwrapStatement(stmt: SqlStatement): SqlStatement {
   return (stmt as WrappedStatement)[ORIGINAL_STMT] ?? stmt;
 }
 
 /**
- * Wrap a D1PreparedStatement to time its terminal methods (run, first, all, raw).
+ * Wrap a SqlStatement to time its terminal methods (run, first, all).
  * bind() returns a new instrumented statement so chaining works correctly.
  *
  * The original statement is stored via ORIGINAL_STMT so that batch() can
- * unwrap instrumented statements before passing them to the real D1.
+ * unwrap instrumented statements before passing them to the real database
+ * (which can only execute its own statements — see the same-origin contract
+ * in sql-database.ts).
  */
-function instrumentStatement(
-  stmt: D1PreparedStatement,
-  metrics: RequestMetrics
-): D1PreparedStatement {
-  const wrapper = {
-    bind(...values: unknown[]): D1PreparedStatement {
+function instrumentStatement(stmt: SqlStatement, metrics: RequestMetrics): SqlStatement {
+  const wrapper: WrappedStatement = {
+    bind(...values: unknown[]): SqlStatement {
       return instrumentStatement(stmt.bind(...values), metrics);
     },
 
-    async first<T = unknown>(colName?: string): Promise<T | null> {
+    async first<T = Record<string, unknown>>(): Promise<T | null> {
       const start = Date.now();
-      const result = colName
-        ? await (stmt.first as (col: string) => Promise<unknown>)(colName)
-        : await stmt.first<T>();
+      const result = await stmt.first<T>();
       metrics.d1Queries.push({ query_ms: Date.now() - start });
-      return result as T | null;
+      return result;
     },
 
-    async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+    async run<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
       const start = Date.now();
       const result = await stmt.run<T>();
       metrics.d1Queries.push({
@@ -148,7 +139,7 @@ function instrumentStatement(
       return result;
     },
 
-    async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+    async all<T = Record<string, unknown>>(): Promise<SqlResult<T>> {
       const start = Date.now();
       const result = await stmt.all<T>();
       metrics.d1Queries.push({
@@ -159,41 +150,30 @@ function instrumentStatement(
       });
       return result;
     },
-
-    async raw(options?: Record<string, unknown>) {
-      const start = Date.now();
-      if (!hasRawMethod(stmt)) {
-        throw new Error("D1PreparedStatement.raw() is not available in this runtime");
-      }
-      const result = await stmt.raw(options);
-      metrics.d1Queries.push({ query_ms: Date.now() - start });
-      return result;
-    },
-  } as D1PreparedStatement as WrappedStatement;
+  };
 
   wrapper[ORIGINAL_STMT] = stmt;
   return wrapper;
 }
 
 // ---------------------------------------------------------------------------
-// D1 database wrapper
+// Database wrapper
 // ---------------------------------------------------------------------------
 
 /**
- * Wrap a D1Database to automatically record timing for all queries.
+ * Wrap a SqlDatabase to automatically record timing for all queries.
  *
- * Uses object composition for type safety and simplicity. The stores
- * (SessionIndexStore, RepoMetadataStore, etc.) accept D1Database in their
- * constructor — passing an instrumented DB means all their queries are
- * timed without any changes to the store code.
+ * Uses object composition: the stores accept the SqlDatabase port in their
+ * constructor — passing an instrumented DB means all their queries are timed
+ * without any changes to the store code.
  */
-export function instrumentD1(db: D1Database, metrics: RequestMetrics): D1Database {
+export function instrumentD1(db: SqlDatabase, metrics: RequestMetrics): SqlDatabase {
   return {
-    prepare(query: string): D1PreparedStatement {
+    prepare(query: string): SqlStatement {
       return instrumentStatement(db.prepare(query), metrics);
     },
 
-    async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+    async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
       const start = Date.now();
       const results = await db.batch<T>(statements.map(unwrapStatement));
       const elapsed = Date.now() - start;
@@ -216,13 +196,5 @@ export function instrumentD1(db: D1Database, metrics: RequestMetrics): D1Databas
 
       return results;
     },
-
-    exec(query: string): Promise<D1ExecResult> {
-      return db.exec(query);
-    },
-
-    dump(): Promise<ArrayBuffer> {
-      return db.dump();
-    },
-  } as D1Database;
+  };
 }

@@ -11,9 +11,15 @@ import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
-import { Group as PanelGroup, Panel, Separator as PanelResizeHandle } from "react-resizable-panels";
+import {
+  Group as PanelGroup,
+  Panel,
+  Separator as PanelResizeHandle,
+  useDefaultLayout,
+} from "react-resizable-panels";
 import { TerminalPanel } from "@/components/terminal-panel";
 import { archiveSession } from "@/lib/archive-session";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   isArchivedSessionListKey,
   isUnarchivedSessionListKey,
@@ -21,10 +27,29 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getDefaultReasoningEffort,
+  type SessionAttachmentReference,
+} from "@open-inspect/shared";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import {
+  DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+  useSessionAttachments,
+} from "@/hooks/use-session-attachments";
 import type { ComboboxGroup } from "@/components/ui/combobox";
+import { useSessionDiffs } from "@/hooks/use-session-diffs";
+import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
+import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import { SessionChangesPanel } from "@/components/session-changes-panel";
+import {
+  SESSION_CHANGES_LAYOUT_ID,
+  SessionDesktopLayout,
+} from "@/components/session-desktop-layout";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
+import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -79,7 +104,16 @@ function SessionPageContent() {
     modelItems,
     loadingEnabledModels,
   } = useModelSelection(sessionState);
-  const { prompt, inputRef, handleSubmit, handleInputChange, handleKeyDown } = usePromptInput(
+  const {
+    prompt,
+    sessionAttachments,
+    inputRef,
+    isSubmitting,
+    handleSubmit,
+    handleInputChange,
+    handleKeyDown,
+  } = usePromptInput(
+    sessionId,
     isProcessing,
     sendPrompt,
     sendTyping,
@@ -89,12 +123,16 @@ function SessionPageContent() {
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
+  const [selectedDiff, setSelectedDiff] = useState<DiffSelection | null>(null);
+  const diffReturnFocusRef = useRef<DiffSelection | null>(null);
+  const { state: diffState, isLoading: diffLoading } = useSessionDiffs(sessionId);
 
   const isBelowLg = useMediaQuery("(max-width: 1023px)");
   const isPhone = useMediaQuery("(max-width: 767px)");
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
+  const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
   const [terminalOpen, setTerminalOpen] = useState(() => {
@@ -102,12 +140,10 @@ function SessionPageContent() {
     return localStorage.getItem("terminal-visible") === "true";
   });
   const toggleTerminal = useCallback(() => {
-    setTerminalOpen((prev) => {
-      const next = !prev;
-      localStorage.setItem("terminal-visible", String(next));
-      return next;
-    });
-  }, []);
+    const next = !terminalOpen;
+    localStorage.setItem("terminal-visible", String(next));
+    setTerminalOpen(next);
+  }, [terminalOpen]);
   const closeTerminal = useCallback(() => {
     setTerminalOpen(false);
     localStorage.setItem("terminal-visible", "false");
@@ -119,6 +155,13 @@ function SessionPageContent() {
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => !prev);
   }, []);
+  const openMobileDetails = useCallback(() => {
+    setIsDetailsOpen(true);
+  }, []);
+  const focusDetailsTrigger = useCallback(
+    () => focusSessionDetailsTrigger(isPhone, actionsButtonRef.current, detailsButtonRef.current),
+    [isPhone]
+  );
 
   useEffect(() => {
     if (isBelowLg) return;
@@ -134,11 +177,86 @@ function SessionPageContent() {
     () => mediaArtifacts.find((artifact) => artifact.id === selectedMediaArtifactId) ?? null,
     [mediaArtifacts, selectedMediaArtifactId]
   );
+  const primaryRepo =
+    sessionState?.repositories?.[0] ??
+    (sessionState?.repoOwner && sessionState?.repoName
+      ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
+      : null);
 
   const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
+  const resolvedDiff = useMemo(
+    () =>
+      selectedDiff && diffState?.current
+        ? resolveDiffSelection(diffState.current, selectedDiff)
+        : null,
+    [diffState, selectedDiff]
+  );
+  const changesLayoutStorage = useBrowserLayoutStorage();
+  const changesLayout = useDefaultLayout({
+    id: SESSION_CHANGES_LAYOUT_ID,
+    panelIds:
+      resolvedDiff && diffState && !isBelowLg
+        ? ["session-main", "session-changes"]
+        : ["session-main"],
+    storage: changesLayoutStorage,
+  });
+  const openDiff = useCallback((repository: SessionDiffRepository, file: SessionDiffFile) => {
+    const selection = { repositoryPosition: repository.position, path: file.path };
+    diffReturnFocusRef.current = selection;
+    setSelectedDiff(selection);
+    setIsDetailsOpen(false);
+  }, []);
+  const closeDiff = useCallback(() => {
+    const returnSelection = diffReturnFocusRef.current;
+    setSelectedDiff(null);
+    requestAnimationFrame(() => {
+      if (!isBelowLg && returnSelection) {
+        const row = Array.from(
+          document.querySelectorAll<HTMLButtonElement>("button[data-diff-path]")
+        ).find(
+          (candidate) =>
+            candidate.dataset.diffRepositoryPosition ===
+              String(returnSelection.repositoryPosition) &&
+            candidate.dataset.diffPath === returnSelection.path
+        );
+        if (row) {
+          row.focus();
+          return;
+        }
+      }
+      focusDetailsTrigger();
+    });
+  }, [focusDetailsTrigger, isBelowLg]);
+
+  const sessionWorkspace = (
+    <div className="flex h-full flex-1 flex-col overflow-hidden">
+      <PanelGroup orientation="vertical" id="session-terminal">
+        <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
+          <SessionTimeline
+            events={events}
+            sessionId={sessionId}
+            currentParticipantId={currentParticipantId}
+            isProcessing={isProcessing}
+            loadingHistory={loadingHistory}
+            showSkeleton={showTimelineSkeleton}
+            onLoadOlder={loadOlderEvents}
+            onOpenMedia={setSelectedMediaArtifactId}
+          />
+        </Panel>
+        {showTerminal && (
+          <>
+            <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
+            <Panel defaultSize="30%" minSize="15%" maxSize="70%">
+              <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
+            </Panel>
+          </>
+        )}
+      </PanelGroup>
+    </div>
+  );
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
@@ -146,7 +264,17 @@ function SessionPageContent() {
         connecting={connecting}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
+        actionsButtonRef={actionsButtonRef}
         onToggleDetails={toggleDetails}
+        onOpenMobileDetails={openMobileDetails}
+        actions={{
+          sessionId,
+          sessionStatus: sessionState?.status ?? "created",
+          artifacts,
+          primaryRepo,
+          onArchive: handleArchive,
+          onUnarchive: handleUnarchive,
+        }}
         renameSession={renameSession}
       />
 
@@ -155,6 +283,7 @@ function SessionPageContent() {
         <div className="bg-destructive-muted border-b border-destructive-border px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-destructive">{authError || connectionError}</p>
           <button
+            type="button"
             onClick={reconnect}
             className="px-3 py-1.5 text-sm font-medium text-destructive-foreground bg-destructive hover:bg-destructive/90 transition"
           >
@@ -164,46 +293,59 @@ function SessionPageContent() {
       )}
 
       {/* Main content */}
-      <main className="flex-1 flex overflow-hidden">
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <PanelGroup orientation="vertical" id="session-terminal">
-            {/* Chat / Event Timeline */}
-            <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
-              <SessionTimeline
-                events={events}
+      <main className="min-w-0 flex-1 flex overflow-hidden">
+        {!isBelowLg ? (
+          <SessionDesktopLayout
+            workspace={sessionWorkspace}
+            sidebar={
+              <SessionRightSidebar
                 sessionId={sessionId}
-                currentParticipantId={currentParticipantId}
-                isProcessing={isProcessing}
-                loadingHistory={loadingHistory}
-                showSkeleton={showTimelineSkeleton}
-                onLoadOlder={loadOlderEvents}
+                sessionState={sessionState}
+                participants={participants}
+                events={events}
+                artifacts={artifacts}
+                terminalOpen={terminalOpen}
+                onToggleTerminal={toggleTerminal}
                 onOpenMedia={setSelectedMediaArtifactId}
+                diffState={diffState}
+                diffLoading={diffLoading}
+                selectedDiff={selectedDiff}
+                onOpenDiff={openDiff}
               />
-            </Panel>
-
-            {/* Terminal panel — only rendered when URL + token available and open */}
-            {showTerminal && (
-              <>
-                <PanelResizeHandle className="h-1.5 bg-border-muted hover:bg-accent transition-colors cursor-row-resize" />
-                <Panel defaultSize="30%" minSize="15%" maxSize="70%">
-                  <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
-                </Panel>
-              </>
-            )}
-          </PanelGroup>
-        </div>
-
-        {/* Right sidebar */}
-        <SessionRightSidebar
-          sessionId={sessionId}
-          sessionState={sessionState}
-          participants={participants}
-          events={events}
-          artifacts={artifacts}
-          terminalOpen={terminalOpen}
-          onToggleTerminal={toggleTerminal}
-          onOpenMedia={setSelectedMediaArtifactId}
-        />
+            }
+            changes={
+              resolvedDiff && diffState ? (
+                <SessionChangesPanel
+                  sessionId={sessionId}
+                  state={diffState}
+                  resolved={resolvedDiff}
+                  onClose={closeDiff}
+                  onSelect={setSelectedDiff}
+                />
+              ) : null
+            }
+            defaultLayout={changesLayout.defaultLayout}
+            onLayoutChanged={changesLayout.onLayoutChanged}
+          />
+        ) : (
+          <>
+            {sessionWorkspace}
+            <SessionRightSidebar
+              sessionId={sessionId}
+              sessionState={sessionState}
+              participants={participants}
+              events={events}
+              artifacts={artifacts}
+              terminalOpen={terminalOpen}
+              onToggleTerminal={toggleTerminal}
+              onOpenMedia={setSelectedMediaArtifactId}
+              diffState={diffState}
+              diffLoading={diffLoading}
+              selectedDiff={selectedDiff}
+              onOpenDiff={openDiff}
+            />
+          </>
+        )}
       </main>
 
       {isBelowLg && (
@@ -211,7 +353,7 @@ function SessionPageContent() {
           open={isDetailsOpen}
           onOpenChange={setIsDetailsOpen}
           isPhone={isPhone}
-          returnFocusRef={detailsButtonRef}
+          onReturnFocus={focusDetailsTrigger}
           sessionId={sessionId}
           sessionState={sessionState}
           participants={participants}
@@ -220,7 +362,32 @@ function SessionPageContent() {
           terminalOpen={terminalOpen}
           onToggleTerminal={toggleTerminal}
           onOpenMedia={setSelectedMediaArtifactId}
+          diffState={diffState}
+          diffLoading={diffLoading}
+          selectedDiff={selectedDiff}
+          onOpenDiff={openDiff}
         />
+      )}
+
+      {isBelowLg && (
+        <Sheet
+          open={Boolean(resolvedDiff && diffState)}
+          onOpenChange={(open) => !open && closeDiff()}
+        >
+          <SheetContent className="inset-0 h-dvh w-screen max-w-none gap-0 p-0 sm:max-w-none">
+            <SheetTitle className="sr-only">Changes</SheetTitle>
+            {resolvedDiff && diffState && (
+              <SessionChangesPanel
+                mobile
+                sessionId={sessionId}
+                state={diffState}
+                resolved={resolvedDiff}
+                onClose={closeDiff}
+                onSelect={setSelectedDiff}
+              />
+            )}
+          </SheetContent>
+        </Sheet>
       )}
 
       <MediaLightbox
@@ -237,24 +404,28 @@ function SessionPageContent() {
       <SessionPromptComposer
         session={{
           id: sessionId,
-          status: sessionState?.status || "",
+          status: sessionState?.status ?? "created",
           artifacts,
-          primaryRepo:
-            sessionState?.repositories?.[0] ??
-            (sessionState?.repoOwner && sessionState?.repoName
-              ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
-              : null),
+          primaryRepo,
           onArchive: handleArchive,
           onUnarchive: handleUnarchive,
         }}
         prompt={{
           value: prompt,
           isProcessing,
+          draftLocked: isSubmitting || sessionAttachments.isUploading,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
           onKeyDown: handleKeyDown,
           onStopExecution: stopExecution,
+        }}
+        attachments={{
+          items: sessionAttachments.attachments,
+          error: sessionAttachments.attachmentError,
+          isUploading: sessionAttachments.isUploading,
+          onAdd: sessionAttachments.addFiles,
+          onRemove: sessionAttachments.removeAttachment,
         }}
         model={{
           selectedModel,
@@ -277,8 +448,8 @@ function useSessionListActions(sessionId: string) {
 
   const { trigger: triggerRename } = useSWRMutation(
     `/api/sessions/${sessionId}/title`,
-    (url: string, { arg }: { arg: { title: string } }) =>
-      fetch(url, {
+    (url: BrowserApiPath, { arg }: { arg: { title: string } }) =>
+      browserApiFetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: arg.title }),
@@ -343,8 +514,8 @@ function useSessionListActions(sessionId: string) {
 
   const { trigger: handleUnarchive } = useSWRMutation(
     `/api/sessions/${sessionId}/unarchive`,
-    (url: string) =>
-      fetch(url, { method: "POST" }).then(async (r) => {
+    (url: BrowserApiPath) =>
+      browserApiFetch(url, { method: "POST" }).then(async (r) => {
         if (r.ok) {
           await mutate<SessionListResponse>(
             isArchivedSessionListKey,
@@ -421,6 +592,7 @@ function useModelSelection(sessionState: SessionState) {
  * debounced typing indicator.
  */
 function usePromptInput(
+  sessionId: string,
   isProcessing: boolean,
   sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
   sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
@@ -429,8 +601,11 @@ function usePromptInput(
   loadingEnabledModels: boolean
 ) {
   const [prompt, setPrompt] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const sessionAttachments = useSessionAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const submitInFlightRef = useRef(false);
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -441,16 +616,49 @@ function usePromptInput(
 
   useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!prompt.trim() || isProcessing || loadingEnabledModels) return;
+    const hasAttachments = sessionAttachments.attachments.length > 0;
+    if (
+      submitInFlightRef.current ||
+      (!prompt.trim() && !hasAttachments) ||
+      isProcessing ||
+      loadingEnabledModels ||
+      sessionAttachments.isUploading
+    ) {
+      return;
+    }
 
-    // Drop any queued typing indicator — the prompt supersedes it
-    clearTypingTimeout();
-    sendPrompt(prompt, selectedModel, reasoningEffort);
-    setPrompt("");
-    // Revalidate sidebar so this session bubbles to the top
-    mutate(isUnarchivedSessionListKey);
+    submitInFlightRef.current = true;
+    setIsSubmitting(true);
+    try {
+      let attachments: SessionAttachmentReference[] | undefined;
+      if (hasAttachments) {
+        try {
+          attachments = await sessionAttachments.uploadAll(sessionId);
+        } catch {
+          return;
+        }
+      }
+
+      // Drop any queued typing indicator — the prompt supersedes it
+      clearTypingTimeout();
+      const accepted = await sendPrompt(
+        prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+        selectedModel,
+        reasoningEffort,
+        attachments
+      );
+      if (!accepted) return;
+
+      setPrompt("");
+      sessionAttachments.clearAttachments();
+      // Revalidate sidebar so this session bubbles to the top
+      mutate(isUnarchivedSessionListKey);
+    } finally {
+      submitInFlightRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -472,5 +680,13 @@ function usePromptInput(
     }, 300);
   };
 
-  return { prompt, inputRef, handleSubmit, handleInputChange, handleKeyDown };
+  return {
+    prompt,
+    sessionAttachments,
+    inputRef,
+    isSubmitting,
+    handleSubmit,
+    handleInputChange,
+    handleKeyDown,
+  };
 }

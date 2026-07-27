@@ -22,6 +22,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { z } from "zod";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
   toAutomationRun,
@@ -47,11 +48,13 @@ import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
+import type { SqlDatabase } from "../db/sql-database";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import type { RequestContext } from "../routes/shared";
+import { deliverWithRetry } from "../session/callback-delivery";
 
 /** Max automations to process per tick (backpressure). */
 const MAX_PER_TICK = 25;
@@ -116,7 +119,7 @@ const runCompleteBodySchema = z.object({
   automationId: z.string(),
   runId: z.string(),
   sessionId: z.string(),
-  messageId: z.string().optional(),
+  messageId: z.string().min(1),
   success: z.boolean(),
   error: z.string().optional(),
 });
@@ -158,10 +161,14 @@ type StartInvocationResult =
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
+  /** The DO's database handle — the single point where env.DB is read. */
+  private readonly db: SqlDatabase;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.log = createLogger("scheduler-do", {}, parseLogLevel(env.LOG_LEVEL));
+    // eslint-disable-next-line no-restricted-syntax -- composition root: the DO's one env.DB read
+    this.db = env.DB;
   }
 
   /**
@@ -492,7 +499,7 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Tick handler ────────────────────────────────────────────────────────
 
   private async handleTick(): Promise<Response> {
-    const store = new AutomationStore(this.env.DB);
+    const store = new AutomationStore(this.db);
     const now = Date.now();
     let processed = 0;
     let skipped = 0;
@@ -793,7 +800,7 @@ export class SchedulerDO extends DurableObject<Env> {
     }
 
     const event = parsedEvent.data;
-    const store = new AutomationStore(this.env.DB);
+    const store = new AutomationStore(this.db);
 
     // 1. Find matching automations
     let candidates: AutomationRow[];
@@ -825,7 +832,7 @@ export class SchedulerDO extends DurableObject<Env> {
         );
         break;
       case "slack":
-        candidates = await new SlackChannelStore(this.env.DB).getSlackAutomationsForChannel(
+        candidates = await new SlackChannelStore(this.db).getSlackAutomationsForChannel(
           event.channelId
         );
         break;
@@ -937,7 +944,7 @@ export class SchedulerDO extends DurableObject<Env> {
 
     const { automationId } = parsedBody.data;
 
-    const store = new AutomationStore(this.env.DB);
+    const store = new AutomationStore(this.db);
     const automation = await store.getById(automationId);
     if (!automation) {
       return new Response(JSON.stringify({ error: "Automation not found" }), {
@@ -998,7 +1005,7 @@ export class SchedulerDO extends DurableObject<Env> {
 
     const body = parsedBody.data;
 
-    const store = new AutomationStore(this.env.DB);
+    const store = new AutomationStore(this.db);
 
     const run = await store.getRunById(body.automationId, body.runId);
     if (!run) {
@@ -1079,7 +1086,7 @@ export class SchedulerDO extends DurableObject<Env> {
       const automation = await store.getById(body.automationId);
       await this.notifySlackCompletion(run, slackMeta, {
         sessionId: body.sessionId,
-        messageId: body.messageId ?? "",
+        messageId: body.messageId,
         success: body.success,
         error: body.error,
         repoFullName: formatRunRepositoryLabel(run),
@@ -1096,10 +1103,10 @@ export class SchedulerDO extends DurableObject<Env> {
   /**
    * Tell the slack-bot to post a slack-triggered run's result into the triggering
    * message's thread and clear the `eyes` reaction, via its
-   * `/callbacks/automation-complete` endpoint. Signs the body with
-   * `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other callbacks).
-   * No-ops when the run has no triggering message, when `SLACK_BOT` is unbound, or
-   * when the secret is unset — all best-effort.
+   * `/callbacks/automation-complete` endpoint. Signs the body with the
+   * slack-bot's own service secret (in-body HMAC, matching the bot's other
+   * callbacks). No-ops when the run has no triggering message, when
+   * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
     run: AutomationRunRow,
@@ -1107,35 +1114,35 @@ export class SchedulerDO extends DurableObject<Env> {
     ctx: SlackCompletionContext
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
-    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
     const body = buildSlackCompletionNotification(meta, ctx);
     if (!body) return;
 
-    try {
-      const signature = await computeHmacHex(JSON.stringify(body), secret);
-      const response = await binding.fetch("https://internal/callbacks/automation-complete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...body, signature }),
-      });
-      if (!response.ok) {
+    const signature = await computeHmacHex(JSON.stringify(body), secret);
+    await deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/callbacks/automation-complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...body, signature }),
+          signal,
+        }),
+      (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      ({ attempt, response, error }) => {
         this.log.warn("Slack completion callback failed", {
           event: "scheduler.slack_complete_failed",
           automation_id: run.automation_id,
           run_id: run.id,
-          http_status: response.status,
+          attempt,
+          ...(response ? { http_status: response.status } : {}),
+          ...(error !== undefined
+            ? { error: error instanceof Error ? error : new Error(String(error)) }
+            : {}),
         });
       }
-    } catch (e) {
-      this.log.warn("Slack completion callback errored", {
-        event: "scheduler.slack_complete_failed",
-        automation_id: run.automation_id,
-        run_id: run.id,
-        error: e instanceof Error ? e : new Error(String(e)),
-      });
-    }
+    );
   }
 
   /**
@@ -1145,7 +1152,7 @@ export class SchedulerDO extends DurableObject<Env> {
    */
   private async notifySlackConcurrencySkip(event: SlackAutomationEvent): Promise<void> {
     const binding = this.env.SLACK_BOT;
-    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
     const body = buildSlackSkipNotification({
@@ -1182,7 +1189,7 @@ export class SchedulerDO extends DurableObject<Env> {
   // ─── Health check ────────────────────────────────────────────────────────
 
   private async handleHealth(): Promise<Response> {
-    const store = new AutomationStore(this.env.DB);
+    const store = new AutomationStore(this.db);
     const overdueCount = await store.countOverdue(Date.now());
 
     return new Response(
@@ -1207,12 +1214,12 @@ export class SchedulerDO extends DurableObject<Env> {
     // (handleCreateAutomation resolves it for both GitHub and Google users), so this
     // lookup is skipped for them. The fallback below only covers legacy rows with
     // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from NextAuth session.user.id), so a github-only identity lookup
+    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
     // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {
       try {
-        const userStore = new UserStore(this.env.DB);
+        const userStore = new UserStore(this.db);
         const identity = await userStore.getIdentity("github", automation.created_by);
         if (identity) {
           userId = identity.userId;
@@ -1226,6 +1233,7 @@ export class SchedulerDO extends DurableObject<Env> {
       trace_id: `automation:${automation.id}`,
       request_id: run.id,
       metrics: createRequestMetrics(),
+      db: this.db,
     };
 
     // What the session opens — the run's repository snapshot or, for
@@ -1243,7 +1251,7 @@ export class SchedulerDO extends DurableObject<Env> {
         ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
         : []);
     const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
-      this.env.DB,
+      this.db,
       scopeMembers,
       target.environmentId
     );

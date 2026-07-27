@@ -1,3 +1,4 @@
+import type { SlackMessageFile } from "@open-inspect/shared";
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
@@ -18,6 +19,7 @@ export interface SlackEventPayload {
     tab?: string;
     channel_type?: string;
     subtype?: string;
+    files?: SlackMessageFile[];
     attachments?: Array<{
       text?: string;
       pretext?: string;
@@ -46,12 +48,14 @@ export async function handleSlackEvent(
     await handleDirectMessage(
       {
         type: event.type,
-        text: event.text!,
+        // file_share messages may carry no text at all.
+        text: event.text ?? "",
         user: event.user!,
         channel: event.channel!,
         ts: event.ts!,
         thread_ts: event.thread_ts,
         channel_type: event.channel_type,
+        files: event.files,
       },
       env,
       traceId,
@@ -68,6 +72,7 @@ export async function handleSlackEvent(
         channel: event.channel,
         ts: event.ts,
         thread_ts: event.thread_ts,
+        files: event.files,
       },
       env,
       traceId,

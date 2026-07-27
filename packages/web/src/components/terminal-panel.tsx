@@ -37,6 +37,7 @@ export function TerminalPanel({ url, token, onClose }: TerminalPanelProps) {
             <LinkIcon className="h-3.5 w-3.5" />
           </a>
           <button
+            type="button"
             onClick={onClose}
             className="p-1 text-muted-foreground hover:text-foreground transition"
             title="Close terminal"
@@ -69,6 +70,7 @@ export function TerminalPanel({ url, token, onClose }: TerminalPanelProps) {
           </div>
         )}
         <iframe
+          title="Session terminal"
           src={authenticatedUrl}
           className="w-full h-full border-0"
           allow="clipboard-read; clipboard-write"

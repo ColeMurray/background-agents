@@ -162,7 +162,7 @@ describe("applyTitleUpdate", () => {
       sessions: [session("a")],
       hasMore: false,
     };
-    const beforeSnapshot = JSON.parse(JSON.stringify(before));
+    const beforeSnapshot = structuredClone(before);
 
     applyTitleUpdate(before, "a", "Mutated", 9999);
 

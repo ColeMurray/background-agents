@@ -1,5 +1,10 @@
 """Shared constants for sandbox modules."""
 
+# Provider-selected directory for standalone runtime commands. OpenComputer uses
+# the sandbox user's bin directory; providers with writable images use /usr/local/bin.
+BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
+DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
+
 # Default service ports. The control plane may override the externally-exposed
 # ones per session via the *_ENV_VAR env vars below; the entrypoint and ttyd
 # proxy fall back to these defaults. TTYD_PORT is localhost-only and fixed — it

@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useCallback, useContext, useState } from "react";
-import { useSession, signIn } from "next-auth/react";
+import { signIn, useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
@@ -74,7 +74,7 @@ export function CollapsedSidebarControls() {
 }
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
-  const { data: session, status } = useSession();
+  const { data: session, status } = useAuthSession();
   const router = useRouter();
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
@@ -188,7 +188,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
               onSessionSelect={sidebar.close}
             />
           </div>
-          <main className="flex-1 overflow-hidden">{children}</main>
+          <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
         </div>
         <GlobalCommandMenu
           open={isCommandMenuOpen}

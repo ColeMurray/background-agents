@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { getSafeExternalUrl } from "./urls";
+import { buildAuthenticatedUrl, getSafeExternalUrl } from "./urls";
+
+describe("buildAuthenticatedUrl", () => {
+  it("adds the token while preserving existing query parameters", () => {
+    expect(buildAuthenticatedUrl("https://terminal.example.com/?theme=dark", "secret token")).toBe(
+      "https://terminal.example.com/?theme=dark&token=secret+token"
+    );
+  });
+
+  it("replaces an existing token", () => {
+    expect(buildAuthenticatedUrl("https://terminal.example.com/?token=old", "new")).toBe(
+      "https://terminal.example.com/?token=new"
+    );
+  });
+
+  it("rejects missing tokens and unsafe urls", () => {
+    expect(buildAuthenticatedUrl("https://terminal.example.com", undefined)).toBeNull();
+    expect(buildAuthenticatedUrl("http://terminal.example.com", "secret")).toBeNull();
+  });
+});
 
 describe("getSafeExternalUrl", () => {
   it("allows https urls", () => {

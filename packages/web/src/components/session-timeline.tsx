@@ -177,7 +177,7 @@ export function SessionTimeline({
       onScroll={handleScroll}
       className="h-full overflow-y-auto overflow-x-hidden p-4"
     >
-      <div className="max-w-3xl mx-auto space-y-2">
+      <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
         <div ref={topSentinelRef} className="h-1" />
         {loadingHistory && (
           <div className="text-center text-muted-foreground text-sm py-2">Loading...</div>
@@ -207,7 +207,7 @@ export function SessionTimeline({
   );
 }
 
-export function ThinkingIndicator() {
+function ThinkingIndicator() {
   return (
     <div className="bg-card p-4 flex items-center gap-2">
       <span className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse" />
@@ -216,7 +216,7 @@ export function ThinkingIndicator() {
   );
 }
 
-export function TimelineSkeleton() {
+function TimelineSkeleton() {
   return (
     <div className="space-y-3 py-2 animate-pulse">
       <div className="bg-card p-4 space-y-2">
@@ -311,18 +311,26 @@ function StatusRow({
   time,
   children,
 }: {
-  tone: "muted" | "success" | "destructive";
+  tone: "muted" | "success" | "destructive" | "warning";
   time: string;
   children: ReactNode;
 }) {
   const dotClassName =
-    tone === "success" ? "bg-success" : tone === "destructive" ? "bg-destructive" : "bg-accent";
+    tone === "success"
+      ? "bg-success"
+      : tone === "destructive"
+        ? "bg-destructive"
+        : tone === "warning"
+          ? "bg-warning"
+          : "bg-accent";
   const textClassName =
     tone === "success"
       ? "text-success"
       : tone === "destructive"
         ? "text-destructive"
-        : "text-muted-foreground";
+        : tone === "warning"
+          ? "text-warning"
+          : "text-muted-foreground";
 
   return (
     <div className={`flex items-center gap-2 text-sm ${textClassName}`}>
@@ -333,13 +341,45 @@ function StatusRow({
   );
 }
 
+type UserMessageEventData = Extract<SandboxEvent, { type: "user_message" }>;
+type UserMessageAttachment = NonNullable<UserMessageEventData["attachments"]>[number];
+
+function UserMessageAttachments({
+  attachments,
+  sessionId,
+}: {
+  attachments: UserMessageAttachment[];
+  sessionId: string;
+}) {
+  return (
+    <div className="min-w-0 max-w-full flex flex-wrap gap-2 mt-3">
+      {attachments.map((attachment, index) => {
+        return (
+          <img
+            key={`${attachment.attachmentId}-${index}`}
+            src={`/api/sessions/${sessionId}/attachments/${attachment.attachmentId}`}
+            alt={attachment.name}
+            title={attachment.name}
+            loading="lazy"
+            decoding="async"
+            className="block h-auto max-h-48 max-w-full border border-border object-contain"
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 function UserMessageEvent({
   event,
+  sessionId,
   currentParticipantId,
   copied,
   onCopyContent,
 }: EventRendererProps) {
-  if (event.type !== "user_message" || !event.content) return null;
+  if (event.type !== "user_message") return null;
+  const attachments = event.attachments ?? [];
+  if (!event.content && attachments.length === 0) return null;
 
   const isCurrentUser =
     event.author?.participantId && currentParticipantId
@@ -364,7 +404,12 @@ function UserMessageEvent({
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
-      <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+      {event.content && (
+        <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+      )}
+      {attachments.length > 0 && (
+        <UserMessageAttachments attachments={attachments} sessionId={sessionId} />
+      )}
     </MessageFrame>
   );
 }
@@ -447,6 +492,16 @@ function ErrorEvent({ event }: EventRendererProps) {
   );
 }
 
+function WarningEvent({ event }: EventRendererProps) {
+  if (event.type !== "warning") return null;
+
+  return (
+    <StatusRow tone="warning" time={formatEventTime(event)}>
+      {event.message}
+    </StatusRow>
+  );
+}
+
 function ExecutionCompleteEvent({ event }: EventRendererProps) {
   if (event.type !== "execution_complete") return null;
 
@@ -478,6 +533,7 @@ const eventRenderers: Partial<
   git_sync: GitSyncEvent,
   artifact: ArtifactEvent,
   error: ErrorEvent,
+  warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
 };
 

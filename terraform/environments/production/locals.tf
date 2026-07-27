@@ -4,10 +4,11 @@ locals {
   use_daytona_backend      = var.sandbox_provider == "daytona"
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
+  use_e2b_backend          = var.sandbox_provider == "e2b"
 
   # Google login is enabled only when both OAuth credentials are configured.
   # Drives the build-time NEXT_PUBLIC_GOOGLE_ENABLED flag (sign-in button) and
-  # mirrors the server-side conditional GoogleProvider in packages/web/src/lib/auth.ts.
+  # mirrors the control plane's conditional Better Auth Google provider.
   google_enabled = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
 
   # URLs for cross-service configuration

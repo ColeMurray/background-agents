@@ -11,11 +11,18 @@ import type {
   AgentResponse,
   ToolCallSummary,
   ArtifactInfo,
+  MediaArtifactInfo,
 } from "../types/artifacts";
 import type { EventResponse, ListEventsResponse } from "../types/sandbox-events";
 import type { ArtifactType } from "../types/statuses";
 import type { Logger } from "../logger";
-import { buildInternalAuthHeaders } from "../auth";
+import {
+  buildOutboundAuthHeaders,
+  type ControlPlaneFetcher,
+  type OutboundServiceCredential,
+} from "../service-auth";
+
+export type { ControlPlaneFetcher };
 
 /**
  * Tool names included in summary display.
@@ -30,25 +37,31 @@ export interface BuildAgentResponseOptions {
 }
 
 /**
- * Minimal interface for the control-plane service binding.
- * Compatible with Cloudflare Workers' `Fetcher` type without depending on
- * `@cloudflare/workers-types`.
- */
-export interface ControlPlaneFetcher {
-  fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
-}
-
-/**
  * Dependencies injected into {@link extractAgentResponse} so it does not
  * depend on any package-specific `Env` type.
  */
 export interface ExtractorDeps {
   /** Cloudflare Workers service binding pointing at the control plane (resolves `https://internal` URLs). */
   fetcher: ControlPlaneFetcher;
-  /** Shared secret for HMAC-based internal auth. If omitted, requests are sent without auth. */
-  internalSecret?: string;
+  /**
+   * Outbound credential (resolve with `resolveOutboundCredential`).
+   * Signatures are request-bound, so headers are built per URL.
+   */
+  auth: OutboundServiceCredential;
   /** Structured logger. Falls back to a silent no-op if not provided. */
   log?: Logger;
+}
+
+/** Build auth headers for one GET to `url`, per the deps' credential. */
+async function buildExtractorAuthHeaders(
+  deps: ExtractorDeps,
+  url: string,
+  traceId?: string
+): Promise<Record<string, string>> {
+  return {
+    Accept: "application/json",
+    ...(await buildOutboundAuthHeaders(deps.auth, { method: "GET", url, traceId })),
+  };
 }
 
 /** Silent no-op logger used when the caller does not supply one. */
@@ -79,12 +92,6 @@ export async function extractAgentResponse(
   const base = { trace_id: traceId, session_id: sessionId, message_id: messageId };
 
   try {
-    // Build auth headers
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      ...(await buildInternalAuthHeaders(deps.internalSecret, traceId)),
-    };
-
     // Fetch all events for this message, paginating if necessary
     const allEvents: EventResponse[] = [];
     let cursor: string | undefined;
@@ -97,6 +104,7 @@ export async function extractAgentResponse(
         url.searchParams.set("cursor", cursor);
       }
 
+      const headers = await buildExtractorAuthHeaders(deps, url.toString(), traceId);
       const response = await deps.fetcher.fetch(url.toString(), { headers });
 
       if (!response.ok) {
@@ -106,7 +114,13 @@ export async function extractAgentResponse(
           http_status: response.status,
           duration_ms: Date.now() - startTime,
         });
-        return { textContent: "", toolCalls: [], artifacts: [], success: false };
+        return {
+          textContent: "",
+          toolCalls: [],
+          artifacts: [],
+          mediaArtifacts: [],
+          success: false,
+        };
       }
 
       const data = (await response.json()) as ListEventsResponse;
@@ -114,7 +128,7 @@ export async function extractAgentResponse(
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
 
-    const artifacts = await fetchSessionArtifacts(deps, sessionId, headers, base, allEvents);
+    const artifacts = await fetchSessionArtifacts(deps, sessionId, traceId, base, allEvents);
     const agentResponse = buildAgentResponseFromEvents(allEvents, artifacts);
 
     log.info("control_plane.fetch_events", {
@@ -123,6 +137,7 @@ export async function extractAgentResponse(
       event_count: allEvents.length,
       tool_call_count: agentResponse.toolCalls.length,
       artifact_count: agentResponse.artifacts.length,
+      media_artifact_count: agentResponse.mediaArtifacts.length,
       has_text: Boolean(agentResponse.textContent),
       has_error: Boolean(agentResponse.error),
       duration_ms: Date.now() - startTime,
@@ -136,7 +151,7 @@ export async function extractAgentResponse(
       error: error instanceof Error ? error : new Error(String(error)),
       duration_ms: Date.now() - startTime,
     });
-    return { textContent: "", toolCalls: [], artifacts: [], success: false };
+    return { textContent: "", toolCalls: [], artifacts: [], mediaArtifacts: [], success: false };
   }
 }
 
@@ -171,6 +186,16 @@ export function buildAgentResponseFromEvents(
     .map((event) => toEventArtifactInfo(event.data))
     .filter((artifact: ArtifactInfo | null): artifact is ArtifactInfo => artifact !== null);
 
+  const mediaArtifacts: MediaArtifactInfo[] = [];
+  const mediaArtifactIds = new Set<string>();
+  for (const event of chronologicalEvents) {
+    if (event.type !== "artifact") continue;
+    const mediaArtifact = toEventMediaArtifactInfo(event.data);
+    if (!mediaArtifact || mediaArtifactIds.has(mediaArtifact.id)) continue;
+    mediaArtifactIds.add(mediaArtifact.id);
+    mediaArtifacts.push(mediaArtifact);
+  }
+
   const completionEvent = findLastEvent(chronologicalEvents, "execution_complete");
   const errorEvent = findLastEvent(chronologicalEvents, "error");
   const errorMessage =
@@ -185,6 +210,7 @@ export function buildAgentResponseFromEvents(
     textContent,
     toolCalls,
     artifacts: eventArtifacts.length > 0 ? eventArtifacts : artifacts,
+    mediaArtifacts,
     success,
     error: errorMessage,
   };
@@ -214,14 +240,16 @@ function findLastEvent(
 async function fetchSessionArtifacts(
   deps: ExtractorDeps,
   sessionId: string,
-  headers: Record<string, string>,
+  traceId: string | undefined,
   base: Record<string, unknown>,
   events: EventResponse[]
 ): Promise<ArtifactInfo[]> {
   const log = deps.log ?? noopLogger;
   const eventRange = getEventCreatedAtRange(events);
   try {
-    const response = await deps.fetcher.fetch(`https://internal/sessions/${sessionId}/artifacts`, {
+    const artifactsUrl = `https://internal/sessions/${sessionId}/artifacts`;
+    const headers = await buildExtractorAuthHeaders(deps, artifactsUrl, traceId);
+    const response = await deps.fetcher.fetch(artifactsUrl, {
       headers,
     });
 
@@ -346,6 +374,36 @@ export function toEventArtifactInfo(data: Record<string, unknown>): ArtifactInfo
     type,
     url: String(data.url ?? ""),
     label: getArtifactLabel(data),
+  };
+}
+
+/** Convert a media artifact event into the protected download information. */
+export function toEventMediaArtifactInfo(data: Record<string, unknown>): MediaArtifactInfo | null {
+  const type = toArtifactType(data.artifactType);
+  if (type !== "screenshot" && type !== "video") return null;
+
+  const id = typeof data.artifactId === "string" ? data.artifactId.trim() : "";
+  if (!id) return null;
+
+  const metadata =
+    data.metadata && typeof data.metadata === "object" && !Array.isArray(data.metadata)
+      ? (data.metadata as Record<string, unknown>)
+      : undefined;
+  const mimeType = typeof metadata?.mimeType === "string" ? metadata.mimeType : undefined;
+  const sizeBytes =
+    typeof metadata?.sizeBytes === "number" &&
+    Number.isSafeInteger(metadata.sizeBytes) &&
+    metadata.sizeBytes > 0
+      ? metadata.sizeBytes
+      : undefined;
+  const caption = typeof metadata?.caption === "string" ? metadata.caption : undefined;
+
+  return {
+    id,
+    type,
+    ...(mimeType ? { mimeType } : {}),
+    ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    ...(caption ? { caption } : {}),
   };
 }
 

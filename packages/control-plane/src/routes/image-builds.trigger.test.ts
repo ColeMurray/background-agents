@@ -5,6 +5,7 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { imageBuildRoutes } from "./image-builds";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "./shared";
+import type { SqlDatabase } from "../db/sql-database";
 import type { RepositoryAccessResult } from "../source-control";
 import type * as SourceControlModule from "../source-control";
 import type * as SandboxClientModule from "../sandbox/client";
@@ -122,6 +123,7 @@ function createContext(waitUntilTasks?: Promise<unknown>[]): RequestContext {
   return {
     request_id: "request-1",
     trace_id: "trace-1",
+    db: {} as SqlDatabase,
     metrics: createRequestMetrics(),
     executionCtx: {
       waitUntil: (task: Promise<unknown>) => {
@@ -138,6 +140,8 @@ function createModalEnv(): Env {
     WORKER_URL: "https://cp.test",
     MODAL_API_SECRET: "modal-secret",
     MODAL_WORKSPACE: "modal-ws",
+    // Modal builds mint callback tokens like every provider.
+    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
   } as Env;
 }
 
@@ -147,7 +151,7 @@ function createVercelEnv(): Env {
     SANDBOX_PROVIDER: "vercel",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     VERCEL_TOKEN: "vercel-token",
     VERCEL_PROJECT_ID: "project-123",
   } as Env;
@@ -159,7 +163,7 @@ function createOpenComputerEnv(): Env {
     SANDBOX_PROVIDER: "opencomputer",
     SCM_PROVIDER: "github",
     WORKER_URL: "https://cp.test",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
     OPENCOMPUTER_API_URL: "https://opencomputer.test",
     OPENCOMPUTER_API_KEY: "oc-token",
     OPENCOMPUTER_TEMPLATE: "openinspect-runtime",

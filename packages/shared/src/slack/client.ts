@@ -19,15 +19,29 @@ const SLACK_API_BASE = "https://slack.com/api";
  * string (Slack's `error` field, or one of the synthesized values
  * `network_error` / `invalid_response` / `http_<status>` / `ratelimited`).
  */
-export type SlackEnvelope<T = Record<string, never>> =
+export type SlackEnvelope<T = object> =
   | ({ ok: true } & T)
   | { ok: false; error: string; retryAfter?: number };
+
+export interface ExternalUploadUrlOptions {
+  filename: string;
+  length: number;
+  altText?: string;
+  signal?: AbortSignal;
+}
+
+export interface CompleteExternalUploadOptions {
+  files: Array<{ id: string; title?: string }>;
+  channelId: string;
+  threadTs: string;
+  signal?: AbortSignal;
+}
 
 async function slackFetch<T>(
   token: string,
   endpoint: string,
   method: "GET" | "POST",
-  init?: { query?: Record<string, string>; body?: Record<string, unknown> }
+  init?: { query?: Record<string, string>; body?: Record<string, unknown>; signal?: AbortSignal }
 ): Promise<SlackEnvelope<T>> {
   const url = init?.query
     ? `${SLACK_API_BASE}/${endpoint}?${new URLSearchParams(init.query).toString()}`
@@ -44,7 +58,7 @@ async function slackFetch<T>(
 
   let response: Response;
   try {
-    response = await fetch(url, { method, headers, body });
+    response = await fetch(url, { method, headers, body, signal: init?.signal });
   } catch {
     return { ok: false, error: "network_error" };
   }
@@ -73,17 +87,70 @@ async function slackFetch<T>(
 function slackGet<T>(
   token: string,
   endpoint: string,
-  query?: Record<string, string>
+  query?: Record<string, string>,
+  signal?: AbortSignal
 ): Promise<SlackEnvelope<T>> {
-  return slackFetch<T>(token, endpoint, "GET", query ? { query } : undefined);
+  return slackFetch<T>(token, endpoint, "GET", query ? { query, signal } : { signal });
 }
 
 function slackPost<T>(
   token: string,
   endpoint: string,
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<SlackEnvelope<T>> {
-  return slackFetch<T>(token, endpoint, "POST", body ? { body } : undefined);
+  return slackFetch<T>(token, endpoint, "POST", body ? { body, signal } : { signal });
+}
+
+export function getExternalUploadUrl(
+  token: string,
+  options: ExternalUploadUrlOptions
+): Promise<SlackEnvelope<{ upload_url: string; file_id: string }>> {
+  return slackGet(
+    token,
+    "files.getUploadURLExternal",
+    {
+      filename: options.filename,
+      length: String(options.length),
+      ...(options.altText ? { alt_txt: options.altText } : {}),
+    },
+    options.signal
+  );
+}
+
+export async function uploadToExternalUrl(
+  uploadUrl: string,
+  body: RequestInit["body"],
+  contentType: string,
+  signal?: AbortSignal
+): Promise<SlackEnvelope> {
+  try {
+    const response = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": contentType },
+      body,
+      signal,
+    });
+    return response.ok ? { ok: true } : { ok: false, error: `http_${response.status}` };
+  } catch {
+    return { ok: false, error: "network_error" };
+  }
+}
+
+export function completeExternalUpload(
+  token: string,
+  options: CompleteExternalUploadOptions
+): Promise<SlackEnvelope<{ files: Array<{ id: string; title?: string }> }>> {
+  return slackPost(
+    token,
+    "files.completeUploadExternal",
+    {
+      files: options.files,
+      channel_id: options.channelId,
+      thread_ts: options.threadTs,
+    },
+    options.signal
+  );
 }
 
 /**
@@ -326,6 +393,63 @@ export async function getThreadMessages(
     if (!cursor) break;
   }
   return { ok: true, messages };
+}
+
+/** A file object as it appears on a Slack message (subset of fields we use). */
+export interface SlackMessageFile {
+  id?: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  url_private?: string;
+  url_private_download?: string;
+  size?: number;
+  /** "external" marks remote files whose url_private is third-party-hosted. */
+  mode?: string;
+}
+
+/**
+ * Fetch the files attached to a single message.
+ *
+ * `app_mention` events don't include the message's `files` array, so when an
+ * event arrives without files we recover them from conversation history. Pass
+ * `threadTs` when the message is a thread reply; otherwise the top-level
+ * message at `ts` is fetched. Returns the failure arm on API errors so callers
+ * can distinguish "the message has no files" from "the lookup failed".
+ */
+export async function getMessageFiles(
+  token: string,
+  channelId: string,
+  ts: string,
+  threadTs?: string
+): Promise<SlackEnvelope<{ files: SlackMessageFile[] }>> {
+  // Single-message fetch. The two endpoints sort differently, so the window
+  // anchor differs: conversations.history returns newest-first, so
+  // `latest=<ts>&inclusive=true&limit=1` yields the target; conversations.replies
+  // returns oldest-first, so the anchor must be `oldest=<ts>&inclusive=true` (a
+  // `latest` anchor would yield the thread root instead). Never set oldest and
+  // latest to the same ts — an equal pair is a zero-width window that Slack
+  // returns empty for. `limit=2` on replies tolerates the thread root being
+  // included alongside the target; the find-by-ts below is the source of truth.
+  type HistoryResult = { messages?: Array<{ ts?: string; files?: SlackMessageFile[] }> };
+  const res =
+    threadTs && threadTs !== ts
+      ? await slackGet<HistoryResult>(token, "conversations.replies", {
+          channel: channelId,
+          ts: threadTs,
+          oldest: ts,
+          inclusive: "true",
+          limit: "2",
+        })
+      : await slackGet<HistoryResult>(token, "conversations.history", {
+          channel: channelId,
+          latest: ts,
+          inclusive: "true",
+          limit: "1",
+        });
+  if (!res.ok) return res;
+  const message = res.messages?.find((m) => m.ts === ts);
+  return { ok: true, files: message?.files ?? [] };
 }
 
 export interface SlackUser {
