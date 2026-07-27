@@ -43,6 +43,20 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(rows[0].count).toBe(0);
   });
 
+  it("rejects typing before subscribing", async () => {
+    const name = `ws-client-nosub-typing-${Date.now()}`;
+    await initNamedSession(name);
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+
+    ws.send(JSON.stringify({ type: "typing" }));
+
+    await expect(closed).resolves.toEqual({ code: 4002 });
+  });
+
   it("subscribe with valid token sends subscribed + state", async () => {
     const name = `ws-client-sub-${Date.now()}`;
     await initNamedSession(name, { repoOwner: "acme", repoName: "web-app" });

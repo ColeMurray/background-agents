@@ -339,7 +339,6 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._presenceService) {
       this._presenceService = new PresenceService({
         getAuthenticatedClients: () => this.wsManager.getAuthenticatedClients(),
-        getClientInfo: (ws) => this.getClientInfo(ws),
         messenger: this.messenger,
         send: (ws, msg) => this.safeSend(ws, msg),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
@@ -1192,17 +1191,22 @@ export class SessionDO extends DurableObject<Env> {
         return;
       }
 
+      if (data.type === "ping") {
+        this.safeSend(ws, { type: "pong", timestamp: Date.now() });
+        return;
+      }
+
+      if (data.type === "subscribe") {
+        await this.handleSubscribe(ws, data);
+        return;
+      }
+
+      const client = this.getClientInfo(ws);
+      if (!client) return;
+
       switch (data.type) {
-        case "ping":
-          this.safeSend(ws, { type: "pong", timestamp: Date.now() });
-          break;
-
-        case "subscribe":
-          await this.handleSubscribe(ws, data);
-          break;
-
         case "prompt":
-          await this.handlePromptMessage(ws, data);
+          await this.handlePromptMessage(ws, client, data);
           break;
 
         case "stop":
@@ -1214,11 +1218,11 @@ export class SessionDO extends DurableObject<Env> {
           break;
 
         case "fetch_history":
-          this.handleFetchHistory(ws, data);
+          this.handleFetchHistory(ws, client, data);
           break;
 
         case "presence":
-          this.presenceService.updatePresence(ws, data);
+          this.presenceService.updatePresence(client, data);
           break;
       }
     } catch (e) {
@@ -1419,6 +1423,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handlePromptMessage(
     ws: WebSocket,
+    client: ClientInfo,
     data: {
       content: string;
       model?: string;
@@ -1426,16 +1431,6 @@ export class SessionDO extends DurableObject<Env> {
       attachments?: SessionAttachmentReference[];
     }
   ): Promise<void> {
-    const client = this.getClientInfo(ws);
-    if (!client) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "NOT_SUBSCRIBED",
-        message: "Must subscribe first",
-      });
-      return;
-    }
-
     await this.messageQueue.handlePromptMessage(ws, client, data);
   }
 
@@ -1444,18 +1439,9 @@ export class SessionDO extends DurableObject<Env> {
    */
   private handleFetchHistory(
     ws: WebSocket,
+    client: ClientInfo,
     data: { cursor?: { timestamp: number; id: string }; limit?: number }
   ): void {
-    const client = this.getClientInfo(ws);
-    if (!client) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "NOT_SUBSCRIBED",
-        message: "Must subscribe first",
-      });
-      return;
-    }
-
     // Validate cursor
     if (
       !data.cursor ||

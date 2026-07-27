@@ -361,7 +361,10 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1">
+        <label
+          htmlFor="linear-issue-session-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
           Issue Session Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
@@ -370,6 +373,7 @@ function GlobalSettingsSection({
           conventions).
         </p>
         <Textarea
+          id="linear-issue-session-instructions"
           value={issueSessionInstructions}
           onChange={(e) => {
             setIssueSessionInstructions(e.target.value);

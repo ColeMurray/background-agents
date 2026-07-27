@@ -41,9 +41,11 @@ export async function GET() {
       return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 502 });
     }
 
-    const enabledData = await enabledResponse.json();
-    const enabledReposData = await enabledReposResponse.json();
-    const statusData = await statusResponse.json();
+    const [enabledData, enabledReposData, statusData] = await Promise.all([
+      enabledResponse.json(),
+      enabledReposResponse.json(),
+      statusResponse.json(),
+    ]);
 
     // The enabled feed also carries the cron's repository lists — serve the
     // scope identity plus the current fingerprint the status fold keys on.

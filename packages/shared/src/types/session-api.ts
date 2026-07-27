@@ -13,17 +13,20 @@ export interface UserPreferences {
   updatedAt: number;
 }
 
-export interface SlackCallbackContext {
-  source: "slack";
-  channel: string;
-  threadTs: string;
-  repoFullName: string;
-  model: string;
-  reasoningEffort?: string;
-  reactionMessageTs?: string;
-}
-
 const nonEmptyStringSchema = z.string().trim().min(1);
+
+export const slackCallbackContextSchema = z.object({
+  source: z.literal("slack"),
+  channel: z.string(),
+  threadTs: z.string(),
+  repoFullName: z.string(),
+  model: z.string(),
+  reasoningEffort: z.string().optional(),
+  reactionMessageTs: z.string().optional(),
+});
+
+export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
+
 const linearCallbackContextBaseSchema = z.strictObject({
   source: z.literal("linear"),
   issueId: nonEmptyStringSchema,
@@ -63,17 +66,33 @@ export const linearStartCallbackSchema = z.strictObject({
 
 export type LinearStartCallback = z.infer<typeof linearStartCallbackSchema>;
 
-export interface AutomationCallbackContext {
-  source: "automation";
-  automationId: string;
-  runId: string;
-  automationName: string;
-}
+export const automationCallbackContextSchema = z.object({
+  source: z.literal("automation"),
+  automationId: z.string(),
+  runId: z.string(),
+  automationName: z.string(),
+});
 
-export type CallbackContext =
-  | SlackCallbackContext
-  | LinearCallbackContext
-  | AutomationCallbackContext;
+export type AutomationCallbackContext = z.infer<typeof automationCallbackContextSchema>;
+
+export const callbackContextSchema = z.union([
+  slackCallbackContextSchema,
+  linearCallbackContextSchema,
+  automationCallbackContextSchema,
+]);
+
+export type CallbackContext = z.infer<typeof callbackContextSchema>;
+
+export const sendPromptRequestSchema = z.object({
+  content: z.string().min(1),
+  source: z.string().optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  attachments: z.unknown().optional(),
+  callbackContext: z.unknown().optional(),
+});
+
+export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
 
 function hasRepositoryIdentifier(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;

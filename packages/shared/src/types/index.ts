@@ -158,8 +158,12 @@ export type {
 } from "./session-diffs";
 
 export {
+  automationCallbackContextSchema,
+  callbackContextSchema,
   linearCallbackContextSchema,
   linearStartCallbackSchema,
+  sendPromptRequestSchema,
+  slackCallbackContextSchema,
   createSessionRequestSchema,
   createSessionInputSchema,
   createMediaArtifactRequestSchema,
@@ -176,6 +180,7 @@ export type {
   LinearStartCallback,
   AutomationCallbackContext,
   CallbackContext,
+  SendPromptRequest,
   CreateSessionRequest,
   CreateSessionInput,
   CreateMediaArtifactRequest,

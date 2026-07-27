@@ -45,9 +45,25 @@ export function buildCodeReviewPrompt(params: {
   head: string;
   isPublic: boolean;
   codeReviewInstructions?: string | null;
+  isSelfReview?: boolean;
 }): string {
-  const { owner, repo, number, title, body, author, base, head, isPublic, codeReviewInstructions } =
-    params;
+  const {
+    owner,
+    repo,
+    number,
+    title,
+    body,
+    author,
+    base,
+    head,
+    isPublic,
+    codeReviewInstructions,
+    isSelfReview = false,
+  } = params;
+  const reviewEvent = isSelfReview ? "COMMENT" : "COMMENT|APPROVE|REQUEST_CHANGES";
+  const reviewEventGuidance = isSelfReview
+    ? "Use COMMENT because GitHub does not allow pull request authors to approve their own PRs."
+    : "Use APPROVE if the code looks good, REQUEST_CHANGES if changes are needed,\n   or COMMENT for general feedback.";
 
   const prTitleBlock = buildUntrustedUserContentBlock({
     source: "github_pr_title",
@@ -96,10 +112,9 @@ ${prDescriptionBlock}
    gh api repos/${owner}/${repo}/pulls/${number}/reviews \\
      --method POST \\
      -f body="<your review summary>" \\
-     -f event="COMMENT|APPROVE|REQUEST_CHANGES"
+     -f event="${reviewEvent}"
 
-   Use APPROVE if the code looks good, REQUEST_CHANGES if changes are needed,
-   or COMMENT for general feedback.
+   ${reviewEventGuidance}
 
 5. For inline comments on specific files:
 

@@ -83,21 +83,27 @@ export default defineConfig({
     include: ["test/integration/**/*.test.ts"],
     setupFiles: ["test/integration/apply-migrations.ts"],
     onUnhandledError(error) {
-      // Better Auth implements OAuth callback redirects as thrown APIError
-      // values. Its handler catches and converts them to the expected 3xx
-      // response, but the Workers pool reports the intermediate rejection as
-      // unhandled. Filter only that library-owned redirect control flow; every
-      // other unhandled error remains fatal.
+      // Better Auth implements redirects and invalid-token responses as thrown
+      // APIError values. Its handler catches and converts them to HTTP responses,
+      // but the Workers pool reports the intermediate rejection as unhandled.
       const betterAuthStack =
         "errorStack" in error && typeof error.errorStack === "string"
           ? error.errorStack
           : error.stack;
+      const betterAuthErrorCode =
+        "body" in error &&
+        typeof error.body === "object" &&
+        error.body !== null &&
+        "code" in error.body &&
+        typeof error.body.code === "string"
+          ? error.body.code
+          : null;
       if (
         error.name === "APIError" &&
         "statusCode" in error &&
         typeof error.statusCode === "number" &&
-        error.statusCode >= 300 &&
-        error.statusCode < 400 &&
+        ((error.statusCode >= 300 && error.statusCode < 400) ||
+          (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN")) &&
         betterAuthStack?.includes("/better-auth/dist/api/routes/")
       ) {
         return false;

@@ -5,10 +5,12 @@ import {
   clientMessageSchema,
   createSessionResponseSchema,
   createSessionRequestSchema,
+  callbackContextSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
   sandboxEventSchema,
+  sendPromptRequestSchema,
   serverMessageSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
@@ -124,6 +126,82 @@ describe("boundary schemas", () => {
         createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
       ).toBe(false);
       expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("sendPromptRequestSchema", () => {
+    it("parses a valid prompt request with a Slack callback context", () => {
+      const result = sendPromptRequestSchema.safeParse({
+        content: "Investigate the failure",
+        source: "slack",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "high",
+        attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
+        callbackContext: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "1710000000.000100",
+          repoFullName: "open-inspect/background-agents",
+          model: "anthropic/claude-sonnet-4-6",
+          reactionMessageTs: "1710000000.000200",
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed prompt request", () => {
+      expect(sendPromptRequestSchema.safeParse({ content: 123 }).success).toBe(false);
+      expect(sendPromptRequestSchema.safeParse({ source: "web" }).success).toBe(false);
+      expect(sendPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+    });
+  });
+
+  describe("callbackContextSchema", () => {
+    it("parses valid callback contexts", () => {
+      expect(
+        callbackContextSchema.safeParse({
+          source: "slack",
+          channel: "C123",
+          threadTs: "1710000000.000100",
+          repoFullName: "open-inspect/background-agents",
+          model: "anthropic/claude-sonnet-4-6",
+        }).success
+      ).toBe(true);
+      expect(
+        callbackContextSchema.safeParse({
+          source: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "OI-123",
+          issueUrl: "https://linear.app/open-inspect/issue/OI-123/test",
+          repoFullName: "open-inspect/background-agents",
+          model: "anthropic/claude-sonnet-4-6",
+          transitionIssueOnStart: false,
+        }).success
+      ).toBe(true);
+      expect(
+        callbackContextSchema.safeParse({
+          source: "automation",
+          automationId: "automation-1",
+          runId: "run-1",
+          automationName: "Nightly sweep",
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects malformed or partial callback contexts", () => {
+      expect(callbackContextSchema.safeParse({ source: "slack", channel: "C123" }).success).toBe(
+        false
+      );
+      expect(
+        callbackContextSchema.safeParse({
+          source: "automation",
+          automationId: "automation-1",
+          runId: null,
+          automationName: "Nightly sweep",
+        }).success
+      ).toBe(false);
+      expect(callbackContextSchema.safeParse({ source: "github" }).success).toBe(false);
     });
   });
 
