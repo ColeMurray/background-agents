@@ -168,7 +168,7 @@ describe("GitHubProviderIdentityResolver", () => {
     });
   });
 
-  it("paginates GitHub emails to exhaustion", async () => {
+  it("constructs subsequent GitHub email page URLs locally", async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       email: `unverified-${index}@example.com`,
       primary: false,
@@ -188,7 +188,7 @@ describe("GitHubProviderIdentityResolver", () => {
       .mockResolvedValueOnce(
         Response.json(firstPage, {
           headers: {
-            Link: '<https://api.github.com/user/emails?per_page=100&page=2>; rel="next"',
+            Link: '<https://attacker.example/collect>; rel="next"',
           },
         })
       )
@@ -213,39 +213,33 @@ describe("GitHubProviderIdentityResolver", () => {
     );
   });
 
-  it("fails closed when GitHub email pagination metadata is malformed", async () => {
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json({ id: 583_231, login: "octocat" }))
-      .mockResolvedValueOnce(
-        Response.json([], {
-          headers: { Link: "this is not a valid Link header" },
-        })
-      );
+  it("bounds GitHub email pagination", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, index) => ({
+      email: `email-${index}@example.com`,
+      primary: false,
+      verified: true,
+      visibility: null,
+    }));
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input) => {
+      if (String(input) === "https://api.github.com/user") {
+        return Response.json({ id: 583_231, login: "octocat" });
+      }
+      return Response.json(fullPage, {
+        headers: {
+          Link: '<https://api.github.com/user/emails?per_page=100&page=999>; rel="next"',
+        },
+      });
+    });
     const resolver = new GitHubProviderIdentityResolver(config, { fetch });
 
     await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
       name: "OAuthProviderError",
       failure: "malformed_response",
+      message: "GitHub email pagination exceeded its limit",
     });
-  });
-
-  it("fails closed when GitHub repeats an email page", async () => {
-    const repeatedPage = "https://api.github.com/user/emails?per_page=100&page=1";
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json({ id: 583_231, login: "octocat" }))
-      .mockResolvedValueOnce(
-        Response.json([], {
-          headers: { Link: `<${repeatedPage}>; rel="next"` },
-        })
-      );
-    const resolver = new GitHubProviderIdentityResolver(config, { fetch });
-
-    await expect(resolver.resolveIdentity("ghu-access")).rejects.toMatchObject({
-      name: "OAuthProviderError",
-      failure: "malformed_response",
-    });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(11);
+    expect(String(fetch.mock.calls[10][0])).toBe(
+      "https://api.github.com/user/emails?per_page=100&page=10"
+    );
   });
 });

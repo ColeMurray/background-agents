@@ -95,24 +95,14 @@ export class GitHubProviderIdentityResolver {
   private async fetchVerifiedEmails(
     accessToken: string
   ): Promise<Array<z.infer<typeof githubEmailSchema>>> {
-    let nextUrl: URL | null = new URL(`${GITHUB_API_URL}/user/emails`);
-    nextUrl.searchParams.set("per_page", String(GITHUB_EMAILS_PER_PAGE));
-    nextUrl.searchParams.set("page", "1");
-    const seenUrls = new Set<string>();
     const entries: Array<z.infer<typeof githubEmailSchema>> = [];
 
-    for (let page = 1; nextUrl !== null && page <= GITHUB_EMAILS_MAX_PAGES; page += 1) {
-      const currentUrl: URL = nextUrl;
-      const serializedUrl = currentUrl.toString();
-      if (seenUrls.has(serializedUrl)) {
-        throw new OAuthProviderError(
-          "malformed_response",
-          "GitHub repeated an email pagination page"
-        );
-      }
-      seenUrls.add(serializedUrl);
+    for (let page = 1; page <= GITHUB_EMAILS_MAX_PAGES; page += 1) {
+      const pageUrl = new URL(`${GITHUB_API_URL}/user/emails`);
+      pageUrl.searchParams.set("per_page", String(GITHUB_EMAILS_PER_PAGE));
+      pageUrl.searchParams.set("page", String(page));
 
-      const response = await this.fetchWithTimeout(currentUrl, {
+      const response = await this.fetchWithTimeout(pageUrl, {
         headers: this.apiHeaders(accessToken),
       });
       if (!response.ok) {
@@ -129,60 +119,15 @@ export class GitHubProviderIdentityResolver {
       }
       entries.push(...parsed.data);
 
-      nextUrl = this.parseEmailNextPage(response.headers.get("Link"));
-      if (nextUrl !== null && page === GITHUB_EMAILS_MAX_PAGES) {
-        throw new OAuthProviderError(
-          "malformed_response",
-          "GitHub email pagination exceeded its limit"
-        );
+      const hasNextPage = response.headers.get("Link")?.includes('rel="next"') ?? false;
+      if (!hasNextPage) {
+        return entries;
       }
     }
-    return entries;
-  }
-
-  private parseEmailNextPage(linkHeader: string | null): URL | null {
-    if (!linkHeader) return null;
-    const links = linkHeader
-      .split(",")
-      .map((value) => value.trim().match(/^<([^>]+)>;\s*rel="([^"]+)"$/));
-    if (links.some((match) => match === null)) {
-      throw new OAuthProviderError(
-        "malformed_response",
-        "GitHub returned malformed email pagination"
-      );
-    }
-    const nextLinks = links
-      .filter((match): match is RegExpMatchArray => match !== null)
-      .filter((match) => match[2].split(/\s+/).includes("next"));
-    if (nextLinks.length === 0) return null;
-    if (nextLinks.length !== 1) {
-      throw new OAuthProviderError(
-        "malformed_response",
-        "GitHub returned ambiguous email pagination"
-      );
-    }
-
-    let url: URL;
-    try {
-      url = new URL(nextLinks[0][1]);
-    } catch {
-      throw new OAuthProviderError(
-        "malformed_response",
-        "GitHub returned invalid email pagination"
-      );
-    }
-    if (
-      url.origin !== GITHUB_API_URL ||
-      url.pathname !== "/user/emails" ||
-      url.searchParams.get("per_page") !== String(GITHUB_EMAILS_PER_PAGE) ||
-      !/^[1-9]\d*$/.test(url.searchParams.get("page") ?? "")
-    ) {
-      throw new OAuthProviderError(
-        "malformed_response",
-        "GitHub returned invalid email pagination"
-      );
-    }
-    return url;
+    throw new OAuthProviderError(
+      "malformed_response",
+      "GitHub email pagination exceeded its limit"
+    );
   }
 
   private apiHeaders(accessToken: string): HeadersInit {
