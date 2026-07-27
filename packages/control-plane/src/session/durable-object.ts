@@ -1192,6 +1192,15 @@ export class SessionDO extends DurableObject<Env> {
         return;
       }
 
+      if (data.type !== "ping" && data.type !== "subscribe" && !this.getClientInfo(ws)) {
+        this.safeSend(ws, {
+          type: "error",
+          code: "NOT_SUBSCRIBED",
+          message: "Must subscribe first",
+        });
+        return;
+      }
+
       switch (data.type) {
         case "ping":
           this.safeSend(ws, { type: "pong", timestamp: Date.now() });

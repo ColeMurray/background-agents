@@ -72,7 +72,14 @@ export function createUserAuth(config: UserAuthConfig) {
             },
           }
         : {}),
-      ...(config.google ? { google: config.google } : {}),
+      ...(config.google
+        ? {
+            google: {
+              ...config.google,
+              disableIdTokenSignIn: true,
+            },
+          }
+        : {}),
     },
     user: {
       modelName: "auth_users",

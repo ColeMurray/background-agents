@@ -152,6 +152,40 @@ describe("browser authentication", () => {
     expect(stateCookie?.toLowerCase()).not.toContain("domain=");
   });
 
+  it("rejects social sign-in from an untrusted browser origin", async () => {
+    const auth = createUserAuth({
+      database: env.DB,
+      publicWebOrigin: PUBLIC_WEB_ORIGIN,
+      secret: SECRET,
+      userProjection: UNUSED_USER_PROJECTION,
+      github: {
+        clientId: "github-app-client-id",
+        clientSecret: "github-app-client-secret",
+        getUserInfo: UNUSED_PROFILE_RESOLVER,
+      },
+    });
+
+    const response = await auth.handler(
+      new Request(`${PUBLIC_WEB_ORIGIN}/api/auth/sign-in/social`, {
+        method: "POST",
+        headers: {
+          [BROWSER_AUTH_CLIENT_IP_HEADER]: "203.0.113.74",
+          "Content-Type": "application/json",
+          Cookie: "__Secure-openinspect.session_token=invalid",
+          Origin: "https://attacker.example",
+        },
+        body: JSON.stringify({
+          provider: "github",
+          callbackURL: "/",
+          disableRedirect: true,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
   it("rate limits repeated browser sign-in attempts by the trusted client IP", async () => {
     const auth = createUserAuth({
       database: env.DB,
@@ -239,6 +273,8 @@ describe("browser authentication", () => {
         getUserInfo: UNUSED_PROFILE_RESOLVER,
       },
     });
+
+    expect(auth.options.socialProviders?.google?.disableIdTokenSignIn).toBe(true);
 
     const response = await auth.handler(
       new Request(`${PUBLIC_WEB_ORIGIN}/api/auth/sign-in/social`, {
