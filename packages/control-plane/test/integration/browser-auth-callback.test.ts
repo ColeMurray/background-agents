@@ -154,12 +154,12 @@ describe("browser auth callback", () => {
     });
 
     const account = await env.DB.prepare(
-      `SELECT id, providerId, accountId
+      `SELECT id
        FROM auth_accounts
        WHERE userId = ?`
     )
       .bind(session.user.id)
-      .first<{ id: string; providerId: string; accountId: string }>();
+      .first<{ id: string }>();
     expect(account).not.toBeNull();
 
     const enrichment = await resolveGitHubEnrichmentForRequest(
@@ -167,19 +167,18 @@ describe("browser auth callback", () => {
       env.DB,
       new UserStore(env.DB),
       session.user.id,
-      resolveGitHubCredentialAuthority({
-        principal: { kind: "user", userId: session.user.id },
-        authentication: {
-          mechanism: "browser_session",
-          credentialId: session.session.id,
-          githubAccount: {
-            id: account?.id ?? "",
-            subject: account?.accountId ?? "",
+      await resolveGitHubCredentialAuthority(
+        {
+          principal: { kind: "user", userId: session.user.id },
+          authentication: {
+            mechanism: "browser_session",
+            credentialId: session.session.id,
+            channel: { kind: "sig1", service: "web" },
           },
-          channel: { kind: "sig1", service: "web" },
+          getBrowserAuth: () => getBrowserAuth(env, env.DB),
         },
-        getBrowserAuth: () => getBrowserAuth(env, env.DB),
-      })
+        new Headers({ Cookie: sessionCookie })
+      )
     );
     expect(enrichment).toMatchObject({
       scmUserId: "583231",

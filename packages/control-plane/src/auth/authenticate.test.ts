@@ -314,20 +314,13 @@ describe("authenticate — compound browser credentials", () => {
     session: {
       session: { id: string; userId: string };
       user: { id: string };
-    } | null,
-    accounts: Array<{
-      id: string;
-      providerId: string;
-      accountId: string;
-      userId: string;
-    }> = []
+    } | null
   ): RequestContext {
     const ctx = createCtx();
     ctx.getBrowserAuth = () =>
       ({
         api: {
           getSession: vi.fn(async () => session),
-          listUserAccounts: vi.fn(async () => accounts),
         },
       }) as never;
     return ctx;
@@ -342,26 +335,10 @@ describe("authenticate — compound browser credentials", () => {
         headers.Cookie = "__Secure-openinspect.session_token=signed-session-token";
       },
     });
-    const ctx = createBrowserCtx(
-      {
-        session: { id: "session-1", userId: "user-1" },
-        user: { id: "user-1" },
-      },
-      [
-        {
-          id: "account-1",
-          providerId: "github",
-          accountId: "583231",
-          userId: "user-1",
-        },
-        {
-          id: "account-2",
-          providerId: "google",
-          accountId: "google-subject",
-          userId: "user-1",
-        },
-      ]
-    );
+    const ctx = createBrowserCtx({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1" },
+    });
 
     const result = await authenticate(request, createEnv(), ctx, {
       webService: "browser",
@@ -373,10 +350,6 @@ describe("authenticate — compound browser credentials", () => {
     expect(result.authentication).toEqual({
       mechanism: "browser_session",
       credentialId: "session-1",
-      githubAccount: {
-        id: "account-1",
-        subject: "583231",
-      },
       channel: { kind: "sig1", service: "web" },
     });
   });

@@ -12,18 +12,9 @@ const sessionSchema = z.object({
   }),
 });
 
-const providerAccountSchema = z.object({
-  id: z.string().min(1),
-  providerId: z.string().min(1),
-  accountId: z.string().min(1),
-  userId: z.string().min(1),
-});
-
 export interface AuthenticatedBrowserUser {
   readonly userId: string;
-  readonly authentication: AuthenticationContext & {
-    readonly mechanism: "browser_session";
-  };
+  readonly authentication: AuthenticationContext;
 }
 
 export class BrowserSessionIntegrityError extends Error {
@@ -52,34 +43,11 @@ export async function authenticateBrowserSession(
     throw new BrowserSessionIntegrityError("Better Auth returned a cross-user session");
   }
 
-  const parsedAccounts = z
-    .array(providerAccountSchema)
-    .safeParse(await auth.api.listUserAccounts({ headers }));
-  if (
-    !parsedAccounts.success ||
-    parsedAccounts.data.some((account) => account.userId !== user.id)
-  ) {
-    throw new BrowserSessionIntegrityError("Browser session provider account is corrupt");
-  }
-  const githubAccounts = parsedAccounts.data.filter((account) => account.providerId === "github");
-  if (githubAccounts.length > 1) {
-    throw new BrowserSessionIntegrityError(
-      "Browser session resolves to multiple GitHub provider accounts"
-    );
-  }
-  const githubAccount = githubAccounts[0] ?? null;
-
   return {
     userId: user.id,
     authentication: {
       mechanism: "browser_session",
       credentialId: session.id,
-      githubAccount: githubAccount
-        ? {
-            id: githubAccount.id,
-            subject: githubAccount.accountId,
-          }
-        : null,
       channel: {
         kind: "sig1",
         service: "web",

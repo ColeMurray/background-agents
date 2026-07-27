@@ -26,14 +26,10 @@ export interface ResolvedIdentity {
   participantUserId: string;
 }
 
+/** Provider-independent evidence used to authenticate a browser request. */
 export interface AuthenticationContext {
   mechanism: "browser_session";
   credentialId: string;
-  /** GitHub credential authority for SCM enrichment, independent of sign-in provenance. */
-  githubAccount: {
-    id: string;
-    subject: string;
-  } | null;
   channel: {
     kind: "sig1";
     service: "web";

@@ -18,7 +18,17 @@ vi.mock("./session/identity", async (importOriginal) => {
 });
 
 vi.mock("./auth/browser-auth-runtime", () => ({
-  getBrowserAuth: vi.fn(() => ({})),
+  getBrowserAuth: vi.fn(() => ({
+    api: {
+      listUserAccounts: vi.fn(async () => [
+        {
+          providerId: "github",
+          accountId: "583231",
+          userId: "user-1",
+        },
+      ]),
+    },
+  })),
 }));
 
 vi.mock("./auth/browser-session-authenticator", () => ({
@@ -28,10 +38,6 @@ vi.mock("./auth/browser-session-authenticator", () => ({
     authentication: {
       mechanism: "browser_session",
       credentialId: "session-1",
-      githubAccount: {
-        id: "account-1",
-        subject: "583231",
-      },
       channel: { kind: "sig1", service: "web" },
     },
   })),

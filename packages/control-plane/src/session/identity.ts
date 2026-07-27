@@ -1,7 +1,10 @@
 import { formatGitHubNoreplyEmail, githubLoginSchema } from "@open-inspect/shared";
 import { z } from "zod";
 import { encryptToken } from "../auth/crypto";
-import type { GitHubCredentialAuthority } from "../auth/github-credential-authority";
+import type {
+  GitHubAccountSelection,
+  GitHubCredentialAuthority,
+} from "../auth/github-credential-authority";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
@@ -75,11 +78,6 @@ const browserGitHubAccountInfoSchema = z.object({
   }),
 });
 
-export interface BrowserGitHubAccount {
-  readonly id: string;
-  readonly subject: string;
-}
-
 export interface BrowserGitHubEnrichmentDependencies {
   readonly getAccessToken: (selection: {
     providerId: "github";
@@ -103,7 +101,7 @@ export interface BrowserGitHubEnrichmentDependencies {
  */
 export async function resolveBrowserGitHubEnrichment(
   userId: string,
-  account: BrowserGitHubAccount,
+  account: GitHubAccountSelection,
   dependencies: BrowserGitHubEnrichmentDependencies
 ): Promise<GitHubEnrichment> {
   const selection = {

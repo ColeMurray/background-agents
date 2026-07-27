@@ -96,7 +96,7 @@ async function handleSessionPrompt(
             ctx.db,
             userStore,
             userId,
-            resolveGitHubCredentialAuthority(ctx)
+            await resolveGitHubCredentialAuthority(ctx, request.headers)
           )) ?? undefined;
       }
     } catch (e) {

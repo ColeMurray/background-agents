@@ -192,7 +192,6 @@ describe("resolveGitHubEnrichment", () => {
 
 describe("resolveBrowserGitHubEnrichment", () => {
   const githubAccount = {
-    id: "account-row-1",
     subject: "42",
   };
 
