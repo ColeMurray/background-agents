@@ -56,6 +56,24 @@ function createMockKV() {
   };
 }
 
+function mockReposResponseBody(repos: Array<Record<string, unknown>>) {
+  return {
+    repos: repos.map((repo, index) => ({
+      ...repo,
+      id: typeof repo.id === "number" ? repo.id : index + 1,
+      fullName:
+        typeof repo.fullName === "string"
+          ? repo.fullName
+          : `${String(repo.owner)}/${String(repo.name)}`,
+      description:
+        repo.description === null || typeof repo.description === "string" ? repo.description : null,
+      archived: typeof repo.archived === "boolean" ? repo.archived : false,
+    })),
+    cached: false,
+    cachedAt: "2026-07-27T00:00:00.000Z",
+  };
+}
+
 function makeEnv(): Env {
   return {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
@@ -67,8 +85,8 @@ function makeEnv(): Env {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -77,8 +95,8 @@ function makeEnv(): Env {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
@@ -129,12 +147,12 @@ function buildNumberedRepos(count: number) {
 }
 
 /** Point CONTROL_PLANE.fetch at a fixed repo list (other routes return enabledModels). */
-function mockReposFetch(env: Env, repos: unknown[]) {
+function mockReposFetch(env: Env, repos: Array<Record<string, unknown>>) {
   (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
     async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/repos")) {
-        return new Response(JSON.stringify({ repos }), {
+        return new Response(JSON.stringify(mockReposResponseBody(repos)), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -176,8 +194,8 @@ function makeSessionEnv(
       if (url.includes("/repos")) {
         order.push("repos");
         return new Response(
-          JSON.stringify({
-            repos: [
+          JSON.stringify(
+            mockReposResponseBody([
               {
                 id: "acme/app",
                 owner: "acme",
@@ -186,8 +204,8 @@ function makeSessionEnv(
                 defaultBranch: "main",
                 private: true,
               },
-            ],
-          }),
+            ])
+          ),
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -553,13 +571,13 @@ describe("POST /events", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 { owner: "acme", name: "web", defaultBranch: "main", private: true },
                 { owner: "acme", name: "api", defaultBranch: "main", private: true },
                 { owner: "acme", name: "docs", defaultBranch: "main", private: true },
-              ],
-            }),
+              ])
+            ),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
@@ -1417,7 +1435,7 @@ describe("POST /interactions", () => {
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
-          return new Response(JSON.stringify({ repos: [] }), {
+          return new Response(JSON.stringify(mockReposResponseBody([])), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
@@ -1822,8 +1840,8 @@ describe("POST /interactions", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -1832,8 +1850,8 @@ describe("POST /interactions", () => {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
@@ -1945,8 +1963,8 @@ describe("POST /interactions", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -1955,8 +1973,8 @@ describe("POST /interactions", () => {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
@@ -2050,8 +2068,8 @@ describe("POST /interactions", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -2060,8 +2078,8 @@ describe("POST /interactions", () => {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
