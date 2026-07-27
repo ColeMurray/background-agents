@@ -14,6 +14,7 @@ import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
+import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import type { RequestContext } from "../routes/shared";
 import type { Env } from "../types";
@@ -61,7 +62,11 @@ export async function authenticate(
       };
     }
     try {
-      const userSession = await authenticateSession(ctx.getUserAuth().api, channel.request.headers);
+      const userSession = await authenticateSession(
+        ctx.getUserAuth().api,
+        new UserStore(ctx.db),
+        channel.request.headers
+      );
       if (!userSession) {
         return {
           reason: "Unauthorized",

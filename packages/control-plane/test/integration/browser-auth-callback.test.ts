@@ -1,5 +1,9 @@
 import { env } from "cloudflare:test";
-import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
+import {
+  BROWSER_AUTH_CLIENT_IP_HEADER,
+  buildServiceAuthHeaders,
+  isCanonicalUserId,
+} from "@open-inspect/shared";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserAuth } from "../../src/auth/user/runtime";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";
@@ -19,6 +23,7 @@ async function signedWebRequest(
     method: "GET" | "POST";
     body?: string;
     cookie?: string;
+    clientIp?: string;
   }
 ): Promise<Request> {
   const url = `${CONTROL_PLANE_ORIGIN}${path}`;
@@ -27,6 +32,7 @@ async function signedWebRequest(
     headers: {
       ...(init.body ? { "Content-Type": "application/json" } : {}),
       ...(init.cookie ? { Cookie: init.cookie } : {}),
+      ...(init.clientIp ? { [BROWSER_AUTH_CLIENT_IP_HEADER]: init.clientIp } : {}),
       Origin: PUBLIC_WEB_ORIGIN,
       ...(await buildServiceAuthHeaders({
         service: "web",
@@ -364,5 +370,99 @@ describe("browser auth callback", () => {
       env
     );
     expect(resourceResponse.status).toBe(200);
+  });
+
+  it("does not retain a Better Auth identity when canonical user creation fails", async () => {
+    const canonicalUserId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const now = Date.now();
+    await env.DB.prepare(
+      `INSERT INTO users (
+         id, display_name, email, avatar_url, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+      .bind(canonicalUserId, "Existing Canonical User", "octocat@example.com", null, now, now)
+      .run();
+
+    async function attemptSignIn(clientIp: string): Promise<Response> {
+      const initiationBody = JSON.stringify({
+        provider: "github",
+        callbackURL: "/after-sign-in",
+        disableRedirect: true,
+      });
+      const initiationResponse = await handleRequest(
+        await signedWebRequest("/api/auth/sign-in/social", {
+          method: "POST",
+          body: initiationBody,
+          clientIp,
+        }),
+        env
+      );
+      expect(initiationResponse.status).toBe(200);
+      const providerUrl = new URL((await initiationResponse.json<{ url: string }>()).url);
+      const state = providerUrl.searchParams.get("state");
+      expect(state).toBeTruthy();
+      const stateCookie = cookiePair(initiationResponse, "__Secure-openinspect.state");
+
+      return handleRequest(
+        await signedWebRequest(
+          `/api/auth/callback/github?code=authorization-code&state=${encodeURIComponent(state ?? "")}`,
+          {
+            method: "GET",
+            cookie: stateCookie,
+          }
+        ),
+        env
+      );
+    }
+
+    const firstCallback = await attemptSignIn("203.0.113.41");
+    expect(firstCallback.status).toBe(302);
+    expect(firstCallback.headers.get("Location")).toContain("error=unable_to_create_user");
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count
+         FROM auth_users
+         WHERE id <> ?`
+      )
+        .bind(canonicalUserId)
+        .first<{ count: number }>()
+    ).toEqual({ count: 0 });
+    expect(
+      await env.DB.prepare(
+        `SELECT COUNT(*) AS count
+         FROM auth_accounts
+         WHERE userId <> ?`
+      )
+        .bind(canonicalUserId)
+        .first<{ count: number }>()
+    ).toEqual({ count: 0 });
+
+    const secondCallback = await attemptSignIn("203.0.113.42");
+    expect(secondCallback.status).toBe(302);
+    expect(secondCallback.headers.get("Location")).toContain("error=unable_to_create_user");
+    expect(
+      secondCallback.headers
+        .getSetCookie()
+        .some((cookie) => cookie.startsWith("__Secure-openinspect.session_token="))
+    ).toBe(false);
+    for (const table of ["auth_users", "auth_accounts", "auth_sessions"] as const) {
+      expect(
+        await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<{
+          count: number;
+        }>()
+      ).toEqual({ count: 0 });
+    }
+    expect(
+      await env.DB.prepare(
+        `SELECT id, email
+         FROM users
+         WHERE email = ?`
+      )
+        .bind("octocat@example.com")
+        .first<{ id: string; email: string }>()
+    ).toEqual({
+      id: canonicalUserId,
+      email: "octocat@example.com",
+    });
   });
 });

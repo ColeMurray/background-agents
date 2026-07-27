@@ -38,6 +38,10 @@ export interface SessionReader {
   }): Promise<unknown>;
 }
 
+export interface CanonicalUserReader {
+  getUserById(userId: string): Promise<unknown | null>;
+}
+
 export class SessionIntegrityError extends Error {
   constructor(message: string) {
     super(message);
@@ -47,6 +51,7 @@ export class SessionIntegrityError extends Error {
 
 export async function authenticateSession(
   sessionReader: SessionReader,
+  canonicalUsers: CanonicalUserReader,
   headers: Headers
 ): Promise<AuthenticatedUserSession | null> {
   // Resource authentication is a read-only hot path, not a session-lifecycle endpoint.
@@ -63,6 +68,9 @@ export async function authenticateSession(
   const { session, user } = parsedSession.data;
   if (session.userId !== user.id) {
     throw new SessionIntegrityError("Better Auth returned a cross-user session");
+  }
+  if ((await canonicalUsers.getUserById(user.id)) === null) {
+    throw new SessionIntegrityError("Better Auth returned a user without a canonical record");
   }
 
   return {

@@ -1,7 +1,6 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
 import { betterAuth } from "better-auth";
 import { generateId } from "../crypto";
-import type { CanonicalUserProjection } from "./canonical-user-projection";
 import type { ProviderProfileResolver } from "./provider-profile";
 
 const MS_PER_SECOND = 1000;
@@ -13,7 +12,6 @@ export interface UserAuthConfig {
   readonly database: D1Database;
   readonly publicWebOrigin: string;
   readonly secret: string;
-  readonly userProjection: CanonicalUserProjection;
   readonly github?: {
     readonly clientId: string;
     readonly clientSecret: string;
@@ -100,15 +98,8 @@ export function createUserAuth(config: UserAuthConfig) {
       modelName: "auth_verifications",
       storeIdentifier: "hashed",
     },
-    databaseHooks: {
-      user: {
-        create: {
-          after: (user) => config.userProjection.project(user),
-        },
-        update: {
-          after: (user) => config.userProjection.project(user),
-        },
-      },
-    },
+    // Canonical users are projected by D1 triggers installed in migration
+    // 0051. Better Auth runs database after-hooks outside its D1 transaction
+    // fallback, so an application-level projection cannot provide atomicity.
   });
 }

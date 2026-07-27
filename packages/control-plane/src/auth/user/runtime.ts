@@ -7,7 +7,6 @@ import { createUserAuth } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
-import { D1CanonicalUserProjection } from "../../db/canonical-user-projection";
 import type { Env } from "../../types";
 
 const GITHUB_ISSUER = "https://github.com";
@@ -108,7 +107,6 @@ export function createUserAuthFromEnv(env: Env, database: D1Database) {
     database,
     publicWebOrigin,
     secret,
-    userProjection: new D1CanonicalUserProjection(database),
     github: {
       clientId: githubClientId,
       clientSecret: githubClientSecret,

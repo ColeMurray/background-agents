@@ -314,9 +314,10 @@ describe("authenticate — compound browser credentials", () => {
     session: {
       session: { id: string; userId: string };
       user: { id: string };
-    } | null
+    } | null,
+    canonicalUserExists = true
   ): RequestContext {
-    const ctx = createCtx();
+    const ctx = createCtx(canonicalUserExists ? { id: session?.user.id ?? "user-1" } : null);
     ctx.getUserAuth = () =>
       ({
         api: {
@@ -368,6 +369,31 @@ describe("authenticate — compound browser credentials", () => {
     expect(result).toEqual({
       reason: "Unauthorized",
       status: 401,
+      failedScheme: "browser-session",
+    });
+  });
+
+  it("fails closed when a Better Auth session has no canonical user", async () => {
+    const request = await signedRequest({
+      service: "web",
+      method: "GET",
+      url: "https://cp.test.local/sessions",
+    });
+    const ctx = createUserAuthContext(
+      {
+        session: { id: "session-1", userId: "orphan-user" },
+        user: { id: "orphan-user" },
+      },
+      false
+    );
+
+    const result = await authenticate(request, createEnv(), ctx, {
+      webService: "user",
+    });
+
+    expect(result).toEqual({
+      reason: "User authentication failed",
+      status: 500,
       failedScheme: "browser-session",
     });
   });

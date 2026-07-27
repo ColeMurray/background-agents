@@ -13,7 +13,6 @@ const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const MS_PER_SECOND = 1000;
 const UNUSED_PROFILE_RESOLVER = async () => null;
-const UNUSED_USER_PROJECTION = { project: async () => {} };
 
 function encodeBase64Url(value: string | Uint8Array): string {
   const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
@@ -116,7 +115,6 @@ function createTestAuth() {
     database: env.DB,
     publicWebOrigin: PUBLIC_WEB_ORIGIN,
     secret: SECRET,
-    userProjection: UNUSED_USER_PROJECTION,
   });
 }
 
@@ -159,7 +157,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -209,7 +206,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -243,7 +239,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -282,7 +277,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: localOrigin,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -318,7 +312,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       google: {
         clientId: "google-client-id",
         clientSecret: "google-client-secret",
@@ -378,7 +371,6 @@ describe("browser authentication", () => {
         database: env.DB,
         publicWebOrigin: PUBLIC_WEB_ORIGIN,
         secret: SECRET,
-        userProjection: UNUSED_USER_PROJECTION,
         google: {
           clientId,
           clientSecret: "google-client-secret",
