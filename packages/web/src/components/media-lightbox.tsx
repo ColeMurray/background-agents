@@ -3,7 +3,14 @@
 import { useEffect, useState } from "react";
 import type { Artifact } from "@/types/session";
 import { buildSessionMediaUrl } from "@/lib/media";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { XIcon } from "@/components/ui/icons";
 
 interface MediaLightboxProps {
   sessionId: string;
@@ -26,14 +33,20 @@ export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: Media
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[min(96vw,1100px)] gap-4 border-border-muted bg-background p-4">
-        <DialogTitle>{caption}</DialogTitle>
-        <DialogDescription>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-[min(96vw,1100px)] grid-rows-[auto_auto_minmax(0,1fr)] gap-4 overflow-hidden border-border-muted bg-background p-4">
+        <DialogClose
+          className="absolute right-3 top-3 rounded-sm p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Close media viewer"
+        >
+          <XIcon className="h-5 w-5" />
+        </DialogClose>
+        <DialogTitle className="line-clamp-2 pr-8">{caption}</DialogTitle>
+        <DialogDescription className="truncate pr-8">
           {artifact?.metadata?.sourceUrl ||
             (isVideo ? "Session video recording" : "Session screenshot")}
         </DialogDescription>
 
-        <div className="max-h-[80vh] overflow-auto bg-muted">
+        <div className="min-h-0 overflow-auto bg-muted">
           {!artifact ? (
             <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
               No media selected
@@ -44,7 +57,7 @@ export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: Media
                 <video
                   src={mediaUrl}
                   aria-label={`${caption} video`}
-                  className={isLoaded ? "mx-auto h-auto max-h-[76vh] max-w-full" : "invisible"}
+                  className={isLoaded ? "mx-auto h-auto max-h-full max-w-full" : "invisible"}
                   controls
                   preload="metadata"
                   onLoadedMetadata={() => setIsLoaded(true)}

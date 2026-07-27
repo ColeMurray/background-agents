@@ -86,6 +86,7 @@ describe("ScreenshotArtifactCard", () => {
 
 describe("MediaLightbox", () => {
   it("renders the selected screenshot preview", () => {
+    const onOpenChange = vi.fn();
     render(
       <MediaLightbox
         sessionId="session-1"
@@ -100,7 +101,7 @@ describe("MediaLightbox", () => {
           createdAt: 1234,
         }}
         open={true}
-        onOpenChange={vi.fn()}
+        onOpenChange={onOpenChange}
       />
     );
 
@@ -113,6 +114,9 @@ describe("MediaLightbox", () => {
       "src",
       "/api/sessions/session-1/media/artifact-1"
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Close media viewer" }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("renders the selected video preview with controls", () => {
