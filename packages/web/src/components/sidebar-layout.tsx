@@ -1,6 +1,15 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { signIn, useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
@@ -29,6 +38,11 @@ interface AppShellActionsContextValue {
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
 const AppShellActionsContext = createContext<AppShellActionsContextValue | null>(null);
+
+const MOBILE_SIDEBAR_WIDTH_PX = 288;
+const MOBILE_SIDEBAR_HOLD_MS = 300;
+const MOBILE_SIDEBAR_HOLD_TOLERANCE_PX = 10;
+const MOBILE_SIDEBAR_OPEN_THRESHOLD_PX = 72;
 
 export function useSidebarContext() {
   const context = useContext(SidebarContext);
@@ -79,6 +93,79 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
+  const [sidebarDragDistance, setSidebarDragDistance] = useState(0);
+  const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
+  const sidebarHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sidebarDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const sidebarDragDistanceRef = useRef(0);
+  const isSidebarDragActiveRef = useRef(false);
+
+  const resetSidebarDrag = useCallback(() => {
+    if (sidebarHoldTimerRef.current !== null) {
+      clearTimeout(sidebarHoldTimerRef.current);
+      sidebarHoldTimerRef.current = null;
+    }
+    sidebarDragStartRef.current = null;
+    sidebarDragDistanceRef.current = 0;
+    isSidebarDragActiveRef.current = false;
+    setSidebarDragDistance(0);
+    setIsDraggingSidebar(false);
+  }, []);
+
+  useEffect(() => resetSidebarDrag, [resetSidebarDrag]);
+
+  const handleSidebarDragStart = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!isMobile || sidebar.isOpen || (event.pointerType === "mouse" && event.button !== 0)) {
+        return;
+      }
+
+      resetSidebarDrag();
+      sidebarDragStartRef.current = { x: event.clientX, y: event.clientY };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      sidebarHoldTimerRef.current = setTimeout(() => {
+        sidebarHoldTimerRef.current = null;
+        isSidebarDragActiveRef.current = true;
+        setIsDraggingSidebar(true);
+      }, MOBILE_SIDEBAR_HOLD_MS);
+    },
+    [isMobile, resetSidebarDrag, sidebar.isOpen]
+  );
+
+  const handleSidebarDragMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const start = sidebarDragStartRef.current;
+      if (!start) return;
+
+      const deltaX = event.clientX - start.x;
+      const deltaY = event.clientY - start.y;
+      if (!isSidebarDragActiveRef.current) {
+        if (Math.hypot(deltaX, deltaY) > MOBILE_SIDEBAR_HOLD_TOLERANCE_PX) {
+          resetSidebarDrag();
+        }
+        return;
+      }
+
+      if (Math.abs(deltaY) > Math.abs(deltaX)) {
+        resetSidebarDrag();
+        return;
+      }
+
+      event.preventDefault();
+      const distance = Math.min(MOBILE_SIDEBAR_WIDTH_PX, Math.max(0, deltaX));
+      sidebarDragDistanceRef.current = distance;
+      setSidebarDragDistance(distance);
+    },
+    [resetSidebarDrag]
+  );
+
+  const handleSidebarDragEnd = useCallback(() => {
+    const shouldOpen =
+      isSidebarDragActiveRef.current &&
+      sidebarDragDistanceRef.current >= MOBILE_SIDEBAR_OPEN_THRESHOLD_PX;
+    resetSidebarDrag();
+    if (shouldOpen) sidebar.open();
+  }, [resetSidebarDrag, sidebar]);
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
     status === "authenticated" && Boolean(session) && isCommandMenuOpen
@@ -160,12 +247,31 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     <SidebarContext.Provider value={sidebar}>
       <AppShellActionsContext.Provider value={appShellActions}>
         <div className="flex h-dvh overflow-hidden">
+          {isMobile && !sidebar.isOpen && (
+            <div
+              data-testid="mobile-sidebar-drag-handle"
+              className="fixed inset-y-0 left-0 z-50 w-6 touch-pan-y"
+              aria-hidden="true"
+              onPointerDown={handleSidebarDragStart}
+              onPointerMove={handleSidebarDragMove}
+              onPointerUp={handleSidebarDragEnd}
+              onPointerCancel={resetSidebarDrag}
+              onContextMenu={(event) => event.preventDefault()}
+            />
+          )}
           {/* Mobile: overlay backdrop */}
           {isMobile && (
             <div
-              className={`fixed inset-0 z-30 bg-overlay transition-opacity duration-200 ${
-                sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
-              }`}
+              className={`fixed inset-0 z-30 bg-overlay ${
+                isDraggingSidebar ? "" : "transition-opacity duration-200"
+              } ${sidebar.isOpen ? "opacity-100" : "pointer-events-none"}`}
+              style={
+                !sidebar.isOpen && sidebarDragDistance > 0
+                  ? { opacity: sidebarDragDistance / MOBILE_SIDEBAR_WIDTH_PX }
+                  : !sidebar.isOpen
+                    ? { opacity: 0 }
+                    : undefined
+              }
               role="presentation"
               aria-hidden="true"
               onClick={sidebar.close}
@@ -175,12 +281,17 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           <div
             className={
               isMobile
-                ? `fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-in-out ${
-                    sidebar.isOpen ? "translate-x-0" : "-translate-x-full"
-                  }`
+                ? `fixed inset-y-0 left-0 z-40 w-72 ease-in-out ${
+                    isDraggingSidebar ? "" : "transition-transform duration-200"
+                  } ${sidebar.isOpen ? "translate-x-0" : "-translate-x-full"}`
                 : `transition-all duration-200 ease-in-out ${
                     sidebar.isOpen ? "w-72" : "w-0"
                   } flex-shrink-0 overflow-hidden`
+            }
+            style={
+              isMobile && !sidebar.isOpen && sidebarDragDistance > 0
+                ? { transform: `translateX(calc(-100% + ${sidebarDragDistance}px))` }
+                : undefined
             }
           >
             <SessionSidebar
