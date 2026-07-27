@@ -26,13 +26,7 @@ vi.mock("./routes/shared", async (importOriginal) => {
 
 const USER_PRINCIPAL: Principal = {
   kind: "user",
-  user: {
-    provider: "github",
-    providerUserId: "583231",
-    canonicalUserId: "user-1",
-    participantUserId: "user-1",
-  },
-  tokenId: "token-1",
+  userId: "user-1",
 };
 
 describe("handleCreateSession D1 ordering", () => {

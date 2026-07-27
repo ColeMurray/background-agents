@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ authOptions: {} }));
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
+}));
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
@@ -12,7 +13,7 @@ describe("session diff API route", () => {
   beforeEach(() => vi.resetAllMocks());
 
   it("requires authentication", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
     const context = { params: Promise.resolve({ id: "session-1" }) };
 
     expect(
@@ -22,7 +23,7 @@ describe("session diff API route", () => {
   });
 
   it("proxies the latest manifest with private caching", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValueOnce(
       Response.json({ version: 1, current: null, lastError: null, unavailableReason: null })
     );

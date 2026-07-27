@@ -1,4 +1,10 @@
 import { formatGitHubNoreplyEmail, githubLoginSchema } from "@open-inspect/shared";
+import { z } from "zod";
+import { encryptToken } from "../auth/crypto";
+import type {
+  GitHubAccountSelection,
+  GitHubCredentialAuthority,
+} from "../source-control/github-credential-authority";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
 import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
@@ -50,6 +56,84 @@ export interface GitHubEnrichment {
   accessTokenEncrypted?: string;
   refreshTokenEncrypted?: string;
   tokenExpiresAt?: number;
+}
+
+const browserAccessTokenSchema = z.object({
+  accessToken: z.string().min(1),
+  accessTokenExpiresAt: z.coerce.date().optional(),
+});
+
+const browserGitHubAccountInfoSchema = z.object({
+  user: z.object({
+    id: z.string().min(1),
+  }),
+  data: z.object({
+    provider: z.literal("github"),
+    issuer: z.literal("https://github.com"),
+    subject: z.string().min(1),
+    login: githubLoginSchema,
+    displayName: z.string().min(1).optional(),
+    verifiedEmails: z.array(z.string()),
+    primaryEmail: z.string().nullable(),
+  }),
+});
+
+export interface BrowserGitHubEnrichmentDependencies {
+  readonly getAccessToken: (selection: {
+    providerId: "github";
+    accountId: string;
+    userId: string;
+  }) => Promise<unknown>;
+  readonly getAccountInfo: (selection: {
+    providerId: "github";
+    accountId: string;
+    userId: string;
+  }) => Promise<unknown>;
+  readonly encryptAccessToken: (accessToken: string) => Promise<string>;
+}
+
+/**
+ * Resolve GitHub attribution and a current provider token from Better Auth.
+ *
+ * Better Auth owns refresh-token storage and rotation. Session state receives
+ * only a re-encrypted, currently valid access token; it never copies the
+ * long-lived refresh credential into a second store.
+ */
+export async function resolveBrowserGitHubEnrichment(
+  userId: string,
+  account: GitHubAccountSelection,
+  dependencies: BrowserGitHubEnrichmentDependencies
+): Promise<GitHubEnrichment> {
+  const selection = {
+    providerId: "github" as const,
+    accountId: account.subject,
+    userId,
+  };
+  const token = browserAccessTokenSchema.parse(await dependencies.getAccessToken(selection));
+  const profile = browserGitHubAccountInfoSchema.parse(
+    await dependencies.getAccountInfo(selection)
+  );
+  if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
+    throw new Error("Better Auth returned a mismatched GitHub account");
+  }
+
+  const accessTokenEncrypted = await dependencies.encryptAccessToken(token.accessToken);
+  const author = resolveGitAuthorIdentity({
+    scmProvider: "github",
+    scmUserId: profile.data.subject,
+    scmLogin: profile.data.login,
+    scmName: profile.data.displayName,
+    scmEmail: profile.data.primaryEmail,
+  });
+
+  return {
+    scmUserId: profile.data.subject,
+    scmLogin: profile.data.login,
+    displayName: profile.data.displayName ?? profile.data.login,
+    email: author?.email,
+    accessTokenEncrypted,
+    ...(token.accessTokenExpiresAt ? { tokenExpiresAt: token.accessTokenExpiresAt.getTime() } : {}),
+  };
 }
 
 /**
@@ -105,4 +189,31 @@ export async function resolveGitHubEnrichment(
     refreshTokenEncrypted: tokens?.refreshTokenEncrypted,
     tokenExpiresAt: tokens?.expiresAt,
   };
+}
+
+/**
+ * Select the credential authority associated with the authenticated request.
+ *
+ * Browser sessions read/refresh through Better Auth. Bot identities retain
+ * their existing actor identity/token-store lookup.
+ */
+export async function resolveGitHubEnrichmentForRequest(
+  env: Env,
+  db: SqlDatabase,
+  userStore: UserStore,
+  userId: string,
+  authority: GitHubCredentialAuthority
+): Promise<GitHubEnrichment | null> {
+  if (authority.kind === "legacy") {
+    return resolveGitHubEnrichment(env, db, userStore, userId);
+  }
+
+  const accountClient = authority.accountClient;
+  const githubAccount = authority.githubAccount;
+  if (!githubAccount) return null;
+  return resolveBrowserGitHubEnrichment(userId, githubAccount, {
+    getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
+    getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
+    encryptAccessToken: (accessToken) => encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY),
+  });
 }

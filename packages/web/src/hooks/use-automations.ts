@@ -1,5 +1,5 @@
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
 import type {
   Automation,
   ListAutomationsResponse,
@@ -7,7 +7,7 @@ import type {
 } from "@open-inspect/shared";
 
 export function useAutomations() {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
 
   const { data, isLoading, mutate } = useSWR<ListAutomationsResponse>(
     session ? "/api/automations" : null
@@ -22,7 +22,7 @@ export function useAutomations() {
 }
 
 export function useAutomation(id: string | undefined) {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
 
   const { data, isLoading, mutate } = useSWR<{ automation: Automation }>(
     session && id ? `/api/automations/${id}` : null
@@ -36,7 +36,7 @@ export function useAutomation(id: string | undefined) {
 }
 
 export function useAutomationInvocations(id: string | undefined, limit = 20, offset = 0) {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
 
   const { data, isLoading, mutate } = useSWR<ListAutomationInvocationsResponse>(
     session && id ? `/api/automations/${id}/invocations?limit=${limit}&offset=${offset}` : null

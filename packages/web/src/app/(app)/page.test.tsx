@@ -50,8 +50,8 @@ const repo = {
   defaultBranch: "main",
 };
 
-vi.mock("next-auth/react", () => ({
-  useSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -137,6 +137,15 @@ function sessionCreateBody(): Record<string, unknown> {
 }
 
 describe("Home", () => {
+  it("disables autofill suggestions for the prompt", () => {
+    render(<Home />);
+
+    expect(screen.getByPlaceholderText("What do you want to build?")).toHaveAttribute(
+      "autocomplete",
+      "off"
+    );
+  });
+
   it("keeps the attachment control anchored while the sandbox warms", async () => {
     let resolveCreate: ((response: Response) => void) | undefined;
     vi.mocked(fetch).mockImplementation(

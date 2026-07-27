@@ -193,7 +193,6 @@ WEB_PLATFORM # Optional; defaults to vercel
 VERCEL_API_TOKEN
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
-NEXTAUTH_URL # Used by the Vercel web deploy workflow
 
 # Modal
 MODAL_TOKEN_ID
@@ -221,7 +220,7 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
-# GitHub OAuth App
+# GitHub App OAuth credentials
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET
 
@@ -252,7 +251,7 @@ ANTHROPIC_API_KEY
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
-NEXTAUTH_SECRET
+NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control
 ALLOWED_USERS

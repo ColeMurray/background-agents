@@ -3,6 +3,8 @@
  * Extracted from index.ts for modularity.
  */
 
+import { createSessionResponseSchema } from "@open-inspect/shared";
+import { z } from "zod";
 import type {
   Env,
   LinearCallbackContext,
@@ -35,6 +37,17 @@ import {
 import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-store";
 
 const log = createLogger("handler");
+
+const sessionEventsSummaryResponseSchema = z.object({
+  events: z.array(
+    z.object({
+      type: z.literal("token"),
+      data: z.object({
+        content: z.string(),
+      }),
+    })
+  ),
+});
 
 export function escapeHtml(s: string): string {
   return s
@@ -162,8 +175,11 @@ async function createSession(
     return { ok: false, status: response.status, body };
   }
 
-  const result = (await response.json()) as { sessionId: string };
-  return { ok: true, sessionId: result.sessionId };
+  const result = createSessionResponseSchema.safeParse(await response.json().catch(() => null));
+  if (!result.success) {
+    return { ok: false, status: response.status, body: "invalid response" };
+  }
+  return { ok: true, sessionId: result.data.sessionId };
 }
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
@@ -366,22 +382,19 @@ async function handleFollowUp(
 
   let sessionContextSummary = "";
   try {
-    const eventsUrl = `https://internal/sessions/${existingSession.sessionId}/events?limit=20`;
+    const eventsUrl = `https://internal/sessions/${existingSession.sessionId}/events?type=token&limit=20`;
     const eventsRes = await signedControlPlaneFetch(env, {
       method: "GET",
       url: eventsUrl,
       traceId,
     });
     if (eventsRes.ok) {
-      const eventsData = (await eventsRes.json()) as {
-        events: Array<{ type: string; data: Record<string, unknown> }>;
-      };
-      const recentTokens = eventsData.events.filter((e) => e.type === "token").slice(-1);
-      if (recentTokens.length > 0) {
-        const lastContent = String(recentTokens[0].data.content ?? "");
-        if (lastContent) {
-          sessionContextSummary = lastContent.slice(0, 500);
-        }
+      const eventsData = sessionEventsSummaryResponseSchema.safeParse(await eventsRes.json());
+      const latestContent = eventsData.success
+        ? eventsData.data.events[0]?.data.content
+        : undefined;
+      if (latestContent) {
+        sessionContextSummary = latestContent.slice(0, 500);
       }
     }
   } catch {

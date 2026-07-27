@@ -7,6 +7,7 @@ import {
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export type PendingAttachment = {
   id: string;
@@ -183,7 +184,7 @@ export function useSessionAttachments() {
           }, SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS);
           let response: Response;
           try {
-            response = await fetch(`/api/sessions/${sessionId}/attachments`, {
+            response = await browserApiFetch(`/api/sessions/${sessionId}/attachments`, {
               method: "POST",
               body: formData,
               signal: controller.signal,

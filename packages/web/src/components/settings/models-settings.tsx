@@ -7,6 +7,7 @@ import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
 import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export function ModelsSettings() {
   const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
@@ -57,7 +58,7 @@ export function ModelsSettings() {
     setSaving(true);
 
     try {
-      const res = await fetch("/api/model-preferences", {
+      const res = await browserApiFetch("/api/model-preferences", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabledModels: Array.from(enabledModels) }),

@@ -52,7 +52,9 @@ describe("analytics router integration", () => {
     };
 
     const response = await handleRequest(
-      await signedServiceRequest("https://test.local/analytics/summary"),
+      await signedServiceRequest("https://test.local/analytics/summary", {
+        service: "modal",
+      }),
       env as never
     );
 

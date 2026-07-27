@@ -14,6 +14,7 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -43,7 +44,7 @@ export function DataControlsSettings() {
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
-      const res = await fetch(
+      const res = await browserApiFetch(
         buildSessionsPageKey({
           status: "archived",
           limit: PAGE_SIZE,
@@ -66,7 +67,9 @@ export function DataControlsSettings() {
 
   const handleUnarchive = async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
+      const res = await browserApiFetch(`/api/sessions/${sessionId}/unarchive`, {
+        method: "POST",
+      });
       if (!res.ok) {
         toast.error("Failed to unarchive session");
         return;

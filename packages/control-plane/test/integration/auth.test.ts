@@ -30,7 +30,7 @@ describe("Edge authentication", () => {
     expect(response.status).toBe(401);
   });
 
-  it("accepts a service-signed request and returns the session list", async () => {
+  it("accepts a compound browser request and returns the session list", async () => {
     const response = await serviceFetch("https://test.local/sessions");
     expect(response.status).toBe(200);
     const body = await response.json<{ sessions: unknown[]; hasMore: boolean }>();

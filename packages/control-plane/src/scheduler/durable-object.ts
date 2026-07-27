@@ -22,7 +22,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { z } from "zod";
-import { callbackSigningSecret } from "../auth/callback-signing";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
   toAutomationRun,
@@ -34,7 +34,6 @@ import {
   type AutomationRepositoryInsert,
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
-import { ApiTokenStore } from "../db/api-tokens";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import {
   buildSlackCompletionNotification,
@@ -510,11 +509,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // 1. Recovery sweep
     await this.recoverySweep(store);
 
-    // 2. Retention sweep: purge api_tokens rows long past expiry — nothing
-    // else ever deletes them (rotation mints 2 rows per user per period).
-    await this.apiTokenRetentionSweep(now);
-
-    // 3. Process overdue automations, bounded by the per-tick child budget.
+    // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
     const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
       store.getRepositoriesForAutomationIds(overdue.map((automation) => automation.id)),
@@ -594,25 +589,6 @@ export class SchedulerDO extends DurableObject<Env> {
     return new Response(JSON.stringify({ processed, skipped, failed }), {
       headers: { "Content-Type": "application/json" },
     });
-  }
-
-  // ─── Retention sweep ─────────────────────────────────────────────────────
-
-  private async apiTokenRetentionSweep(now: number): Promise<void> {
-    try {
-      const deleted = await new ApiTokenStore(this.db).deleteExpired(now);
-      if (deleted > 0) {
-        this.log.info("Expired api_tokens rows purged", {
-          event: "scheduler.api_token_retention",
-          deleted,
-        });
-      }
-    } catch (e) {
-      this.log.error("api_tokens retention sweep failed", {
-        event: "scheduler.api_token_retention_error",
-        error: e instanceof Error ? e.message : String(e),
-      });
-    }
   }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────
@@ -1238,7 +1214,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // (handleCreateAutomation resolves it for both GitHub and Google users), so this
     // lookup is skipped for them. The fallback below only covers legacy rows with
     // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from NextAuth session.user.id), so a github-only identity lookup
+    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
     // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {

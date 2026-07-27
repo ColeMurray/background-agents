@@ -47,8 +47,10 @@ async function signedFetch(p: {
 describe("sig1 service-credential authentication", () => {
   beforeEach(cleanD1Tables);
 
-  it("accepts a signed GET from every registered service", async () => {
-    for (const service of Object.keys(SERVICE_SECRET) as ServiceName[]) {
+  it("accepts a signed GET from every non-web service", async () => {
+    for (const service of Object.keys(SERVICE_SECRET).filter(
+      (candidate): candidate is Exclude<ServiceName, "web"> => candidate !== "web"
+    )) {
       const response = await signedFetch({
         service,
         method: "GET",
@@ -60,12 +62,21 @@ describe("sig1 service-credential authentication", () => {
     }
   });
 
+  it("requires a browser session in addition to the web service channel", async () => {
+    const response = await signedFetch({
+      service: "web",
+      method: "GET",
+      url: "https://test.local/sessions",
+    });
+    expect(response.status).toBe(401);
+  });
+
   it("accepts a signed request with a query string regardless of param order", async () => {
     const createdBy = "a".repeat(32);
     const signedUrl = `https://test.local/sessions?limit=5&createdBy=${createdBy}`;
     const headers = await buildServiceAuthHeaders({
-      service: "web",
-      secret: SERVICE_SECRET.web,
+      service: "modal",
+      secret: SERVICE_SECRET.modal,
       method: "GET",
       url: signedUrl,
     });
@@ -80,7 +91,7 @@ describe("sig1 service-credential authentication", () => {
 
   it("delivers the signed body intact to the handler (D1 write lands)", async () => {
     const response = await signedFetch({
-      service: "web",
+      service: "modal",
       method: "PUT",
       url: "https://test.local/secrets",
       body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } }),
@@ -94,32 +105,29 @@ describe("sig1 service-credential authentication", () => {
     expect(secrets.SIGNED_BODY_TEST).toBe("intact");
   });
 
-  it("does not let the web service credential mutate provider identities", async () => {
-    const response = await signedFetch({
-      service: "web",
-      method: "PUT",
-      url: "https://test.local/provider-identities/github/424242",
-      body: JSON.stringify({ providerEmail: "victim@example.com" }),
-    });
-
-    expect(response.status).toBe(403);
-  });
-
   it("rejects a body tampered after signing", async () => {
-    const url = "https://test.local/provider-identities/github/424242";
+    const url = "https://test.local/secrets";
+    const intactBody = JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } });
     const headers = await buildServiceAuthHeaders({
-      service: "web",
-      secret: SERVICE_SECRET.web,
+      service: "modal",
+      secret: SERVICE_SECRET.modal,
       method: "PUT",
       url,
-      body: JSON.stringify({ providerLogin: "octocat" }),
+      body: intactBody,
     });
-    const response = await SELF.fetch(url, {
+    const intact = await SELF.fetch(url, {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({ providerLogin: "evilcat" }),
+      body: intactBody,
     });
-    expect(response.status).toBe(401);
+    expect(intact.status).toBe(200);
+
+    const tampered = await SELF.fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "tampered" } }),
+    });
+    expect(tampered.status).toBe(401);
   });
 
   it("rejects a signature replayed against a different method or path", async () => {
@@ -201,9 +209,10 @@ describe("sig1 service-credential authentication", () => {
     const identity = await new UserStore(env.DB).getIdentity("slack", "U0001");
     expect(identity).not.toBeNull();
     const listed = await signedFetch({
-      service: "web",
+      service: "slack-bot",
       method: "GET",
       url: "https://test.local/sessions",
+      actor: "slack:U0001",
     });
     const body = await listed.json<{
       sessions: Array<{ title: string; userId: string; spawnSource: string }>;
@@ -228,7 +237,7 @@ describe("sig1 service-credential authentication", () => {
           model: "anthropic/claude-haiku-4-5",
         }),
       });
-      expect(response.status, service).toBe(403);
+      expect(response.status, service).toBe(service === "web" ? 401 : 403);
     }
 
     const sessionCount = await env.DB.prepare("SELECT COUNT(*) AS n FROM sessions").first<{

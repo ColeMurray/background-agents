@@ -309,6 +309,70 @@ describe("authenticate — service credentials", () => {
   });
 });
 
+describe("authenticate — compound browser credentials", () => {
+  function createUserAuthContext(
+    session: {
+      session: { id: string; userId: string };
+      user: { id: string };
+    } | null
+  ): RequestContext {
+    const ctx = createCtx();
+    ctx.getUserAuth = () =>
+      ({
+        api: {
+          getSession: vi.fn(async () => session),
+        },
+      }) as never;
+    return ctx;
+  }
+
+  it("requires the web sig1 channel and Better Auth session for a browser resource", async () => {
+    const request = await signedRequest({
+      service: "web",
+      method: "GET",
+      url: "https://cp.test.local/sessions",
+      mutate: (headers) => {
+        headers.Cookie = "__Secure-openinspect.session_token=signed-session-token";
+      },
+    });
+    const ctx = createUserAuthContext({
+      session: { id: "session-1", userId: "user-1" },
+      user: { id: "user-1" },
+    });
+
+    const result = await authenticate(request, createEnv(), ctx, {
+      webService: "user",
+    });
+
+    expect(isAuthError(result)).toBe(false);
+    if (isAuthError(result)) return;
+    expect(result.principal).toEqual({ kind: "user", userId: "user-1" });
+    expect(result.authentication).toEqual({
+      mechanism: "browser_session",
+      credentialId: "session-1",
+      channel: { kind: "sig1", service: "web" },
+    });
+  });
+
+  it("does not let a valid web channel fall back when its browser session is absent", async () => {
+    const request = await signedRequest({
+      service: "web",
+      method: "GET",
+      url: "https://cp.test.local/sessions",
+    });
+
+    const result = await authenticate(request, createEnv(), createUserAuthContext(null), {
+      webService: "user",
+    });
+
+    expect(result).toEqual({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "browser-session",
+    });
+  });
+});
+
 describe("authenticate — nonce replay logging", () => {
   it("warns on nonce reuse inside the validity window but still authenticates", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -340,10 +404,8 @@ describe("authenticate — nonce replay logging", () => {
   });
 });
 
-describe("authenticate — web session token dispatch", () => {
-  it("dispatches oi_at_ bearers to token verification, never the shared bearer", async () => {
-    // An unknown token must fail as a user-token attempt (terminal), even
-    // though the same header would otherwise reach the shared-bearer arm.
+describe("authenticate — retired web session tokens", () => {
+  it("treats oi_at_ bearers as unrecognized after the browser-session cutover", async () => {
     const request = new Request("https://cp.test.local/sessions", {
       headers: { Authorization: "Bearer oi_at_unknown-token-value" },
     });
@@ -351,7 +413,7 @@ describe("authenticate — web session token dispatch", () => {
     expect(result).toEqual({
       reason: "Unauthorized",
       status: 401,
-      failedScheme: "user-token",
+      failedScheme: "none",
     });
   });
 });

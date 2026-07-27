@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --external:cloudflare:* --external:node:*",
+    "build": "esbuild src/index.ts --bundle --format=esm --outfile=dist/index.js --platform=browser --target=es2022 --conditions=workerd,module --external:cloudflare:* --external:node:*",
     "build:vercel-base-snapshot": "esbuild scripts/build-vercel-base-snapshot.ts --bundle --format=esm --platform=node --target=node22 --outfile=dist/vercel-base-snapshot.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -16,6 +16,7 @@
   "dependencies": {
     "@cloudflare/workers-types": "^4.20241230.0",
     "@open-inspect/shared": "file:../shared",
+    "better-auth": "1.6.25",
     "zod": "^4.1.13"
   },
   "devDependencies": {

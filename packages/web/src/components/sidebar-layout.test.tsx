@@ -5,13 +5,13 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 
 expect.extend(matchers);
 
-vi.mock("next-auth/react", () => ({
-  useSession: vi.fn(),
+vi.mock("@/lib/auth-session", () => ({
+  useAuthSession: vi.fn(),
   signIn: vi.fn(),
 }));
 
@@ -37,10 +37,9 @@ afterEach(cleanup);
 
 describe("CollapsedSidebarControls", () => {
   it("renders the sidebar, search, and new session actions inline", () => {
-    vi.mocked(useSession).mockReturnValue({
-      data: { user: { name: "Test User" }, expires: "2099-01-01" },
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user-1", name: "Test User" } },
       status: "authenticated",
-      update: vi.fn(),
     });
     const push = vi.fn();
     vi.mocked(useRouter).mockReturnValue({ push } as never);

@@ -8,6 +8,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
@@ -40,7 +41,7 @@ interface EnvironmentSettingsResponse {
   settings: SandboxSettings | null;
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
 
 function isValidPort(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
@@ -115,7 +116,7 @@ function numberPayloadValue(
 
 /** What a sandbox-settings scope reads/writes and what it inherits from. */
 interface SandboxScopeModel {
-  apiUrl: string;
+  apiUrl: BrowserApiPath;
   /** This scope's own stored settings (at global scope, the stored defaults). */
   ownSettings: SandboxSettings | undefined;
   /** The layer beneath this scope's overrides (undefined at global scope). */
@@ -143,11 +144,11 @@ function useSandboxSettingsScope(
   environmentId?: string
 ): SandboxScopeModel {
   const isGlobal = scope === "global";
-  const globalApiUrl = "/api/integration-settings/sandbox";
+  const globalApiUrl: BrowserApiPath = "/api/integration-settings/sandbox";
   const repoPath =
     owner && name ? encodeRepositoryPathSegments({ repoOwner: owner, repoName: name }) : "";
-  const repoApiUrl = `/api/integration-settings/sandbox/repos/${repoPath}`;
-  const apiUrl = isGlobal
+  const repoApiUrl: BrowserApiPath = `/api/integration-settings/sandbox/repos/${repoPath}`;
+  const apiUrl: BrowserApiPath = isGlobal
     ? globalApiUrl
     : scope === "repo"
       ? repoApiUrl
@@ -442,7 +443,7 @@ export function SandboxSettingsEditor({
         ? { settings: { defaults: settingsPayload, enabledRepos } }
         : { settings: settingsPayload };
 
-      const res = await fetch(apiUrl, {
+      const res = await browserApiFetch(apiUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

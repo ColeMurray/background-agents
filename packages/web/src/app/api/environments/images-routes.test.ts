@@ -5,12 +5,8 @@ const mocks = vi.hoisted(() => ({
   supportsRepoImagesValue: true,
 }));
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
@@ -21,7 +17,7 @@ vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.supportsRepoImagesValue,
 }));
 
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET as getEnvironmentStatus } from "./[id]/images/route";
 import { POST as triggerBuild } from "./[id]/images/trigger/route";
@@ -48,7 +44,7 @@ describe.each(routes)("$name", ({ call }) => {
 
   it("returns 401 before disclosing provider support when unauthenticated", async () => {
     mocks.supportsRepoImagesValue = false;
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await call();
 
@@ -58,7 +54,7 @@ describe.each(routes)("$name", ({ call }) => {
 
   it("returns 501 for authenticated users on a provider without image support", async () => {
     mocks.supportsRepoImagesValue = false;
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
 
     const response = await call();
 
@@ -67,7 +63,7 @@ describe.each(routes)("$name", ({ call }) => {
   });
 
   it("proxies to the control plane for authenticated users", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
     vi.mocked(controlPlaneUserFetch).mockImplementation(async () => Response.json({ images: [] }));
 
     const response = await call();
@@ -81,7 +77,7 @@ describe("unified route consumption", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.supportsRepoImagesValue = true;
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
   });
 
   it("status reads the per-scope unified status and filters superseded rows", async () => {

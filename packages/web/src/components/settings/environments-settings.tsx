@@ -14,6 +14,7 @@ import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { useEnvironments, ENVIRONMENTS_KEY } from "@/hooks/use-environments";
 import { EnvironmentForm, type EnvironmentFormValues } from "./environment-form";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { EnvironmentIntegrationSettings } from "./environment-integration-settings";
 import { EnvironmentSecretsImport } from "./environment-secrets-import";
 import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
@@ -39,7 +40,7 @@ export function EnvironmentsSettings() {
     setSubmitting(true);
     setError("");
     try {
-      const response = await fetch("/api/environments", {
+      const response = await browserApiFetch("/api/environments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
@@ -68,7 +69,7 @@ export function EnvironmentsSettings() {
     setSubmitting(true);
     setError("");
     try {
-      const response = await fetch(`/api/environments/${environmentId}`, {
+      const response = await browserApiFetch(`/api/environments/${environmentId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
@@ -91,7 +92,9 @@ export function EnvironmentsSettings() {
   const handleDelete = async (environment: Environment) => {
     setError("");
     try {
-      const response = await fetch(`/api/environments/${environment.id}`, { method: "DELETE" });
+      const response = await browserApiFetch(`/api/environments/${environment.id}`, {
+        method: "DELETE",
+      });
       if (!response.ok) {
         const data = await response.json();
         setError(data?.error || "Failed to delete environment");
@@ -108,7 +111,7 @@ export function EnvironmentsSettings() {
     setTogglingIds((prev) => new Set(prev).add(environment.id));
     setError("");
     try {
-      const response = await fetch(`/api/environments/${environment.id}`, {
+      const response = await browserApiFetch(`/api/environments/${environment.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prebuildEnabled: enabled }),
@@ -135,7 +138,7 @@ export function EnvironmentsSettings() {
     setTriggeringIds((prev) => new Set(prev).add(environment.id));
     setError("");
     try {
-      const response = await fetch(`/api/environments/${environment.id}/images/trigger`, {
+      const response = await browserApiFetch(`/api/environments/${environment.id}/images/trigger`, {
         method: "POST",
       });
       if (!response.ok) {

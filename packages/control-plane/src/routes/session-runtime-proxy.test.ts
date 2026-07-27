@@ -12,13 +12,7 @@ function createCtx(): RequestContext {
     db: {} as SqlDatabase,
     principal: {
       kind: "user",
-      user: {
-        provider: "github",
-        providerUserId: "583231",
-        canonicalUserId: "user-1",
-        participantUserId: "user-1",
-      },
-      tokenId: "token-1",
+      userId: "user-1",
     },
     metrics: {
       d1Queries: [],

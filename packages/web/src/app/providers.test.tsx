@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
-import { SessionProvider } from "next-auth/react";
+import { SWRConfig } from "swr";
 
-import { WebSessionGate } from "@/components/web-session-gate";
 import { Providers } from "./providers";
 
 function findByType(node: ReactNode, type: unknown): ReactElement | undefined {
@@ -19,22 +18,11 @@ function findByType(node: ReactNode, type: unknown): ReactElement | undefined {
 }
 
 describe("Providers", () => {
-  it("keeps the SessionProvider focus refetch disabled", () => {
-    // A focus refetch would make /api/auth/session a second session-cookie
-    // writer racing the oi-refresh rotation write; the rotation machinery
-    // depends on oi-refresh being the only focus/interval-triggered writer.
-    const sessionProvider = findByType(Providers({ children: null }), SessionProvider);
-    expect(sessionProvider).toBeDefined();
-    expect(
-      (sessionProvider as ReactElement<{ refetchOnWindowFocus?: boolean }>).props
-    ).toMatchObject({ refetchOnWindowFocus: false });
-  });
-
-  it("places application children behind the web-session gate", () => {
+  it("nests application children inside the shared SWR provider", () => {
     const child = <div>Protected application</div>;
-    const gate = findByType(Providers({ children: child }), WebSessionGate);
+    const provider = findByType(Providers({ children: child }), SWRConfig);
 
-    expect(gate).toBeDefined();
-    expect((gate as ReactElement<{ children?: ReactNode }>).props.children).toBe(child);
+    expect(provider).toBeDefined();
+    expect((provider as ReactElement<{ children?: ReactNode }>).props.children).toContain(child);
   });
 });

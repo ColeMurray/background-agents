@@ -113,6 +113,55 @@ export default tseslint.config(
     },
   },
 
+  // Web code depends on app-owned auth and request seams. OAuth and session
+  // protocol code is owned by the control plane.
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "next-auth",
+              message: "Use the app-owned browser authentication seams.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["next-auth/*"],
+              message: "Use the app-owned browser authentication seams.",
+            },
+            {
+              regex: "(?:^|/)lib/auth$",
+              message: "Use getServerAuthSession from @/lib/server-auth-session.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    ignores: [
+      "**/*.test.{ts,tsx}",
+      "**/*.spec.{ts,tsx}",
+      "packages/web/src/lib/auth.ts",
+      "packages/web/src/lib/browser-api-fetch.ts",
+      "packages/web/src/lib/control-plane-transport.ts",
+      "packages/web/src/lib/github-org-membership.ts",
+    ],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Use an app-owned HTTP transport instead of raw fetch.",
+        },
+      ],
+    },
+  },
+
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

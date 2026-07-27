@@ -440,7 +440,7 @@ echo "repo_secrets_encryption_key: $(openssl rand -base64 32)"
 # Modal API secret (use hex for this one)
 echo "modal_api_secret: $(openssl rand -hex 32)"
 
-# NextAuth secret
+# Browser authentication secret (Terraform retains the legacy input name)
 echo "nextauth_secret: $(openssl rand -base64 32)"
 
 # GitHub webhook secret (only if enabling GitHub bot)
@@ -822,7 +822,7 @@ cloudflare_custom_domain = "app.example.com" # bare hostname, no scheme
 
 Cloudflare provisions the DNS record and edge certificate automatically. Notes:
 
-- The web app URL — including `NEXTAUTH_URL` and the links the bots send — becomes
+- The canonical browser-auth origin and the links the bots send become
   `https://{your-custom-domain}`, and the workers.dev route for the web Worker is disabled so the
   app has a single canonical origin.
 - Update the GitHub App callback URL (and the Google redirect URI, if Google login is enabled) to
@@ -918,7 +918,6 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `VERCEL_API_TOKEN`               | Vercel API token _(only if `web_platform = "vercel"`)_                                      |
 | `VERCEL_TEAM_ID`                 | Vercel team/account ID _(only if `web_platform = "vercel"`)_                                |
 | `VERCEL_PROJECT_ID`              | Vercel project ID _(only if `web_platform = "vercel"`)_                                     |
-| `NEXTAUTH_URL`                   | Your web app URL                                                                            |
 | `MODAL_TOKEN_ID`                 | Modal token ID                                                                              |
 | `MODAL_TOKEN_SECRET`             | Modal token secret                                                                          |
 | `MODAL_WORKSPACE`                | Modal workspace name                                                                        |
@@ -955,7 +954,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `TOKEN_ENCRYPTION_KEY`           | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`    | Generated encryption key (repo secrets)                                                     |
 | `MODAL_API_SECRET`               | Generated Modal API secret                                                                  |
-| `NEXTAUTH_SECRET`                | Generated NextAuth secret                                                                   |
+| `NEXTAUTH_SECRET`                | Generated browser-auth secret (legacy Actions secret name)                                  |
 | `ALLOWED_USERS`                  | Comma-separated GitHub usernames (or empty for all users)                                   |
 | `ALLOWED_EMAIL_DOMAINS`          | Comma-separated email domains (or empty for all domains)                                    |
 | `ALLOWED_EMAILS`                 | Comma-separated exact email addresses (for individual users on shared domains)              |

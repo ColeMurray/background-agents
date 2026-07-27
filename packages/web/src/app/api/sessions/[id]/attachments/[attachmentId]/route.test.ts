@@ -1,18 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
@@ -23,11 +19,11 @@ const PARAMS = {
 describe("session attachment download API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
   it("rejects unauthenticated downloads before contacting the control plane", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await GET(
       new Request("http://localhost/api/sessions/session-1/attachments/attachment-1"),
@@ -69,5 +65,26 @@ describe("session attachment download API route", () => {
     expect(response.status).toBe(206);
     expect(response.headers.get("Content-Range")).toBe("bytes 0-4/10");
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+  });
+
+  it("does not reuse the encoded payload length for a decoded attachment stream", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("decoded attachment", {
+        headers: {
+          "Content-Type": "text/plain",
+          "Content-Encoding": "gzip",
+          "Content-Length": "8",
+        },
+      })
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/sessions/session-1/attachments/attachment-1"),
+      PARAMS
+    );
+
+    expect(response.headers.get("Content-Encoding")).toBeNull();
+    expect(response.headers.get("Content-Length")).toBeNull();
+    await expect(response.text()).resolves.toBe("decoded attachment");
   });
 });

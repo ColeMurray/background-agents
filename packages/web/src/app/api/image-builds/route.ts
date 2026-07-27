@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import type { ImageBuildRecordView } from "@open-inspect/shared";
-import { authOptions } from "@/lib/auth";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeSupersededBuilds,
@@ -16,7 +15,7 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
  * the settings pages and the session-target picker.
  */
 export async function GET() {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }

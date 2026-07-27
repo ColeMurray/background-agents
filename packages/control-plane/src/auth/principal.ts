@@ -26,8 +26,18 @@ export interface ResolvedIdentity {
   participantUserId: string;
 }
 
+/** Provider-independent evidence used to authenticate a browser request. */
+export interface AuthenticationContext {
+  mechanism: "browser_session";
+  credentialId: string;
+  channel: {
+    kind: "sig1";
+    service: "web";
+  };
+}
+
 export type Principal =
-  | { kind: "user"; user: ResolvedIdentity; tokenId: string }
+  | { kind: "user"; userId: string }
   | { kind: "service"; service: ServiceName; actor: ResolvedIdentity | null }
   | { kind: "sandbox"; sessionId: string };
 

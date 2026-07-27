@@ -20,6 +20,8 @@ describe("DiffRetryNotice", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/diff/retry", {
       method: "POST",
+      mode: "same-origin",
+      credentials: "same-origin",
     });
   });
 
@@ -45,6 +47,8 @@ describe("DiffRetryNotice", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-2/diff/retry", {
       method: "POST",
+      mode: "same-origin",
+      credentials: "same-origin",
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("Still failing");
   });

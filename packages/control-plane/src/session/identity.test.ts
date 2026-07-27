@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { UserStore } from "../db/user-store";
 import type { Env } from "../types";
-import { parseAuthorId, resolveGitAuthorIdentity, resolveGitHubEnrichment } from "./identity";
+import {
+  parseAuthorId,
+  resolveBrowserGitHubEnrichment,
+  resolveGitAuthorIdentity,
+  resolveGitHubEnrichment,
+} from "./identity";
 
 describe("resolveGitAuthorIdentity", () => {
   it("derives a canonical noreply author from a trusted GitHub id and login", () => {
@@ -182,5 +187,86 @@ describe("resolveGitHubEnrichment", () => {
     const enrichment = await resolveGitHubEnrichment(env, env.DB, store, "user-1");
 
     expect(enrichment?.email).toBe("42+pm-dev@users.noreply.github.com");
+  });
+});
+
+describe("resolveBrowserGitHubEnrichment", () => {
+  const githubAccount = {
+    subject: "42",
+  };
+
+  it("gets a current Better Auth token and binds it to the verified GitHub profile", async () => {
+    const getAccessToken = vi.fn(async () => ({
+      accessToken: "current-access-token",
+      accessTokenExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
+      scopes: [],
+    }));
+    const getAccountInfo = vi.fn(async () => ({
+      user: {
+        id: "42",
+        name: "Ada Lovelace",
+        email: "private@example.com",
+        emailVerified: true,
+      },
+      data: {
+        provider: "github",
+        issuer: "https://github.com",
+        subject: "42",
+        login: "ada",
+        displayName: "Ada Lovelace",
+        verifiedEmails: ["private@example.com"],
+        primaryEmail: "private@example.com",
+      },
+    }));
+    const encryptAccessToken = vi.fn(async () => "encrypted-current-access-token");
+
+    await expect(
+      resolveBrowserGitHubEnrichment("0123456789abcdef0123456789abcdef", githubAccount, {
+        getAccessToken,
+        getAccountInfo,
+        encryptAccessToken,
+      })
+    ).resolves.toEqual({
+      scmUserId: "42",
+      scmLogin: "ada",
+      displayName: "Ada Lovelace",
+      email: "42+ada@users.noreply.github.com",
+      accessTokenEncrypted: "encrypted-current-access-token",
+      tokenExpiresAt: new Date("2030-01-01T00:00:00.000Z").getTime(),
+    });
+
+    const accountSelection = {
+      providerId: "github",
+      accountId: "42",
+      userId: "0123456789abcdef0123456789abcdef",
+    };
+    expect(getAccessToken).toHaveBeenCalledWith(accountSelection);
+    expect(getAccountInfo).toHaveBeenCalledWith(accountSelection);
+    expect(encryptAccessToken).toHaveBeenCalledWith("current-access-token");
+  });
+
+  it("rejects provider profile substitution", async () => {
+    await expect(
+      resolveBrowserGitHubEnrichment("0123456789abcdef0123456789abcdef", githubAccount, {
+        getAccessToken: async () => ({ accessToken: "token" }),
+        getAccountInfo: async () => ({
+          user: {
+            id: "7",
+            name: "Mallory",
+            email: "mallory@example.com",
+            emailVerified: true,
+          },
+          data: {
+            provider: "github",
+            issuer: "https://github.com",
+            subject: "7",
+            login: "mallory",
+            verifiedEmails: ["mallory@example.com"],
+            primaryEmail: "mallory@example.com",
+          },
+        }),
+        encryptAccessToken: async () => "encrypted",
+      })
+    ).rejects.toThrow("Better Auth returned a mismatched GitHub account");
   });
 });

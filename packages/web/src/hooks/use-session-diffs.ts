@@ -5,8 +5,9 @@ import useSWR from "swr";
 import { mutate } from "swr";
 import { sessionDiffStateSchema, type SessionDiffState } from "@open-inspect/shared";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
-export function sessionDiffKey(sessionId: string): string {
+export function sessionDiffKey(sessionId: string): BrowserApiPath {
   return `/api/sessions/${sessionId}/diff`;
 }
 
@@ -40,7 +41,9 @@ export function useSessionDiffRetry(sessionId: string): {
     setIsRetrying(true);
     setRetryError(null);
     try {
-      const response = await fetch(`/api/sessions/${sessionId}/diff/retry`, { method: "POST" });
+      const response = await browserApiFetch(`/api/sessions/${sessionId}/diff/retry`, {
+        method: "POST",
+      });
       if (!response.ok) {
         const body = parseDiffErrorBody(await response.json().catch(() => null));
         setRetryError(body.error ?? "Changes could not be retried.");

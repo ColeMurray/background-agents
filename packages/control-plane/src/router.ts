@@ -3,8 +3,10 @@
  */
 
 import type { Env } from "./types";
+import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
+import { getUserAuth } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
@@ -23,7 +25,7 @@ import {
   error,
   HttpError,
 } from "./routes/shared";
-import { authTokenRoutes } from "./routes/auth-tokens";
+import { browserAuthRoutes } from "./routes/browser-auth";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -35,7 +37,6 @@ import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
-import { providerIdentityRoutes } from "./routes/provider-identities";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
@@ -157,14 +158,10 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isScmAgnosticRoute(path: string): boolean {
+function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
-    // Token issuance is identity work, independent of the SCM provider.
-    /^\/auth\/tokens\/(exchange|refresh)$/.test(path) ||
+    isBrowserAuthProxyRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    // Identity resolution is independent of the SCM provider. Only the known
-    // auth providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
-    /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
@@ -176,6 +173,7 @@ function isProviderImplementedRoute(provider: SourceControlProviderName, path: s
 }
 
 function enforceImplementedScmProvider(
+  method: string,
   path: string,
   env: Env,
   ctx: RequestContext
@@ -185,7 +183,7 @@ function enforceImplementedScmProvider(
     if (
       !isProviderImplementedRoute(provider, path) &&
       !isPublicRoute(path) &&
-      !isScmAgnosticRoute(path)
+      !isScmAgnosticRoute(method, path)
     ) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
@@ -292,7 +290,7 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
       fields.session_id = principal.sessionId;
       break;
     case "user":
-      fields.user_id = principal.user.canonicalUserId ?? undefined;
+      fields.user_id = principal.userId;
       break;
   }
   logger.info("auth.principal", {
@@ -315,8 +313,7 @@ const routes: Route[] = [
     handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
   },
 
-  // Token issuance (exchange + refresh; web service principal only)
-  ...authTokenRoutes,
+  ...browserAuthRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -358,9 +355,6 @@ const routes: Route[] = [
   // Analytics
   ...analyticsRoutes,
 
-  // Provider identities
-  ...providerIdentityRoutes,
-
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
 ];
@@ -401,6 +395,8 @@ export async function handleRequest(
     metrics,
     // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
     db: instrumentD1(env.DB, metrics),
+    // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
+    getUserAuth: () => getUserAuth(env, env.DB),
     executionCtx,
   };
 
@@ -418,6 +414,17 @@ export async function handleRequest(
     });
   }
 
+  const matchedRoute = routes
+    .filter((route) => route.method === method)
+    .map((route) => ({ route, match: path.match(route.pattern) }))
+    .find(
+      (candidate): candidate is { route: Route; match: RegExpMatchArray } =>
+        candidate.match !== null
+    );
+  if (!matchedRoute) {
+    return withCorsAndTraceHeaders(error("Not found", 404), ctx);
+  }
+
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
     const requiresSandboxAuth = isSandboxAuthOnlyRoute(path);
@@ -431,12 +438,14 @@ export async function handleRequest(
         ? await verifySandboxAuth(request, env, sandboxSessionId, ctx)
         : error("Unauthorized: Invalid session path", 401);
     } else {
-      const authResult = await authenticate(request, env, ctx);
+      const authResult = await authenticate(request, env, ctx, {
+        webService: isBrowserAuthProxyRoute(method, path) ? "service" : "user",
+      });
 
       if (isAuthError(authResult)) {
-        // A service-credential or user-token attempt is terminal; only a
-        // request with no recognized credential may still be a sandbox-token
-        // call on a sandbox-accepting route.
+        // A service-credential attempt is terminal; only a request with no
+        // recognized credential may still be a sandbox-token call on a
+        // sandbox-accepting route.
         authError = error(authResult.reason, authResult.status);
 
         if (
@@ -449,6 +458,7 @@ export async function handleRequest(
       } else {
         authError = null;
         ctx.principal = authResult.principal;
+        ctx.authentication = authResult.authentication;
         request = authResult.request;
       }
     }
@@ -462,60 +472,50 @@ export async function handleRequest(
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(method, path, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }
 
-  // Find matching route
-  for (const route of routes) {
-    if (route.method !== method) continue;
-
-    const match = path.match(route.pattern);
-    if (match) {
-      let response: Response;
-      let outcome: "success" | "error";
-      try {
-        response = await route.handler(request, env, match, ctx);
-        outcome = response.status >= 500 ? "error" : "success";
-      } catch (e) {
-        if (e instanceof HttpError) {
-          response = error(e.message, e.status);
-          outcome = e.status >= 500 ? "error" : "success";
-        } else {
-          const durationMs = Date.now() - startTime;
-          logger.error("http.request", {
-            event: "http.request",
-            request_id: ctx.request_id,
-            trace_id: ctx.trace_id,
-            http_method: method,
-            http_path: path,
-            http_status: 500,
-            duration_ms: durationMs,
-            outcome: "error",
-            error: e instanceof Error ? e : String(e),
-            ...ctx.metrics.summarize(),
-          });
-          return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
-        }
-      }
-
+  let response: Response;
+  let outcome: "success" | "error";
+  try {
+    response = await matchedRoute.route.handler(request, env, matchedRoute.match, ctx);
+    outcome = response.status >= 500 ? "error" : "success";
+  } catch (e) {
+    if (e instanceof HttpError) {
+      response = error(e.message, e.status);
+      outcome = e.status >= 500 ? "error" : "success";
+    } else {
       const durationMs = Date.now() - startTime;
-      logger.info("http.request", {
+      logger.error("http.request", {
         event: "http.request",
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
         http_method: method,
         http_path: path,
-        http_status: response.status,
+        http_status: 500,
         duration_ms: durationMs,
-        outcome,
+        outcome: "error",
+        error: e instanceof Error ? e : String(e),
         ...ctx.metrics.summarize(),
       });
-
-      return withCorsAndTraceHeaders(response, ctx);
+      return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
     }
   }
 
-  return error("Not found", 404);
+  const durationMs = Date.now() - startTime;
+  logger.info("http.request", {
+    event: "http.request",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    http_method: method,
+    http_path: path,
+    http_status: response.status,
+    duration_ms: durationMs,
+    outcome,
+    ...ctx.metrics.summarize(),
+  });
+
+  return withCorsAndTraceHeaders(response, ctx);
 }
