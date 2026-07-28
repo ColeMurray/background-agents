@@ -17,19 +17,23 @@ function parseSessionStatus(value: string | null): SessionStatus | undefined {
   return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
 }
 
-function parseCreatedByFilters(searchParams: URLSearchParams): string[] | Response {
+function parseCreatedByFilters(
+  searchParams: URLSearchParams,
+  ctx: RequestContext
+): string[] | Response {
   const values = searchParams.getAll("createdBy");
   const userIds: string[] = [];
   const seen = new Set<string>();
 
   for (const value of values) {
-    if (!isCanonicalUserId(value)) {
+    const userId = value === "me" && ctx.principal?.kind === "user" ? ctx.principal.userId : value;
+    if (!isCanonicalUserId(userId)) {
       return error("Invalid createdBy", 400);
     }
 
-    if (!seen.has(value)) {
-      seen.add(value);
-      userIds.push(value);
+    if (!seen.has(userId)) {
+      seen.add(userId);
+      userIds.push(userId);
     }
   }
 
@@ -61,7 +65,7 @@ async function handleListSessions(
   const excludeStatusParam = url.searchParams.get("excludeStatus");
   const status = parseSessionStatus(statusParam);
   const excludeStatus = parseSessionStatus(excludeStatusParam);
-  const createdByUserIds = parseCreatedByFilters(url.searchParams);
+  const createdByUserIds = parseCreatedByFilters(url.searchParams, ctx);
 
   if (statusParam && !status) {
     return error("Invalid status", 400);

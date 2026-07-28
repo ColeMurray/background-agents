@@ -20,6 +20,7 @@ describe("initializeSession", () => {
     reasoningEffort: null,
     participantUserId: "user-1",
     platformUserId: "platform-user-1",
+    authName: "Authenticated User",
     scmLogin: "acmedev",
     scmName: "Acme Dev",
     scmEmail: "dev@acme.test",
@@ -231,6 +232,7 @@ describe("initializeSession", () => {
     expect(body.reasoningEffort).toBeNull();
     expect(body.userId).toBe("user-1");
     expect(body.scmLogin).toBe("acmedev");
+    expect(body.authName).toBe("Authenticated User");
     expect(body.scmName).toBe("Acme Dev");
     expect(body.scmEmail).toBe("dev@acme.test");
     expect(body.scmTokenEncrypted).toBe("enc-token");

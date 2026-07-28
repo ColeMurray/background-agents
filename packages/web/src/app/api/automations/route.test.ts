@@ -9,8 +9,6 @@ vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-// NOTE: @/lib/build-auth-identity is intentionally NOT mocked — these tests
-// exercise the real chokepoint to prove the route's outgoing body is correct.
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
@@ -39,16 +37,18 @@ describe("automations API route (POST)", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("forwards control-plane authentication failures", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(postRequest(validBody));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).toHaveBeenCalledOnce();
   });
 
-  it("sends cosmetic auth display without identity or SCM assertions", async () => {
+  it("sends no profile, identity, or SCM assertions", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "0123456789abcdef0123456789abcdef",
@@ -72,9 +72,6 @@ describe("automations API route (POST)", () => {
     expect(sent).toMatchObject({
       name: "Daily sync",
       repositories: [{ repoOwner: "o", repoName: "r" }],
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
     // Forbidden under strict identity enforcement: the control plane derives
     // created_by from the Bearer principal.
@@ -86,9 +83,12 @@ describe("automations API route (POST)", () => {
     expect(sent.scmToken).toBeUndefined();
     expect(sent.scmRefreshToken).toBeUndefined();
     expect(sent.scmTokenExpiresAt).toBeUndefined();
+    expect(sent.authEmail).toBeUndefined();
+    expect(sent.authName).toBeUndefined();
+    expect(sent.authAvatarUrl).toBeUndefined();
   });
 
-  it("uses the same display-only shape for another provider", async () => {
+  it("uses the same profile-independent shape for another provider", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "fedcba9876543210fedcba9876543210",
@@ -105,10 +105,8 @@ describe("automations API route (POST)", () => {
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
-    expect(sent).toMatchObject({
-      authEmail: "pm@gmail.com",
-      authName: "Pat PM",
-    });
+    expect(sent.authEmail).toBeUndefined();
+    expect(sent.authName).toBeUndefined();
     expect(sent.userId).toBeUndefined();
     expect(sent.authProvider).toBeUndefined();
     expect(sent.authUserId).toBeUndefined();

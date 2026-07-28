@@ -31,16 +31,18 @@ describe("ws-token API route", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("forwards control-plane authentication failures", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(request(), params("sess1"));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).toHaveBeenCalledOnce();
   });
 
-  it("sends only provider-independent display data", async () => {
+  it("leaves display-data resolution to the control plane", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "0123456789abcdef0123456789abcdef",
@@ -60,9 +62,7 @@ describe("ws-token API route", () => {
       "/sessions/sess1/ws-token",
       expect.objectContaining({ method: "POST" })
     );
-    expect(sentBody()).toEqual({
-      authName: "Ada Lovelace",
-    });
+    expect(sentBody()).toEqual({});
   });
 
   it("uses the same body shape regardless of sign-in provider", async () => {
@@ -81,6 +81,6 @@ describe("ws-token API route", () => {
     const response = await POST(request(), params("sess2"));
 
     expect(response.status).toBe(200);
-    expect(sentBody()).toEqual({ authName: "Pat PM" });
+    expect(sentBody()).toEqual({});
   });
 });

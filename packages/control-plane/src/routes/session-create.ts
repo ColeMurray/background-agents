@@ -125,6 +125,7 @@ async function handleCreateSession(
   });
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution.userId;
+  const canonicalUser = await userStore.getUserById(resolvedUserId);
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
@@ -200,6 +201,7 @@ async function handleCreateSession(
     reasoningEffort,
     participantUserId,
     platformUserId: resolvedUserId,
+    authName: canonicalUser?.displayName ?? canonicalUser?.email,
     scmLogin,
     scmName,
     scmEmail,

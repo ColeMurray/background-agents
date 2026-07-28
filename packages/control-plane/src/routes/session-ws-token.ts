@@ -1,4 +1,5 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import { UserStore } from "../db/user-store";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import { error, parseJsonBody, parsePattern, type Route } from "./shared";
@@ -13,12 +14,7 @@ async function handleSessionWsToken(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  const body = await parseJsonBody<{
-    scmLogin?: string;
-    scmName?: string;
-    authName?: string;
-    scmEmail?: string;
-  }>(request);
+  const body = await parseJsonBody<Record<string, unknown>>(request);
   if (body instanceof Response) return body;
 
   // The participant identity comes from the verified principal; body SCM
@@ -27,6 +23,8 @@ async function handleSessionWsToken(
   const enforcement = applyIdentityEnforcement(ctx, "ws-token", body);
   if (enforcement.rejection) return enforcement.rejection;
   const userId = enforcement.enforced.participantUserId;
+  const canonicalUserId = enforcement.enforced.canonicalUserId;
+  const user = canonicalUserId ? await new UserStore(ctx.db).getUserById(canonicalUserId) : null;
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -34,10 +32,7 @@ async function handleSessionWsToken(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
-        scmLogin: body.scmLogin,
-        scmName: body.scmName,
-        authName: body.authName,
-        scmEmail: body.scmEmail,
+        authName: user?.displayName ?? user?.email,
       }),
     })
   );

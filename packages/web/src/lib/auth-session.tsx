@@ -7,7 +7,6 @@ import {
   type BrowserAuthSessionUser,
 } from "./browser-auth-session-contract";
 import { browserApiFetch } from "./browser-api-fetch";
-import type { AuthProvider } from "./build-auth-identity";
 
 const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
 
@@ -17,7 +16,7 @@ export interface AuthSession {
   user: AuthSessionUser;
 }
 
-export type SignInProvider = AuthProvider;
+export type SignInProvider = "github" | "google";
 
 export type AuthSessionState =
   | {

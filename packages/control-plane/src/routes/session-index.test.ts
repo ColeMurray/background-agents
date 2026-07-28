@@ -20,6 +20,7 @@ function createCtx(): RequestContext {
     trace_id: "trace-1",
     request_id: "req-1",
     db: {} as SqlDatabase,
+    principal: { kind: "user", userId: "0123456789abcdef0123456789abcdef" },
     metrics: {
       d1Queries: [],
       spans: {},
@@ -104,11 +105,25 @@ describe("session index routes", () => {
     });
   });
 
-  it("rejects invalid creator filters before querying the store", async () => {
+  it("resolves the current creator from the authenticated principal", async () => {
     const response = await listSessions("?createdBy=me");
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
-    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+      })
+    );
+  });
+
+  it("deduplicates me with an explicit current-user filter", async () => {
+    const response = await listSessions("?createdBy=0123456789abcdef0123456789abcdef&createdBy=me");
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+      })
+    );
   });
 });

@@ -223,6 +223,7 @@ describe("createSessionLifecycleHandler", () => {
           model: "anthropic/claude-haiku-4-5",
           reasoningEffort: "high",
           userId: "user-1",
+          authName: "Authenticated User",
           scmLogin: "octocat",
           scmName: "The Octocat",
           scmEmail: "octocat@example.com",
@@ -268,6 +269,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(repository.createParticipant).toHaveBeenCalledWith({
       id: "participant-1",
       userId: "user-1",
+      authName: "Authenticated User",
       scmUserId: "github-user-123",
       scmLogin: "octocat",
       scmName: "The Octocat",

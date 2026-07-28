@@ -119,10 +119,12 @@ vi.mock("../db/session-index", () => ({
 }));
 
 const mockUserStoreGetIdentity = vi.fn().mockResolvedValue(null);
+const mockUserStoreGetUserById = vi.fn().mockResolvedValue(null);
 vi.mock("../db/user-store", () => ({
   UserStore: vi.fn().mockImplementation(function () {
     return {
       getIdentity: mockUserStoreGetIdentity,
+      getUserById: mockUserStoreGetUserById,
     };
   }),
 }));
@@ -1210,12 +1212,23 @@ describe("SchedulerDO", () => {
       const automation = { ...sampleAutomation, user_id: "canonical-user-1" };
       mockStore.getOverdueAutomations.mockResolvedValue([automation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetUserById.mockResolvedValue({
+        id: "canonical-user-1",
+        displayName: "Automation Owner",
+        email: "owner@example.com",
+      });
+      const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+      const env = createEnv();
+      vi.mocked(env.SESSION.get).mockReturnValue({ fetch: initFetch } as never);
 
-      const scheduler = createSchedulerDO();
+      const scheduler = createSchedulerDO(env);
       await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
 
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
         expect.objectContaining({ userId: "canonical-user-1" })
+      );
+      await expect(getInitBody(initFetch)).resolves.toEqual(
+        expect.objectContaining({ authName: "Automation Owner" })
       );
     });
 

@@ -182,6 +182,7 @@ async function handleSpawnChild(
     reasoningEffort,
     participantUserId: spawnContext.owner.userId,
     platformUserId: parentUserId,
+    authName: spawnContext.owner.authName,
     scmLogin: spawnContext.owner.scmLogin,
     scmName: spawnContext.owner.scmName,
     scmEmail: spawnContext.owner.scmEmail,

@@ -192,7 +192,9 @@ describe("createChildSessionsHandler", () => {
   it("maps spawn context from session and owner participant", async () => {
     const { handler, getSession, repository } = createHandler();
     getSession.mockReturnValue(createSession({ reasoning_effort: "high" }));
-    repository.listParticipants.mockReturnValue([createParticipant()]);
+    repository.listParticipants.mockReturnValue([
+      createParticipant({ auth_name: "Authenticated User" }),
+    ]);
 
     const response = handler.getSpawnContext();
 
@@ -206,6 +208,7 @@ describe("createChildSessionsHandler", () => {
       baseBranch: "main",
       owner: {
         userId: "user-1",
+        authName: "Authenticated User",
         scmUserId: null,
         scmLogin: "octocat",
         scmName: "The Octocat",

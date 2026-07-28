@@ -1217,9 +1217,9 @@ export class SchedulerDO extends DurableObject<Env> {
     // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
     // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
+    const userStore = new UserStore(this.db);
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {
       try {
-        const userStore = new UserStore(this.db);
         const identity = await userStore.getIdentity("github", automation.created_by);
         if (identity) {
           userId = identity.userId;
@@ -1228,6 +1228,7 @@ export class SchedulerDO extends DurableObject<Env> {
         // Best-effort — proceed without user_id
       }
     }
+    const canonicalUser = userId ? await userStore.getUserById(userId) : null;
 
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -1266,6 +1267,7 @@ export class SchedulerDO extends DurableObject<Env> {
         reasoningEffort: automation.reasoning_effort,
         participantUserId: automation.created_by,
         platformUserId: userId,
+        authName: canonicalUser?.displayName ?? canonicalUser?.email,
         scmTokenEncrypted: null,
         scmRefreshTokenEncrypted: null,
         codeServerEnabled,

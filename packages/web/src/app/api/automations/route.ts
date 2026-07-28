@@ -1,16 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
-import { buildAuthDisplay } from "@/lib/build-auth-identity";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const path = buildControlPlanePath("/automations", request.nextUrl.searchParams);
 
   try {
@@ -24,18 +17,11 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
     const body = await request.json();
 
     // Explicitly pick allowed fields from the client body. Creator identity
     // and SCM provenance derive from authenticated control-plane state.
-    const user = session.user;
-
     const automationBody = {
       name: body.name,
       instructions: body.instructions,
@@ -49,7 +35,6 @@ export async function POST(request: NextRequest) {
       sentryClientSecret: body.sentryClientSecret,
       repositories: body.repositories,
       environmentIds: body.environmentIds,
-      ...buildAuthDisplay(user),
     };
 
     const response = await controlPlaneUserFetch("/automations", {

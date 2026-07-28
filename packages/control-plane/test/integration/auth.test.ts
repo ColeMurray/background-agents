@@ -3,7 +3,7 @@ import { generateInternalToken } from "@open-inspect/shared";
 import { SELF, env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { serviceFetch } from "./helpers";
+import { serviceFetch, TEST_BROWSER_USER_ID } from "./helpers";
 
 describe("Edge authentication", () => {
   beforeEach(cleanD1Tables);
@@ -92,10 +92,41 @@ describe("Edge authentication", () => {
     expect(body.hasMore).toBe(false);
   });
 
-  it("rejects invalid creator user id filters", async () => {
+  it("resolves the current-user creator filter", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: "current-user-session",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      userId: TEST_BROWSER_USER_ID,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await store.create({
+      id: "other-user-session",
+      title: null,
+      repoOwner: "acme",
+      repoName: "api",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: null,
+      status: "active",
+      userId: "cccccccccccccccccccccccccccccccc",
+      createdAt: now - 1,
+      updatedAt: now - 1,
+    });
+
     const response = await serviceFetch("https://test.local/sessions?createdBy=me");
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
+    expect(response.status).toBe(200);
+    const body = await response.json<{ sessions: Array<{ id: string }>; hasMore: boolean }>();
+    expect(body.sessions.map((session) => session.id)).toEqual(["current-user-session"]);
+    expect(body.hasMore).toBe(false);
   });
 });

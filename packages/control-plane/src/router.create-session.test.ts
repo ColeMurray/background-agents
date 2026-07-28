@@ -42,6 +42,12 @@ describe("handleCreateSession D1 ordering", () => {
       return {
         getIdentity: async () => ({ userId: "user-1" }),
         getIdentitiesForUser: async () => [],
+        getUserById: async () => ({
+          id: "user-1",
+          displayName: "Test User",
+          email: "user@example.com",
+          avatarUrl: null,
+        }),
       } as never;
     });
   });
@@ -326,9 +332,19 @@ describe("handleCreateSession D1 ordering", () => {
         getIdentity: async () => null,
         resolveOrCreateUser,
         getIdentitiesForUser: async () => [],
+        getUserById: async () => ({
+          id: "user-9",
+          displayName: "Ada Lovelace",
+          email: "ada@example.com",
+          avatarUrl: "https://avatars.example.com/ada.png",
+        }),
       } as never;
     });
-    const initFetch = vi.fn(async () => Response.json({ status: "created" }));
+    let initBody: Record<string, unknown> | undefined;
+    const initFetch = vi.fn(async (request: Request) => {
+      initBody = (await request.json()) as Record<string, unknown>;
+      return Response.json({ status: "created" });
+    });
 
     const response = await createSessionRequestWithBody(createEnv(initFetch), {
       title: "First-contact session",
@@ -347,6 +363,7 @@ describe("handleCreateSession D1 ordering", () => {
       avatarUrl: "https://avatars.example.com/ada.png",
     });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: "user-9" }));
+    expect(initBody?.authName).toBe("Ada Lovelace");
     expect(initFetch).toHaveBeenCalledOnce();
   });
 

@@ -49,6 +49,8 @@ export interface SessionInitInput {
   participantUserId: string;
   /** Canonical platform user ID for D1 analytics attribution. Null when unresolved. */
   platformUserId: string | null;
+  /** Provider-independent display name for the owner participant. */
+  authName?: string | null;
 
   // SCM credentials
   scmLogin?: string | null;
@@ -176,6 +178,7 @@ export async function initializeSession(
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,
+          authName: input.authName,
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,

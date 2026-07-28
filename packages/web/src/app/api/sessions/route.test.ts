@@ -35,14 +35,16 @@ describe("sessions API route", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("forwards control-plane authentication failures", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await GET(request("/api/sessions?limit=50"));
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).toHaveBeenCalledOnce();
   });
 
   it("forwards allowed session query params", async () => {
@@ -66,7 +68,7 @@ describe("sessions API route", () => {
     await expect(response.json()).resolves.toEqual({ sessions: [], hasMore: false });
   });
 
-  it("replaces createdBy=me with the canonical session principal", async () => {
+  it("forwards createdBy=me for control-plane resolution", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "0123456789abcdef0123456789abcdef",
@@ -84,12 +86,12 @@ describe("sessions API route", () => {
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"
     );
     expect(response.status).toBe(200);
   });
 
-  it("does not branch on the provider used to authenticate the session", async () => {
+  it("does not need the provider used to authenticate the session", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "fedcba9876543210fedcba9876543210",
@@ -104,13 +106,11 @@ describe("sessions API route", () => {
 
     const response = await GET(request("/api/sessions?limit=50&createdBy=me"));
 
-    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=50&createdBy=fedcba9876543210fedcba9876543210"
-    );
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions?limit=50&createdBy=me");
     expect(response.status).toBe(200);
   });
 
-  it("resolves createdBy=me alongside explicit creator filters", async () => {
+  it("forwards createdBy=me alongside explicit creator filters", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "0123456789abcdef0123456789abcdef",
@@ -128,7 +128,7 @@ describe("sessions API route", () => {
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=25&createdBy=ffffffffffffffffffffffffffffffff&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?limit=25&createdBy=ffffffffffffffffffffffffffffffff&createdBy=me"
     );
     expect(response.status).toBe(200);
   });
@@ -152,11 +152,11 @@ describe("sessions API route", () => {
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(2);
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       1,
-      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       2,
-      "/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"
     );
   });
 });
@@ -166,16 +166,18 @@ describe("sessions API route (POST)", () => {
     vi.resetAllMocks();
   });
 
-  it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+  it("forwards control-plane authentication failures", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
 
     const response = await POST(postRequest({ repoOwner: "o", repoName: "r" }));
 
     expect(response.status).toBe(401);
-    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).toHaveBeenCalledOnce();
   });
 
-  it("sends display fields without identity or SCM assertions", async () => {
+  it("sends no profile, identity, or SCM assertions", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "0123456789abcdef0123456789abcdef",
@@ -200,9 +202,6 @@ describe("sessions API route (POST)", () => {
       repoOwner: "o",
       repoName: "r",
       model: "m",
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
     // Forbidden under strict identity enforcement: the control plane derives
     // these from the Bearer principal, so the web must not send them.
@@ -215,9 +214,12 @@ describe("sessions API route (POST)", () => {
     expect(sent.scmToken).toBeUndefined();
     expect(sent.scmRefreshToken).toBeUndefined();
     expect(sent.scmTokenExpiresAt).toBeUndefined();
+    expect(sent.authEmail).toBeUndefined();
+    expect(sent.authName).toBeUndefined();
+    expect(sent.authAvatarUrl).toBeUndefined();
   });
 
-  it("uses the same display-only body for another sign-in provider", async () => {
+  it("uses the same profile-independent body for another sign-in provider", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "fedcba9876543210fedcba9876543210",
@@ -234,10 +236,8 @@ describe("sessions API route (POST)", () => {
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
-    expect(sent).toMatchObject({
-      authEmail: "pm@gmail.com",
-      authName: "Pat PM",
-    });
+    expect(sent.authEmail).toBeUndefined();
+    expect(sent.authName).toBeUndefined();
     expect(sent.userId).toBeUndefined();
     expect(sent.authProvider).toBeUndefined();
     expect(sent.authUserId).toBeUndefined();
