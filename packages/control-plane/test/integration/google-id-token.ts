@@ -1,4 +1,5 @@
 const MS_PER_SECOND = 1000;
+const GOOGLE_ID_TOKEN_LIFETIME_MS = 5 * 60 * MS_PER_SECOND;
 
 interface GoogleIdTokenClaims {
   readonly sub: string;
@@ -42,7 +43,7 @@ export async function createSignedGoogleIdToken({
       aud: audience,
       ...claims,
       iat: issuedAt,
-      exp: issuedAt + 300,
+      exp: issuedAt + GOOGLE_ID_TOKEN_LIFETIME_MS / MS_PER_SECOND,
     })
   );
   const signingInput = `${header}.${payload}`;

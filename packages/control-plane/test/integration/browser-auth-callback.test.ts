@@ -15,9 +15,12 @@ const PUBLIC_WEB_ORIGIN = "https://app.test.local";
 const WEB_SERVICE_SECRET = "test-service-secret-web";
 const GOOGLE_CLIENT_ID = "google-client-id";
 const GOOGLE_SUBJECT = "google-subject";
+const MS_PER_SECOND = 1000;
+const GOOGLE_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * MS_PER_SECOND;
 
 let googleIdToken = "";
 let googlePublicKey: JsonWebKey;
+let googleCertRequestCount = 0;
 
 async function signedWebRequest(
   path: string,
@@ -111,19 +114,23 @@ beforeAll(async () => {
       return Response.json({
         access_token: "google-access-token",
         token_type: "Bearer",
-        expires_in: 3600,
+        expires_in: GOOGLE_ACCESS_TOKEN_LIFETIME_MS / MS_PER_SECOND,
         scope: "openid email profile",
         id_token: googleIdToken,
       });
     }
     if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+      googleCertRequestCount += 1;
       return Response.json({ keys: [googlePublicKey] });
     }
     throw new Error(`Unexpected external request: ${url}`);
   });
 });
 
-beforeEach(cleanD1Tables);
+beforeEach(async () => {
+  await cleanD1Tables();
+  googleCertRequestCount = 0;
+});
 
 afterAll(() => {
   vi.restoreAllMocks();
@@ -162,6 +169,7 @@ describe("browser auth callback", () => {
 
     expect(callbackResponse.status).toBe(302);
     expect(callbackResponse.headers.get("Location")).toBe("/after-sign-in");
+    expect(googleCertRequestCount).toBeGreaterThan(0);
     const sessionCookie = cookiePair(callbackResponse, "__Secure-openinspect.session_token");
     const sessionResponse = await handleRequest(
       await signedWebRequest("/api/auth/get-session", {
