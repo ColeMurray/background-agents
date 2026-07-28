@@ -257,19 +257,6 @@ export function splitIntoSlackSections(
 }
 
 /**
- * Truncate text for Slack display with smart sentence breaks.
- */
-function truncateForSlack(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  const truncated = text.slice(0, maxLen);
-  const lastPeriod = truncated.lastIndexOf(". ");
-  if (lastPeriod > maxLen * 0.7) {
-    return truncated.slice(0, lastPeriod + 1) + "\n\n_...truncated_";
-  }
-  return truncated + "...\n\n_...truncated_";
-}
-
-/**
  * Truncate an error string for Slack display, collapsing whitespace.
  */
 export function truncateError(text: string, maxLen: number): string {
