@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAuthDisplay, isAuthProvider } from "./build-auth-identity";
-
-describe("isAuthProvider", () => {
-  it("accepts only executable sign-in providers", () => {
-    expect(isAuthProvider("github")).toBe(true);
-    expect(isAuthProvider("google")).toBe(true);
-    expect(isAuthProvider("gitlab")).toBe(false);
-    expect(isAuthProvider(undefined)).toBe(false);
-  });
-});
+import { buildAuthDisplay } from "./build-auth-identity";
 
 describe("buildAuthDisplay", () => {
   it("returns cosmetic fields without identity or SCM assertions", () => {

@@ -146,10 +146,8 @@ export default tseslint.config(
     ignores: [
       "**/*.test.{ts,tsx}",
       "**/*.spec.{ts,tsx}",
-      "packages/web/src/lib/auth.ts",
       "packages/web/src/lib/browser-api-fetch.ts",
       "packages/web/src/lib/control-plane-transport.ts",
-      "packages/web/src/lib/github-org-membership.ts",
     ],
     rules: {
       "no-restricted-globals": [

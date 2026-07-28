@@ -1,9 +1,5 @@
 export type AuthProvider = "github" | "google";
 
-export function isAuthProvider(value: string | null | undefined): value is AuthProvider {
-  return value === "github" || value === "google";
-}
-
 export interface AuthDisplayUser {
   readonly name?: string | null;
   readonly email?: string | null;

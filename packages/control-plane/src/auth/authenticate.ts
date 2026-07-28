@@ -90,7 +90,5 @@ export async function authenticate(
     }
   }
 
-  // No recognized credential. The shared bearer is retired — a
-  // legacy internal token is just another unrecognized Authorization value.
   return { reason: "Unauthorized", status: 401, failedScheme: "none" };
 }

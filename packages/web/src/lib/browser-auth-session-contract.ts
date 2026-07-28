@@ -24,4 +24,3 @@ export const browserAuthSessionResponseSchema = z
   });
 
 export type BrowserAuthSessionUser = z.infer<typeof browserAuthSessionUserSchema>;
-export type BrowserAuthSessionResponse = z.infer<typeof browserAuthSessionResponseSchema>;
