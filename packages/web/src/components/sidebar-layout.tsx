@@ -1,15 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent as ReactPointerEvent,
-} from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { signIn, useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
@@ -23,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { GitHubIcon, GoogleIcon, SidebarIcon } from "@/components/ui/icons";
 import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -38,11 +30,6 @@ interface AppShellActionsContextValue {
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
 const AppShellActionsContext = createContext<AppShellActionsContextValue | null>(null);
-
-const MOBILE_SIDEBAR_WIDTH_PX = 288;
-const MOBILE_SIDEBAR_HOLD_MS = 300;
-const MOBILE_SIDEBAR_HOLD_TOLERANCE_PX = 10;
-const MOBILE_SIDEBAR_OPEN_THRESHOLD_PX = 72;
 
 export function useSidebarContext() {
   const context = useContext(SidebarContext);
@@ -93,79 +80,17 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
-  const [sidebarDragDistance, setSidebarDragDistance] = useState(0);
-  const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
-  const sidebarHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sidebarDragStartRef = useRef<{ x: number; y: number } | null>(null);
-  const sidebarDragDistanceRef = useRef(0);
-  const isSidebarDragActiveRef = useRef(false);
-
-  const resetSidebarDrag = useCallback(() => {
-    if (sidebarHoldTimerRef.current !== null) {
-      clearTimeout(sidebarHoldTimerRef.current);
-      sidebarHoldTimerRef.current = null;
-    }
-    sidebarDragStartRef.current = null;
-    sidebarDragDistanceRef.current = 0;
-    isSidebarDragActiveRef.current = false;
-    setSidebarDragDistance(0);
-    setIsDraggingSidebar(false);
-  }, []);
-
-  useEffect(() => resetSidebarDrag, [resetSidebarDrag]);
-
-  const handleSidebarDragStart = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!isMobile || sidebar.isOpen || (event.pointerType === "mouse" && event.button !== 0)) {
-        return;
-      }
-
-      resetSidebarDrag();
-      sidebarDragStartRef.current = { x: event.clientX, y: event.clientY };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      sidebarHoldTimerRef.current = setTimeout(() => {
-        sidebarHoldTimerRef.current = null;
-        isSidebarDragActiveRef.current = true;
-        setIsDraggingSidebar(true);
-      }, MOBILE_SIDEBAR_HOLD_MS);
-    },
-    [isMobile, resetSidebarDrag, sidebar.isOpen]
+  const mobileSidebarRef = useRef<HTMLDivElement>(null);
+  const getMobileSidebarWidth = useCallback(
+    () => mobileSidebarRef.current?.getBoundingClientRect().width ?? 0,
+    []
   );
-
-  const handleSidebarDragMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      const start = sidebarDragStartRef.current;
-      if (!start) return;
-
-      const deltaX = event.clientX - start.x;
-      const deltaY = event.clientY - start.y;
-      if (!isSidebarDragActiveRef.current) {
-        if (Math.hypot(deltaX, deltaY) > MOBILE_SIDEBAR_HOLD_TOLERANCE_PX) {
-          resetSidebarDrag();
-        }
-        return;
-      }
-
-      if (Math.abs(deltaY) > Math.abs(deltaX)) {
-        resetSidebarDrag();
-        return;
-      }
-
-      event.preventDefault();
-      const distance = Math.min(MOBILE_SIDEBAR_WIDTH_PX, Math.max(0, deltaX));
-      sidebarDragDistanceRef.current = distance;
-      setSidebarDragDistance(distance);
-    },
-    [resetSidebarDrag]
-  );
-
-  const handleSidebarDragEnd = useCallback(() => {
-    const shouldOpen =
-      isSidebarDragActiveRef.current &&
-      sidebarDragDistanceRef.current >= MOBILE_SIDEBAR_OPEN_THRESHOLD_PX;
-    resetSidebarDrag();
-    if (shouldOpen) sidebar.open();
-  }, [resetSidebarDrag, sidebar]);
+  const sidebarPull = useMobileSidebarPull({
+    isMobile,
+    isSidebarOpen: sidebar.isOpen,
+    getSidebarWidth: getMobileSidebarWidth,
+    onOpen: sidebar.open,
+  });
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
     status === "authenticated" && Boolean(session) && isCommandMenuOpen
@@ -250,12 +175,12 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           {isMobile && !sidebar.isOpen && (
             <div
               data-testid="mobile-sidebar-drag-handle"
-              className="fixed inset-y-0 left-0 z-50 w-6 touch-pan-y"
+              className="fixed inset-y-0 left-8 z-50 w-6 touch-pan-y"
               aria-hidden="true"
-              onPointerDown={handleSidebarDragStart}
-              onPointerMove={handleSidebarDragMove}
-              onPointerUp={handleSidebarDragEnd}
-              onPointerCancel={resetSidebarDrag}
+              onPointerDown={sidebarPull.handlePointerDown}
+              onPointerMove={sidebarPull.handlePointerMove}
+              onPointerUp={sidebarPull.handlePointerUp}
+              onPointerCancel={sidebarPull.reset}
               onContextMenu={(event) => event.preventDefault()}
             />
           )}
@@ -263,11 +188,11 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           {isMobile && (
             <div
               className={`fixed inset-0 z-30 bg-overlay ${
-                isDraggingSidebar ? "" : "transition-opacity duration-200"
+                sidebarPull.isDragging ? "" : "transition-opacity duration-200"
               } ${sidebar.isOpen ? "opacity-100" : "pointer-events-none"}`}
               style={
-                !sidebar.isOpen && sidebarDragDistance > 0
-                  ? { opacity: sidebarDragDistance / MOBILE_SIDEBAR_WIDTH_PX }
+                !sidebar.isOpen && sidebarPull.dragProgress > 0
+                  ? { opacity: sidebarPull.dragProgress }
                   : !sidebar.isOpen
                     ? { opacity: 0 }
                     : undefined
@@ -279,18 +204,20 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           )}
           {/* Sidebar: overlay on mobile, push on desktop */}
           <div
+            ref={mobileSidebarRef}
+            data-testid="mobile-sidebar-drawer"
             className={
               isMobile
                 ? `fixed inset-y-0 left-0 z-40 w-72 ease-in-out ${
-                    isDraggingSidebar ? "" : "transition-transform duration-200"
+                    sidebarPull.isDragging ? "" : "transition-transform duration-200"
                   } ${sidebar.isOpen ? "translate-x-0" : "-translate-x-full"}`
                 : `transition-all duration-200 ease-in-out ${
                     sidebar.isOpen ? "w-72" : "w-0"
                   } flex-shrink-0 overflow-hidden`
             }
             style={
-              isMobile && !sidebar.isOpen && sidebarDragDistance > 0
-                ? { transform: `translateX(calc(-100% + ${sidebarDragDistance}px))` }
+              isMobile && !sidebar.isOpen && sidebarPull.dragDistance > 0
+                ? { transform: `translateX(calc(-100% + ${sidebarPull.dragDistance}px))` }
                 : undefined
             }
           >

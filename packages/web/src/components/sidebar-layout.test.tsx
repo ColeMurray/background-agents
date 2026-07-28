@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
 import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
+import { MOBILE_SIDEBAR_HOLD_MS } from "@/hooks/use-mobile-sidebar-pull";
 
 expect.extend(matchers);
 
@@ -82,31 +83,34 @@ describe("mobile sidebar drag", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
     vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { name: "Test User" } },
+      data: { user: { id: "user-1", name: "Test User" } },
       status: "authenticated",
     });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
 
     render(<SidebarLayout>Session</SidebarLayout>);
 
+    vi.spyOn(screen.getByTestId("mobile-sidebar-drawer"), "getBoundingClientRect").mockReturnValue({
+      width: 288,
+    } as DOMRect);
     const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
     fireEvent.pointerDown(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 40,
       clientY: 200,
     });
-    act(() => vi.advanceTimersByTime(300));
+    act(() => vi.advanceTimersByTime(MOBILE_SIDEBAR_HOLD_MS));
     fireEvent.pointerMove(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 100,
+      clientX: 132,
       clientY: 202,
     });
     fireEvent.pointerUp(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 100,
+      clientX: 132,
       clientY: 202,
     });
 
@@ -118,27 +122,30 @@ describe("mobile sidebar drag", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
     vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { name: "Test User" } },
+      data: { user: { id: "user-1", name: "Test User" } },
       status: "authenticated",
     });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
 
     render(<SidebarLayout>Session</SidebarLayout>);
 
+    vi.spyOn(screen.getByTestId("mobile-sidebar-drawer"), "getBoundingClientRect").mockReturnValue({
+      width: 288,
+    } as DOMRect);
     const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
     fireEvent.pointerDown(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 40,
       clientY: 200,
     });
     fireEvent.pointerMove(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 30,
+      clientX: 62,
       clientY: 200,
     });
-    act(() => vi.advanceTimersByTime(300));
+    act(() => vi.advanceTimersByTime(MOBILE_SIDEBAR_HOLD_MS));
     fireEvent.pointerUp(dragHandle, { pointerId: 1, pointerType: "touch" });
 
     expect(mocks.sidebar.open).not.toHaveBeenCalled();
