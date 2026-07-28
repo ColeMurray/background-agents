@@ -5,7 +5,7 @@ import {
   completeExternalUpload,
   getExternalUploadUrl,
   getChannelInfo,
-  getMessageFiles,
+  getMessageDetails,
   getPermalink,
   getThreadMessages,
   getUserInfo,
@@ -721,7 +721,7 @@ describe("listChannels", () => {
   });
 });
 
-describe("getMessageFiles", () => {
+describe("getMessageDetails", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -734,7 +734,7 @@ describe("getMessageFiles", () => {
       })
     );
 
-    const result = await getMessageFiles("xoxb-token", "C123", "1.0");
+    const result = await getMessageDetails("xoxb-token", "C123", "1.0");
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -758,7 +758,7 @@ describe("getMessageFiles", () => {
       })
     );
 
-    const result = await getMessageFiles("xoxb-token", "C123", "1.5", "1.0");
+    const result = await getMessageDetails("xoxb-token", "C123", "1.5", "1.0");
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -781,7 +781,7 @@ describe("getMessageFiles", () => {
       })
     );
 
-    const result = await getMessageFiles("xoxb-token", "C123", "1.5", "1.0");
+    const result = await getMessageDetails("xoxb-token", "C123", "1.5", "1.0");
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -794,7 +794,7 @@ describe("getMessageFiles", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ ok: true, messages: [{ ts: "1.0" }] }));
 
-    await getMessageFiles("xoxb-token", "C123", "1.0", "1.0");
+    await getMessageDetails("xoxb-token", "C123", "1.0", "1.0");
 
     const [url] = fetchSpy.mock.calls[0]!;
     expect(String(url)).toContain("conversations.history");
@@ -805,7 +805,31 @@ describe("getMessageFiles", () => {
       jsonResponse({ ok: true, messages: [{ ts: "9.9" }] })
     );
 
-    expect(await getMessageFiles("xoxb-token", "C123", "1.0")).toEqual({ ok: true, files: [] });
+    expect(await getMessageDetails("xoxb-token", "C123", "1.0")).toEqual({
+      ok: true,
+      files: [],
+      attachments: [],
+    });
+  });
+
+  it("returns the message's attachments alongside its files", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse({
+        ok: true,
+        messages: [
+          {
+            ts: "1.0",
+            attachments: [{ is_share: true, text: "the shared body", author_name: "Ada" }],
+          },
+        ],
+      })
+    );
+
+    expect(await getMessageDetails("xoxb-token", "C123", "1.0")).toEqual({
+      ok: true,
+      files: [],
+      attachments: [{ is_share: true, text: "the shared body", author_name: "Ada" }],
+    });
   });
 
   it("returns the failure arm on Slack API errors (e.g. missing_scope)", async () => {
@@ -813,7 +837,7 @@ describe("getMessageFiles", () => {
       jsonResponse({ ok: false, error: "missing_scope" })
     );
 
-    expect(await getMessageFiles("xoxb-token", "C123", "1.0")).toEqual({
+    expect(await getMessageDetails("xoxb-token", "C123", "1.0")).toEqual({
       ok: false,
       error: "missing_scope",
     });
