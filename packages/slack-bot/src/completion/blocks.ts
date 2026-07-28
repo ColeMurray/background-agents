@@ -43,7 +43,7 @@ const SECTION_TEXT_MAX_CHARS = 3000;
  */
 const MAX_RESPONSE_SECTIONS = 20;
 
-const CODE_FENCE_RE = /^```/;
+const CODE_FENCE = "```";
 
 /**
  * Build Slack blocks for completion message.
@@ -149,6 +149,34 @@ export function getFallbackText(response: AgentResponse): string {
   return response.textContent.slice(0, FALLBACK_TEXT_LIMIT) || "Agent completed.";
 }
 
+interface FenceState {
+  readonly open: boolean;
+  readonly info: string;
+}
+
+const CLOSED_FENCE: FenceState = { open: false, info: "" };
+
+/** Fence state after `chunk` is appended to text that ended in `state`. */
+function advanceFence(state: FenceState, chunk: string): FenceState {
+  let next = state;
+  for (const line of chunk.split("\n")) {
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith(CODE_FENCE)) continue;
+    next = next.open ? CLOSED_FENCE : { open: true, info: trimmed.slice(CODE_FENCE.length).trim() };
+  }
+  return next;
+}
+
+/** Reopens, at the top of a section, a fence carried over from the previous one. */
+function reopenPrefix(state: FenceState): string {
+  return state.open ? `${CODE_FENCE}${state.info}\n` : "";
+}
+
+/** Closes a fence still open at the end of a section. */
+function closeSuffix(state: FenceState): string {
+  return state.open ? `\n${CODE_FENCE}` : "";
+}
+
 /**
  * Split agent prose into Slack section blocks, preferring paragraph boundaries.
  *
@@ -160,6 +188,12 @@ export function getFallbackText(response: AgentResponse): string {
  * Fenced code blocks are closed at the end of a section and reopened at the start
  * of the next, so a split inside a fence doesn't leak monospace formatting across
  * the rest of the message.
+ *
+ * Both repairs cost characters, so every fit check measures the text Slack will
+ * actually receive — reopen prefix plus body plus closing fence — and the
+ * hard-slice path advances by exactly what it kept. Measuring the bare body
+ * instead lets an in-fence section overflow by the 4 closing characters, and
+ * Slack rejects the whole message rather than trimming the block.
  *
  * Returns [] for empty input so the caller can render its own placeholder.
  */
@@ -173,87 +207,92 @@ export function splitIntoSlackSections(
   if (trimmed.length <= maxChars) return [trimmed];
 
   const sections: string[] = [];
-  let current = "";
-  // Tracks whether `current` ends inside a fence, so the split can repair it.
-  let fenceOpen = false;
-  let fenceInfo = "";
+  // Fence state where the in-progress section began, and where its body now ends.
+  let sectionStart = CLOSED_FENCE;
+  let sectionEnd = CLOSED_FENCE;
+  let body = "";
 
-  const flush = () => {
-    if (!current) return;
-    sections.push(fenceOpen ? `${current}\n\`\`\`` : current);
-    current = "";
+  const render = (start: FenceState, content: string, end: FenceState): string =>
+    `${reopenPrefix(start)}${content}${closeSuffix(end)}`;
+
+  const flush = (): void => {
+    if (!body) return;
+    sections.push(render(sectionStart, body, sectionEnd));
+    // A fence left open carries into the next section, which reopens it.
+    sectionStart = sectionEnd;
+    body = "";
   };
 
-  const appendChunk = (chunk: string) => {
-    const reopen = fenceOpen ? `\`\`\`${fenceInfo}\n` : "";
-    const candidate = current ? `${current}\n\n${chunk}` : `${reopen}${chunk}`;
-    if (candidate.length <= maxChars) {
-      current = candidate;
+  const appendToken = (token: string, separator: string): void => {
+    const joined = body ? `${body}${separator}${token}` : token;
+    const joinedEnd = advanceFence(sectionEnd, token);
+    if (render(sectionStart, joined, joinedEnd).length <= maxChars) {
+      body = joined;
+      sectionEnd = joinedEnd;
       return;
     }
-    flush();
-    const withReopen = `${fenceOpen ? `\`\`\`${fenceInfo}\n` : ""}${chunk}`;
-    current = withReopen.length <= maxChars ? withReopen : withReopen.slice(0, maxChars);
-  };
 
-  // Track fence state per line so `fenceOpen` is accurate at every boundary.
-  const consumeFences = (chunk: string) => {
-    for (const line of chunk.split("\n")) {
-      if (CODE_FENCE_RE.test(line.trimStart())) {
-        if (fenceOpen) {
-          fenceOpen = false;
-          fenceInfo = "";
-        } else {
-          fenceOpen = true;
-          fenceInfo = line.trimStart().slice(3).trim();
-        }
-      }
+    flush();
+    const aloneEnd = advanceFence(sectionEnd, token);
+    if (render(sectionStart, token, aloneEnd).length <= maxChars) {
+      body = token;
+      sectionEnd = aloneEnd;
+      return;
+    }
+
+    // Token exceeds a whole section on its own: slice it against the real budget.
+    let rest = token;
+    while (rest.length > 0) {
+      const start = sectionEnd;
+      // Reserve the closing fence whenever this slice could end inside one.
+      const reserveClose = start.open || advanceFence(start, rest).open;
+      const budget =
+        maxChars -
+        reopenPrefix(start).length -
+        (reserveClose ? closeSuffix({ open: true, info: "" }).length : 0);
+      const taken = rest.slice(0, Math.max(1, budget));
+      sectionStart = start;
+      body = taken;
+      sectionEnd = advanceFence(start, taken);
+      rest = rest.slice(taken.length);
+      if (rest.length > 0) flush();
     }
   };
 
   for (const paragraph of trimmed.split(/\n{2,}/)) {
     if (paragraph.length <= maxChars) {
-      appendChunk(paragraph);
-      consumeFences(paragraph);
+      appendToken(paragraph, "\n\n");
       continue;
     }
-    // Oversized paragraph (long table, big code block): break on lines.
-    let buffer = "";
+    // Oversized paragraph (long table, big code block): break on lines. Only the
+    // first line is a paragraph boundary; the rest are line continuations.
+    let atParagraphStart = true;
     for (const line of paragraph.split("\n")) {
-      const candidate = buffer ? `${buffer}\n${line}` : line;
-      if (candidate.length <= maxChars) {
-        buffer = candidate;
-        continue;
-      }
-      if (buffer) {
-        appendChunk(buffer);
-        consumeFences(buffer);
-      }
-      // A single line longer than the cap has to be sliced.
-      let rest = line;
-      while (rest.length > maxChars) {
-        appendChunk(rest.slice(0, maxChars));
-        consumeFences(rest.slice(0, maxChars));
-        rest = rest.slice(maxChars);
-      }
-      buffer = rest;
-    }
-    if (buffer) {
-      appendChunk(buffer);
-      consumeFences(buffer);
+      appendToken(line, atParagraphStart ? "\n\n" : "\n");
+      atParagraphStart = false;
     }
   }
   flush();
 
   if (sections.length <= maxSections) return sections;
   const kept = sections.slice(0, maxSections);
-  const last = kept[maxSections - 1];
-  const marker = "\n\n_...truncated — open the session to read the rest_";
-  kept[maxSections - 1] =
-    last.length + marker.length <= maxChars
-      ? last + marker
-      : last.slice(0, maxChars - marker.length) + marker;
+  const lastIndex = maxSections - 1;
+  kept[lastIndex] = withTruncationMarker(kept[lastIndex], maxChars);
   return kept;
+}
+
+/**
+ * Append the truncation pointer to the final kept section, preserving both the
+ * character cap and fence balance — slicing blindly can eat the closing fence and
+ * leak monospace over the marker.
+ */
+function withTruncationMarker(section: string, maxChars: number): string {
+  const marker = "\n\n_...truncated — open the session to read the rest_";
+  if (section.length + marker.length <= maxChars) return section + marker;
+  const closing = section.endsWith(`\n${CODE_FENCE}`) ? `\n${CODE_FENCE}` : "";
+  const content = closing ? section.slice(0, -closing.length) : section;
+  const room = maxChars - marker.length - closing.length;
+  return `${content.slice(0, Math.max(0, room))}${closing}${marker}`;
 }
 
 /**

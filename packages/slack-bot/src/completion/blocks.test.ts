@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCompletionBlocks } from "./blocks";
+import { buildCompletionBlocks, splitIntoSlackSections } from "./blocks";
 import type { AgentResponse, SlackCallbackContext } from "../types";
 
 const BASE_CONTEXT: SlackCallbackContext = {
@@ -251,6 +251,54 @@ describe("long response handling", () => {
     expect(texts.length).toBeGreaterThan(1);
     for (const text of texts) {
       expect((text.match(/```/g) ?? []).length % 2).toBe(0);
+    }
+  });
+
+  // The two checks above pass on fence-free and short-line input respectively, so
+  // neither exercises a split *inside* a fence — which is where the section repair
+  // adds characters after the fit check and where the hard slice drops them.
+  it("respects the section cap when a fence is split (repair chars are budgeted)", () => {
+    const textContent = `\`\`\`json\n${"a".repeat(9000)}\n\`\`\``;
+    const blocks = buildCompletionBlocks(
+      "sess-6",
+      { ...BASE_RESPONSE, textContent },
+      BASE_CONTEXT,
+      "https://inspect.example.com"
+    );
+    for (const text of sectionTexts(blocks)) {
+      expect(text.length).toBeLessThanOrEqual(3000);
+    }
+  });
+
+  it("loses no characters when hard-slicing inside a fence", () => {
+    const payload = "b".repeat(7000);
+    const sections = splitIntoSlackSections(`\`\`\`js\n${payload}\n\`\`\``);
+    const recovered = sections
+      .join("")
+      .split("```")
+      .join("")
+      .replace(/^js$/gm, "")
+      .replace(/\n/g, "");
+    expect(recovered).toBe(payload);
+  });
+
+  it("keeps fences balanced in the truncated final section", () => {
+    const textContent = `\`\`\`ts\n${Array.from({ length: 400 }, () => "y".repeat(2900)).join("\n")}\n\`\`\``;
+    const sections = splitIntoSlackSections(textContent);
+    const last = sections[sections.length - 1];
+    expect(last).toContain("truncated");
+    expect(last.length).toBeLessThanOrEqual(3000);
+    for (const section of sections) {
+      expect((section.match(/```/g) ?? []).length % 2).toBe(0);
+    }
+  });
+
+  it("carries the fence language across a split", () => {
+    const sections = splitIntoSlackSections(`\`\`\`python\n${"c".repeat(6500)}\n\`\`\``);
+    expect(sections.length).toBeGreaterThan(1);
+    // Every continuation section reopens the fence with its original language.
+    for (const section of sections.slice(1)) {
+      expect(section.startsWith("```python\n")).toBe(true);
     }
   });
 
