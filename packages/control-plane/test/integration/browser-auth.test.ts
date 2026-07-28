@@ -8,63 +8,13 @@ import {
   SESSION_UPDATE_AGE_MS,
   createUserAuth,
 } from "../../src/auth/user/better-auth";
+import { createSignedGoogleIdToken } from "./google-id-token";
 
 const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const MS_PER_SECOND = 1000;
 const UNUSED_PROFILE_RESOLVER = async () => null;
 const UNUSED_USER_PROJECTION = { project: async () => {} };
-
-function encodeBase64Url(value: string | Uint8Array): string {
-  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
-async function createSignedGoogleIdToken(clientId: string) {
-  const keyId = "test-google-key";
-  const keyPair = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"]
-  );
-  const issuedAt = Math.floor(Date.now() / MS_PER_SECOND);
-  const header = encodeBase64Url(JSON.stringify({ alg: "RS256", kid: keyId, typ: "JWT" }));
-  const payload = encodeBase64Url(
-    JSON.stringify({
-      iss: "https://accounts.google.com",
-      aud: clientId,
-      sub: "direct-id-token-subject",
-      email: "direct-id-token@example.com",
-      email_verified: true,
-      name: "Direct ID Token User",
-      iat: issuedAt,
-      exp: issuedAt + 300,
-    })
-  );
-  const signingInput = `${header}.${payload}`;
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    keyPair.privateKey,
-    new TextEncoder().encode(signingInput)
-  );
-  const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-  return {
-    token: `${signingInput}.${encodeBase64Url(new Uint8Array(signature))}`,
-    publicKey: {
-      ...publicKey,
-      alg: "RS256",
-      kid: keyId,
-      use: "sig",
-    },
-  };
-}
 
 const EXPECTED_COLUMNS = {
   auth_users: [
@@ -360,7 +310,15 @@ describe("browser authentication", () => {
 
   it("rejects direct Google ID-token sign-in without creating authentication state", async () => {
     const clientId = "google-client-id";
-    const { token, publicKey } = await createSignedGoogleIdToken(clientId);
+    const { token, publicKey } = await createSignedGoogleIdToken({
+      audience: clientId,
+      claims: {
+        sub: "direct-id-token-subject",
+        email: "direct-id-token@example.com",
+        email_verified: true,
+        name: "Direct ID Token User",
+      },
+    });
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : String(input);
       if (url === "https://www.googleapis.com/oauth2/v3/certs") {

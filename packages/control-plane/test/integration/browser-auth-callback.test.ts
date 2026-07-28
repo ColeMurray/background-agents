@@ -8,63 +8,16 @@ import { UserStore } from "../../src/db/user-store";
 import { handleRequest } from "../../src/router";
 import { resolveGitHubEnrichmentForRequest } from "../../src/session/identity";
 import { cleanD1Tables } from "./cleanup";
+import { createSignedGoogleIdToken } from "./google-id-token";
 
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
 const WEB_SERVICE_SECRET = "test-service-secret-web";
 const GOOGLE_CLIENT_ID = "google-client-id";
 const GOOGLE_SUBJECT = "google-subject";
-const MS_PER_SECOND = 1000;
 
 let googleIdToken = "";
 let googlePublicKey: JsonWebKey;
-
-function encodeBase64Url(value: string | Uint8Array): string {
-  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
-async function createSignedGoogleIdToken() {
-  const keyId = "callback-test-google-key";
-  const keyPair = await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"]
-  );
-  const issuedAt = Math.floor(Date.now() / MS_PER_SECOND);
-  const header = encodeBase64Url(JSON.stringify({ alg: "RS256", kid: keyId, typ: "JWT" }));
-  const payload = encodeBase64Url(
-    JSON.stringify({
-      iss: "https://accounts.google.com",
-      aud: GOOGLE_CLIENT_ID,
-      sub: GOOGLE_SUBJECT,
-      email: "Google.User@Example.COM",
-      email_verified: true,
-      name: "Google User",
-      picture: "https://images.example/google-user",
-      iat: issuedAt,
-      exp: issuedAt + 300,
-    })
-  );
-  const signingInput = `${header}.${payload}`;
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    keyPair.privateKey,
-    new TextEncoder().encode(signingInput)
-  );
-  const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
-  return {
-    token: `${signingInput}.${encodeBase64Url(new Uint8Array(signature))}`,
-    publicKey: { ...publicKey, alg: "RS256", kid: keyId, use: "sig" },
-  };
-}
 
 async function signedWebRequest(
   path: string,
@@ -102,7 +55,17 @@ function cookiePair(response: Response, cookieName: string): string {
 }
 
 beforeAll(async () => {
-  const signedToken = await createSignedGoogleIdToken();
+  const signedToken = await createSignedGoogleIdToken({
+    audience: GOOGLE_CLIENT_ID,
+    keyId: "callback-test-google-key",
+    claims: {
+      sub: GOOGLE_SUBJECT,
+      email: "Google.User@Example.COM",
+      email_verified: true,
+      name: "Google User",
+      picture: "https://images.example/google-user",
+    },
+  });
   googleIdToken = signedToken.token;
   googlePublicKey = signedToken.publicKey;
 
