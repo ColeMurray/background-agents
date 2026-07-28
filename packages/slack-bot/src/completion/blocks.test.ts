@@ -293,6 +293,31 @@ describe("long response handling", () => {
     }
   });
 
+  // The truncation cut can land inside a fence the final section both opened and
+  // closed, which a trailing-fence check cannot detect. Sweep the section length
+  // through the window where slicing actually happens, moving the fence across the
+  // cut point, and assert the invariant holds for every shape.
+  it("keeps fences balanced when the truncation cut lands inside a fence", () => {
+    const fence = "```";
+    for (let sectionLen = 2949; sectionLen <= 3000; sectionLen += 1) {
+      for (const codeLen of [20, 45, 200]) {
+        const block = `\n${fence}ts\n${"h".repeat(codeLen)}\n${fence}`;
+        const fill = sectionLen - block.length;
+        if (fill < 1) continue;
+        const paragraphs = [
+          ...Array.from({ length: 19 }, () => "f".repeat(2900)),
+          "g".repeat(fill) + block,
+          ...Array.from({ length: 5 }, () => "z".repeat(2900)),
+        ];
+        const sections = splitIntoSlackSections(paragraphs.join("\n\n"));
+        const last = sections[sections.length - 1];
+        expect(last).toContain("truncated");
+        expect(last.length).toBeLessThanOrEqual(3000);
+        expect((last.match(/```/g) ?? []).length % 2).toBe(0);
+      }
+    }
+  });
+
   it("carries the fence language across a split", () => {
     const sections = splitIntoSlackSections(`\`\`\`python\n${"c".repeat(6500)}\n\`\`\``);
     expect(sections.length).toBeGreaterThan(1);

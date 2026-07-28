@@ -304,10 +304,14 @@ export function splitIntoSlackSections(
 function withTruncationMarker(section: string, maxChars: number): string {
   const marker = "\n\n_...truncated — open the session to read the rest_";
   if (section.length + marker.length <= maxChars) return section + marker;
-  const closing = section.endsWith(`\n${CODE_FENCE}`) ? `\n${CODE_FENCE}` : "";
-  const content = closing ? section.slice(0, -closing.length) : section;
+  const closing = `\n${CODE_FENCE}`;
+  // Reserve room for a closing fence unconditionally: the cut can land inside a
+  // fence this section opened *and* closed, which no trailing-fence check sees.
+  const content = section.endsWith(closing) ? section.slice(0, -closing.length) : section;
   const room = maxChars - marker.length - closing.length;
-  return `${content.slice(0, Math.max(0, room))}${closing}${marker}`;
+  const sliced = content.slice(0, Math.max(0, room));
+  const needsClose = (sliced.match(/```/g) ?? []).length % 2 !== 0;
+  return `${sliced}${needsClose ? closing : ""}${marker}`;
 }
 
 /**
