@@ -76,17 +76,26 @@ export function createUserAuthFromEnv(env: Env, database: D1Database) {
     );
   }
 
-  const githubClientId = requireConfig(env.GITHUB_CLIENT_ID, "GITHUB_CLIENT_ID");
-  const githubClientSecret = requireConfig(env.GITHUB_CLIENT_SECRET, "GITHUB_CLIENT_SECRET");
   const admissionPolicy = createAdmissionPolicy(env);
-  const githubIdentityResolver = new GitHubProviderIdentityResolver({
-    issuer: GITHUB_ISSUER,
-    userAgent: `${env.APP_NAME?.trim() || "Open-Inspect"} Control Plane`,
-  });
-  const githubProfile = new GitHubSignInProfileResolver({
-    identityResolver: githubIdentityResolver,
-    admissionPolicy,
-  });
+
+  const githubClientId = env.GITHUB_CLIENT_ID?.trim();
+  const githubClientSecret = env.GITHUB_CLIENT_SECRET?.trim();
+  if (Boolean(githubClientId) !== Boolean(githubClientSecret)) {
+    throw new UserAuthConfigurationError(
+      "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured together"
+    );
+  }
+
+  const githubProfile =
+    githubClientId && githubClientSecret
+      ? new GitHubSignInProfileResolver({
+          identityResolver: new GitHubProviderIdentityResolver({
+            issuer: GITHUB_ISSUER,
+            userAgent: `${env.APP_NAME?.trim() || "Open-Inspect"} Control Plane`,
+          }),
+          admissionPolicy,
+        })
+      : null;
 
   const googleClientId = env.GOOGLE_CLIENT_ID?.trim();
   const googleClientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
@@ -104,16 +113,29 @@ export function createUserAuthFromEnv(env: Env, database: D1Database) {
         })
       : null;
 
+  // Each provider is opt-in, but browser sign-in is unreachable with none of
+  // them configured — fail at construction rather than serving a sign-in page
+  // that cannot complete.
+  if (!githubProfile && !googleProfile) {
+    throw new UserAuthConfigurationError(
+      "At least one sign-in provider must be configured: set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET"
+    );
+  }
+
   return createUserAuth({
     database,
     publicWebOrigin,
     secret,
     userProjection: new D1CanonicalUserProjection(database),
-    github: {
-      clientId: githubClientId,
-      clientSecret: githubClientSecret,
-      getUserInfo: githubProfile.getUserInfo,
-    },
+    ...(githubProfile && githubClientId && githubClientSecret
+      ? {
+          github: {
+            clientId: githubClientId,
+            clientSecret: githubClientSecret,
+            getUserInfo: githubProfile.getUserInfo,
+          },
+        }
+      : {}),
     ...(googleProfile && googleClientId && googleClientSecret
       ? {
           google: {

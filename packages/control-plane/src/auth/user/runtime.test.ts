@@ -1,5 +1,27 @@
-import { describe, expect, it } from "vitest";
-import { parsePublicWebOrigin } from "./runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createUserAuthFromEnv, parsePublicWebOrigin } from "./runtime";
+import { createUserAuth } from "./better-auth";
+import type { Env } from "../../types";
+
+// Constructing the real Better Auth instance would initialize a D1 adapter, so the
+// provider-resolution tests below assert the config it is handed instead.
+vi.mock("./better-auth", () => ({ createUserAuth: vi.fn(() => ({}) as never) }));
+
+const BASE_ENV = {
+  WEB_APP_URL: "https://open-inspect.example",
+  BROWSER_AUTH_SECRET: "x".repeat(32),
+} as const;
+
+function envWith(overrides: Record<string, string>): Env {
+  return { ...BASE_ENV, ...overrides } as unknown as Env;
+}
+
+const STUB_DATABASE = {} as D1Database;
+
+function configuredProviders(): string[] {
+  const config = vi.mocked(createUserAuth).mock.calls.at(-1)?.[0] ?? {};
+  return ["github", "google"].filter((provider) => provider in config);
+}
 
 describe("parsePublicWebOrigin", () => {
   it.each([
@@ -22,5 +44,77 @@ describe("parsePublicWebOrigin", () => {
     "https://open-inspect.example?query=1",
   ])("rejects an unsafe or non-origin WEB_APP_URL: %s", (configured) => {
     expect(() => parsePublicWebOrigin(configured)).toThrow();
+  });
+});
+
+describe("createUserAuthFromEnv sign-in provider configuration", () => {
+  beforeEach(() => {
+    vi.mocked(createUserAuth).mockClear();
+  });
+
+  it("accepts a Google-only deployment and wires only Google", () => {
+    expect(() =>
+      createUserAuthFromEnv(
+        envWith({ GOOGLE_CLIENT_ID: "google-id", GOOGLE_CLIENT_SECRET: "google-secret" }),
+        STUB_DATABASE
+      )
+    ).not.toThrow();
+    expect(configuredProviders()).toEqual(["google"]);
+  });
+
+  it("accepts a GitHub-only deployment and wires only GitHub", () => {
+    expect(() =>
+      createUserAuthFromEnv(
+        envWith({ GITHUB_CLIENT_ID: "github-id", GITHUB_CLIENT_SECRET: "github-secret" }),
+        STUB_DATABASE
+      )
+    ).not.toThrow();
+    expect(configuredProviders()).toEqual(["github"]);
+  });
+
+  it("wires both providers when both are configured", () => {
+    createUserAuthFromEnv(
+      envWith({
+        GITHUB_CLIENT_ID: "github-id",
+        GITHUB_CLIENT_SECRET: "github-secret",
+        GOOGLE_CLIENT_ID: "google-id",
+        GOOGLE_CLIENT_SECRET: "google-secret",
+      }),
+      STUB_DATABASE
+    );
+    expect(configuredProviders()).toEqual(["github", "google"]);
+  });
+
+  it("rejects a deployment with no sign-in provider configured", () => {
+    expect(() => createUserAuthFromEnv(envWith({}), STUB_DATABASE)).toThrow(
+      /At least one sign-in provider must be configured/
+    );
+  });
+
+  it.each([
+    ["GITHUB_CLIENT_ID", { GITHUB_CLIENT_ID: "github-id" }],
+    ["GITHUB_CLIENT_SECRET", { GITHUB_CLIENT_SECRET: "github-secret" }],
+  ])("rejects a half-configured GitHub provider: %s alone", (_name, overrides) => {
+    expect(() => createUserAuthFromEnv(envWith(overrides), STUB_DATABASE)).toThrow(
+      /GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured together/
+    );
+  });
+
+  it.each([
+    ["GOOGLE_CLIENT_ID", { GOOGLE_CLIENT_ID: "google-id" }],
+    ["GOOGLE_CLIENT_SECRET", { GOOGLE_CLIENT_SECRET: "google-secret" }],
+  ])("rejects a half-configured Google provider: %s alone", (_name, overrides) => {
+    expect(() => createUserAuthFromEnv(envWith(overrides), STUB_DATABASE)).toThrow(
+      /GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together/
+    );
+  });
+
+  it("treats whitespace-only credentials as unset", () => {
+    expect(() =>
+      createUserAuthFromEnv(
+        envWith({ GITHUB_CLIENT_ID: "   ", GITHUB_CLIENT_SECRET: "   " }),
+        STUB_DATABASE
+      )
+    ).toThrow(/At least one sign-in provider must be configured/);
   });
 });
