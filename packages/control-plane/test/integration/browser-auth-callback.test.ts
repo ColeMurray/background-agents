@@ -12,6 +12,59 @@ import { cleanD1Tables } from "./cleanup";
 const CONTROL_PLANE_ORIGIN = "https://control-plane.test.local";
 const PUBLIC_WEB_ORIGIN = "https://app.test.local";
 const WEB_SERVICE_SECRET = "test-service-secret-web";
+const GOOGLE_CLIENT_ID = "google-client-id";
+const GOOGLE_SUBJECT = "google-subject";
+const MS_PER_SECOND = 1000;
+
+let googleIdToken = "";
+let googlePublicKey: JsonWebKey;
+
+function encodeBase64Url(value: string | Uint8Array): string {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+async function createSignedGoogleIdToken() {
+  const keyId = "callback-test-google-key";
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"]
+  );
+  const issuedAt = Math.floor(Date.now() / MS_PER_SECOND);
+  const header = encodeBase64Url(JSON.stringify({ alg: "RS256", kid: keyId, typ: "JWT" }));
+  const payload = encodeBase64Url(
+    JSON.stringify({
+      iss: "https://accounts.google.com",
+      aud: GOOGLE_CLIENT_ID,
+      sub: GOOGLE_SUBJECT,
+      email: "Google.User@Example.COM",
+      email_verified: true,
+      name: "Google User",
+      picture: "https://images.example/google-user",
+      iat: issuedAt,
+      exp: issuedAt + 300,
+    })
+  );
+  const signingInput = `${header}.${payload}`;
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    keyPair.privateKey,
+    new TextEncoder().encode(signingInput)
+  );
+  const publicKey = await crypto.subtle.exportKey("jwk", keyPair.publicKey);
+  return {
+    token: `${signingInput}.${encodeBase64Url(new Uint8Array(signature))}`,
+    publicKey: { ...publicKey, alg: "RS256", kid: keyId, use: "sig" },
+  };
+}
 
 async function signedWebRequest(
   path: string,
@@ -48,8 +101,12 @@ function cookiePair(response: Response, cookieName: string): string {
   return cookie.split(";", 1)[0];
 }
 
-beforeAll(() => {
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+beforeAll(async () => {
+  const signedToken = await createSignedGoogleIdToken();
+  googleIdToken = signedToken.token;
+  googlePublicKey = signedToken.publicKey;
+
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url === "https://github.com/login/oauth/access_token") {
       return Response.json({
@@ -78,6 +135,27 @@ beforeAll(() => {
         },
       ]);
     }
+    if (url === "https://oauth2.googleapis.com/token") {
+      const body = new URLSearchParams(
+        input instanceof Request ? await input.clone().text() : String(init?.body ?? "")
+      );
+      expect(body.get("grant_type")).toBe("authorization_code");
+      expect(body.get("code")).toBe("google-authorization-code");
+      expect(body.get("client_id")).toBe(GOOGLE_CLIENT_ID);
+      expect(body.get("client_secret")).toBe("google-client-secret");
+      expect(body.get("redirect_uri")).toBe(`${PUBLIC_WEB_ORIGIN}/api/auth/callback/google`);
+      expect(body.get("code_verifier")).toBeTruthy();
+      return Response.json({
+        access_token: "google-access-token",
+        token_type: "Bearer",
+        expires_in: 3600,
+        scope: "openid email profile",
+        id_token: googleIdToken,
+      });
+    }
+    if (url === "https://www.googleapis.com/oauth2/v3/certs") {
+      return Response.json({ keys: [googlePublicKey] });
+    }
     throw new Error(`Unexpected external request: ${url}`);
   });
 });
@@ -89,6 +167,99 @@ afterAll(() => {
 });
 
 describe("browser auth callback", () => {
+  it("creates and resolves a Google browser session through an authorization-code callback", async () => {
+    const initiationResponse = await handleRequest(
+      await signedWebRequest("/api/auth/sign-in/social", {
+        method: "POST",
+        body: JSON.stringify({
+          provider: "google",
+          callbackURL: "/after-sign-in",
+          disableRedirect: true,
+        }),
+      }),
+      env
+    );
+    expect(initiationResponse.status).toBe(200);
+    const providerUrl = new URL((await initiationResponse.json<{ url: string }>()).url);
+    const state = providerUrl.searchParams.get("state");
+    expect(state).toBeTruthy();
+    expect(providerUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    const stateCookie = cookiePair(initiationResponse, "__Secure-openinspect.state");
+
+    const callbackResponse = await handleRequest(
+      await signedWebRequest(
+        `/api/auth/callback/google?code=google-authorization-code&state=${encodeURIComponent(state ?? "")}`,
+        {
+          method: "GET",
+          cookie: stateCookie,
+        }
+      ),
+      env
+    );
+
+    expect(callbackResponse.status).toBe(302);
+    expect(callbackResponse.headers.get("Location")).toBe("/after-sign-in");
+    const sessionCookie = cookiePair(callbackResponse, "__Secure-openinspect.session_token");
+    const sessionResponse = await handleRequest(
+      await signedWebRequest("/api/auth/get-session", {
+        method: "GET",
+        cookie: sessionCookie,
+      }),
+      env
+    );
+    expect(sessionResponse.status).toBe(200);
+    const session = await sessionResponse.json<{
+      user: { id: string; name: string; email: string; image: string };
+      session: { id: string; userId: string };
+    }>();
+    expect(isCanonicalUserId(session.user.id)).toBe(true);
+    expect(session).toMatchObject({
+      user: {
+        name: "Google User",
+        email: "google.user@example.com",
+        image: "https://images.example/google-user",
+      },
+      session: { userId: session.user.id },
+    });
+
+    await expect(
+      env.DB.prepare(
+        `SELECT accountId, providerId, userId
+         FROM auth_accounts
+         WHERE providerId = ?`
+      )
+        .bind("google")
+        .first()
+    ).resolves.toEqual({
+      accountId: GOOGLE_SUBJECT,
+      providerId: "google",
+      userId: session.user.id,
+    });
+    await expect(
+      env.DB.prepare(
+        `SELECT userId
+         FROM auth_sessions
+         WHERE id = ?`
+      )
+        .bind(session.session.id)
+        .first()
+    ).resolves.toEqual({ userId: session.user.id });
+    await expect(
+      env.DB.prepare(
+        `SELECT id, display_name, email, avatar_url
+         FROM users
+         WHERE id = ?`
+      )
+        .bind(session.user.id)
+        .first()
+    ).resolves.toEqual({
+      id: session.user.id,
+      display_name: "Google User",
+      email: "google.user@example.com",
+      avatar_url: "https://images.example/google-user",
+    });
+  });
+
   it("creates and resolves a GitHub browser session through the signed proxy", async () => {
     const initiationBody = JSON.stringify({
       provider: "github",
