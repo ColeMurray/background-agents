@@ -110,6 +110,12 @@ describe("collectForwardedMessages", () => {
     ).toEqual({ entries: [], files: [] });
   });
 
+  it("treats a whitespace-only body as absent so the fallback still shows", () => {
+    expect(collectForwardedMessages([shareAttachment({ text: "   " })]).entries[0]).toContain(
+      "[February 9th, 2026 12:30 PM] ada: The analytics job has been failing since Tuesday"
+    );
+  });
+
   it("skips shares with neither a body nor files", () => {
     expect(
       collectForwardedMessages([shareAttachment({ text: "   ", fallback: undefined })])
@@ -137,7 +143,9 @@ describe("collectForwardedMessages", () => {
 
   it("truncates a single oversized body instead of dropping it", () => {
     const [entry] = collectForwardedMessages([shareAttachment({ text: "x".repeat(5000) })]).entries;
-    expect(entry).toContain("… [truncated]");
-    expect(entry!.length).toBeLessThan(4500);
+    const body = entry!.split("\n").at(-1)!;
+    // The marker counts against the cap rather than pushing the body past it.
+    expect(body.endsWith("… [truncated]")).toBe(true);
+    expect(body).toHaveLength(4000);
   });
 });

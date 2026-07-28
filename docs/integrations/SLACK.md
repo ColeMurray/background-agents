@@ -125,8 +125,9 @@ The whole forwarded message reaches the agent:
 - Its author, source channel, permalink, channel id, and message timestamp. An agent with Slack
   tooling of its own can use those to read the original thread for wider context.
 
-Forward several messages at once and each is quoted separately. Link previews are skipped, since the
-message text already carries the link, and very long forwarded messages are truncated.
+Forward several messages at once and each is quoted separately, up to ten per request. Each shared
+message's text is truncated at 4,000 characters. Link previews are skipped, since the message text
+already carries the link.
 
 ### Repository dropdowns
 

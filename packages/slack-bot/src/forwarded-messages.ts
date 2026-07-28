@@ -27,6 +27,9 @@ const MAX_FORWARDED_MESSAGES = 10;
 /** Longest body kept per shared message, to bound one forward's prompt cost. */
 const MAX_FORWARDED_BODY_LENGTH = 4000;
 
+/** Counted against MAX_FORWARDED_BODY_LENGTH, not appended past it. */
+const TRUNCATION_MARKER = "… [truncated]";
+
 /** Prompt body used when a message forwards content but carries no text. */
 export const FORWARD_ONLY_PROMPT_TEXT = "See the forwarded Slack message(s).";
 
@@ -58,8 +61,9 @@ export function collectForwardedMessages(
     if (!attachment.is_share && !attachment.is_msg_unfurl) continue;
     // `fallback` is Slack's own plain-text rendering ("[date] user: body"); it
     // is the only body left when the shared message put its content somewhere
-    // `text` does not reach, such as a bot post's own attachments.
-    const body = (attachment.text || attachment.fallback || "").trim();
+    // `text` does not reach, such as a bot post's own attachments. A `text` of
+    // pure whitespace counts as absent, or it would shadow that fallback.
+    const body = attachment.text?.trim() || attachment.fallback?.trim() || "";
     const files = attachment.files ?? [];
     if (!body && files.length === 0) continue;
     result.entries.push(formatEntry(attachment, body || NO_TEXT_BODY));
@@ -93,6 +97,6 @@ function formatEntry(attachment: SlackMessageAttachment, body: string): string {
 
 function truncate(body: string): string {
   return body.length > MAX_FORWARDED_BODY_LENGTH
-    ? `${body.slice(0, MAX_FORWARDED_BODY_LENGTH)}… [truncated]`
+    ? `${body.slice(0, MAX_FORWARDED_BODY_LENGTH - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`
     : body;
 }
