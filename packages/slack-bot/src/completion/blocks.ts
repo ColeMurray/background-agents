@@ -155,6 +155,21 @@ interface FenceState {
 }
 
 const CLOSED_FENCE: FenceState = { open: false, info: "" };
+const OPEN_FENCE: FenceState = { open: true, info: "" };
+
+/**
+ * Cap on the retained fence info string. An info string is a language token
+ * (`ts`, `python`, `json`), so this is generous for real input — but it has to be
+ * bounded: `reopenPrefix` re-emits it on every continuation section, so an
+ * unbounded capture let a pathologically long fence-opener line push sections
+ * past the cap by the length of its info string. Only the first whitespace-
+ * delimited token is kept, since anything after it isn't a language.
+ */
+const FENCE_INFO_MAX_CHARS = 32;
+
+function normalizeFenceInfo(raw: string): string {
+  return raw.trim().split(/\s/, 1)[0].slice(0, FENCE_INFO_MAX_CHARS);
+}
 
 /** Fence state after `chunk` is appended to text that ended in `state`. */
 function advanceFence(state: FenceState, chunk: string): FenceState {
@@ -162,7 +177,9 @@ function advanceFence(state: FenceState, chunk: string): FenceState {
   for (const line of chunk.split("\n")) {
     const trimmed = line.trimStart();
     if (!trimmed.startsWith(CODE_FENCE)) continue;
-    next = next.open ? CLOSED_FENCE : { open: true, info: trimmed.slice(CODE_FENCE.length).trim() };
+    next = next.open
+      ? CLOSED_FENCE
+      : { open: true, info: normalizeFenceInfo(trimmed.slice(CODE_FENCE.length)) };
   }
   return next;
 }
@@ -249,7 +266,7 @@ export function splitIntoSlackSections(
       const budget =
         maxChars -
         reopenPrefix(start).length -
-        (reserveClose ? closeSuffix({ open: true, info: "" }).length : 0);
+        (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
       const taken = rest.slice(0, Math.max(1, budget));
       sectionStart = start;
       body = taken;

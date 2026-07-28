@@ -312,3 +312,42 @@ describe("long response handling", () => {
     expect(sectionTexts(blocks)[0]).toBe("_Agent completed._");
   });
 });
+
+describe("fence info bounding", () => {
+  // Regression: `info` was captured unbounded from the fence line, so an
+  // oversized fence-opener (a single ≥3000-char line beginning with ```) was
+  // re-emitted by reopenPrefix on every continuation section and overflowed
+  // Slack's per-section cap. Slack rejects the whole message on overflow rather
+  // than trimming the block, so the cap has to hold for every input shape.
+  it("keeps sections within the cap for an oversized fence-opener line", () => {
+    const monsterInfo = "x".repeat(4000);
+    const sections = splitIntoSlackSections(`\`\`\`${monsterInfo}\n${"c".repeat(5000)}\n\`\`\``);
+    for (const section of sections) {
+      expect(section.length).toBeLessThanOrEqual(3000);
+    }
+  });
+
+  it("keeps only the language token when the fence line carries trailing text", () => {
+    const sections = splitIntoSlackSections(
+      `\`\`\`python title="a very long annotation ${"y".repeat(200)}"\n${"c".repeat(6500)}\n\`\`\``
+    );
+    expect(sections.length).toBeGreaterThan(1);
+    for (const section of sections.slice(1)) {
+      expect(section.startsWith("```python\n")).toBe(true);
+    }
+  });
+
+  // The bot's review caught the original overflow by fuzzing rather than by a
+  // single case, and a single case would have missed it here too.
+  it("never overflows across a sweep of fence-opener and body lengths", () => {
+    for (let infoLen = 0; infoLen <= 4200; infoLen += 350) {
+      for (let bodyLen = 2900; bodyLen <= 6200; bodyLen += 550) {
+        const text = `\`\`\`${"i".repeat(infoLen)}\n${"b".repeat(bodyLen)}\n\`\`\``;
+        for (const section of splitIntoSlackSections(text)) {
+          expect(section.length).toBeLessThanOrEqual(3000);
+          expect((section.match(/```/g) ?? []).length % 2).toBe(0);
+        }
+      }
+    }
+  });
+});
