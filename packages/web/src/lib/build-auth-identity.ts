@@ -1,5 +1,3 @@
-export type AuthProvider = "github" | "google";
-
 export interface AuthDisplayUser {
   readonly name?: string | null;
   readonly email?: string | null;
