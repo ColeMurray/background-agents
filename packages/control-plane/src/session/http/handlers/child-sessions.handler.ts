@@ -1,5 +1,6 @@
 import type { SpawnContext } from "@open-inspect/shared";
-import type { SessionStatus } from "../../../types";
+import { sessionStatusSchema } from "@open-inspect/shared";
+import { z } from "zod";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
@@ -29,6 +30,12 @@ export interface ChildSessionsHandlerDeps {
   ) => Record<string, unknown> | null;
   messenger: SessionMessenger;
 }
+
+const childSessionUpdateBodySchema = z.object({
+  childSessionId: z.string().min(1),
+  status: sessionStatusSchema,
+  title: z.string().nullable().optional(),
+});
 
 export interface ChildSessionsHandler {
   getSpawnContext: () => Response;
@@ -127,15 +134,13 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {
-      const body = (await request.json()) as {
-        childSessionId: string;
-        status: SessionStatus;
-        title: string | null;
-      };
+      const result = childSessionUpdateBodySchema.safeParse(await request.json());
 
-      if (!body.childSessionId || !body.status) {
+      if (!result.success) {
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
       }
+
+      const body = result.data;
 
       deps.messenger.broadcast({
         type: "child_session_update",

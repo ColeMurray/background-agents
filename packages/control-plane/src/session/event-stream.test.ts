@@ -21,13 +21,37 @@ function eventRow(
   data: Record<string, unknown> | string,
   createdAt: number
 ): EventRow {
+  const completeData =
+    typeof data === "string" ? data : completeSandboxEventData(type, data, createdAt);
   return {
     id,
     type,
-    data: typeof data === "string" ? data : JSON.stringify(data),
+    data: typeof completeData === "string" ? completeData : JSON.stringify(completeData),
     message_id: null,
     created_at: createdAt,
   };
+}
+
+function completeSandboxEventData(
+  type: EventRow["type"],
+  data: Record<string, unknown>,
+  timestamp: number
+): Record<string, unknown> {
+  const base = { sandboxId: "sandbox-1", timestamp, ...data };
+  if (
+    [
+      "token",
+      "tool_call",
+      "tool_result",
+      "step_start",
+      "step_finish",
+      "error",
+      "execution_complete",
+    ].includes(type)
+  ) {
+    return { messageId: "message-1", ...base };
+  }
+  return base;
 }
 
 describe("SessionEventStream", () => {
@@ -44,16 +68,26 @@ describe("SessionEventStream", () => {
     it("returns parsed replay events and the oldest cursor from the loaded window", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow("e1", "tool_call", { type: "tool_call", tool: "read_file" }, 1000),
-        eventRow("e2", "tool_result", { type: "tool_result", result: "ok" }, 2000),
+        eventRow(
+          "e1",
+          "tool_call",
+          { type: "tool_call", tool: "read_file", args: {}, callId: "call-1" },
+          1000
+        ),
+        eventRow(
+          "e2",
+          "tool_result",
+          { type: "tool_result", result: "ok", callId: "call-1" },
+          2000
+        ),
       ]);
 
       const replay = stream.getReplay();
 
       expect(replay).toEqual({
         events: [
-          { type: "tool_call", tool: "read_file" },
-          { type: "tool_result", result: "ok" },
+          expect.objectContaining({ type: "tool_call", tool: "read_file" }),
+          expect.objectContaining({ type: "tool_result", result: "ok" }),
         ],
         hasMore: false,
         cursor: { timestamp: 1000, id: "e1" },
@@ -76,13 +110,32 @@ describe("SessionEventStream", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
         eventRow("bad", "tool_call", "{bad", 1000),
-        eventRow("good", "tool_result", { type: "tool_result", result: "ok" }, 2000),
+        eventRow(
+          "good",
+          "tool_result",
+          { type: "tool_result", result: "ok", callId: "call-1" },
+          2000
+        ),
       ]);
 
       const replay = stream.getReplay();
 
-      expect(replay.events).toEqual([{ type: "tool_result", result: "ok" }]);
+      expect(replay.events).toEqual([
+        expect.objectContaining({ type: "tool_result", result: "ok" }),
+      ]);
       expect(replay.cursor).toEqual({ timestamp: 1000, id: "bad" });
+    });
+
+    it("skips schema-invalid replay events", () => {
+      const { stream, repository } = createStream();
+      vi.mocked(repository.getEventsForReplay).mockReturnValue([
+        eventRow("bad", "tool_result", { type: "tool_result", result: "missing call id" }, 1000),
+        eventRow("good", "token", { type: "token", content: "ok" }, 2000),
+      ]);
+
+      const replay = stream.getReplay();
+
+      expect(replay.events).toEqual([expect.objectContaining({ type: "token", content: "ok" })]);
     });
   });
 
@@ -90,7 +143,14 @@ describe("SessionEventStream", () => {
     it("loads history after a client cursor while excluding heartbeats", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
-        events: [eventRow("e1", "tool_call", { type: "tool_call", tool: "write_file" }, 1000)],
+        events: [
+          eventRow(
+            "e1",
+            "tool_call",
+            { type: "tool_call", tool: "write_file", args: {}, callId: "call-1" },
+            1000
+          ),
+        ],
         hasMore: false,
         nextCursor: { kind: "timeline", createdAt: 1000, id: "e1" },
       });
@@ -106,7 +166,7 @@ describe("SessionEventStream", () => {
         limit: 100,
       });
       expect(page).toEqual({
-        items: [{ type: "tool_call", tool: "write_file" }],
+        items: [expect.objectContaining({ type: "tool_call", tool: "write_file" })],
         hasMore: false,
         cursor: { timestamp: 1000, id: "e1" },
       });
@@ -146,7 +206,12 @@ describe("SessionEventStream", () => {
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
         events: [
           eventRow("bad", "tool_call", "{bad", 1000),
-          eventRow("good", "tool_result", { type: "tool_result", result: "ok" }, 2000),
+          eventRow(
+            "good",
+            "tool_result",
+            { type: "tool_result", result: "ok", callId: "call-1" },
+            2000
+          ),
         ],
         hasMore: true,
         nextCursor: { kind: "timeline", createdAt: 1000, id: "bad" },
@@ -158,7 +223,7 @@ describe("SessionEventStream", () => {
       });
 
       expect(page).toEqual({
-        items: [{ type: "tool_result", result: "ok" }],
+        items: [expect.objectContaining({ type: "tool_result", result: "ok" })],
         hasMore: true,
         cursor: { timestamp: 1000, id: "bad" },
       });
@@ -192,7 +257,13 @@ describe("SessionEventStream", () => {
           {
             id: "e1",
             type: "token",
-            data: { type: "token", content: "hello" },
+            data: {
+              type: "token",
+              content: "hello",
+              messageId: "message-1",
+              sandboxId: "sandbox-1",
+              timestamp: 1000,
+            },
             messageId: null,
             createdAt: 1000,
           },
