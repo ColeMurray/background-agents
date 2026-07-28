@@ -6,8 +6,9 @@ import {
   parseAdmissionAllowlist,
   parseAdmissionBoolean,
   type AdmissionPolicyConfig,
+  type GitHubAdmissionEvidence,
+  type GoogleAdmissionEvidence,
 } from "./admission-policy";
-import type { ProviderSignInResult } from "./providers/types";
 
 const BASE_CONFIG: AdmissionPolicyConfig = {
   allowedGitHubUsers: [],
@@ -17,7 +18,7 @@ const BASE_CONFIG: AdmissionPolicyConfig = {
   unsafeAllowAllUsers: false,
 };
 
-const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
+const GOOGLE_SIGN_IN: GoogleAdmissionEvidence = {
   identity: {
     provider: "google",
     issuer: "https://accounts.google.com",
@@ -27,7 +28,7 @@ const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
   },
 };
 
-const GITHUB_SIGN_IN: ProviderSignInResult<"github"> = {
+const GITHUB_SIGN_IN: GitHubAdmissionEvidence = {
   identity: {
     provider: "github",
     issuer: "https://github.com",

@@ -1,9 +1,9 @@
-import type { AdmissionPolicy } from "../admission-policy";
+import type { AdmissionPolicy, GitHubAdmissionEvidence } from "../admission-policy";
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
-import { OAuthProviderError, type GitHubIdentity, type ProviderSignInResult } from "./types";
+import { OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
 export interface GitHubIdentityResolver {
-  resolveIdentity(accessToken: string): Promise<GitHubIdentity>;
+  resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">>;
 }
 
 export interface GitHubSignInProfileResolverConfig {
@@ -25,7 +25,7 @@ export class GitHubSignInProfileResolver {
       throw new OAuthProviderError("malformed_response", "GitHub did not return a verified email");
     }
 
-    const signIn: ProviderSignInResult<"github"> = {
+    const signIn: GitHubAdmissionEvidence = {
       identity,
       accessToken: tokens.accessToken,
     };

@@ -11,21 +11,6 @@ export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvi
   readonly primaryEmail: string | null;
 }
 
-export type GitHubIdentity = VerifiedProviderIdentity<"github">;
-export type GoogleIdentity = VerifiedProviderIdentity<"google">;
-
-interface ProviderSignInResultByProvider {
-  readonly github: {
-    readonly identity: GitHubIdentity;
-    readonly accessToken: string;
-  };
-  readonly google: {
-    readonly identity: GoogleIdentity;
-  };
-}
-
-export type ProviderSignInResult<P extends SignInProvider> = ProviderSignInResultByProvider[P];
-
 export type OAuthProviderFailure =
   | "invalid_configuration"
   | "invalid_request"
