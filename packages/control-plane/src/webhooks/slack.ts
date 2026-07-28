@@ -14,6 +14,7 @@ import { createAutomationEventRoute } from "./automation-event";
 export const slackAutomationEventRoute = createAutomationEventRoute({
   path: "/internal/slack-event",
   source: "slack",
+  allowedServices: ["slack-bot"],
   validate: (event) =>
     !event.channelId || !event.ts ? "Invalid event: channelId and ts are required" : null,
 });

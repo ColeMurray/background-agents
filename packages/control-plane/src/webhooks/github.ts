@@ -145,5 +145,6 @@ async function handleGitHubAutomationEvent(
 export const githubAutomationEventRoute: Route = {
   method: "POST",
   pattern: parsePattern("/internal/github-event"),
+  allowedServices: ["github-bot"],
   handler: handleGitHubAutomationEvent,
 };

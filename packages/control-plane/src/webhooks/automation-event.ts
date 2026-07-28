@@ -9,7 +9,7 @@
  * named handler.
  */
 
-import type { AutomationEventSource } from "@open-inspect/shared";
+import type { AutomationEventSource, ServiceName } from "@open-inspect/shared";
 import { requireEventPoster } from "../auth/identity-enforcement";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
@@ -81,6 +81,7 @@ export async function forwardAutomationEventToScheduler(
 export function createAutomationEventRoute(opts: {
   path: string;
   source: AutomationEventSource;
+  allowedServices: readonly ServiceName[];
   /** Validate source-specific required fields. Returns an error message, or null when valid. */
   validate: (event: Record<string, unknown>) => string | null;
 }): Route {
@@ -106,5 +107,10 @@ export function createAutomationEventRoute(opts: {
     return forwardAutomationEventToScheduler(env, validated.event);
   }
 
-  return { method: "POST", pattern: parsePattern(opts.path), handler };
+  return {
+    method: "POST",
+    pattern: parsePattern(opts.path),
+    allowedServices: opts.allowedServices,
+    handler,
+  };
 }

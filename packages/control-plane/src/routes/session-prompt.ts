@@ -162,6 +162,7 @@ export const sessionPromptRoutes: Route[] = [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/prompt"),
+    allowedServices: ["slack-bot", "github-bot", "linear-bot"],
     handler: handleSessionPrompt,
   }),
 ];

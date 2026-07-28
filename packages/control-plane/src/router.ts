@@ -302,6 +302,12 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
   });
 }
 
+function authorizeService(route: Route, principal: Principal | undefined): Response | null {
+  if (principal?.kind !== "service") return null;
+  if (route.allowedServices?.includes(principal.service)) return null;
+  return error("Forbidden", 403);
+}
+
 /**
  * Routes definition.
  */
@@ -469,6 +475,19 @@ export async function handleRequest(
 
     if (ctx.principal) {
       logPrincipal(ctx.principal, ctx, path);
+    }
+
+    const authorizationError = authorizeService(matchedRoute.route, ctx.principal);
+    if (authorizationError) {
+      logger.warn("Service route access denied", {
+        event: "auth.service_forbidden",
+        service: ctx.principal?.kind === "service" ? ctx.principal.service : undefined,
+        http_method: method,
+        http_path: path,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return withCorsAndTraceHeaders(authorizationError, ctx);
     }
   }
 

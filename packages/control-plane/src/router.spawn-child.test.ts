@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import { TEST_SERVICE_SECRETS } from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
@@ -87,10 +87,13 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   async function makeRequest(env: Record<string, unknown>): Promise<Response> {
     return handleRequest(
-      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
+      new Request(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
         body: JSON.stringify({ title: "Child task", prompt: "Do the thing" }),
-        service: "modal",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/json",
+        },
       }),
       env as never
     );
@@ -216,14 +219,17 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     };
 
     const response = await handleRequest(
-      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
+      new Request(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        service: "modal",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
           model: "not-a-real-model",
         }),
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/json",
+        },
       }),
       env as never
     );
@@ -273,15 +279,18 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       DB: {},
       SESSION: {
         idFromName: (name: string) => name,
-        get: vi.fn(),
+        get: () => ({ fetch: vi.fn(async () => new Response(null, { status: 204 })) }),
       },
     };
 
     const response = await handleRequest(
-      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
+      new Request(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        service: "modal",
         body: JSON.stringify({ title: "Child task" }),
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/json",
+        },
       }),
       env as never
     );
@@ -415,14 +424,17 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     };
 
     const response = await handleRequest(
-      await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
+      new Request(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        service: "modal",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
           model: "",
         }),
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/json",
+        },
       }),
       env as never
     );
@@ -439,8 +451,10 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     });
 
     const parentStub: DurableObjectStub = {
-      fetch: vi.fn(async () =>
-        Response.json({ error: "Child sessions require a repository context" }, { status: 400 })
+      fetch: vi.fn(async (request: Request) =>
+        new URL(request.url).pathname === SessionInternalPaths.verifySandboxToken
+          ? new Response(null, { status: 204 })
+          : Response.json({ error: "Child sessions require a repository context" }, { status: 400 })
       ),
     } as never;
 

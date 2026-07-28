@@ -101,7 +101,7 @@ describe("browser auth router", () => {
 
     const response = await handleRequest(request, env);
 
-    expect(response.status).toBe(401);
+    expect(response.status).toBe(403);
   });
 
   it("does not expose Better Auth endpoints outside the positive allowlist", async () => {

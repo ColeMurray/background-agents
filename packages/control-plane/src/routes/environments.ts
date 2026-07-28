@@ -258,9 +258,19 @@ async function handleDeleteEnvironment(
 }
 
 export const environmentRoutes: Route[] = [
-  { method: "GET", pattern: parsePattern("/environments"), handler: handleListEnvironments },
+  {
+    method: "GET",
+    pattern: parsePattern("/environments"),
+    allowedServices: ["slack-bot", "linear-bot"],
+    handler: handleListEnvironments,
+  },
   { method: "POST", pattern: parsePattern("/environments"), handler: handleCreateEnvironment },
-  { method: "GET", pattern: parsePattern("/environments/:id"), handler: handleGetEnvironment },
+  {
+    method: "GET",
+    pattern: parsePattern("/environments/:id"),
+    allowedServices: ["github-bot"],
+    handler: handleGetEnvironment,
+  },
   { method: "PUT", pattern: parsePattern("/environments/:id"), handler: handleUpdateEnvironment },
   {
     method: "DELETE",

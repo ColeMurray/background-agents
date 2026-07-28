@@ -671,11 +671,13 @@ export const imageBuildRoutes: Route[] = [
   {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/environment/:id"),
+    allowedServices: ["modal"],
     handler: handleTriggerEnvironmentBuild,
   },
   {
     method: "POST",
     pattern: parsePattern("/image-builds/trigger/repo/:owner/:name"),
+    allowedServices: ["modal"],
     handler: handleTriggerRepoBuild,
   },
   {
@@ -686,11 +688,13 @@ export const imageBuildRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/image-builds/status"),
+    allowedServices: ["modal"],
     handler: handleGetStatus,
   },
   {
     method: "GET",
     pattern: parsePattern("/image-builds/enabled"),
+    allowedServices: ["modal"],
     handler: handleGetEnabledUnits,
   },
   {
@@ -701,11 +705,13 @@ export const imageBuildRoutes: Route[] = [
   {
     method: "POST",
     pattern: parsePattern("/image-builds/mark-stale"),
+    allowedServices: ["modal"],
     handler: handleMarkStale,
   },
   {
     method: "POST",
     pattern: parsePattern("/image-builds/cleanup"),
+    allowedServices: ["modal"],
     handler: handleCleanup,
   },
 ];

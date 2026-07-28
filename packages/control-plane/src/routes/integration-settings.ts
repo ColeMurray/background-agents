@@ -472,6 +472,26 @@ async function handleGetResolvedConfig(
 }
 
 export const integrationSettingsRoutes: Route[] = [
+  // Exact bot-facing routes precede the generic user routes so a bot cannot
+  // substitute another integration id in an otherwise allowed URL.
+  {
+    method: "GET",
+    pattern: /^\/integration-settings\/(?<id>slack)$/,
+    allowedServices: ["slack-bot"],
+    handler: handleGetIntegrationSettings,
+  },
+  {
+    method: "GET",
+    pattern: /^\/integration-settings\/(?<id>github)\/resolved\/(?<owner>[^/]+)\/(?<name>[^/]+)$/,
+    allowedServices: ["github-bot"],
+    handler: handleGetResolvedConfig,
+  },
+  {
+    method: "GET",
+    pattern: /^\/integration-settings\/(?<id>linear)\/resolved\/(?<owner>[^/]+)\/(?<name>[^/]+)$/,
+    allowedServices: ["linear-bot"],
+    handler: handleGetResolvedConfig,
+  },
   // Integration settings — global
   {
     method: "GET",

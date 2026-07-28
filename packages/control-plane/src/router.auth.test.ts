@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
+import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -14,6 +15,7 @@ function createEnv(verifyStatus: number) {
   };
 
   const env = {
+    ...TEST_SERVICE_SECRETS,
     SCM_PROVIDER: "gitlab",
     GITLAB_ACCESS_TOKEN: "glpat-test",
     DB: {
@@ -75,6 +77,75 @@ describe("router sandbox-token fallback", () => {
 
     expect(response.status).toBe(401);
     expect(doFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("router service authorization", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("allows an explicitly authorized service route", async () => {
+    const { env, doFetch } = createEnv(202);
+    env.SCM_PROVIDER = "github";
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/sessions/session-1/stop", {
+        method: "POST",
+        service: "linear-bot",
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(202);
+    expect(doFetch).toHaveBeenCalledOnce();
+  });
+
+  it("denies an authenticated service that is not authorized for the route", async () => {
+    const { env, doFetch } = createEnv(202);
+    env.SCM_PROVIDER = "github";
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/sessions/session-1/stop", {
+        method: "POST",
+        service: "modal",
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Forbidden" });
+    expect(doFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not let a bot substitute another integration id", async () => {
+    const { env } = createEnv(202);
+    env.SCM_PROVIDER = "github";
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/integration-settings/github", {
+        service: "slack-bot",
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(403);
+  });
+
+  it("does not let one bot post another bot's internal event", async () => {
+    const { env } = createEnv(202);
+    env.SCM_PROVIDER = "github";
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/internal/github-event", {
+        method: "POST",
+        body: "{}",
+        service: "slack-bot",
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(403);
   });
 });
 

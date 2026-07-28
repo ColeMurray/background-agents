@@ -224,6 +224,7 @@ export const sessionAttachmentRoutes: Route[] = [
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/attachments"),
+    allowedServices: ["slack-bot"],
     handler: handleAttachmentPost,
   }),
   sessionRoute({

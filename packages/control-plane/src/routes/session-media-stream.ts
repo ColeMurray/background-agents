@@ -140,6 +140,7 @@ export const sessionMediaStreamRoutes: Route[] = [
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/media/:artifactId"),
+    allowedServices: ["slack-bot"],
     handler: handleMediaGet,
   }),
 ];

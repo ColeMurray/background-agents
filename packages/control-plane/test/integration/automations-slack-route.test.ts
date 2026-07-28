@@ -48,13 +48,9 @@ function createBody(overrides: Record<string, unknown>) {
 }
 
 async function postAutomation(body: Record<string, unknown>): Promise<Response> {
-  // automation-create requires a participant identity: sign as a bot with an
-  // asserted actor (the userless web service credential is rejected, 403).
   return serviceFetch("https://test.local/automations", {
     method: "POST",
     body: JSON.stringify(body),
-    service: "slack-bot",
-    actor: "slack:U0123",
   });
 }
 

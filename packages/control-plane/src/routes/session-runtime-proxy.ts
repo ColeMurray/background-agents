@@ -1,4 +1,5 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import type { ServiceName } from "@open-inspect/shared";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
 import type { Env } from "../types";
 import { error, parseJsonBody, parsePattern, type Route } from "./shared";
@@ -11,6 +12,7 @@ type SimpleProxyRouteConfig = {
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
+  allowedServices?: readonly ServiceName[];
 };
 
 function getSessionId(match: RegExpMatchArray): string | Response {
@@ -26,6 +28,7 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
   return sessionRoute({
     method: config.method,
     pattern: parsePattern(config.routePath),
+    allowedServices: config.allowedServices,
     handler: async (request, _env, match, ctx) => {
       const sessionId = getSessionId(match);
       if (sessionId instanceof Response) return sessionId;
@@ -179,17 +182,20 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     routePath: "/sessions/:id/stop",
     internalPath: SessionInternalPaths.stop,
     runtimeMethod: "POST",
+    allowedServices: ["linear-bot"],
   }),
   simpleProxyRoute({
     method: "GET",
     routePath: "/sessions/:id/events",
     internalPath: SessionInternalPaths.events,
     forwardSearch: true,
+    allowedServices: ["slack-bot", "linear-bot"],
   }),
   simpleProxyRoute({
     method: "GET",
     routePath: "/sessions/:id/artifacts",
     internalPath: SessionInternalPaths.artifacts,
+    allowedServices: ["slack-bot", "linear-bot"],
   }),
   simpleProxyRoute({
     method: "GET",

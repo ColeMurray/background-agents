@@ -87,5 +87,6 @@ const handleBrowserAuth: Route["handler"] = async (request, _env, _match, ctx) =
 export const browserAuthRoutes: Route[] = BROWSER_AUTH_PROXY_ROUTES.map(([method, path]) => ({
   method,
   pattern: parsePattern(path),
+  allowedServices: ["web"],
   handler: requireWebService(handleBrowserAuth),
 }));

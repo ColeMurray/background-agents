@@ -1,6 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+
+vi.mock("./auth/authenticate", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    authenticate: vi.fn(async (request: Request) => ({
+      principal: { kind: "user", userId: "user-1" },
+      request,
+    })),
+  };
+});
 
 const mockStore = {
   getSummary: vi.fn(),
@@ -41,7 +51,6 @@ describe("analytics router integration", () => {
     });
 
     const env = {
-      ...TEST_SERVICE_SECRETS,
       SCM_PROVIDER: "gitlab",
       DB: {
         prepare: vi.fn(),
@@ -52,9 +61,7 @@ describe("analytics router integration", () => {
     };
 
     const response = await handleRequest(
-      await signedServiceRequest("https://test.local/analytics/summary", {
-        service: "modal",
-      }),
+      new Request("https://test.local/analytics/summary"),
       env as never
     );
 

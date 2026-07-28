@@ -235,6 +235,7 @@ export const sessionCreateRoutes: Route[] = [
   {
     method: "POST",
     pattern: parsePattern("/sessions"),
+    allowedServices: ["slack-bot", "github-bot", "linear-bot"],
     handler: handleCreateSession,
   },
 ];

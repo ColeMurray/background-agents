@@ -2,7 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
-import { decodeRepositoryPathSegments } from "@open-inspect/shared";
+import { decodeRepositoryPathSegments, type ServiceName } from "@open-inspect/shared";
 import type { CorrelationContext } from "../logger";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { RequestMetrics } from "../db/instrumented-d1";
@@ -48,6 +48,8 @@ export type RequestContext = CorrelationContext & {
 export interface Route {
   method: string;
   pattern: RegExp;
+  /** First-party services allowed to call this route. Omitted means service access is denied. */
+  allowedServices?: readonly ServiceName[];
   handler: (
     request: Request,
     env: Env,

@@ -107,6 +107,7 @@ export const modelPreferencesRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/model-preferences"),
+    allowedServices: ["slack-bot"],
     handler: handleGetModelPreferences,
   },
   {

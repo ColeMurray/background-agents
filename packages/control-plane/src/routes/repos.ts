@@ -334,6 +334,7 @@ export const reposRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/repos"),
+    allowedServices: ["slack-bot", "linear-bot"],
     handler: handleListRepos,
   },
   {
@@ -344,6 +345,7 @@ export const reposRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/repos/:owner/:name/metadata"),
+    allowedServices: ["github-bot"],
     handler: handleGetRepoMetadata,
   },
   {

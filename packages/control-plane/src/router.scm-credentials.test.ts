@@ -42,16 +42,16 @@ describe("SCM credentials router provider gate", () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
-      await signedServiceRequest("https://test.local/sessions/session-1/scm-credentials", {
+      new Request("https://test.local/sessions/session-1/scm-credentials", {
         method: "POST",
-        service: "modal",
+        headers: { Authorization: "Bearer sandbox-token" },
       }),
       env as never
     );
 
     expect(response.status).toBe(202);
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0][0];
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const request = fetch.mock.calls[1][0];
     expect(new URL(request.url).pathname).toBe("/internal/scm-credentials");
   });
 
@@ -59,15 +59,15 @@ describe("SCM credentials router provider gate", () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
-      await signedServiceRequest("https://test.local/sessions/session-1/tunnel-urls", {
-        service: "modal",
+      new Request("https://test.local/sessions/session-1/tunnel-urls", {
+        headers: { Authorization: "Bearer sandbox-token" },
       }),
       env as never
     );
 
     expect(response.status).toBe(202);
-    expect(fetch).toHaveBeenCalledOnce();
-    const request = fetch.mock.calls[0][0];
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const request = fetch.mock.calls[1][0];
     expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
   });
 
@@ -99,7 +99,7 @@ describe("SCM credentials router provider gate", () => {
     expect(response.status).toBe(401);
   });
 
-  it("continues blocking unrelated GitLab session routes", async () => {
+  it("denies service access before the provider gate", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
@@ -110,10 +110,8 @@ describe("SCM credentials router provider gate", () => {
       env as never
     );
 
-    expect(response.status).toBe(501);
-    await expect(response.json()).resolves.toEqual({
-      error: "SCM provider 'gitlab' is not implemented in this deployment.",
-    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "Forbidden" });
     expect(fetch).not.toHaveBeenCalled();
   });
 });

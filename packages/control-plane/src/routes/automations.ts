@@ -1150,6 +1150,7 @@ export const automationRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/slack/watched-channels"),
+    allowedServices: ["slack-bot"],
     handler: handleGetWatchedSlackChannels,
   },
   {
