@@ -1,5 +1,4 @@
 import type { SignInProvider } from "../sign-in-provider";
-import type { ProviderCredentialInput } from "../provider-credential";
 
 export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvider> {
   readonly provider: P;
@@ -12,14 +11,16 @@ export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvi
   readonly primaryEmail: string | null;
 }
 
+export type GitHubIdentity = VerifiedProviderIdentity<"github">;
+export type GoogleIdentity = VerifiedProviderIdentity<"google">;
+
 interface ProviderSignInResultByProvider {
   readonly github: {
-    readonly identity: VerifiedProviderIdentity<"github">;
-    readonly credential: ProviderCredentialInput;
+    readonly identity: GitHubIdentity;
+    readonly accessToken: string;
   };
   readonly google: {
-    readonly identity: VerifiedProviderIdentity<"google">;
-    readonly credential: null;
+    readonly identity: GoogleIdentity;
   };
 }
 

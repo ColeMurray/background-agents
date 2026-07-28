@@ -120,7 +120,7 @@ export class AdmissionPolicy {
   private async requireGitHubOrganization(
     signIn: ProviderSignInResult<"github">
   ): Promise<AdmissionDecision> {
-    const accessToken = signIn.credential.accessToken;
+    const accessToken = signIn.accessToken;
     let unavailable = false;
 
     for (const organization of this.config.allowedGitHubOrganizations) {

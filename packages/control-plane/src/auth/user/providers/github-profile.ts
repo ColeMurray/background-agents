@@ -1,14 +1,9 @@
 import type { AdmissionPolicy } from "../admission-policy";
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
-import type { ProviderCredentialInput } from "../provider-credential";
-import {
-  OAuthProviderError,
-  type ProviderSignInResult,
-  type VerifiedProviderIdentity,
-} from "./types";
+import { OAuthProviderError, type GitHubIdentity, type ProviderSignInResult } from "./types";
 
 export interface GitHubIdentityResolver {
-  resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">>;
+  resolveIdentity(accessToken: string): Promise<GitHubIdentity>;
 }
 
 export interface GitHubSignInProfileResolverConfig {
@@ -32,7 +27,7 @@ export class GitHubSignInProfileResolver {
 
     const signIn: ProviderSignInResult<"github"> = {
       identity,
-      credential: toProviderCredential(tokens),
+      accessToken: tokens.accessToken,
     };
     await this.config.admissionPolicy.requireAdmission(signIn);
 
@@ -46,44 +41,5 @@ export class GitHubSignInProfileResolver {
       },
       data: identity,
     };
-  };
-}
-
-function toProviderCredential(tokens: ProviderTokens): ProviderCredentialInput {
-  const accessToken = tokens.accessToken;
-  if (!accessToken) {
-    throw new OAuthProviderError("malformed_response", "GitHub did not return an access token");
-  }
-  if (tokens.refreshToken && !tokens.accessTokenExpiresAt) {
-    throw new OAuthProviderError(
-      "malformed_response",
-      "GitHub returned a refresh token without access expiry"
-    );
-  }
-  if (tokens.refreshTokenExpiresAt && !tokens.refreshToken) {
-    throw new OAuthProviderError(
-      "malformed_response",
-      "GitHub returned refresh expiry without a refresh token"
-    );
-  }
-  if (tokens.refreshToken && tokens.accessTokenExpiresAt) {
-    return {
-      kind: "refreshable",
-      accessToken,
-      accessExpiresAt: tokens.accessTokenExpiresAt.getTime(),
-      refreshToken: tokens.refreshToken,
-      refreshExpiresAt: tokens.refreshTokenExpiresAt?.getTime() ?? null,
-    };
-  }
-  if (tokens.accessTokenExpiresAt) {
-    return {
-      kind: "access_only_expiring",
-      accessToken,
-      accessExpiresAt: tokens.accessTokenExpiresAt.getTime(),
-    };
-  }
-  return {
-    kind: "access_only_nonexpiring",
-    accessToken,
   };
 }

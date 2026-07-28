@@ -25,7 +25,6 @@ const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
     verifiedEmails: ["first@example.net", "allowed@corp.example"],
     primaryEmail: "first@example.net",
   },
-  credential: null,
 };
 
 const GITHUB_SIGN_IN: ProviderSignInResult<"github"> = {
@@ -37,10 +36,7 @@ const GITHUB_SIGN_IN: ProviderSignInResult<"github"> = {
     verifiedEmails: [],
     primaryEmail: null,
   },
-  credential: {
-    kind: "access_only_nonexpiring",
-    accessToken: "ghu_token",
-  },
+  accessToken: "ghu_token",
 };
 
 describe("AdmissionPolicy", () => {
@@ -59,7 +55,7 @@ describe("AdmissionPolicy", () => {
     });
   });
 
-  it("admits an active GitHub organization member with the current flow credential", async () => {
+  it("admits an active GitHub organization member with the current access token", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ state: "active" }));
     const policy = new AdmissionPolicy(
       {

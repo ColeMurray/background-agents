@@ -61,7 +61,6 @@ export class GoogleSignInProfileResolver {
         verifiedEmails: [email],
         primaryEmail: email,
       },
-      credential: null,
     };
     await this.config.admissionPolicy.requireAdmission(signIn);
 
