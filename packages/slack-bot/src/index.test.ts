@@ -1313,6 +1313,7 @@ describe("POST /events", () => {
         ],
       },
       true,
+      2,
       "didn't start on this request",
     ],
     [
@@ -1341,6 +1342,7 @@ describe("POST /events", () => {
         ],
       },
       true,
+      2,
       "didn't start on this request",
     ],
     [
@@ -1366,11 +1368,39 @@ describe("POST /events", () => {
         ],
       },
       false,
+      0,
       "Please include a message with your request",
     ],
-  ] satisfies Array<[string, Record<string, unknown>, boolean, string]>)(
+    [
+      "an app mention contains a body-less forward with only unsupported files",
+      {
+        type: "app_mention",
+        text: "<@B123>",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "incident.pdf",
+                mimetype: "application/pdf",
+                url_private: "https://files.slack.com/files-pri/T1-F1/incident.pdf",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      false,
+      0,
+      "Please include a message with your request",
+    ],
+  ] satisfies Array<[string, Record<string, unknown>, boolean, number, string]>)(
     "starts nothing when %s",
-    async (_caseName, eventFields, downloadsImage, expectedMessage) => {
+    async (_caseName, eventFields, downloadsImage, expectedStartingStatuses, expectedMessage) => {
       const order: string[] = [];
       const slackFetch = mockSlackFetch(order, { fileDownloadStatus: 403 });
       const env = makeSessionEnv(order);
@@ -1396,6 +1426,7 @@ describe("POST /events", () => {
       // no session is created and the user is told nothing ran.
       if (downloadsImage) expect(order).toContain("filedownload");
       else expect(order).not.toContain("filedownload");
+      expect(startingStatusBodies(slackFetch)).toHaveLength(expectedStartingStatuses);
       expect(order).not.toContain("session");
       expect(order).not.toContain("prompt");
       expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
