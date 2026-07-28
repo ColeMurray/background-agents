@@ -42,7 +42,7 @@ interface InitRequest {
   model?: string;
   reasoningEffort?: string;
   userId: string;
-  authName?: string;
+  authName?: string | null;
   scmLogin?: string;
   scmName?: string;
   scmEmail?: string;

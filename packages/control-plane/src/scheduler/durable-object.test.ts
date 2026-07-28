@@ -415,6 +415,8 @@ function lastInsertedChildren(): Array<Record<string, unknown>> {
 describe("SchedulerDO", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUserStoreGetIdentity.mockResolvedValue(null);
+    mockUserStoreGetUserById.mockResolvedValue(null);
     capturedInvocationParams = [];
     mockStore = createMockStore();
     mockGetSlackAutomationsForChannel.mockResolvedValue([]);
@@ -488,6 +490,12 @@ describe("SchedulerDO", () => {
 
     it("fans out one child per selected repository", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
+      mockUserStoreGetIdentity.mockResolvedValue({ userId: "canonical-user-1" });
+      mockUserStoreGetUserById.mockResolvedValue({
+        id: "canonical-user-1",
+        displayName: "Automation Owner",
+        email: "owner@example.com",
+      });
       selectRepositories("auto-1", [
         repositoryRow("auto-1", { repo_name: "web-app" }),
         repositoryRow("auto-1", { repo_name: "api", base_branch: null }),
@@ -527,6 +535,8 @@ describe("SchedulerDO", () => {
       expect(children[0].invocation_id).toBe(children[1].invocation_id);
       // Both launched.
       expect(mockStore.updateRun).toHaveBeenCalledTimes(2);
+      expect(mockUserStoreGetIdentity).toHaveBeenCalledOnce();
+      expect(mockUserStoreGetUserById).toHaveBeenCalledOnce();
     });
 
     it("starts later child launches before earlier child sessions finish initializing", async () => {

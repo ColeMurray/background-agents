@@ -280,8 +280,6 @@ function logPrincipal(principal: Principal, ctx: RequestContext, path: string): 
   const fields: Record<string, string | undefined> = { principal_kind: principal.kind };
   switch (principal.kind) {
     case "service":
-      // Kept as a log key for dashboard continuity; per-service is the only
-      // service scheme since the shared bearer's retirement.
       fields.auth_scheme = "per-service";
       fields.service = principal.service;
       fields.actor = principal.actor?.participantUserId;

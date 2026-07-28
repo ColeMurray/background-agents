@@ -2,9 +2,7 @@
  * App-owned browser-to-BFF request boundary.
  *
  * The path type keeps application calls on the BFF API surface, while the
- * browser's native request mode prevents cross-origin dispatch. Terminal
- * browser authentication can add its request contract here without another
- * repository-wide consumer migration.
+ * browser's native request mode prevents cross-origin dispatch.
  */
 export type BrowserApiPath = `/api/${string}`;
 

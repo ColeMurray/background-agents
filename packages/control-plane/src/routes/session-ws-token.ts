@@ -1,9 +1,12 @@
-import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import { applyIdentityEnforcement, getCanonicalUserSummary } from "../auth/identity-enforcement";
 import { UserStore } from "../db/user-store";
+import { z } from "zod";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import { error, parseJsonBody, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+
+const wsTokenBodySchema = z.strictObject({});
 
 async function handleSessionWsToken(
   request: Request,
@@ -14,17 +17,18 @@ async function handleSessionWsToken(
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
-  const body = await parseJsonBody<Record<string, unknown>>(request);
+  const body = await parseJsonBody<unknown>(request);
   if (body instanceof Response) return body;
+  const parsedBody = wsTokenBodySchema.safeParse(body);
+  if (!parsedBody.success) return error("Invalid request body", 400);
 
-  // The participant identity comes from the verified principal; body SCM
-  // credentials are rejected (tokens arrive via the exchange; enrichment
-  // reads the store server-side).
-  const enforcement = applyIdentityEnforcement(ctx, "ws-token", body);
+  const enforcement = applyIdentityEnforcement(ctx, "ws-token", parsedBody.data);
   if (enforcement.rejection) return enforcement.rejection;
   const userId = enforcement.enforced.participantUserId;
   const canonicalUserId = enforcement.enforced.canonicalUserId;
-  const user = canonicalUserId ? await new UserStore(ctx.db).getUserById(canonicalUserId) : null;
+  const user = canonicalUserId
+    ? await getCanonicalUserSummary(new UserStore(ctx.db), canonicalUserId)
+    : null;
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -32,7 +36,7 @@ async function handleSessionWsToken(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
-        authName: user?.displayName ?? user?.email,
+        authName: user?.authName,
       }),
     })
   );

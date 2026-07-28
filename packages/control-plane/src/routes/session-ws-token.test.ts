@@ -97,6 +97,26 @@ describe("session websocket token route", () => {
     );
 
     expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid request body" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects arbitrary caller fields", async () => {
+    const fetch = vi.fn(async () => Response.json({ token: "token-1" }));
+    const { handler, match } = getHandler();
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/ws-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ futureProfileField: "value" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

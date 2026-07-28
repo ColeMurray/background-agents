@@ -28,8 +28,6 @@ export type AuthSessionState =
       status: "loading" | "unauthenticated";
     };
 
-export type AuthSessionStatus = AuthSessionState["status"];
-
 export async function signIn(provider: SignInProvider): Promise<void> {
   const response = await browserApiFetch("/api/auth/sign-in/social", {
     method: "POST",

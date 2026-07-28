@@ -5,7 +5,7 @@ import {
   deriveIdentity,
   mayAttachCallbackContext,
   requireEventPoster,
-  resolveCanonicalUserId,
+  resolveCanonicalUser,
 } from "./identity-enforcement";
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
@@ -209,12 +209,19 @@ describe("applyIdentityEnforcement — requires-user rejection", () => {
   });
 });
 
-describe("resolveCanonicalUserId", () => {
+describe("resolveCanonicalUser", () => {
   const display = { displayName: "Dana", email: "d@example.com" };
 
   it("returns the canonical id directly when the principal already resolved", async () => {
-    const userStore = { resolveOrCreateUser: vi.fn() } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
+    const userStore = {
+      getUserById: vi.fn().mockResolvedValue({
+        id: "canon-1",
+        displayName: "Canonical User",
+        email: "canonical@example.com",
+      }),
+      resolveOrCreateUser: vi.fn(),
+    } as unknown as UserStore;
+    const result = await resolveCanonicalUser(
       userStore,
       createCtx(USER_PRINCIPAL),
       {
@@ -225,13 +232,17 @@ describe("resolveCanonicalUserId", () => {
       },
       display
     );
-    expect(result).toEqual({ userId: "canon-1" });
+    expect(result).toEqual({ userId: "canon-1", authName: "Canonical User" });
   });
 
   it("creates the user from the VERIFIED actor when unseen", async () => {
-    const resolveOrCreateUser = vi.fn(async () => ({ id: "canon-new" }));
+    const resolveOrCreateUser = vi.fn(async () => ({
+      id: "canon-new",
+      displayName: "Dana",
+      email: "d@example.com",
+    }));
     const userStore = { resolveOrCreateUser } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
+    const result = await resolveCanonicalUser(
       userStore,
       createCtx(SLACK_BOT_PRINCIPAL),
       {
@@ -242,7 +253,7 @@ describe("resolveCanonicalUserId", () => {
       },
       display
     );
-    expect(result).toEqual({ userId: "canon-new" });
+    expect(result).toEqual({ userId: "canon-new", authName: "Dana" });
     expect(resolveOrCreateUser).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "slack", providerUserId: "U0123", displayName: "Dana" })
     );
@@ -251,7 +262,7 @@ describe("resolveCanonicalUserId", () => {
   it("fails closed with a 500 if a participant ever lacks both a canonical user and an actor", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const userStore = { resolveOrCreateUser: vi.fn() } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
+    const result = await resolveCanonicalUser(
       userStore,
       createCtx(SLACK_BOT_PRINCIPAL),
       {
@@ -274,7 +285,7 @@ describe("resolveCanonicalUserId", () => {
         throw new Error("d1 down");
       }),
     } as unknown as UserStore;
-    const result = await resolveCanonicalUserId(
+    const result = await resolveCanonicalUser(
       userStore,
       createCtx(SLACK_BOT_PRINCIPAL),
       {

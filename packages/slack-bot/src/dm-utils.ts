@@ -14,7 +14,8 @@ export function stripMentions(text: string): string {
  * Filters out subtypes (bot_message, message_changed, message_deleted, etc.)
  * to prevent processing bot replies and edit/delete notifications. Messages
  * with file uploads arrive as the `file_share` subtype and may carry no text,
- * so they dispatch on their attachments instead.
+ * so they dispatch on their files instead; a forwarded message with no comment
+ * likewise carries its content in `attachments` and no text at all.
  */
 export function isDmDispatchable(event: {
   type: string;
@@ -25,9 +26,11 @@ export function isDmDispatchable(event: {
   ts?: string;
   user?: string;
   files?: unknown[];
+  attachments?: unknown[];
 }): boolean {
   const subtypeOk = !event.subtype || event.subtype === "file_share";
-  const hasContent = !!event.text || (event.files?.length ?? 0) > 0;
+  const hasContent =
+    !!event.text || (event.files?.length ?? 0) > 0 || (event.attachments?.length ?? 0) > 0;
   return (
     event.type === "message" &&
     subtypeOk &&

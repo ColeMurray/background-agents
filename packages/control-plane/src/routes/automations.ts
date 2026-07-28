@@ -29,7 +29,7 @@ import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
 import { generateId } from "../auth/crypto";
-import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
+import { applyIdentityEnforcement, resolveCanonicalUser } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import {
@@ -457,7 +457,7 @@ async function handleCreateAutomation(
   // Resolve the canonical user model ID fail-closed from the verified
   // principal — the scheduler replays user_id as session identity at fire
   // time, so an automation must never be created with lost attribution.
-  const resolution = await resolveCanonicalUserId(new UserStore(ctx.db), ctx, enforced, {
+  const resolution = await resolveCanonicalUser(new UserStore(ctx.db), ctx, enforced, {
     displayName: body.actorDisplayName,
     email: body.actorEmail,
     avatarUrl: body.actorAvatarUrl,

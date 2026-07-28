@@ -14,6 +14,10 @@ export function formatInterimThreadContext(interimMessages: string[]): string {
   );
 }
 
+export function formatForwardedContext(forwardedMessages: string[]): string {
+  return formatMessageSection("Slack messages forwarded with this request", forwardedMessages);
+}
+
 export function formatChannelContext(channelName: string, channelDescription?: string): string {
   let context = `Slack channel context:\n---\nChannel: #${channelName}`;
   if (channelDescription) context += `\nDescription: ${channelDescription}`;

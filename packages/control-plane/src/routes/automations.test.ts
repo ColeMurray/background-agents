@@ -53,7 +53,17 @@ vi.mock("../db/automation-store", async (importOriginal) => {
 });
 
 const mockUserStore = {
-  resolveOrCreateUser: vi.fn().mockResolvedValue({ id: "resolved-user-1", isNew: false }),
+  resolveOrCreateUser: vi.fn().mockResolvedValue({
+    id: "resolved-user-1",
+    displayName: "Resolved User",
+    email: "resolved@example.com",
+    isNew: false,
+  }),
+  getUserById: vi.fn().mockResolvedValue({
+    id: "user-1",
+    displayName: "Test User",
+    email: "user@example.com",
+  }),
 };
 vi.mock("../db/user-store", () => ({
   UserStore: vi.fn().mockImplementation(function () {
@@ -207,6 +217,17 @@ describe("automation route handlers", () => {
     mockStore.bindReplaceEnvironments.mockReturnValue([{ sql: "replace-environments" }]);
     mockBatch.mockResolvedValue([]);
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
+    mockUserStore.resolveOrCreateUser.mockResolvedValue({
+      id: "resolved-user-1",
+      displayName: "Resolved User",
+      email: "resolved@example.com",
+      isNew: false,
+    });
+    mockUserStore.getUserById.mockResolvedValue({
+      id: "user-1",
+      displayName: "Test User",
+      email: "user@example.com",
+    });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       repoOwner: "acme",
@@ -582,13 +603,14 @@ describe("automation route handlers", () => {
       });
     });
 
-    it("stores the user principal's canonical id without consulting the user store", async () => {
+    it("stores the user principal's canonical id without resolving an actor", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
       const res = await callRoute("POST", "/automations", { body: validBody });
 
       expect(res.status).toBe(201);
       expect(mockUserStore.resolveOrCreateUser).not.toHaveBeenCalled();
+      expect(mockUserStore.getUserById).toHaveBeenCalledWith("user-1");
       expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({ created_by: "user-1", user_id: "user-1" })
       );

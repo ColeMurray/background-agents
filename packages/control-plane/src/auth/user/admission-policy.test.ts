@@ -6,8 +6,9 @@ import {
   parseAdmissionAllowlist,
   parseAdmissionBoolean,
   type AdmissionPolicyConfig,
+  type GitHubAdmissionEvidence,
+  type GoogleAdmissionEvidence,
 } from "./admission-policy";
-import type { ProviderSignInResult } from "./providers/types";
 
 const BASE_CONFIG: AdmissionPolicyConfig = {
   allowedGitHubUsers: [],
@@ -17,7 +18,7 @@ const BASE_CONFIG: AdmissionPolicyConfig = {
   unsafeAllowAllUsers: false,
 };
 
-const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
+const GOOGLE_SIGN_IN: GoogleAdmissionEvidence = {
   identity: {
     provider: "google",
     issuer: "https://accounts.google.com",
@@ -25,10 +26,9 @@ const GOOGLE_SIGN_IN: ProviderSignInResult<"google"> = {
     verifiedEmails: ["first@example.net", "allowed@corp.example"],
     primaryEmail: "first@example.net",
   },
-  credential: null,
 };
 
-const GITHUB_SIGN_IN: ProviderSignInResult<"github"> = {
+const GITHUB_SIGN_IN: GitHubAdmissionEvidence = {
   identity: {
     provider: "github",
     issuer: "https://github.com",
@@ -37,10 +37,7 @@ const GITHUB_SIGN_IN: ProviderSignInResult<"github"> = {
     verifiedEmails: [],
     primaryEmail: null,
   },
-  credential: {
-    kind: "access_only_nonexpiring",
-    accessToken: "ghu_token",
-  },
+  accessToken: "ghu_token",
 };
 
 describe("AdmissionPolicy", () => {
@@ -59,7 +56,7 @@ describe("AdmissionPolicy", () => {
     });
   });
 
-  it("admits an active GitHub organization member with the current flow credential", async () => {
+  it("admits an active GitHub organization member with the current access token", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ state: "active" }));
     const policy = new AdmissionPolicy(
       {

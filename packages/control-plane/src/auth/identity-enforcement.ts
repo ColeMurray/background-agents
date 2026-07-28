@@ -46,16 +46,7 @@ const SPAWNING_FORBIDDEN_FIELDS = [
  */
 const FORBIDDEN_IDENTITY_FIELDS: Record<IdentityRoute, readonly string[]> = {
   "session-create": SPAWNING_FORBIDDEN_FIELDS,
-  "ws-token": [
-    "userId",
-    "authName",
-    "scmLogin",
-    "scmName",
-    "scmEmail",
-    "scmToken",
-    "scmRefreshToken",
-    "scmUserId",
-  ],
+  "ws-token": [],
   prompt: ["authorId"],
   "session-lifecycle": ["userId"],
   "automation-create": SPAWNING_FORBIDDEN_FIELDS,
@@ -88,7 +79,7 @@ export interface DerivedIdentity {
   canonicalUserId: string | null;
   /**
    * The verified bot-asserted actor backing `participantUserId` — what
-   * `resolveCanonicalUserId` creates the canonical user from on first sight.
+   * `resolveCanonicalUser` creates the canonical user from on first sight.
    * Null for user principals (their `canonicalUserId` is always set) and for
    * userless service principals.
    */
@@ -202,13 +193,31 @@ export function applyIdentityEnforcement<R extends IdentityRoute>(
  * canonical user (web users) or a verified actor (bot assertions), so the
  * resolved id is never null.
  */
-export async function resolveCanonicalUserId(
+export interface CanonicalUserSummary {
+  userId: string;
+  authName: string | null;
+}
+
+export async function getCanonicalUserSummary(
+  userStore: UserStore,
+  userId: string
+): Promise<CanonicalUserSummary> {
+  const user = await userStore.getUserById(userId);
+  return {
+    userId,
+    authName: user?.displayName ?? user?.email ?? null,
+  };
+}
+
+export async function resolveCanonicalUser(
   userStore: UserStore,
   ctx: RequestContext,
   enforced: DerivedIdentity & { participantUserId: string },
   display: { displayName?: string; email?: string; avatarUrl?: string }
-): Promise<{ userId: string } | Response> {
-  if (enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
+): Promise<CanonicalUserSummary | Response> {
+  if (enforced.canonicalUserId) {
+    return getCanonicalUserSummary(userStore, enforced.canonicalUserId);
+  }
   const actor = enforced.actor;
   if (!actor) {
     // Unreachable while deriveIdentity holds its invariant (a participant
@@ -229,7 +238,10 @@ export async function resolveCanonicalUserId(
       providerEmail: display.email,
       avatarUrl: display.avatarUrl,
     });
-    return { userId: user.id };
+    return {
+      userId: user.id,
+      authName: user.displayName ?? user.email ?? null,
+    };
   } catch (e) {
     logger.error("Failed to resolve verified actor identity", {
       error: e instanceof Error ? e : String(e),

@@ -493,10 +493,7 @@ export class SessionDO extends DurableObject<Env> {
         repository: this.repository,
         getDurableObjectId: () => this.ctx.id.toString(),
         tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
-        encryptToken: async (token, encryptionKey) => {
-          const { encryptToken } = await import("../auth/crypto");
-          return encryptToken(token, encryptionKey);
-        },
+        encryptToken: (token, encryptionKey) => encryptToken(token, encryptionKey),
         validateReasoningEffort: (model, effort) =>
           validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),

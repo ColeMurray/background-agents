@@ -45,6 +45,7 @@ import {
 import { UserStore } from "../db/user-store";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
+import { getCanonicalUserSummary } from "../auth/identity-enforcement";
 import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
@@ -356,9 +357,11 @@ export class SchedulerDO extends DurableObject<Env> {
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
     }
 
+    const owner = await this.resolveAutomationOwner(automation);
+
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
-        const { sessionId } = await this.createSessionForAutomationRun(automation, child);
+        const { sessionId } = await this.createSessionForAutomationRun(automation, child, owner);
         await this.sendPromptToSession(
           sessionId,
           automation,
@@ -1203,32 +1206,34 @@ export class SchedulerDO extends DurableObject<Env> {
 
   // ─── Session creation ────────────────────────────────────────────────────
 
-  private async createSessionForAutomationRun(
-    automation: AutomationRow,
-    run: AutomationRunRow
-  ): Promise<{ sessionId: string }> {
-    const sessionId = generateId();
-
-    // Resolve the canonical user_id for the session index.
-    // Automations created through the web UI populate user_id at creation time
-    // (handleCreateAutomation resolves it for both GitHub and Google users), so this
-    // lookup is skipped for them. The fallback below only covers legacy rows with
-    // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
-    // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
+  private async resolveAutomationOwner(
+    automation: AutomationRow
+  ): Promise<{ userId: string | null; authName: string | null }> {
     let userId = automation.user_id;
     const userStore = new UserStore(this.db);
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {
       try {
         const identity = await userStore.getIdentity("github", automation.created_by);
-        if (identity) {
-          userId = identity.userId;
-        }
+        userId = identity?.userId ?? null;
       } catch {
-        // Best-effort — proceed without user_id
+        return { userId: null, authName: null };
       }
     }
-    const canonicalUser = userId ? await userStore.getUserById(userId) : null;
+    if (!userId) return { userId: null, authName: null };
+
+    try {
+      return await getCanonicalUserSummary(userStore, userId);
+    } catch {
+      return { userId, authName: null };
+    }
+  }
+
+  private async createSessionForAutomationRun(
+    automation: AutomationRow,
+    run: AutomationRunRow,
+    owner: { userId: string | null; authName: string | null }
+  ): Promise<{ sessionId: string }> {
+    const sessionId = generateId();
 
     const ctx: RequestContext = {
       trace_id: `automation:${automation.id}`,
@@ -1266,8 +1271,8 @@ export class SchedulerDO extends DurableObject<Env> {
         model: automation.model,
         reasoningEffort: automation.reasoning_effort,
         participantUserId: automation.created_by,
-        platformUserId: userId,
-        authName: canonicalUser?.displayName ?? canonicalUser?.email,
+        platformUserId: owner.userId,
+        authName: owner.authName,
         scmTokenEncrypted: null,
         scmRefreshTokenEncrypted: null,
         codeServerEnabled,

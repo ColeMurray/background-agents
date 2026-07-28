@@ -326,7 +326,11 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
     });
-    const resolveOrCreateUser = vi.fn(async () => ({ id: "user-9" }));
+    const resolveOrCreateUser = vi.fn(async () => ({
+      id: "user-9",
+      displayName: "Ada Lovelace",
+      email: "ada@example.com",
+    }));
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => null,

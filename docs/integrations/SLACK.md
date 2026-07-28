@@ -34,6 +34,7 @@ notification controls and safety notes are covered near the end.
 | Start from a DM             | Send the bot a direct message                                              |
 | Continue a session          | Reply in the same Slack thread                                             |
 | Send images to the agent    | Attach PNG, JPEG, WebP, or GIF images to an interactive request            |
+| Forward a message           | Share another Slack message with the bot; text, images, and source travel  |
 | Pick the repository         | Let Open-Inspect infer it, or choose from a dropdown when it is unsure     |
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
@@ -109,6 +110,24 @@ session or follow-up is sent.
 
 This feature requires the Slack app's `files:read` bot scope and a reinstall after adding the scope.
 Remote files hosted outside Slack and non-image attachments are not forwarded.
+
+### With forwarded messages
+
+Forward (share) another Slack message to a DM, to a channel request that `@mentions` the bot, or to
+an interactive thread follow-up. Add your own comment — "deal with this" — and it becomes the
+instruction the agent acts on; forward with no comment and the shared message is the whole request.
+
+The whole forwarded message reaches the agent:
+
+- Its text, with any links exactly as written.
+- Its images, forwarded as prompt attachments like images you attach yourself. They share the
+  per-message limits: at most six images, each no larger than 10 MiB.
+- Its author, source channel, permalink, channel id, and message timestamp. An agent with Slack
+  tooling of its own can use those to read the original thread for wider context.
+
+Forward several messages at once and each is quoted separately, up to ten per request. Each shared
+message's text is truncated at 4,000 characters. Link previews are skipped, since the message text
+already carries the link.
 
 ### Repository dropdowns
 
@@ -269,9 +288,10 @@ The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED`
 When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
 automation in the web app is still allowed, but it will not run until the flag is enabled.
 
-Slack Message automations currently ingest text only. File uploads, including image-only
-`file_share` messages, do not start these automations, and attachments on automation thread replies
-are not forwarded to the session. Use an interactive DM or `@mention` when the agent needs an image.
+Slack Message automations currently ingest the message's own text only. File uploads, including
+image-only `file_share` messages, do not start these automations; attachments on automation thread
+replies are not forwarded to the session; and the body of a forwarded message is not read. Use an
+interactive DM or `@mention` when the agent needs an image or a forwarded message.
 
 ### Slack app setup
 
@@ -378,6 +398,12 @@ The bot may also need `channels:history` for public-channel messages or `groups:
 private-channel messages so it can recover file details that Slack omits from `app_mention` events.
 If some images fail, check the warning posted in the thread. `files:write` does not grant inbound
 image access; it is used only when Open-Inspect posts generated media back to Slack.
+
+### A forwarded message did not reach the agent
+
+The same `channels:history` / `groups:history` scopes let the bot recover a forwarded message's
+content when Slack omits it from the `app_mention` event, and images inside a forwarded message need
+`files:read` like any other inbound image.
 
 ### The wrong model or branch was used
 

@@ -1,8 +1,8 @@
 import { verifyGoogleIdToken } from "better-auth/social-providers";
 import { z } from "zod";
-import type { AdmissionPolicy } from "../admission-policy";
+import type { AdmissionPolicy, GoogleAdmissionEvidence } from "../admission-policy";
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
-import { OAuthProviderError, type ProviderSignInResult } from "./types";
+import { OAuthProviderError } from "./types";
 
 const GOOGLE_ISSUER = "https://accounts.google.com";
 
@@ -51,7 +51,7 @@ export class GoogleSignInProfileResolver {
     }
 
     const email = parsedClaims.data.email.toLowerCase();
-    const signIn: ProviderSignInResult<"google"> = {
+    const signIn: GoogleAdmissionEvidence = {
       identity: {
         provider: "google",
         issuer: GOOGLE_ISSUER,
@@ -61,7 +61,6 @@ export class GoogleSignInProfileResolver {
         verifiedEmails: [email],
         primaryEmail: email,
       },
-      credential: null,
     };
     await this.config.admissionPolicy.requireAdmission(signIn);
 
