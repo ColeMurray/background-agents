@@ -264,9 +264,7 @@ export function splitIntoSlackSections(
       // Reserve the closing fence whenever this slice could end inside one.
       const reserveClose = start.open || advanceFence(start, rest).open;
       const budget =
-        maxChars -
-        reopenPrefix(start).length -
-        (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
+        maxChars - reopenPrefix(start).length - (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
       const taken = rest.slice(0, Math.max(1, budget));
       sectionStart = start;
       body = taken;
