@@ -302,6 +302,31 @@ describe("long response handling", () => {
     }
   });
 
+  // The section cap only keeps the message postable in combination with however
+  // many non-section blocks this builder emits, and that coupling lives in a
+  // comment. Assert the real limit with every optional block populated, so raising
+  // the cap or adding a block fails here rather than at the Slack API.
+  it("stays within Slack's 50-block message limit with every block populated", () => {
+    const blocks = buildCompletionBlocks(
+      "sess-7",
+      {
+        ...BASE_RESPONSE,
+        textContent: Array.from({ length: 500 }, () => "z".repeat(2900)).join("\n\n"),
+        artifacts: [{ type: "branch", label: "feature/x", url: "https://example.com/tree/x" }],
+        toolCalls: [
+          { tool: "Edit", summary: "Edit src/a.ts" },
+          { tool: "Write", summary: "Write src/b.ts" },
+          { tool: "Bash", summary: "Bash npm test" },
+        ],
+        success: false,
+        error: "something went wrong",
+      } as AgentResponse,
+      BASE_CONTEXT,
+      "https://inspect.example.com"
+    );
+    expect(blocks.length).toBeLessThanOrEqual(50);
+  });
+
   it("still renders a placeholder for an empty response", () => {
     const blocks = buildCompletionBlocks(
       "sess-5",
