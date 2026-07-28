@@ -5,9 +5,10 @@
  * Forwarding a message does not put its body in the new message's `text` —
  * `text` holds only whatever the user typed alongside it ("take a look at
  * this"). The shared message arrives as a *message attachment* flagged
- * `is_share`/`is_msg_unfurl`, carrying its own author, source channel,
- * permalink, body, and any files it had. Reading only `text` therefore hands
- * the agent a bare pronoun and drops the thing the user was pointing at.
+ * `is_share` (and may also have `is_msg_unfurl`), carrying its own author,
+ * source channel, permalink, body, and any files it had. Reading only `text`
+ * therefore hands the agent a bare pronoun and drops the thing the user was
+ * pointing at.
  *
  * Everything the attachment carries is recovered: the body and its links are
  * quoted verbatim, images flow into the same session-attachment path as
@@ -39,6 +40,8 @@ const NO_TEXT_BODY = "(no text)";
 export interface ForwardedMessages {
   /** One quoted entry per shared message, for the prompt's context block. */
   entries: string[];
+  /** Whether at least one entry contains substantive text or fallback content. */
+  hasBody: boolean;
   /**
    * Files the shared messages carried, in Slack's `SlackMessageFile` shape.
    * They are Slack-hosted like any other message file, so they go through the
@@ -55,10 +58,10 @@ export interface ForwardedMessages {
 export function collectForwardedMessages(
   attachments: SlackMessageAttachment[] | undefined
 ): ForwardedMessages {
-  const result: ForwardedMessages = { entries: [], files: [] };
+  const result: ForwardedMessages = { entries: [], files: [], hasBody: false };
   if (!attachments?.length) return result;
   for (const attachment of attachments) {
-    if (!attachment.is_share && !attachment.is_msg_unfurl) continue;
+    if (!attachment.is_share) continue;
     // `fallback` is Slack's own plain-text rendering ("[date] user: body"); it
     // is the only body left when the shared message put its content somewhere
     // `text` does not reach, such as a bot post's own attachments. A `text` of
@@ -68,6 +71,7 @@ export function collectForwardedMessages(
     if (!body && files.length === 0) continue;
     result.entries.push(formatEntry(attachment, body || NO_TEXT_BODY));
     result.files.push(...files);
+    if (body) result.hasBody = true;
     if (result.entries.length === MAX_FORWARDED_MESSAGES) break;
   }
   return result;

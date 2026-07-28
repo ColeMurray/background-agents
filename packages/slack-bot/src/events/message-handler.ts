@@ -109,6 +109,8 @@ interface IncomingMessageParams {
   images: SlackImageAttachment[];
   /** Quoted entries for the messages forwarded with this request. */
   forwardedMessages: string[];
+  /** Whether a forwarded entry contains real text rather than only images. */
+  forwardedHasBody: boolean;
   env: Env;
   traceId?: string;
   scheduleBackground: BackgroundTaskScheduler;
@@ -131,11 +133,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelDescription,
     images,
     forwardedMessages,
+    forwardedHasBody,
     env,
     traceId,
     scheduleBackground,
   } = params;
-  if (!messageText && images.length === 0 && forwardedMessages.length === 0) {
+  if (!messageText && images.length === 0 && !forwardedHasBody) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -146,7 +149,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   }
   // A message with no text of its own still needs prompt content for the agent
   // to act on; what it carried instead decides which stand-in to use.
-  const imageOnly = !messageText && forwardedMessages.length === 0;
+  const imageOnly = !messageText && !forwardedHasBody;
   const requestText =
     messageText ||
     (forwardedMessages.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
@@ -401,6 +404,7 @@ export async function handleAppMention(
     channelDescription,
     images,
     forwardedMessages,
+    forwardedHasBody: forwarded.hasBody,
     env,
     traceId,
     scheduleBackground,
@@ -441,6 +445,7 @@ export async function handleDirectMessage(
     threadTs: event.thread_ts,
     images,
     forwardedMessages,
+    forwardedHasBody: forwarded.hasBody,
     env,
     traceId,
     scheduleBackground,
