@@ -1,4 +1,4 @@
-import { postMessage, removeReaction } from "@open-inspect/shared";
+import { postBlocks, postMessage, removeReaction } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { extractAgentResponse } from "./extractor";
@@ -72,13 +72,10 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       },
       env.WEB_APP_URL
     );
-    const postResult = await postMessage(
-      env.SLACK_BOT_TOKEN,
-      job.channel,
-      // Without top-level text, Slack derives screen-reader text from the blocks.
-      undefined,
-      { thread_ts: job.threadTs, blocks }
-    );
+    // Without top-level text, Slack derives screen-reader text from the blocks.
+    const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
+      thread_ts: job.threadTs,
+    });
     if (!postResult.ok) {
       log.warn("slack.completion.post", {
         ...base,
