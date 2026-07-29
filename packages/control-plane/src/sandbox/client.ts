@@ -74,6 +74,28 @@ const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
   modalErrorResponseSchema,
 ]);
 
+const buildImageModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      build_id: z.string(),
+      status: z.string(),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const deleteProviderImageModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      provider_image_id: z.string(),
+      deleted: z.boolean(),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
   if (!result.success) {
@@ -224,12 +246,6 @@ export interface DeleteProviderImageRequest {
 export interface DeleteProviderImageResponse {
   providerImageId: string;
   deleted: boolean;
-}
-
-interface ModalApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
 }
 
 /**
@@ -545,12 +561,9 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        build_id: string;
-        status: string;
-      }>;
+      const result = parseModalApiResponse(buildImageModalResponseSchema, await response.json());
 
-      if (!result.success || !result.data) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
@@ -604,12 +617,12 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        provider_image_id: string;
-        deleted: boolean;
-      }>;
+      const result = parseModalApiResponse(
+        deleteProviderImageModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
