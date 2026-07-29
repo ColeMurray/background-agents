@@ -211,6 +211,38 @@ describe("long response handling", () => {
     expect(texts.join(" ")).not.toContain("truncated");
   });
 
+  it("preserves whitespace exactly across section boundaries", () => {
+    const textContent = `alpha\n\n\n\n\nbeta\n\n${"x".repeat(4000)}`;
+    const sections = splitIntoSlackSections(textContent);
+
+    expect(sections.join("")).toBe(textContent);
+  });
+
+  it("keeps Unicode code points intact across hard section boundaries", () => {
+    const textContent = `${"a".repeat(2999)}😀${"b".repeat(10)}`;
+    const sections = splitIntoSlackSections(textContent);
+
+    expect(sections.join("")).toBe(textContent);
+    for (const section of sections) {
+      const firstCodeUnit = section.charCodeAt(0);
+      const lastCodeUnit = section.charCodeAt(section.length - 1);
+      expect(firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff).toBe(false);
+      expect(lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff).toBe(false);
+    }
+  });
+
+  it("keeps Unicode code points intact when adding the truncation marker", () => {
+    for (let prefixLength = 2900; prefixLength <= 3000; prefixLength += 1) {
+      const textContent = `${"a".repeat(prefixLength)}😀${"b".repeat(4000)}\n\nmore`;
+      const [section] = splitIntoSlackSections(textContent, 3000, 1);
+      const markerIndex = section.indexOf("_...truncated");
+      expect(markerIndex).toBeGreaterThanOrEqual(0);
+      const content = section.slice(0, markerIndex).trimEnd();
+      const lastCodeUnit = content.charCodeAt(content.length - 1);
+      expect(lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff).toBe(false);
+    }
+  });
+
   it("never exceeds Slack's per-section character limit", () => {
     const textContent = "x".repeat(25_000);
     const blocks = buildCompletionBlocks(
@@ -251,6 +283,16 @@ describe("long response handling", () => {
     expect(texts.length).toBeGreaterThan(1);
     for (const text of texts) {
       expect((text.match(/```/g) ?? []).length % 2).toBe(0);
+    }
+  });
+
+  it("balances fences that open and close on the same line", () => {
+    const fence = "```";
+    const sections = splitIntoSlackSections(`${fence}code${fence}\n${"after ".repeat(700)}`);
+
+    expect(sections.length).toBeGreaterThan(1);
+    for (const section of sections) {
+      expect((section.match(/```/g) ?? []).length % 2).toBe(0);
     }
   });
 

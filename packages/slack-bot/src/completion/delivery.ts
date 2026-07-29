@@ -2,7 +2,7 @@ import { postMessage, removeReaction } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { extractAgentResponse } from "./extractor";
-import { buildCompletionBlocks, getFallbackText, truncateError } from "./blocks";
+import { buildCompletionBlocks, truncateError } from "./blocks";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
 
@@ -75,7 +75,8 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
     const postResult = await postMessage(
       env.SLACK_BOT_TOKEN,
       job.channel,
-      getFallbackText(agentResponse),
+      // Without top-level text, Slack derives screen-reader text from the blocks.
+      undefined,
       { thread_ts: job.threadTs, blocks }
     );
     if (!postResult.ok) {

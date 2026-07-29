@@ -25,7 +25,6 @@ const STATUS_EMOJI = {
 /**
  * Truncation limits.
  */
-const FALLBACK_TEXT_LIMIT = 150;
 const ERROR_FOOTER_LIMIT = 200;
 
 /**
@@ -142,13 +141,6 @@ export function buildCompletionBlocks(
   return blocks;
 }
 
-/**
- * Get truncated text for Slack's fallback text field.
- */
-export function getFallbackText(response: AgentResponse): string {
-  return response.textContent.slice(0, FALLBACK_TEXT_LIMIT) || "Agent completed.";
-}
-
 interface FenceState {
   readonly open: boolean;
   readonly info: string;
@@ -175,11 +167,19 @@ function normalizeFenceInfo(raw: string): string {
 function advanceFence(state: FenceState, chunk: string): FenceState {
   let next = state;
   for (const line of chunk.split("\n")) {
-    const trimmed = line.trimStart();
-    if (!trimmed.startsWith(CODE_FENCE)) continue;
-    next = next.open
-      ? CLOSED_FENCE
-      : { open: true, info: normalizeFenceInfo(trimmed.slice(CODE_FENCE.length)) };
+    let cursor = 0;
+    while (cursor < line.length) {
+      const fenceIndex = line.indexOf(CODE_FENCE, cursor);
+      if (fenceIndex === -1) break;
+      const startsLine = line.slice(0, fenceIndex).trim().length === 0;
+      next = next.open
+        ? CLOSED_FENCE
+        : {
+            open: true,
+            info: startsLine ? normalizeFenceInfo(line.slice(fenceIndex + CODE_FENCE.length)) : "",
+          };
+      cursor = fenceIndex + CODE_FENCE.length;
+    }
   }
   return next;
 }
@@ -192,6 +192,22 @@ function reopenPrefix(state: FenceState): string {
 /** Closes a fence still open at the end of a section. */
 function closeSuffix(state: FenceState): string {
   return state.open ? `\n${CODE_FENCE}` : "";
+}
+
+function sliceAtCodePointBoundary(text: string, maxChars: number): string {
+  let end = Math.min(maxChars, text.length);
+  const lastCodeUnit = text.charCodeAt(end - 1);
+  const nextCodeUnit = text.charCodeAt(end);
+  if (
+    end > 1 &&
+    lastCodeUnit >= 0xd800 &&
+    lastCodeUnit <= 0xdbff &&
+    nextCodeUnit >= 0xdc00 &&
+    nextCodeUnit <= 0xdfff
+  ) {
+    end -= 1;
+  }
+  return text.slice(0, end);
 }
 
 /**
@@ -228,6 +244,7 @@ export function splitIntoSlackSections(
   let sectionStart = CLOSED_FENCE;
   let sectionEnd = CLOSED_FENCE;
   let body = "";
+  let truncated = false;
 
   const render = (start: FenceState, content: string, end: FenceState): string =>
     `${reopenPrefix(start)}${content}${closeSuffix(end)}`;
@@ -240,21 +257,25 @@ export function splitIntoSlackSections(
     body = "";
   };
 
-  const appendToken = (token: string, separator: string): void => {
-    const joined = body ? `${body}${separator}${token}` : token;
+  const appendToken = (token: string): boolean => {
+    const joined = body + token;
     const joinedEnd = advanceFence(sectionEnd, token);
     if (render(sectionStart, joined, joinedEnd).length <= maxChars) {
       body = joined;
       sectionEnd = joinedEnd;
-      return;
+      return true;
     }
 
     flush();
+    if (sections.length >= maxSections) {
+      truncated = true;
+      return false;
+    }
     const aloneEnd = advanceFence(sectionEnd, token);
     if (render(sectionStart, token, aloneEnd).length <= maxChars) {
       body = token;
       sectionEnd = aloneEnd;
-      return;
+      return true;
     }
 
     // Token exceeds a whole section on its own: slice it against the real budget.
@@ -265,35 +286,40 @@ export function splitIntoSlackSections(
       const reserveClose = start.open || advanceFence(start, rest).open;
       const budget =
         maxChars - reopenPrefix(start).length - (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
-      const taken = rest.slice(0, Math.max(1, budget));
+      const taken = sliceAtCodePointBoundary(rest, Math.max(1, budget));
       sectionStart = start;
       body = taken;
       sectionEnd = advanceFence(start, taken);
       rest = rest.slice(taken.length);
-      if (rest.length > 0) flush();
+      if (rest.length > 0) {
+        flush();
+        if (sections.length >= maxSections) {
+          truncated = true;
+          return false;
+        }
+      }
     }
+    return true;
   };
 
-  for (const paragraph of trimmed.split(/\n{2,}/)) {
-    if (paragraph.length <= maxChars) {
-      appendToken(paragraph, "\n\n");
+  sourceTokens: for (const sourceToken of trimmed.split(/(\n{2,})/)) {
+    if (!sourceToken) continue;
+    if (sourceToken.startsWith("\n\n") || sourceToken.length <= maxChars) {
+      if (!appendToken(sourceToken)) break;
       continue;
     }
-    // Oversized paragraph (long table, big code block): break on lines. Only the
-    // first line is a paragraph boundary; the rest are line continuations.
-    let atParagraphStart = true;
-    for (const line of paragraph.split("\n")) {
-      appendToken(line, atParagraphStart ? "\n\n" : "\n");
-      atParagraphStart = false;
+    // Oversized paragraph (long table, big code block): keep its line endings as
+    // source tokens so section boundaries never rewrite the original response.
+    for (const lineToken of sourceToken.split(/(\n)/)) {
+      if (lineToken && !appendToken(lineToken)) break sourceTokens;
     }
   }
-  flush();
+  if (!truncated) flush();
 
-  if (sections.length <= maxSections) return sections;
-  const kept = sections.slice(0, maxSections);
-  const lastIndex = maxSections - 1;
-  kept[lastIndex] = withTruncationMarker(kept[lastIndex], maxChars);
-  return kept;
+  if (!truncated) return sections;
+  const lastIndex = sections.length - 1;
+  sections[lastIndex] = withTruncationMarker(sections[lastIndex], maxChars);
+  return sections;
 }
 
 /**
@@ -309,7 +335,7 @@ function withTruncationMarker(section: string, maxChars: number): string {
   // fence this section opened *and* closed, which no trailing-fence check sees.
   const content = section.endsWith(closing) ? section.slice(0, -closing.length) : section;
   const room = maxChars - marker.length - closing.length;
-  const sliced = content.slice(0, Math.max(0, room));
+  const sliced = sliceAtCodePointBoundary(content, Math.max(0, room));
   const needsClose = (sliced.match(/```/g) ?? []).length % 2 !== 0;
   return `${sliced}${needsClose ? closing : ""}${marker}`;
 }

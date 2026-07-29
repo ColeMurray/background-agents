@@ -183,7 +183,7 @@ export async function verifySlackSignature(
 export function postMessage(
   token: string,
   channel: string,
-  text: string,
+  text: string | undefined,
   options?: {
     thread_ts?: string;
     blocks?: unknown[];
@@ -192,7 +192,7 @@ export function postMessage(
 ): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
   return slackPost(token, "chat.postMessage", {
     channel,
-    text,
+    ...(text === undefined ? {} : { text }),
     thread_ts: options?.thread_ts,
     blocks: options?.blocks,
     reply_broadcast: options?.reply_broadcast,
