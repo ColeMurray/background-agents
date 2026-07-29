@@ -235,9 +235,8 @@ export function splitIntoSlackSections(
   maxChars: number = SECTION_TEXT_MAX_CHARS,
   maxSections: number = MAX_RESPONSE_SECTIONS
 ): string[] {
-  const trimmed = text.trim();
-  if (!trimmed) return [];
-  if (trimmed.length <= maxChars) return [trimmed];
+  if (!text.trim()) return [];
+  if (text.length <= maxChars) return [text];
 
   const sections: string[] = [];
   // Fence state where the in-progress section began, and where its body now ends.
@@ -302,7 +301,7 @@ export function splitIntoSlackSections(
     return true;
   };
 
-  sourceTokens: for (const sourceToken of trimmed.split(/(\n{2,})/)) {
+  sourceTokens: for (const sourceToken of text.split(/(\n{2,})/)) {
     if (!sourceToken) continue;
     if (sourceToken.startsWith("\n\n") || sourceToken.length <= maxChars) {
       if (!appendToken(sourceToken)) break;

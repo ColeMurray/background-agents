@@ -212,7 +212,7 @@ describe("long response handling", () => {
   });
 
   it("preserves whitespace exactly across section boundaries", () => {
-    const textContent = `alpha\n\n\n\n\nbeta\n\n${"x".repeat(4000)}`;
+    const textContent = `\n  alpha\n\n\n\n\nbeta\n\n${"x".repeat(4000)}  \n`;
     const sections = splitIntoSlackSections(textContent);
 
     expect(sections.join("")).toBe(textContent);
