@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent } from "rea
 
 const DIRECTION_LOCK_THRESHOLD_PX = 8;
 const OPEN_THRESHOLD_PX = 72;
+const PULL_START_MIN_X_PX = 24;
+const PULL_START_MAX_X_PX = 48;
 
 interface UseMobileSidebarPullOptions {
   isMobile: boolean;
@@ -42,6 +44,7 @@ export function useMobileSidebarPull({
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       if (!isEnabled || (event.pointerType === "mouse" && event.button !== 0)) return;
+      if (event.clientX < PULL_START_MIN_X_PX || event.clientX > PULL_START_MAX_X_PX) return;
 
       const sidebarWidth = getSidebarWidth();
       if (sidebarWidth <= 0) return;
@@ -49,7 +52,6 @@ export function useMobileSidebarPull({
       reset();
       sidebarWidthRef.current = sidebarWidth;
       dragStartRef.current = { x: event.clientX, y: event.clientY };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
       setIsDragging(true);
     },
     [getSidebarWidth, isEnabled, reset]
@@ -70,6 +72,7 @@ export function useMobileSidebarPull({
       }
 
       event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
       const distance = Math.min(sidebarWidthRef.current, Math.max(0, deltaX));
       dragDistanceRef.current = distance;
       setDragDistance(distance);

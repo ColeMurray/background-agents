@@ -76,7 +76,7 @@ describe("CollapsedSidebarControls", () => {
 });
 
 describe("mobile sidebar drag", () => {
-  it("opens after swiping right from the inset edge handle", () => {
+  it("opens after swiping right from the inset activation zone", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
     vi.mocked(useAuthSession).mockReturnValue({
@@ -90,21 +90,21 @@ describe("mobile sidebar drag", () => {
     vi.spyOn(screen.getByTestId("mobile-sidebar-drawer"), "getBoundingClientRect").mockReturnValue({
       width: 288,
     } as DOMRect);
-    const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
-    expect(dragHandle).toHaveClass("left-6", "w-6");
-    fireEvent.pointerDown(dragHandle, {
+    const gestureBoundary = screen.getByTestId("mobile-sidebar-gesture-boundary");
+    expect(gestureBoundary).toHaveClass("touch-pan-y");
+    fireEvent.pointerDown(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
       clientX: 32,
       clientY: 200,
     });
-    fireEvent.pointerMove(dragHandle, {
+    fireEvent.pointerMove(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
       clientX: 124,
       clientY: 202,
     });
-    fireEvent.pointerUp(dragHandle, {
+    fireEvent.pointerUp(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
       clientX: 124,
@@ -128,21 +128,60 @@ describe("mobile sidebar drag", () => {
     vi.spyOn(screen.getByTestId("mobile-sidebar-drawer"), "getBoundingClientRect").mockReturnValue({
       width: 288,
     } as DOMRect);
-    const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
-    fireEvent.pointerDown(dragHandle, {
+    const gestureBoundary = screen.getByTestId("mobile-sidebar-gesture-boundary");
+    fireEvent.pointerDown(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
       clientX: 32,
       clientY: 200,
     });
-    fireEvent.pointerMove(dragHandle, {
+    fireEvent.pointerMove(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
       clientX: 74,
       clientY: 200,
     });
-    fireEvent.pointerUp(dragHandle, { pointerId: 1, pointerType: "touch" });
+    fireEvent.pointerUp(gestureBoundary, { pointerId: 1, pointerType: "touch" });
 
+    expect(mocks.sidebar.open).not.toHaveBeenCalled();
+  });
+
+  it("delivers taps in the activation zone to underlying content", () => {
+    mocks.isMobile = true;
+    mocks.sidebar.isOpen = false;
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: { user: { id: "user-1", name: "Test User" } },
+      status: "authenticated",
+    });
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+    const onPointerDown = vi.fn();
+    const onClick = vi.fn();
+
+    render(
+      <SidebarLayout>
+        <button onPointerDown={onPointerDown} onClick={onClick}>
+          Content action
+        </button>
+      </SidebarLayout>
+    );
+
+    const contentAction = screen.getByRole("button", { name: "Content action" });
+    fireEvent.pointerDown(contentAction, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 32,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(contentAction, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 32,
+      clientY: 200,
+    });
+    fireEvent.click(contentAction);
+
+    expect(onPointerDown).toHaveBeenCalledOnce();
+    expect(onClick).toHaveBeenCalledOnce();
     expect(mocks.sidebar.open).not.toHaveBeenCalled();
   });
 });

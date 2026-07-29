@@ -45,13 +45,13 @@ describe("useMobileSidebarPull", () => {
     fireEvent.pointerDown(handle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 32,
       clientY: 200,
     });
     fireEvent.pointerMove(handle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 12,
+      clientX: 36,
       clientY: 250,
     });
     fireEvent.pointerUp(handle, { pointerId: 1, pointerType: "touch" });
@@ -71,10 +71,32 @@ describe("useMobileSidebarPull", () => {
     fireEvent.pointerDown(handle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 32,
       clientY: 200,
     });
     rerender(<Harness onOpen={onOpen} {...props} />);
+    fireEvent.pointerMove(handle, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 152,
+      clientY: 200,
+    });
+    fireEvent.pointerUp(handle, { pointerId: 1, pointerType: "touch" });
+
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("ignores pulls that start in the browser edge gesture zone", () => {
+    const onOpen = vi.fn();
+    const { getByTestId } = render(<Harness onOpen={onOpen} />);
+    const handle = getByTestId("handle");
+
+    fireEvent.pointerDown(handle, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 8,
+      clientY: 200,
+    });
     fireEvent.pointerMove(handle, {
       pointerId: 1,
       pointerType: "touch",
