@@ -108,6 +108,12 @@ export type {
   SessionState,
   ParticipantPresence,
   PullRequestSummary,
+  SessionParticipantProfile,
+  SessionParticipantProfilesResponse,
+} from "./sessions";
+export {
+  sessionParticipantProfileSchema,
+  sessionParticipantProfilesResponseSchema,
 } from "./sessions";
 
 export { serverMessageSchema } from "./server-messages";

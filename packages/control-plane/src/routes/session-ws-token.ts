@@ -16,7 +16,6 @@ async function handleSessionWsToken(
   const body = await parseJsonBody<{
     scmLogin?: string;
     scmName?: string;
-    authName?: string;
     scmEmail?: string;
   }>(request);
   if (body instanceof Response) return body;
@@ -36,7 +35,6 @@ async function handleSessionWsToken(
         userId,
         scmLogin: body.scmLogin,
         scmName: body.scmName,
-        authName: body.authName,
         scmEmail: body.scmEmail,
       }),
     })

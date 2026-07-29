@@ -10,17 +10,17 @@ describe("buildAuthDisplay", () => {
         image: "https://avatars.example/ada",
       })
     ).toEqual({
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.example/ada",
+      actorEmail: "ada@example.com",
+      actorDisplayName: "Ada Lovelace",
+      actorAvatarUrl: "https://avatars.example/ada",
     });
   });
 
   it("normalizes null fields to undefined", () => {
     expect(buildAuthDisplay({ name: null, email: null, image: null })).toEqual({
-      authEmail: undefined,
-      authName: undefined,
-      authAvatarUrl: undefined,
+      actorEmail: undefined,
+      actorDisplayName: undefined,
+      actorAvatarUrl: undefined,
     });
   });
 });

@@ -72,9 +72,9 @@ describe("automations API route (POST)", () => {
     expect(sent).toMatchObject({
       name: "Daily sync",
       repositories: [{ repoOwner: "o", repoName: "r" }],
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
+      actorEmail: "ada@example.com",
+      actorDisplayName: "Ada Lovelace",
+      actorAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
     // Forbidden under strict identity enforcement: the control plane derives
     // created_by from the Bearer principal.
@@ -106,8 +106,8 @@ describe("automations API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent).toMatchObject({
-      authEmail: "pm@gmail.com",
-      authName: "Pat PM",
+      actorEmail: "pm@gmail.com",
+      actorDisplayName: "Pat PM",
     });
     expect(sent.userId).toBeUndefined();
     expect(sent.authProvider).toBeUndefined();

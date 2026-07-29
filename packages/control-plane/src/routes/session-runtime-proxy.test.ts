@@ -5,11 +5,11 @@ import type { SqlDatabase } from "../db/sql-database";
 import { sessionRuntimeProxyRoutes } from "./session-runtime-proxy";
 import type { Env } from "../types";
 
-function createCtx(): RequestContext {
+function createCtx(db: SqlDatabase = {} as SqlDatabase): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
-    db: {} as SqlDatabase,
+    db,
     principal: {
       kind: "user",
       userId: "user-1",
@@ -61,6 +61,76 @@ describe("session runtime proxy routes", () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.events);
     expect(new URL(requests[0].url).search).toBe("?limit=10");
+  });
+
+  it("returns deduplicated canonical participant profiles with safe fields only", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({
+        participants: [
+          { id: "p-1", userId: "user-1" },
+          { id: "p-2", userId: "user-1" },
+          { id: "p-3", userId: "deleted-user" },
+        ],
+      })
+    );
+    const bind = vi.fn();
+    const statement = { bind };
+    bind.mockReturnValue(statement);
+    const db = {
+      prepare: vi.fn(() => statement),
+      batch: vi.fn(async () => [
+        {
+          results: [
+            {
+              id: "user-1",
+              display_name: "Ada Lovelace",
+              email: "private@example.com",
+              avatar_url: "https://avatars.example/ada",
+              created_at: 1,
+              updated_at: 2,
+            },
+          ],
+          meta: { changes: 0 },
+        },
+      ]),
+    } as unknown as SqlDatabase;
+    const { handler, match } = getHandler("GET", "/sessions/session-1/participant-profiles");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participant-profiles"),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      profiles: {
+        "user-1": {
+          userId: "user-1",
+          displayName: "Ada Lovelace",
+          avatarUrl: "https://avatars.example/ada",
+        },
+      },
+    });
+    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user");
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("preserves participant runtime errors without querying profiles", async () => {
+    const fetch = vi.fn(async () => Response.json({ error: "missing" }, { status: 404 }));
+    const db = { prepare: vi.fn(), batch: vi.fn() } as unknown as SqlDatabase;
+    const { handler, match } = getHandler("GET", "/sessions/session-1/participant-profiles");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participant-profiles"),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(404);
+    expect(db.prepare).not.toHaveBeenCalled();
   });
 
   it("adapts title updates to the internal runtime contract", async () => {

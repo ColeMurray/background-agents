@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS participants (
   scm_login TEXT,                                   -- SCM username
   scm_email TEXT,                                   -- For git commit attribution
   scm_name TEXT,                                    -- Display name for git commits
-  auth_name TEXT,                                   -- Provider-agnostic display name (e.g. Google/OIDC) for presence
+  auth_name TEXT,                                   -- Dormant legacy profile snapshot; retained for schema compatibility
   role TEXT NOT NULL DEFAULT 'member',              -- 'owner', 'member'
   -- Token storage (AES-GCM encrypted)
   scm_access_token_encrypted TEXT,

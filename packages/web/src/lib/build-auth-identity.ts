@@ -5,9 +5,9 @@ export interface AuthDisplayUser {
 }
 
 export interface AuthDisplay {
-  readonly authEmail?: string;
-  readonly authName?: string;
-  readonly authAvatarUrl?: string;
+  readonly actorEmail?: string;
+  readonly actorDisplayName?: string;
+  readonly actorAvatarUrl?: string;
 }
 
 /**
@@ -19,8 +19,8 @@ export interface AuthDisplay {
  */
 export function buildAuthDisplay(user: AuthDisplayUser | null | undefined): AuthDisplay {
   return {
-    authEmail: user?.email ?? undefined,
-    authName: user?.name ?? undefined,
-    authAvatarUrl: user?.image ?? undefined,
+    actorEmail: user?.email ?? undefined,
+    actorDisplayName: user?.name ?? undefined,
+    actorAvatarUrl: user?.image ?? undefined,
   };
 }

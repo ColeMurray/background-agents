@@ -339,6 +339,7 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
       author: {
         participantId: participant.id,
+        userId: participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },

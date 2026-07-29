@@ -547,7 +547,6 @@ describe("SessionRepository", () => {
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
-        authName: "Authenticated User",
         scmEmail: "test@example.com",
         scmAccessTokenEncrypted: "encrypted-token",
         scmTokenExpiresAt: 9000,
@@ -563,7 +562,6 @@ describe("SessionRepository", () => {
         "gh-123",
         "testuser",
         "Test User",
-        "Authenticated User",
         "test@example.com",
         "encrypted-token",
         null,
@@ -591,7 +589,6 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
-        null,
         "member",
         1000,
       ]);
@@ -603,15 +600,15 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
-        authName: "Authenticated User",
+        scmEmail: "new@example.com",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
       expect(mock.calls[0].params[0]).toBe(null); // scmUserId
       expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[3]).toBe("Authenticated User");
-      expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[3]).toBe("new@example.com");
+      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
     });
   });
 

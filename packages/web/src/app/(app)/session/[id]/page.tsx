@@ -50,6 +50,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
+import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -85,6 +86,11 @@ function SessionPageContent() {
     reconnect,
     loadOlderEvents,
   } = useSessionSocket(sessionId);
+  const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
+    sessionId,
+    participants,
+    events
+  );
 
   const fallbackSessionInfo = useMemo(
     () => ({
@@ -236,6 +242,7 @@ function SessionPageContent() {
             events={events}
             sessionId={sessionId}
             currentParticipantId={currentParticipantId}
+            participantProfiles={profiles}
             isProcessing={isProcessing}
             loadingHistory={loadingHistory}
             showSkeleton={showTimelineSkeleton}
@@ -301,7 +308,7 @@ function SessionPageContent() {
               <SessionRightSidebar
                 sessionId={sessionId}
                 sessionState={sessionState}
-                participants={participants}
+                participants={profiledParticipants}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -333,7 +340,7 @@ function SessionPageContent() {
             <SessionRightSidebar
               sessionId={sessionId}
               sessionState={sessionState}
-              participants={participants}
+              participants={profiledParticipants}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -356,7 +363,7 @@ function SessionPageContent() {
           onReturnFocus={focusDetailsTrigger}
           sessionId={sessionId}
           sessionState={sessionState}
-          participants={participants}
+          participants={profiledParticipants}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}

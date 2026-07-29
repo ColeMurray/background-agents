@@ -200,9 +200,9 @@ describe("sessions API route (POST)", () => {
       repoOwner: "o",
       repoName: "r",
       model: "m",
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
+      actorEmail: "ada@example.com",
+      actorDisplayName: "Ada Lovelace",
+      actorAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
     });
     // Forbidden under strict identity enforcement: the control plane derives
     // these from the Bearer principal, so the web must not send them.
@@ -235,8 +235,8 @@ describe("sessions API route (POST)", () => {
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
     expect(sent).toMatchObject({
-      authEmail: "pm@gmail.com",
-      authName: "Pat PM",
+      actorEmail: "pm@gmail.com",
+      actorDisplayName: "Pat PM",
     });
     expect(sent.userId).toBeUndefined();
     expect(sent.authProvider).toBeUndefined();

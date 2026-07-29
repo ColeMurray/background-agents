@@ -88,7 +88,7 @@ describe("POST /internal/prompt", () => {
     const data = JSON.parse(matching[0].data);
     expect(data.content).toBe("Refactor auth");
     expect(data.messageId).toBe(messageId);
-    expect(data.author).toBeDefined();
+    expect(data.author).toEqual(expect.objectContaining({ userId: "user-1" }));
   });
 
   it("stores attachments as JSON", async () => {

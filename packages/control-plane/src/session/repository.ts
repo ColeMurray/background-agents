@@ -47,7 +47,8 @@ export interface WsClientMappingResult {
   user_id: string;
   scm_name: string | null;
   scm_login: string | null;
-  auth_name: string | null;
+  /** Dormant legacy column may still be present on older mapping fixtures. */
+  auth_name?: string | null;
 }
 
 /**
@@ -134,7 +135,6 @@ export interface CreateParticipantData {
   scmUserId?: string | null;
   scmLogin?: string | null;
   scmName?: string | null;
-  authName?: string | null;
   scmEmail?: string | null;
   scmAccessTokenEncrypted?: string | null;
   scmRefreshTokenEncrypted?: string | null;
@@ -150,7 +150,6 @@ export interface UpdateParticipantData {
   scmUserId?: string | null;
   scmLogin?: string | null;
   scmName?: string | null;
-  authName?: string | null;
   scmEmail?: string | null;
   scmAccessTokenEncrypted?: string | null;
   scmRefreshTokenEncrypted?: string | null;
@@ -665,14 +664,13 @@ export class SessionRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, auth_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
       data.scmUserId ?? null,
       data.scmLogin ?? null,
       data.scmName ?? null,
-      data.authName ?? null,
       data.scmEmail ?? null,
       data.scmAccessTokenEncrypted ?? null,
       data.scmRefreshTokenEncrypted ?? null,
@@ -688,7 +686,6 @@ export class SessionRepository {
          scm_user_id = COALESCE(?, scm_user_id),
          scm_login = COALESCE(?, scm_login),
          scm_name = COALESCE(?, scm_name),
-         auth_name = COALESCE(?, auth_name),
          scm_email = COALESCE(?, scm_email),
          scm_access_token_encrypted = COALESCE(?, scm_access_token_encrypted),
          scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
@@ -697,7 +694,6 @@ export class SessionRepository {
       data.scmUserId ?? null,
       data.scmLogin ?? null,
       data.scmName ?? null,
-      data.authName ?? null,
       data.scmEmail ?? null,
       data.scmAccessTokenEncrypted ?? null,
       data.scmRefreshTokenEncrypted ?? null,
@@ -1054,7 +1050,7 @@ export class SessionRepository {
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, p.user_id, p.scm_name, p.scm_login, p.auth_name
+      `SELECT m.participant_id, m.client_id, p.user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,

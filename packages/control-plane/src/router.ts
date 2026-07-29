@@ -162,7 +162,7 @@ function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isBrowserAuthProxyRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing)$/.test(path) ||
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
 }

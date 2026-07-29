@@ -1360,6 +1360,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       participant: {
         participantId: participant.id,
+        userId: participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(
           participant.scm_login,
