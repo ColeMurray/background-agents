@@ -211,6 +211,20 @@ describe("long response handling", () => {
     expect(texts.join(" ")).not.toContain("truncated");
   });
 
+  it("requests expanded rendering for every completion response section", () => {
+    const responseSections = buildCompletionBlocks(
+      "sess-1",
+      { ...BASE_RESPONSE, textContent: "x".repeat(4000) },
+      BASE_CONTEXT,
+      "https://inspect.example.com"
+    ).filter((block) => block.type === "section");
+
+    expect(responseSections.length).toBeGreaterThan(1);
+    for (const block of responseSections) {
+      expect(block).toHaveProperty("expand", true);
+    }
+  });
+
   it("preserves whitespace exactly across section boundaries", () => {
     const textContent = `\n  alpha\n\n\n\n\nbeta\n\n${"x".repeat(4000)}  \n`;
     const sections = splitIntoSlackSections(textContent);

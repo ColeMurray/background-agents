@@ -10,6 +10,7 @@ import { escapeMrkdwnText, type ManualPullRequestArtifactMetadata } from "@open-
  */
 interface SlackBlock {
   type: string;
+  expand?: boolean;
   text?: { type: string; text: string };
   elements?: Array<{ type: string; text?: unknown; url?: string; action_id?: string }>;
 }
@@ -61,7 +62,7 @@ export function buildCompletionBlocks(
     blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
   } else {
     for (const section of sections) {
-      blocks.push({ type: "section", text: { type: "mrkdwn", text: section } });
+      blocks.push({ type: "section", expand: true, text: { type: "mrkdwn", text: section } });
     }
   }
 
