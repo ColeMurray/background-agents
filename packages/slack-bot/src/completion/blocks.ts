@@ -199,7 +199,6 @@ function sliceAtCodePointBoundary(text: string, maxChars: number): string {
   const lastCodeUnit = text.charCodeAt(end - 1);
   const nextCodeUnit = text.charCodeAt(end);
   if (
-    end > 1 &&
     lastCodeUnit >= 0xd800 &&
     lastCodeUnit <= 0xdbff &&
     nextCodeUnit >= 0xdc00 &&
@@ -286,6 +285,9 @@ export function splitIntoSlackSections(
       const budget =
         maxChars - reopenPrefix(start).length - (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
       const taken = sliceAtCodePointBoundary(rest, Math.max(1, budget));
+      if (!taken) {
+        throw new RangeError("Section budget is too small to fit the next Unicode code point");
+      }
       sectionStart = start;
       body = taken;
       sectionEnd = advanceFence(start, taken);

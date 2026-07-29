@@ -231,6 +231,12 @@ describe("long response handling", () => {
     }
   });
 
+  it("rejects a section budget that cannot fit the next Unicode code point", () => {
+    expect(() => splitIntoSlackSections("😀", 1)).toThrow(
+      new RangeError("Section budget is too small to fit the next Unicode code point")
+    );
+  });
+
   it("keeps Unicode code points intact when adding the truncation marker", () => {
     for (let prefixLength = 2900; prefixLength <= 3000; prefixLength += 1) {
       const textContent = `${"a".repeat(prefixLength)}😀${"b".repeat(4000)}\n\nmore`;
