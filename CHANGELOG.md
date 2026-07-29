@@ -10,6 +10,9 @@ authentication routes through a signed proxy, and browser resource requests requ
 web-service channel and the browser session. Legacy browser tokens are retired during migration, so
 existing users must sign in again after upgrading.
 
+Note: GitHub sign-in requires the GitHub App `Email addresses: Read-only` account permission —
+without it the callback fails with a misleading `state_mismatch` error.
+
 ## July 24, 2026
 
 **Claude Opus 5.** Adds `claude-opus-5` to the model picker and integrations, with adaptive thinking
