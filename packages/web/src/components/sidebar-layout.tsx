@@ -179,7 +179,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           onPointerDownCapture={sidebarPull.handlePointerDown}
           onPointerMoveCapture={sidebarPull.handlePointerMove}
           onPointerUpCapture={sidebarPull.handlePointerUp}
-          onPointerCancelCapture={sidebarPull.reset}
+          onPointerCancelCapture={sidebarPull.handlePointerCancel}
         >
           {/* Mobile: overlay backdrop */}
           {isMobile && (
