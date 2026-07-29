@@ -138,20 +138,15 @@ export function SessionHeader({
                 className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
               />
             ) : (
-              <h1
-                className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
-                onClick={handleStartRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleStartRename();
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                title="Click to rename"
-              >
-                {resolvedTitle}
+              <h1 className="text-sm font-medium text-foreground max-w-40 truncate">
+                <button
+                  type="button"
+                  className="max-w-full truncate cursor-text text-left"
+                  onClick={handleStartRename}
+                  title="Click to rename"
+                >
+                  {resolvedTitle}
+                </button>
               </h1>
             )}
             <p className="text-sm text-muted-foreground">{repoLabel}</p>

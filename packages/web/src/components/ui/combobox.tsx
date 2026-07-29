@@ -260,7 +260,6 @@ export function Combobox<T = string>({
         className={triggerClassName}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-activedescendant={open ? activeOptionId : undefined}
       >
         {children}
       </button>
