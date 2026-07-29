@@ -76,7 +76,7 @@ describe("CollapsedSidebarControls", () => {
 });
 
 describe("mobile sidebar drag", () => {
-  it("opens after swiping right from the left edge", () => {
+  it("opens after swiping right from the inset edge handle", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
     vi.mocked(useAuthSession).mockReturnValue({
@@ -91,22 +91,23 @@ describe("mobile sidebar drag", () => {
       width: 288,
     } as DOMRect);
     const dragHandle = screen.getByTestId("mobile-sidebar-drag-handle");
+    expect(dragHandle).toHaveClass("left-6", "w-6");
     fireEvent.pointerDown(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 32,
       clientY: 200,
     });
     fireEvent.pointerMove(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 100,
+      clientX: 124,
       clientY: 202,
     });
     fireEvent.pointerUp(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 100,
+      clientX: 124,
       clientY: 202,
     });
 
@@ -131,13 +132,13 @@ describe("mobile sidebar drag", () => {
     fireEvent.pointerDown(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 8,
+      clientX: 32,
       clientY: 200,
     });
     fireEvent.pointerMove(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 50,
+      clientX: 74,
       clientY: 200,
     });
     fireEvent.pointerUp(dragHandle, { pointerId: 1, pointerType: "touch" });
