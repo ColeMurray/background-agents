@@ -42,6 +42,7 @@ interface InitRequest {
   model?: string;
   reasoningEffort?: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmLogin?: string;
   scmName?: string;
   scmEmail?: string;
@@ -240,6 +241,7 @@ export function createSessionLifecycleHandler(
       deps.repository.createParticipant({
         id: participantId,
         userId: body.userId,
+        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,

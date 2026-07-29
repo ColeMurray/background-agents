@@ -1297,6 +1297,7 @@ export class SchedulerDO extends DurableObject<Env> {
     await this.enqueueSessionPrompt(sessionId, {
       content: instructionsOverride ?? automation.instructions,
       authorId: automation.created_by,
+      canonicalUserId: automation.user_id,
       source: "automation",
       callbackContext,
     });
@@ -1331,9 +1332,11 @@ export class SchedulerDO extends DurableObject<Env> {
     };
 
     try {
+      const identity = await new UserStore(this.db).getIdentity("slack", event.actorUserId);
       await this.enqueueSessionPrompt(sessionId, {
         content: event.text,
         authorId: `slack:${event.actorUserId}`,
+        canonicalUserId: identity?.userId,
         source: "slack",
         callbackContext,
       });
@@ -1361,6 +1364,7 @@ export class SchedulerDO extends DurableObject<Env> {
     body: {
       content: string;
       authorId: string;
+      canonicalUserId?: string | null;
       source: string;
       callbackContext: AutomationCallbackContext | SlackCallbackContext;
     }

@@ -70,6 +70,7 @@ describe("session runtime proxy routes", () => {
           { id: "p-1", userId: "user-1" },
           { id: "p-2", userId: "user-1" },
           { id: "p-3", userId: "deleted-user" },
+          { id: "p-4", userId: "slack:U123", canonicalUserId: "user-bot" },
         ],
       })
     );
@@ -86,6 +87,14 @@ describe("session runtime proxy routes", () => {
               display_name: "Ada Lovelace",
               email: "private@example.com",
               avatar_url: "https://avatars.example/ada",
+              created_at: 1,
+              updated_at: 2,
+            },
+            {
+              id: "user-bot",
+              display_name: "Build Bot",
+              email: null,
+              avatar_url: "https://avatars.example/bot",
               created_at: 1,
               updated_at: 2,
             },
@@ -111,9 +120,14 @@ describe("session runtime proxy routes", () => {
           displayName: "Ada Lovelace",
           avatarUrl: "https://avatars.example/ada",
         },
+        "user-bot": {
+          userId: "user-bot",
+          displayName: "Build Bot",
+          avatarUrl: "https://avatars.example/bot",
+        },
       },
     });
-    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user");
+    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user", "user-bot");
     expect(fetch).toHaveBeenCalledOnce();
   });
 

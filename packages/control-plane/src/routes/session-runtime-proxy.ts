@@ -95,7 +95,7 @@ async function handleParticipantProfiles(
   }
 
   const users = await new UserStore(ctx.db).getUsersByIds(
-    participants.map((participant) => participant.userId)
+    participants.map((participant) => participant.canonicalUserId ?? participant.userId)
   );
   const profiles = Object.fromEntries(
     users.map((user): [string, SessionParticipantProfile] => [

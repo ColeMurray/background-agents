@@ -1325,7 +1325,7 @@ export class SessionDO extends DurableObject<Env> {
     // Build client info from participant data
     const clientInfo: ClientInfo = {
       participantId: participant.id,
-      userId: participant.user_id,
+      userId: participant.canonical_user_id ?? participant.user_id,
       name: resolveParticipantName(participant),
       avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
@@ -1360,7 +1360,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       participant: {
         participantId: participant.id,
-        userId: participant.user_id,
+        userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(
           participant.scm_login,
@@ -1402,7 +1402,7 @@ export class SessionDO extends DurableObject<Env> {
     this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
-      userId: mapping.user_id,
+      userId: mapping.canonical_user_id ?? mapping.user_id,
       name: resolveParticipantName(mapping),
       avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",

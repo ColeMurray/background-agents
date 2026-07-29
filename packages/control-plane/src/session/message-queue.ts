@@ -339,7 +339,7 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
       author: {
         participantId: participant.id,
-        userId: participant.user_id,
+        userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },
@@ -360,10 +360,20 @@ export class SessionMessageQueue {
   ): Promise<{ messageId: string; status: "queued" }> {
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
-      participant = this.participantService.create(
-        data.authorId,
-        data.scmEnrichment?.name || data.authorId
-      );
+      const name = data.scmEnrichment?.name || data.authorId;
+      participant = data.canonicalUserId
+        ? this.participantService.create(data.authorId, name, data.canonicalUserId)
+        : this.participantService.create(data.authorId, name);
+    }
+
+    if (data.canonicalUserId) {
+      this.repository.updateParticipantCoalesce(participant.id, {
+        canonicalUserId: data.canonicalUserId,
+      });
+      participant = this.repository.getParticipantById(participant.id) ?? {
+        ...participant,
+        canonical_user_id: data.canonicalUserId,
+      };
     }
 
     if (data.scmEnrichment !== undefined) {

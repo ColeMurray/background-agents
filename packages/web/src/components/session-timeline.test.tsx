@@ -67,4 +67,24 @@ describe("user message authors", () => {
       "https://historical.example/avatar"
     );
   });
+
+  it("preserves event fallbacks when canonical profile fields are null", () => {
+    render(
+      <EventItem
+        event={event("user-2")}
+        sessionId="session-1"
+        currentParticipantId="participant-1"
+        participantProfiles={{
+          "user-2": { userId: "user-2", displayName: null, avatarUrl: null },
+        }}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.getByText("Historical Name")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Historical Name" })).toHaveAttribute(
+      "src",
+      "https://historical.example/avatar"
+    );
+  });
 });

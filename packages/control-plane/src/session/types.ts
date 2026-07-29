@@ -64,6 +64,7 @@ export function sessionHasRepository(session: SessionRow): session is Repository
 export interface ParticipantRow {
   id: string;
   user_id: string;
+  canonical_user_id?: string | null;
   scm_user_id: string | null;
   scm_login: string | null;
   scm_email: string | null;

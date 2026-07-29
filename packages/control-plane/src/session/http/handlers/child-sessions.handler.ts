@@ -58,6 +58,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         baseBranch: session.base_branch,
         owner: {
           userId: owner.user_id,
+          ...(owner.canonical_user_id ? { canonicalUserId: owner.canonical_user_id } : {}),
           scmUserId: owner.scm_user_id,
           scmLogin: owner.scm_login,
           scmName: owner.scm_name,

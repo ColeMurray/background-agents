@@ -72,6 +72,18 @@ describe("useSessionParticipantProfiles", () => {
     expect(result.current.participants[0]).toEqual(presence);
   });
 
+  it("preserves transport fallbacks when canonical profile fields are null", () => {
+    swrState.data = {
+      profiles: {
+        "user-1": { userId: "user-1", displayName: null, avatarUrl: null },
+      },
+    };
+
+    const { result } = renderHook(() => useSessionParticipantProfiles("session-1", [presence], []));
+
+    expect(result.current.participants[0]).toEqual(presence);
+  });
+
   it("revalidates once when presence or events introduce an unknown userId", async () => {
     swrState.data = { profiles: {} };
     const { rerender } = renderHook(

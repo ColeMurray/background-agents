@@ -17,6 +17,7 @@ import { copyToClipboard } from "@/lib/format";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
+import { resolveParticipantDisplay } from "@/lib/participant-display";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -392,10 +393,15 @@ function UserMessageEvent({
       ? event.author.participantId === currentParticipantId
       : !event.author;
   const profile = event.author?.userId ? participantProfiles[event.author.userId] : undefined;
-  const authorName = isCurrentUser
-    ? "You"
-    : profile?.displayName || event.author?.name || "Unknown User";
-  const avatar = profile ? (profile.avatarUrl ?? undefined) : event.author?.avatar;
+  const display = resolveParticipantDisplay(
+    {
+      name: event.author?.name || "Unknown User",
+      avatar: event.author?.avatar,
+    },
+    profile
+  );
+  const authorName = isCurrentUser ? "You" : display.name;
+  const avatar = display.avatar;
 
   return (
     <MessageFrame

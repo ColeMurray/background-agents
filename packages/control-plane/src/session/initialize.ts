@@ -176,6 +176,7 @@ export async function initializeSession(
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,
+          canonicalUserId: input.platformUserId,
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,

@@ -355,12 +355,13 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("includes canonical userId and falls back to it without SCM identity", () => {
+  it("uses the canonical profile userId instead of a bot transport identity", () => {
     const h = buildQueue();
     const participant = createParticipant({
       scm_name: null,
       scm_login: null,
-      user_id: "user-pat",
+      user_id: "slack:U123",
+      canonical_user_id: "user-pat",
     });
 
     h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
@@ -369,7 +370,7 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({
         type: "sandbox_event",
         event: expect.objectContaining({
-          author: expect.objectContaining({ userId: "user-pat", name: "user-pat" }),
+          author: expect.objectContaining({ userId: "user-pat", name: "slack:U123" }),
         }),
       })
     );

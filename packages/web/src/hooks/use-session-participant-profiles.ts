@@ -8,6 +8,7 @@ import {
 } from "@open-inspect/shared";
 import { useEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
+import { resolveParticipantDisplay } from "@/lib/participant-display";
 
 export function useSessionParticipantProfiles(
   sessionId: string,
@@ -52,10 +53,10 @@ export function useSessionParticipantProfiles(
       participants.map((participant) => {
         const profile = profiles[participant.userId];
         if (!profile) return participant;
+        const display = resolveParticipantDisplay(participant, profile);
         return {
           ...participant,
-          name: profile.displayName || participant.name,
-          avatar: profile.avatarUrl ?? undefined,
+          ...display,
         };
       }),
     [participants, profiles]

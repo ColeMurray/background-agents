@@ -270,6 +270,7 @@ export const spawnContextSchema = z.object({
   baseBranch: z.string().nullable(),
   owner: z.object({
     userId: z.string(),
+    canonicalUserId: z.string().nullable().optional(),
     scmUserId: z.string().nullable(),
     scmLogin: z.string().nullable(),
     scmName: z.string().nullable(),

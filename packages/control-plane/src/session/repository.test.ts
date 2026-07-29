@@ -544,6 +544,7 @@ describe("SessionRepository", () => {
       repo.createParticipant({
         id: "p-1",
         userId: "user-1",
+        canonicalUserId: "canonical-user-1",
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
@@ -559,6 +560,7 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "p-1",
         "user-1",
+        "canonical-user-1",
         "gh-123",
         "testuser",
         "Test User",
@@ -589,6 +591,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        null,
         "member",
         1000,
       ]);
@@ -605,10 +608,11 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
-      expect(mock.calls[0].params[0]).toBe(null); // scmUserId
-      expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[3]).toBe("new@example.com");
-      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[0]).toBe(null); // canonicalUserId
+      expect(mock.calls[0].params[1]).toBe(null); // scmUserId
+      expect(mock.calls[0].params[2]).toBe("newlogin");
+      expect(mock.calls[0].params[4]).toBe("new@example.com");
+      expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });
 

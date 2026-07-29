@@ -99,13 +99,14 @@ export class ParticipantService {
    * Create a new participant with "member" role.
    * Returns the constructed ParticipantRow without a DB round-trip.
    */
-  create(userId: string, name: string): ParticipantRow {
+  create(userId: string, name: string, canonicalUserId?: string): ParticipantRow {
     const id = this.generateId();
     const now = Date.now();
 
     this.repository.createParticipant({
       id,
       userId,
+      canonicalUserId: canonicalUserId ?? null,
       scmName: name,
       role: "member",
       joinedAt: now,
@@ -114,6 +115,7 @@ export class ParticipantService {
     return {
       id,
       user_id: userId,
+      canonical_user_id: canonicalUserId ?? null,
       scm_user_id: null,
       scm_login: null,
       scm_email: null,

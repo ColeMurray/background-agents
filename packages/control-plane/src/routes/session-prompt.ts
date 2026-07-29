@@ -80,6 +80,7 @@ async function handleSessionPrompt(
   // anonymous. callbackContext is a completion notification channel — only
   // the bots that own callbacks may attach one.
   const authorId = enforcement.enforced.participantUserId ?? "anonymous";
+  let canonicalUserId = enforcement.enforced.canonicalUserId ?? undefined;
   if (callbackContext === undefined && body.callbackContext !== undefined) {
     logger.warn("Dropped callbackContext from unauthorized principal", {
       event: "identity.callback_context_dropped",
@@ -101,6 +102,7 @@ async function handleSessionPrompt(
         userId = (await userStore.getUserById(authorId))?.id;
       }
       if (userId) {
+        canonicalUserId = userId;
         enrichment =
           (await resolveGitHubEnrichmentForRequest(
             env,
@@ -124,6 +126,7 @@ async function handleSessionPrompt(
     body: JSON.stringify({
       content: body.content,
       authorId,
+      canonicalUserId,
       source: body.source || "web",
       model: body.model,
       reasoningEffort: body.reasoningEffort,

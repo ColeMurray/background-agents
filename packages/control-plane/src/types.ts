@@ -194,6 +194,7 @@ export interface ArtifactResponse {
 export interface ParticipantResponse {
   id: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmLogin: string | null;
   scmName: string | null;
   role: ParticipantRole;

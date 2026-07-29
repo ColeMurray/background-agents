@@ -216,6 +216,7 @@ async function handleSpawnChild(
       body: JSON.stringify({
         content: body.prompt,
         authorId: spawnContext.owner.userId,
+        canonicalUserId: spawnContext.owner.canonicalUserId ?? parentUserId ?? undefined,
         source: "agent",
       }),
     });
