@@ -3,17 +3,15 @@
  */
 
 import type { AgentResponse, SlackCallbackContext } from "../types";
+import type {
+  SlackActionsBlock,
+  SlackButtonElement,
+  SlackContextBlock,
+  SlackSectionBlock,
+} from "../slack-blocks";
 import { escapeMrkdwnText, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 
-/**
- * Slack Block Kit block type (subset).
- */
-interface SlackBlock {
-  type: string;
-  expand?: boolean;
-  text?: { type: string; text: string };
-  elements?: Array<{ type: string; text?: unknown; url?: string; action_id?: string }>;
-}
+type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
 
 /**
  * Status emoji constants.
@@ -53,8 +51,8 @@ export function buildCompletionBlocks(
   response: AgentResponse,
   context: SlackCallbackContext,
   webAppUrl: string
-): SlackBlock[] {
-  const blocks: SlackBlock[] = [];
+): CompletionSlackBlock[] {
+  const blocks: CompletionSlackBlock[] = [];
 
   // 1. Response text, split across as many section blocks as it needs
   const sections = splitIntoSlackSections(response.textContent);
@@ -110,12 +108,7 @@ export function buildCompletionBlocks(
 
   const hasPrArtifact = response.artifacts.some((artifact) => artifact.type === "pr");
   const manualCreatePrUrl = getManualCreatePrUrl(response.artifacts);
-  const actionElements: Array<{
-    type: string;
-    text: { type: string; text: string };
-    url: string;
-    action_id: string;
-  }> = [
+  const actionElements: SlackButtonElement[] = [
     {
       type: "button",
       text: { type: "plain_text", text: "View Session" },
