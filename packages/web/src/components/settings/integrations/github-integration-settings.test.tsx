@@ -183,6 +183,62 @@ describe("GitHubIntegrationSettings", () => {
     );
   });
 
+  it("clears global model defaults without resetting unrelated settings", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          autoReviewOnOpen: false,
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "high",
+          codeReviewInstructions: "Focus on security.",
+        },
+      },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("combobox", { name: "Default reasoning effort" }));
+    await user.click(await screen.findByRole("option", { name: "Use model default" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: false,
+              model: "anthropic/claude-sonnet-4-6",
+              codeReviewInstructions: "Focus on security.",
+            },
+          },
+        }),
+      })
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Default model" }));
+    await user.click(await screen.findByRole("option", { name: "Use system default" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: false,
+              codeReviewInstructions: "Focus on security.",
+            },
+          },
+        }),
+      })
+    );
+  });
+
   it("repo auto-review override without an explicit value seeds from global default when saved", async () => {
     const user = userEvent.setup();
     setupSWR({

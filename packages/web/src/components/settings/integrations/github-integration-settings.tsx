@@ -11,6 +11,7 @@ import {
   type EnrichedRepository,
   type GitHubBotSettings,
   type GitHubGlobalConfig,
+  type ModelCategory,
   type ValidModel,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -42,6 +43,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CommitSigningSettings } from "./commit-signing-settings";
+import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -133,7 +135,7 @@ function GlobalSettingsSection({
 }: {
   settings: GitHubGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
-  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  enabledModelOptions: ModelCategory[];
 }) {
   const [model, setModel] = useState(settings?.defaults?.model ?? "");
   const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
@@ -183,8 +185,6 @@ function GlobalSettingsSection({
   }, [settings, initialized]);
 
   const isConfigured = settings !== null && settings !== undefined;
-  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
-
   const handleReset = () => {
     setShowResetDialog(true);
   };
@@ -285,62 +285,17 @@ function GlobalSettingsSection({
     <Section title="Defaults & Scope" description="Global behavior and repository scope.">
       {error && <Message tone="error" text={error} />}
 
-      <div className="grid sm:grid-cols-2 gap-3 mb-4">
-        <label className="text-sm">
-          <span className="block text-foreground font-medium mb-1">Default model</span>
-          <Select
-            value={model}
-            onValueChange={(nextModel) => {
-              setModel(nextModel);
-              if (effort && !isValidReasoningEffort(nextModel, effort)) {
-                setEffort("");
-              }
-              setDirty(true);
-              setError("");
-            }}
-          >
-            <SelectTrigger className="w-full" aria-label="Default model">
-              <SelectValue placeholder="Use system default" />
-            </SelectTrigger>
-            <SelectContent>
-              {enabledModelOptions.map((group) => (
-                <SelectGroup key={group.category}>
-                  <SelectLabel>{group.category}</SelectLabel>
-                  {group.models.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>
-                      {option.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-
-        <label className="text-sm">
-          <span className="block text-foreground font-medium mb-1">Default reasoning effort</span>
-          <Select
-            value={effort}
-            onValueChange={(value) => {
-              setEffort(value);
-              setDirty(true);
-              setError("");
-            }}
-            disabled={!reasoningConfig}
-          >
-            <SelectTrigger className="w-full" aria-label="Default reasoning effort">
-              <SelectValue placeholder="Use model default" />
-            </SelectTrigger>
-            <SelectContent>
-              {(reasoningConfig?.efforts ?? []).map((value) => (
-                <SelectItem key={value} value={value}>
-                  {value}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </label>
-      </div>
+      <ModelReasoningDefaultsFields
+        model={model}
+        reasoningEffort={effort}
+        modelOptions={enabledModelOptions}
+        onChange={(nextModel, nextEffort) => {
+          setModel(nextModel);
+          setEffort(nextEffort);
+          setDirty(true);
+          setError("");
+        }}
+      />
 
       <label
         htmlFor="auto-review-toggle"
@@ -598,7 +553,7 @@ function RepoOverridesSection({
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
-  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
@@ -682,7 +637,7 @@ function RepoOverrideRow({
   defaultAutoReviewOnOpen,
 }: {
   entry: RepoSettingsEntry;
-  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");
