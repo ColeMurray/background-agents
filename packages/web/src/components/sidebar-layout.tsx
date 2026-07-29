@@ -175,7 +175,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           {isMobile && !sidebar.isOpen && (
             <div
               data-testid="mobile-sidebar-drag-handle"
-              className="fixed inset-y-0 left-8 z-50 w-6 touch-pan-y"
+              className="fixed inset-y-0 left-0 z-50 w-5 touch-pan-y"
               aria-hidden="true"
               onPointerDown={sidebarPull.handlePointerDown}
               onPointerMove={sidebarPull.handlePointerMove}

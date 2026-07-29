@@ -1,13 +1,12 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
 import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
-import { MOBILE_SIDEBAR_HOLD_MS } from "@/hooks/use-mobile-sidebar-pull";
 
 expect.extend(matchers);
 
@@ -41,7 +40,6 @@ vi.mock("@/hooks/use-sidebar", () => ({
 
 afterEach(() => {
   cleanup();
-  vi.useRealTimers();
   vi.clearAllMocks();
   mocks.isMobile = false;
   mocks.sidebar.isOpen = true;
@@ -78,8 +76,7 @@ describe("CollapsedSidebarControls", () => {
 });
 
 describe("mobile sidebar drag", () => {
-  it("opens after holding the left edge and pulling right", () => {
-    vi.useFakeTimers();
+  it("opens after swiping right from the left edge", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
     vi.mocked(useAuthSession).mockReturnValue({
@@ -97,28 +94,26 @@ describe("mobile sidebar drag", () => {
     fireEvent.pointerDown(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 40,
+      clientX: 8,
       clientY: 200,
     });
-    act(() => vi.advanceTimersByTime(MOBILE_SIDEBAR_HOLD_MS));
     fireEvent.pointerMove(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 132,
+      clientX: 100,
       clientY: 202,
     });
     fireEvent.pointerUp(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 132,
+      clientX: 100,
       clientY: 202,
     });
 
     expect(mocks.sidebar.open).toHaveBeenCalledOnce();
   });
 
-  it("does not open when moved before the hold completes", () => {
-    vi.useFakeTimers();
+  it("does not open when the swipe is too short", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
     vi.mocked(useAuthSession).mockReturnValue({
@@ -136,16 +131,15 @@ describe("mobile sidebar drag", () => {
     fireEvent.pointerDown(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 40,
+      clientX: 8,
       clientY: 200,
     });
     fireEvent.pointerMove(dragHandle, {
       pointerId: 1,
       pointerType: "touch",
-      clientX: 62,
+      clientX: 50,
       clientY: 200,
     });
-    act(() => vi.advanceTimersByTime(MOBILE_SIDEBAR_HOLD_MS));
     fireEvent.pointerUp(dragHandle, { pointerId: 1, pointerType: "touch" });
 
     expect(mocks.sidebar.open).not.toHaveBeenCalled();

@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
 
-export const MOBILE_SIDEBAR_HOLD_MS = 300;
-
-const HOLD_TOLERANCE_PX = 10;
+const DIRECTION_LOCK_THRESHOLD_PX = 8;
 const OPEN_THRESHOLD_PX = 72;
 
 interface UseMobileSidebarPullOptions {
@@ -23,36 +21,23 @@ export function useMobileSidebarPull({
   const [dragDistance, setDragDistance] = useState(0);
   const [dragProgress, setDragProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
-  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const dragDistanceRef = useRef(0);
   const sidebarWidthRef = useRef(0);
-  const isDragActiveRef = useRef(false);
   const isEnabled = isMobile && !isSidebarOpen;
 
-  const clearHoldTimer = useCallback(() => {
-    if (holdTimerRef.current !== null) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-  }, []);
-
   const reset = useCallback(() => {
-    clearHoldTimer();
     dragStartRef.current = null;
     dragDistanceRef.current = 0;
     sidebarWidthRef.current = 0;
-    isDragActiveRef.current = false;
     setDragDistance(0);
     setDragProgress(0);
     setIsDragging(false);
-  }, [clearHoldTimer]);
+  }, []);
 
   useEffect(() => {
     if (!isEnabled) reset();
   }, [isEnabled, reset]);
-
-  useEffect(() => clearHoldTimer, [clearHoldTimer]);
 
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -65,11 +50,7 @@ export function useMobileSidebarPull({
       sidebarWidthRef.current = sidebarWidth;
       dragStartRef.current = { x: event.clientX, y: event.clientY };
       event.currentTarget.setPointerCapture?.(event.pointerId);
-      holdTimerRef.current = setTimeout(() => {
-        holdTimerRef.current = null;
-        isDragActiveRef.current = true;
-        setIsDragging(true);
-      }, MOBILE_SIDEBAR_HOLD_MS);
+      setIsDragging(true);
     },
     [getSidebarWidth, isEnabled, reset]
   );
@@ -81,12 +62,9 @@ export function useMobileSidebarPull({
 
       const deltaX = event.clientX - start.x;
       const deltaY = event.clientY - start.y;
-      if (!isDragActiveRef.current) {
-        if (Math.hypot(deltaX, deltaY) > HOLD_TOLERANCE_PX) reset();
-        return;
-      }
+      if (Math.hypot(deltaX, deltaY) < DIRECTION_LOCK_THRESHOLD_PX) return;
 
-      if (Math.abs(deltaY) > Math.abs(deltaX)) {
+      if (deltaX <= 0 || Math.abs(deltaY) > deltaX) {
         reset();
         return;
       }
@@ -101,7 +79,7 @@ export function useMobileSidebarPull({
   );
 
   const handlePointerUp = useCallback(() => {
-    const shouldOpen = isDragActiveRef.current && dragDistanceRef.current >= OPEN_THRESHOLD_PX;
+    const shouldOpen = dragDistanceRef.current >= OPEN_THRESHOLD_PX;
     reset();
     if (shouldOpen) onOpen();
   }, [onOpen, reset]);
