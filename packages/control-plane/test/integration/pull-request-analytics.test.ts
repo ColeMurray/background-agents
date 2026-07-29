@@ -6,22 +6,17 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { env } from "cloudflare:test";
 import type { AnalyticsPullRequestsResponse, SpawnSource } from "@open-inspect/shared";
-import { generateInternalToken } from "../../src/auth/internal";
 import { SessionIndexStore } from "../../src/db/session-index";
 import {
   SessionPullRequestStore,
   type SessionPullRequestRecord,
 } from "../../src/db/session-pull-request-store";
 import { cleanD1Tables } from "./cleanup";
+import { serviceFetch } from "./helpers";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}` };
-}
 
 function dateBucket(timestamp: number): string {
   return new Date(timestamp).toISOString().slice(0, 10);
@@ -174,9 +169,7 @@ describe("GET /analytics/pull-requests", () => {
       await prs.upsert(record);
     }
 
-    const response = await SELF.fetch("https://test.local/analytics/pull-requests?days=7", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/analytics/pull-requests?days=7");
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsPullRequestsResponse>();
 
@@ -243,9 +236,7 @@ describe("GET /analytics/pull-requests", () => {
   });
 
   it("returns zeroed aggregates when no PRs exist", async () => {
-    const response = await SELF.fetch("https://test.local/analytics/pull-requests?days=30", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/analytics/pull-requests?days=30");
     expect(response.status).toBe(200);
     const body = await response.json<AnalyticsPullRequestsResponse>();
 
@@ -262,9 +253,7 @@ describe("GET /analytics/pull-requests", () => {
   });
 
   it("rejects an invalid days parameter", async () => {
-    const response = await SELF.fetch("https://test.local/analytics/pull-requests?days=13", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/analytics/pull-requests?days=13");
     expect(response.status).toBe(400);
   });
 });

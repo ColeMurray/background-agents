@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import type { SlackChannelListing } from "@open-inspect/shared";
 
 interface ControlPlaneChannelsResponse {
@@ -15,13 +14,13 @@ interface ControlPlaneChannelsResponse {
  * array so the picker degrades to manual channel-ID entry on any failure.
  */
 export async function GET() {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const response = await controlPlaneFetch("/integration-settings/slack/channels");
+    const response = await controlPlaneUserFetch("/integration-settings/slack/channels");
     if (!response.ok) {
       const error = await response.text();
       console.error("Control plane slack channels error:", error);

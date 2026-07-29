@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 import { ActionBar } from "@/components/action-bar";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
@@ -11,11 +11,12 @@ import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
+import type { SessionStatus } from "@open-inspect/shared";
 
 type SessionPromptComposerProps = {
   session: {
     id: string;
-    status: string;
+    status: SessionStatus;
     artifacts: Artifact[];
     primaryRepo?: { repoOwner: string; repoName: string } | null;
     onArchive: () => void | Promise<void>;
@@ -68,11 +69,25 @@ export function SessionPromptComposer({
     handleDragLeave,
   } = useAttachmentDropZone({ locked: attachmentsLocked, onAdd: attachments.onAdd });
 
+  useLayoutEffect(() => {
+    const input = prompt.inputRef.current;
+    if (!input) return;
+
+    const resizeInput = () => {
+      input.style.height = "auto";
+      input.style.height = `${input.scrollHeight}px`;
+    };
+
+    resizeInput();
+    window.addEventListener("resize", resizeInput);
+    return () => window.removeEventListener("resize", resizeInput);
+  }, [prompt.inputRef, prompt.value]);
+
   return (
     <footer className="min-w-0 border-t border-border-muted flex-shrink-0">
       <form onSubmit={prompt.onSubmit} className="w-full min-w-0 max-w-4xl mx-auto p-4 pb-6">
         {/* Action bar above input */}
-        <div className="mb-3">
+        <div className="hidden mb-3 md:block">
           <ActionBar
             sessionId={session.id}
             sessionStatus={session.status}
@@ -99,7 +114,7 @@ export function SessionPromptComposer({
           />
 
           {/* Text input area with floating send button */}
-          <div className="relative">
+          <div className="relative flex flex-wrap items-end justify-end sm:block">
             <textarea
               ref={prompt.inputRef}
               value={prompt.value}
@@ -107,14 +122,18 @@ export function SessionPromptComposer({
               onKeyDown={prompt.onKeyDown}
               onPaste={handlePaste}
               disabled={prompt.draftLocked}
+              autoComplete="off"
               placeholder={
                 prompt.isProcessing ? "Type your next message..." : "Ask or build anything"
               }
-              className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground"
-              rows={3}
+              className="min-h-12 max-h-40 w-0 min-w-48 flex-1 resize-none overflow-y-auto bg-transparent px-4 py-3 leading-6 text-foreground placeholder:text-secondary-foreground focus:outline-none sm:block sm:min-h-[7.75rem] sm:w-full sm:px-4 sm:pt-4 sm:pb-12"
+              rows={1}
             />
             {/* Floating action buttons */}
-            <div className="absolute bottom-3 right-3 flex items-center gap-2">
+            <div
+              data-testid="prompt-actions"
+              className="flex shrink-0 items-center gap-1 pb-1.5 pr-2 sm:absolute sm:bottom-3 sm:right-3 sm:gap-2 sm:p-0"
+            >
               {attachments.isUploading && (
                 <span className="whitespace-nowrap text-xs text-muted-foreground">Uploading…</span>
               )}

@@ -259,7 +259,10 @@ describe("handleAgentSessionEvent environment targets", () => {
         return { ok: true, json: () => Promise.resolve({ config: null }) };
       }
       if (url === "https://internal/sessions") {
-        return { ok: true, json: () => Promise.resolve({ sessionId: "session-xyz" }) };
+        return {
+          ok: true,
+          json: () => Promise.resolve({ sessionId: "session-xyz", status: "created" }),
+        };
       }
       if (url === "https://internal/sessions/session-xyz/prompt") {
         return { ok: true, json: () => Promise.resolve({ ok: true }) };
@@ -288,6 +291,74 @@ describe("handleAgentSessionEvent environment targets", () => {
     return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
   }
 
+  async function runWithCreateSessionResponse(response: Response, traceId: string) {
+    const { kv, store } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({ "project-1": { environmentId: "env_abc" } }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env);
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://internal/environments") {
+        return Response.json({ environments: [environment], total: 1 });
+      }
+      if (url.startsWith("https://internal/integration-settings/linear/resolved/")) {
+        return Response.json({ config: null });
+      }
+      if (url === "https://internal/sessions") return response;
+      if (url === "https://internal/repos") return Response.json({ repos: [] });
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+
+    await handleAgentSessionEvent(makeWebhook(), env, traceId);
+
+    return {
+      issueSessionStored: store.has("issue:issue-1"),
+      requestedUrls: fetchMock.mock.calls.map(([input]) => String(input)),
+    };
+  }
+
+  async function followUpPromptForEventsResponse(
+    eventsResponse: Response,
+    traceId: string
+  ): Promise<Record<string, unknown>> {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "issue:issue-1": JSON.stringify({
+        sessionId: "session-xyz",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-42",
+        repoOwner: "acme",
+        repoName: "backend",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
+      .fetch;
+    controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/events?type=token&limit=20")) return eventsResponse;
+      if (url.endsWith("/prompt")) return Response.json({ ok: true });
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      userId: "follow-up-human-user",
+      content: { type: "prompt", body: "Please continue." },
+    };
+
+    await handleAgentSessionEvent(webhook, env, traceId);
+
+    const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
+      String(input).endsWith("/prompt")
+    );
+    return JSON.parse(String(promptCall?.[1]?.body)) as Record<string, unknown>;
+  }
+
   it("transitions an existing installation and creates an environment session", async () => {
     const { kv, store } = createFakeKV({
       "oauth:token:org-1": JSON.stringify({
@@ -297,7 +368,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       }),
       "config:project-repos": JSON.stringify({ "project-1": { environmentId: "env_abc" } }),
     });
-    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+    const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
     const fetchMock = stubControlPlane(env);
 
     await handleAgentSessionEvent(makeWebhook(), env, "trace-env-1");
@@ -306,9 +377,10 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body).toMatchObject({
       environmentId: "env_abc",
       title: "ENG-42: Wire the fullstack flow",
-      spawnSource: "linear-bot",
-      actorUserId: "human-user-1",
     });
+    // Identity travels via the signed actor assertion, never the body.
+    expect(body).not.toHaveProperty("spawnSource");
+    expect(body).not.toHaveProperty("actorUserId");
     expect(body).not.toHaveProperty("repoOwner");
     expect(body).not.toHaveProperty("repoName");
 
@@ -339,6 +411,29 @@ describe("handleAgentSessionEvent environment targets", () => {
     const tokenBody = tokenCall?.[1]?.body as URLSearchParams;
     expect(tokenBody.get("grant_type")).toBe("client_credentials");
     expect(tokenBody.has("refresh_token")).toBe(false);
+  });
+
+  it("does not store or prompt when the create-session response is malformed", async () => {
+    const result = await runWithCreateSessionResponse(
+      Response.json({ id: "session-xyz" }),
+      "trace-malformed-session"
+    );
+
+    expect(result.issueSessionStored).toBe(false);
+    expect(result.requestedUrls).not.toContain("https://internal/sessions/session-xyz/prompt");
+  });
+
+  it("does not store or prompt when the create-session response is invalid JSON", async () => {
+    const result = await runWithCreateSessionResponse(
+      new Response("{not-json", {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+      "trace-invalid-json-session"
+    );
+
+    expect(result.issueSessionStored).toBe(false);
+    expect(result.requestedUrls).not.toContain("https://internal/sessions/session-xyz/prompt");
   });
 
   it("creates an environment session from a label-matched team mapping", async () => {
@@ -468,7 +563,8 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
+      if (url.includes("/integration-settings/")) return Response.json({ config: null });
+      if (url.endsWith("/events?type=token&limit=20")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
       throw new Error(`Unexpected control-plane fetch to ${url}`);
     });
@@ -485,8 +581,9 @@ describe("handleAgentSessionEvent environment targets", () => {
       String(input).endsWith("/prompt")
     );
     const body = JSON.parse(String(promptCall?.[1]?.body)) as Record<string, unknown>;
+    // Identity travels via the signed actor assertion, never the body.
+    expect(body).not.toHaveProperty("authorId");
     expect(body).toMatchObject({
-      authorId: "linear:follow-up-human-user",
       callbackContext: {
         source: "linear",
         issueId: "issue-1",
@@ -500,6 +597,43 @@ describe("handleAgentSessionEvent environment targets", () => {
       },
     });
     expect(body.callbackContext).not.toHaveProperty("transitionIssueOnStart");
+  });
+
+  it("adds prior token context from a parsed events response", async () => {
+    const body = await followUpPromptForEventsResponse(
+      Response.json({
+        events: [
+          { type: "token", data: { content: "Most recent response." } },
+          { type: "token", data: { content: "Older response." } },
+        ],
+      }),
+      "trace-follow-up-context"
+    );
+
+    expect(body.content).toContain("Previous agent response");
+    expect(body.content).toContain("Most recent response.");
+    expect(body.content).not.toContain("Older response.");
+  });
+
+  it("skips prior token context when the events response is malformed", async () => {
+    const body = await followUpPromptForEventsResponse(
+      Response.json({ events: [{ type: "token", data: { content: 123 } }] }),
+      "trace-follow-up-bad-events"
+    );
+
+    expect(body.content).not.toContain("Previous agent response");
+  });
+
+  it("skips prior token context when the events response is invalid JSON", async () => {
+    const body = await followUpPromptForEventsResponse(
+      new Response("{not-json", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      "trace-follow-up-invalid-json-events"
+    );
+
+    expect(body.content).not.toContain("Previous agent response");
   });
 
   it("stops an existing session when Linear sends a stop signal", async () => {
@@ -573,7 +707,7 @@ describe("handleAgentSessionEvent environment targets", () => {
         createdAt: Date.now(),
       }),
     });
-    const env = makeLinearBotEnv(kv, { INTERNAL_CALLBACK_SECRET: "internal-secret" });
+    const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
     const controlPlaneFetch = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> })
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
@@ -594,7 +728,7 @@ describe("handleAgentSessionEvent environment targets", () => {
           },
         });
       }
-      if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
+      if (url.endsWith("/events?type=token&limit=20")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
       throw new Error(`Unexpected control-plane fetch to ${url}`);
     });
@@ -634,7 +768,8 @@ describe("handleAgentSessionEvent environment targets", () => {
       .fetch;
     controlPlaneFetch.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith("/events?limit=20")) return Response.json({ events: [] });
+      if (url.includes("/integration-settings/")) return Response.json({ config: null });
+      if (url.endsWith("/events?type=token&limit=20")) return Response.json({ events: [] });
       if (url.endsWith("/prompt")) return Response.json({ ok: true });
       throw new Error(`Unexpected control-plane fetch to ${url}`);
     });

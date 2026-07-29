@@ -14,6 +14,7 @@ import {
   type ValidModel,
 } from "@open-inspect/shared";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -181,7 +182,7 @@ function GlobalSettingsSection({
     setError("");
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
@@ -226,7 +227,7 @@ function GlobalSettingsSection({
     }
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
@@ -360,7 +361,10 @@ function GlobalSettingsSection({
       </div>
 
       <div className="mb-4">
-        <label className="block text-sm font-medium text-foreground mb-1">
+        <label
+          htmlFor="linear-issue-session-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
           Issue Session Instructions
         </label>
         <p className="text-xs text-muted-foreground mb-2">
@@ -369,6 +373,7 @@ function GlobalSettingsSection({
           conventions).
         </p>
         <Textarea
+          id="linear-issue-session-instructions"
           value={issueSessionInstructions}
           onChange={(e) => {
             setIssueSessionInstructions(e.target.value);
@@ -495,11 +500,14 @@ function RepoOverridesSection({
     if (!repository) return;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {} }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: {} }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -598,11 +606,14 @@ function RepoOverrideRow({
     if (effort) settings.reasoningEffort = effort;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -624,9 +635,12 @@ function RepoOverrideRow({
     if (!repository) return;
 
     try {
-      const res = await fetch(`${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`, {
-        method: "DELETE",
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "DELETE",
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);

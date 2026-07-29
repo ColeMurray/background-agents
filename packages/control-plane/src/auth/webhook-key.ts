@@ -7,6 +7,7 @@
 
 import { timingSafeEqual } from "@open-inspect/shared";
 import { encryptToken, decryptToken } from "./crypto";
+import { base64UrlEncode } from "./encoding";
 
 export function generateWebhookApiKey(): string {
   const bytes = new Uint8Array(32);
@@ -37,9 +38,4 @@ export async function decryptSentrySecret(
   encryptionKey: string
 ): Promise<string> {
   return decryptToken(encrypted, encryptionKey);
-}
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  const base64 = btoa(String.fromCharCode(...bytes));
-  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }

@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import type { ImageBuildRecordView } from "@open-inspect/shared";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeSupersededBuilds,
   type ImageBuildEnabledRepoView,
@@ -16,7 +15,7 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
  * the settings pages and the session-target picker.
  */
 export async function GET() {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -33,18 +32,20 @@ export async function GET() {
 
   try {
     const [enabledResponse, enabledReposResponse, statusResponse] = await Promise.all([
-      controlPlaneFetch("/image-builds/enabled"),
-      controlPlaneFetch("/image-builds/enabled-repos"),
-      controlPlaneFetch("/image-builds/status"),
+      controlPlaneUserFetch("/image-builds/enabled"),
+      controlPlaneUserFetch("/image-builds/enabled-repos"),
+      controlPlaneUserFetch("/image-builds/status"),
     ]);
 
     if (!enabledResponse.ok || !enabledReposResponse.ok || !statusResponse.ok) {
       return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 502 });
     }
 
-    const enabledData = await enabledResponse.json();
-    const enabledReposData = await enabledReposResponse.json();
-    const statusData = await statusResponse.json();
+    const [enabledData, enabledReposData, statusData] = await Promise.all([
+      enabledResponse.json(),
+      enabledReposResponse.json(),
+      statusResponse.json(),
+    ]);
 
     // The enabled feed also carries the cron's repository lists — serve the
     // scope identity plus the current fingerprint the status fold keys on.

@@ -36,6 +36,8 @@ from urllib.parse import quote
 import httpx
 import modal
 
+from sandbox_runtime.auth.service_auth import build_service_auth_headers
+
 from ..app import (
     app,
     function_image,
@@ -43,7 +45,6 @@ from ..app import (
     internal_api_secret,
     validate_control_plane_url,
 )
-from ..auth import generate_internal_token
 from ..clone_token import resolve_clone_token
 from ..log_config import get_logger
 from ..sandbox.manager import (
@@ -113,41 +114,52 @@ async def _terminate_build_sandbox(handle, build_id: str, reason: str) -> bool:
         return False
 
 
-def _outbound_secret() -> str:
-    """Get INTERNAL_CALLBACK_SECRET for authenticating outbound calls to the control plane."""
-    secret = os.environ.get("INTERNAL_CALLBACK_SECRET")
-    if not secret:
-        raise RuntimeError("INTERNAL_CALLBACK_SECRET not configured")
-    return secret
+def _outbound_auth_headers(method: str, url: str, body: str | None = None) -> dict[str, str]:
+    """Headers for an outbound control-plane call.
+
+    Signs with the scheduler's per-service sig1 credential (service "modal",
+    no actor — the scheduler acts for no one).
+    """
+    service_secret = os.environ.get("SERVICE_AUTH_SECRET")
+    if not service_secret:
+        raise RuntimeError("SERVICE_AUTH_SECRET not configured")
+    return build_service_auth_headers(
+        service="modal",
+        secret=service_secret,
+        method=method,
+        url=url,
+        body=body,
+    )
 
 
 async def _callback_with_retry(
     url: str,
     payload: dict,
-    secret: str | None = None,
+    callback_token: str,
 ) -> bool:
     """
-    POST a JSON payload to the callback URL with HMAC auth and retries.
+    POST a JSON payload to the build callback URL with retries.
+
+    Authenticates with the single-use callback token the control plane minted
+    at trigger time (presented as the bearer, like every provider's builder).
 
     Args:
         url: The callback URL to POST to
         payload: JSON body to send
-        secret: INTERNAL_CALLBACK_SECRET for auth. If None, reads from env.
+        callback_token: Bearer token for the callback routes
 
     Returns:
         True if the callback succeeded, False if all retries failed
     """
-    if secret is None:
-        secret = _outbound_secret()
+    body = json.dumps(payload)
     for attempt in range(CALLBACK_MAX_RETRIES):
         try:
-            token = generate_internal_token(secret)
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     url,
-                    json=payload,
+                    content=body,
                     headers={
-                        "Authorization": f"Bearer {token}",
+                        "Authorization": f"Bearer {callback_token}",
                         "Content-Type": "application/json",
                     },
                 )
@@ -253,6 +265,7 @@ async def build_image(
     repositories: list[dict],
     callback_url: str = "",
     failure_callback_url: str = "",
+    callback_token: str = "",
     build_id: str = "",
     user_env_vars: dict[str, str] | None = None,
     build_timeout_seconds: int | None = None,
@@ -277,6 +290,8 @@ async def build_image(
         failure_callback_url: URL to POST failure result to. Sent explicitly by
             the control plane (mirrors client.ts buildImage) so the failure
             route is never derived from callback_url's path.
+        callback_token: Single-use bearer for both callback routes, minted by
+            the control plane at trigger time.
         build_id: Build identifier from the control plane
         user_env_vars: Build secrets (merged by the control plane) injected
             into the build sandbox
@@ -378,6 +393,7 @@ async def build_image(
                     "runtime_version": build_logs.runtime_version,
                     "build_duration_seconds": round(build_duration, 2),
                 },
+                callback_token,
             )
 
     except Exception as e:
@@ -403,6 +419,7 @@ async def build_image(
                     "build_id": build_id,
                     "error": str(e),
                 },
+                callback_token,
             )
     finally:
         if handle is not None and not sandbox_terminated:
@@ -426,18 +443,12 @@ FAILED_BUILD_CLEANUP_SECONDS = 86400  # 24 hours
 TRIGGER_CAP_PER_TICK = 8
 
 
-async def _api_get(
-    url: str,
-    secret: str | None = None,
-) -> dict:
-    """GET a control plane endpoint with HMAC auth."""
-    if secret is None:
-        secret = _outbound_secret()
-    token = generate_internal_token(secret)
+async def _api_get(url: str) -> dict:
+    """GET a control plane endpoint with authenticated headers."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.get(
             url,
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_outbound_auth_headers("GET", url),
         )
         response.raise_for_status()
         return response.json()
@@ -446,18 +457,15 @@ async def _api_get(
 async def _api_post(
     url: str,
     payload: dict | None = None,
-    secret: str | None = None,
 ) -> dict:
-    """POST to a control plane endpoint with HMAC auth."""
-    if secret is None:
-        secret = _outbound_secret()
-    token = generate_internal_token(secret)
+    """POST to a control plane endpoint with authenticated headers."""
+    body = json.dumps(payload or {})
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             url,
-            json=payload or {},
+            content=body,
             headers={
-                "Authorization": f"Bearer {token}",
+                **_outbound_auth_headers("POST", url, body),
                 "Content-Type": "application/json",
             },
         )

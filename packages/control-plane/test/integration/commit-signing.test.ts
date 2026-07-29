@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 
-import { generateInternalToken } from "../../src/auth/internal";
+import { generateInternalToken } from "@open-inspect/shared";
 import { signGitPayloadWithOpenSshEd25519PrivateKey } from "../../src/auth/openssh-ed25519";
 import { CommitSigningStore } from "../../src/db/commit-signing";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth } from "./helpers";
+import { initNamedSession, seedSandboxAuth, serviceFetch } from "./helpers";
 
 const PRIVATE_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
@@ -131,10 +131,7 @@ describe("commit signing settings API", () => {
   beforeEach(cleanD1Tables);
 
   it("returns disabled metadata with no-store when no key is configured", async () => {
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-    const response = await SELF.fetch("https://test.local/commit-signing", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await serviceFetch("https://test.local/commit-signing");
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -142,13 +139,8 @@ describe("commit signing settings API", () => {
   });
 
   it("validates and stores a key while returning public metadata only", async () => {
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-    const response = await SELF.fetch("https://test.local/commit-signing", {
+    const response = await serviceFetch("https://test.local/commit-signing", {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify(WRITE_REQUEST),
     });
 
@@ -168,11 +160,8 @@ describe("commit signing settings API", () => {
 
   it("deletes the active ciphertext when signing is disabled", async () => {
     await saveConfiguration();
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-
-    const response = await SELF.fetch("https://test.local/commit-signing", {
+    const response = await serviceFetch("https://test.local/commit-signing", {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
     });
 
     expect(response.status).toBe(200);
@@ -191,14 +180,8 @@ describe("commit signing settings API", () => {
     await env.DB.prepare(
       "UPDATE commit_signing_configuration SET updated_at = 1 WHERE singleton_id = 1"
     ).run();
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-
-    const response = await SELF.fetch("https://test.local/commit-signing", {
+    const response = await serviceFetch("https://test.local/commit-signing", {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({
         privateKey: PRIVATE_KEY,
         committerName: "New Name",
@@ -230,14 +213,9 @@ describe("commit signing settings API", () => {
       "SELECT * FROM commit_signing_configuration WHERE singleton_id = 1"
     ).first();
     const submittedKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-bytes\n";
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
 
-    const response = await SELF.fetch("https://test.local/commit-signing", {
+    const response = await serviceFetch("https://test.local/commit-signing", {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({
         privateKey: submittedKey,
         committerName: "New Name",
@@ -270,7 +248,7 @@ describe("sandbox commit signing broker", () => {
 
   it.each(["GET", "POST"])("rejects a valid shared internal HMAC token for %s", async (method) => {
     const sessionName = await createSandboxSession("commit-signing-hmac");
-    const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
+    const token = await generateInternalToken("test-hmac-secret-for-integration-tests");
 
     const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/commit-signing`, {
       method,

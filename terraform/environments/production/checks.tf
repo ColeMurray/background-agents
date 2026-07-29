@@ -1,6 +1,6 @@
 # Verify the Vercel production URL matches our hardcoded pattern. If Vercel
-# assigns a different domain (e.g., due to naming conflicts), NEXTAUTH_URL and
-# cross-service references will silently break.
+# assigns a different domain (e.g., due to naming conflicts), browser-auth
+# redirects and cross-service references will silently break.
 check "vercel_url_matches" {
   assert {
     condition = (

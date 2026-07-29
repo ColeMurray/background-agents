@@ -5,9 +5,10 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
   consumeImageBuildCallbackTokenOrThrow,
+  verifyImageBuildArtifactCallbackTokenOrThrow,
   ImageBuildCallbackAuthError,
   markImageBuildFailedWithCallbackTokenOrThrow,
-  requireInternalImageBuildCallbackAuth,
+  markImageBuildReadyWithCallbackTokenOrThrow,
   verifyImageBuildCallbackTokenOrThrow,
 } from "./callback-auth";
 import {
@@ -30,6 +31,7 @@ import {
   type ImageBuildProvider,
   type ImageBuildProviderImageRef,
   type ImageBuildScope,
+  type MarkImageBuildReadyResult,
 } from "./model";
 import { ImageBuildPlanner, type PlannedCallbackAuth } from "./planner";
 import { ImageBuildReaper } from "./reaper";
@@ -56,14 +58,12 @@ type ImageBuildPlannerLike = Pick<
 
 export interface AcceptBuildCompleteCommand {
   completion: CompleteImageBuildCallback;
-  authorizationHeader?: string | null;
   callbackToken?: string | null;
   context: ImageBuildWorkflowContext;
 }
 
 export interface AcceptBuildFailedCommand {
   failure: FailImageBuildCallback;
-  authorizationHeader?: string | null;
   callbackToken?: string | null;
   context: ImageBuildWorkflowContext;
 }
@@ -449,34 +449,38 @@ export class ImageBuildWorkflow {
       return { type: "completion_accepted", finalization };
     }
 
-    // Internal-HMAC mode: authenticate before revealing anything about the
-    // payload's validity.
-    await this.requireInternalBuildCallbackAuth(command.authorizationHeader, build.id, ctx);
+    // provider_image mode (Modal): the builder authenticates with the same
+    // single-use token, bound to a row that never binds a provider session.
+    await this.requireTokenBuildCallbackAuth(command.callbackToken, {
+      buildId: build.id,
+      provider,
+      providerSessionId: null,
+      ctx,
+    });
     const validated = this.validateCompletion(completion);
     if (!completion.providerImageId) {
       throw new ImageBuildInvalidCallbackError("provider_image_id is required");
     }
     const providerImageId = completion.providerImageId;
 
-    let result;
-    try {
-      result = await this.store.tryMarkImageBuildReady(
-        validated.buildId,
-        provider,
+    // Consume the single-use token and commit the ready/superseded transition
+    // in ONE conditional store UPDATE. Unlike a separate consume-then-mark, a
+    // transient failure here cannot burn the token while the build stays
+    // 'building': the provider (Modal) retries with the same token and still
+    // commits, instead of being rejected as a replay while the already-built
+    // image leaks. The provider-session path pre-consumes instead — its token
+    // must be retired before the long deferred snapshot (see finalizeAndCommit).
+    const result = await this.markProviderImageBuildReady(
+      command.callbackToken,
+      { buildId: build.id, provider },
+      {
         providerImageId,
-        validated.repositoryShas,
-        validated.runtimeVersion,
-        validated.buildDurationMs
-      );
-    } catch (e) {
-      logger.error("image_build.build_complete_error", {
-        error: errorMessage(e),
-        build_id: validated.buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      throw new ImageBuildCompleteFailedError("Failed to mark build as ready", e);
-    }
+        repositoryShas: validated.repositoryShas,
+        runtimeVersion: validated.runtimeVersion,
+        buildDurationMs: validated.buildDurationMs,
+      },
+      ctx
+    );
 
     switch (result.type) {
       case "marked_ready": {
@@ -538,7 +542,12 @@ export class ImageBuildWorkflow {
     const row = await this.store.getBuildRow(completion.buildId);
     if (!row || getImageBuildCallbackMode(row.provider) !== "provider_image") return;
 
-    await this.requireInternalBuildCallbackAuth(command.authorizationHeader, row.id, ctx);
+    await this.requireArtifactRecordingCallbackAuth(
+      command.callbackToken,
+      row.id,
+      row.provider,
+      ctx
+    );
 
     const recorded = await this.store.recordArtifactOnSupersededBuild(
       row.id,
@@ -754,28 +763,18 @@ export class ImageBuildWorkflow {
       return cleanup ? { type: "build_failed", cleanup } : { type: "build_failed" };
     }
 
-    await this.requireInternalBuildCallbackAuth(command.authorizationHeader, build.id, ctx);
-
-    let updated: boolean;
-    try {
-      updated = await this.store.markBuildFailed(
-        failure.buildId,
-        build.provider,
-        failure.errorMessage
-      );
-    } catch (e) {
-      logger.error("image_build.build_failed_error", {
-        error: errorMessage(e),
-        build_id: failure.buildId,
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      throw new ImageBuildFailedUpdateError("Failed to mark build as failed", e);
-    }
-
-    if (!updated) {
-      throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
-    }
+    // provider_image mode (Modal): token auth and the failed transition are
+    // one conditional update, with no provider-session binding on the row.
+    await this.markProviderSessionBuildFailedWithCallbackToken(
+      build.provider,
+      {
+        buildId: failure.buildId,
+        providerSessionId: null,
+        errorMessage: failure.errorMessage,
+      },
+      command.callbackToken,
+      ctx
+    );
 
     logger.info("image_build.build_failed", {
       build_id: failure.buildId,
@@ -835,7 +834,7 @@ export class ImageBuildWorkflow {
     params: {
       buildId: string;
       provider: ImageBuildProvider;
-      providerSessionId: string;
+      providerSessionId: string | null;
       ctx: ImageBuildWorkflowContext;
     }
   ): Promise<void> {
@@ -856,7 +855,7 @@ export class ImageBuildWorkflow {
     params: {
       buildId: string;
       provider: ImageBuildProvider;
-      providerSessionId: string;
+      providerSessionId: string | null;
       ctx: ImageBuildWorkflowContext;
     }
   ): Promise<void> {
@@ -872,9 +871,57 @@ export class ImageBuildWorkflow {
     }
   }
 
+  /**
+   * Atomically consume the callback token and mark a provider-image (Modal)
+   * build ready. Auth failures map to the callback-auth taxonomy; any other
+   * store error becomes a complete-failed error so the route surfaces a retry.
+   */
+  private async markProviderImageBuildReady(
+    callbackToken: string | null | undefined,
+    build: { buildId: string; provider: ImageBuildProvider },
+    ready: {
+      providerImageId: string;
+      repositoryShas: RepositoryShaEntry[];
+      runtimeVersion: string;
+      buildDurationMs: number;
+    },
+    ctx: ImageBuildWorkflowContext
+  ): Promise<MarkImageBuildReadyResult> {
+    try {
+      return await markImageBuildReadyWithCallbackTokenOrThrow(
+        this.store,
+        this.env,
+        callbackToken,
+        {
+          buildId: build.buildId,
+          provider: build.provider,
+          providerSessionId: null,
+          now: Date.now(),
+        },
+        ready
+      );
+    } catch (e) {
+      if (e instanceof ImageBuildCallbackAuthError) {
+        throw this.loggedCallbackAuthError(e, {
+          buildId: build.buildId,
+          provider: build.provider,
+          providerSessionId: null,
+          ctx,
+        });
+      }
+      logger.error("image_build.build_complete_error", {
+        error: errorMessage(e),
+        build_id: build.buildId,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      throw new ImageBuildCompleteFailedError("Failed to mark build as ready", e);
+    }
+  }
+
   private async markProviderSessionBuildFailedWithCallbackToken(
     provider: ImageBuildProvider,
-    failure: { buildId: string; providerSessionId: string; errorMessage: string },
+    failure: { buildId: string; providerSessionId: string | null; errorMessage: string },
     callbackToken: string | null | undefined,
     ctx: ImageBuildWorkflowContext
   ): Promise<void> {
@@ -905,15 +952,20 @@ export class ImageBuildWorkflow {
     }
   }
 
-  private async requireInternalBuildCallbackAuth(
-    authorizationHeader: string | null | undefined,
+  private async requireArtifactRecordingCallbackAuth(
+    token: string | null | undefined,
     buildId: string,
+    provider: ImageBuildProvider,
     ctx: ImageBuildWorkflowContext
   ): Promise<void> {
     try {
-      await requireInternalImageBuildCallbackAuth(this.env, authorizationHeader);
+      await verifyImageBuildArtifactCallbackTokenOrThrow(this.store, this.env, token, {
+        buildId,
+        provider,
+        now: Date.now(),
+      });
     } catch (e) {
-      throw this.loggedCallbackAuthError(e, { buildId, ctx });
+      throw this.loggedCallbackAuthError(e, { buildId, provider, ctx });
     }
   }
 
@@ -926,7 +978,7 @@ export class ImageBuildWorkflow {
     params: {
       buildId: string;
       provider?: ImageBuildProvider;
-      providerSessionId?: string;
+      providerSessionId?: string | null;
       ctx: ImageBuildWorkflowContext;
     }
   ): Error {
@@ -1037,13 +1089,11 @@ function createBuildId(scope: ImageBuildScope, now = Date.now()): string {
 
 function callbackAuthRegistration(
   callbackAuth: PlannedCallbackAuth
-): Partial<Pick<ImageBuildRegistration, "callbackTokenHash" | "callbackTokenExpiresAt">> {
-  return callbackAuth.kind === "bearer_token"
-    ? {
-        callbackTokenHash: callbackAuth.tokenHash,
-        callbackTokenExpiresAt: callbackAuth.expiresAt,
-      }
-    : {};
+): Pick<ImageBuildRegistration, "callbackTokenHash" | "callbackTokenExpiresAt"> {
+  return {
+    callbackTokenHash: callbackAuth.tokenHash,
+    callbackTokenExpiresAt: callbackAuth.expiresAt,
+  };
 }
 
 function errorMessage(errorValue: unknown): string {

@@ -62,6 +62,13 @@ export type {
   RepositoryPair,
 } from "./repositories";
 
+export {
+  installationRepositorySchema,
+  repoMetadataSchema,
+  enrichedRepositorySchema,
+  repoConfigSchema,
+  controlPlaneReposResponseSchema,
+} from "./repository-catalog";
 export type {
   InstallationRepository,
   RepoMetadata,
@@ -151,9 +158,12 @@ export type {
 } from "./session-diffs";
 
 export {
-  userPreferencesRequestSchema,
+  automationCallbackContextSchema,
+  callbackContextSchema,
   linearCallbackContextSchema,
   linearStartCallbackSchema,
+  sendPromptRequestSchema,
+  slackCallbackContextSchema,
   createSessionRequestSchema,
   createSessionInputSchema,
   createMediaArtifactRequestSchema,
@@ -165,12 +175,12 @@ export {
 } from "./session-api";
 export type {
   UserPreferences,
-  UserPreferencesRequest,
   SlackCallbackContext,
   LinearCallbackContext,
   LinearStartCallback,
   AutomationCallbackContext,
   CallbackContext,
+  SendPromptRequest,
   CreateSessionRequest,
   CreateSessionInput,
   CreateMediaArtifactRequest,

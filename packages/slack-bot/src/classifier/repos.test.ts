@@ -21,6 +21,7 @@ function makeEnv(fetchResult: Response | Error): Env {
       put: vi.fn().mockResolvedValue(undefined),
     },
     CONTROL_PLANE: { fetch },
+    SERVICE_AUTH_SECRET: "test-secret",
   } as unknown as Env;
 }
 
@@ -84,6 +85,7 @@ describe("getRoutingRules", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getRoutingRules(env, "trace")).toEqual([
@@ -168,9 +170,39 @@ describe("getAvailableRepos", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+  });
+
+  it("falls back when the control-plane repository response is malformed", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        repos: [{ owner: "Open-Inspect", name: "Background-Agents" }],
+        cached: false,
+        cachedAt: new Date().toISOString(),
+      })
+    );
+
+    await expect(getAvailableRepos(env, "trace-3")).resolves.toEqual([]);
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed cached repositories on the fallback path", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue([{ id: "acme/web", owner: "acme", private: false }]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    await expect(getAvailableRepos(env, "trace-4")).resolves.toEqual([]);
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
   });
 
@@ -252,6 +284,7 @@ describe("getWatchedChannels", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getWatchedChannels(env, "trace")).toEqual(new Set(["C7", "C8"]));
@@ -269,6 +302,7 @@ describe("getWatchedChannels", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getWatchedChannels(env, "trace")).toEqual(new Set());
@@ -287,6 +321,7 @@ describe("getWatchedChannels", () => {
       CONTROL_PLANE: {
         fetch: vi.fn().mockResolvedValue(jsonResponse({ channels: ["C1"] })),
       },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     expect(await getWatchedChannels(env)).toEqual(new Set(["C1"]));

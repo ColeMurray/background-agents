@@ -1,22 +1,19 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared";
 import { z } from "zod";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-const promptRequestSchema = z
-  .object({
-    content: z.string().min(1),
-    model: z.string().optional(),
-    reasoningEffort: z.string().optional(),
-    attachments: sessionAttachmentReferencesSchema.optional(),
-  })
-  .strict();
+const promptRequestSchema = z.strictObject({
+  content: z.string().min(1),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  attachments: sessionAttachmentReferencesSchema.optional(),
+});
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -30,14 +27,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     const { content, model, reasoningEffort, attachments } = parsed.data;
 
-    const user = session.user;
-    const userId = user.id || user.email || "anonymous";
-
-    const response = await controlPlaneFetch(`/sessions/${sessionId}/prompt`, {
+    // authorId is derived by the control plane from the Bearer principal and
+    // is rejected in the body under strict enforcement.
+    const response = await controlPlaneUserFetch(`/sessions/${sessionId}/prompt`, {
       method: "POST",
       body: JSON.stringify({
         content,
-        authorId: userId,
         source: "web",
         model,
         reasoningEffort,

@@ -8,7 +8,10 @@
 
 import type { Env } from "../types";
 import type { AgentResponse } from "@open-inspect/shared";
-import { extractAgentResponse as sharedExtract } from "@open-inspect/shared";
+import {
+  extractAgentResponse as sharedExtract,
+  resolveOutboundCredential,
+} from "@open-inspect/shared";
 import { createLogger } from "../logger";
 
 const log = createLogger("extractor");
@@ -27,7 +30,7 @@ export async function extractAgentResponse(
   return sharedExtract(
     {
       fetcher: env.CONTROL_PLANE,
-      internalSecret: env.INTERNAL_CALLBACK_SECRET,
+      auth: resolveOutboundCredential("linear-bot", env),
       log,
     },
     sessionId,

@@ -1,25 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
 describe("session prompt API route", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
   it("rejects malformed attachment references before proxying", async () => {
@@ -37,11 +33,11 @@ describe("session prompt API route", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid prompt request" });
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("proxies validated attachment references", async () => {
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ messageId: "message-1", status: "queued" })
     );
 
@@ -58,14 +54,15 @@ describe("session prompt API route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/prompt", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions/session-1/prompt", {
       method: "POST",
       body: expect.any(String),
     });
-    const requestBody = vi.mocked(controlPlaneFetch).mock.calls[0][1]?.body;
+    const requestBody = vi.mocked(controlPlaneUserFetch).mock.calls[0][1]?.body;
+    // authorId is forbidden under strict identity enforcement — the control
+    // plane derives the author from the Bearer principal.
     expect(JSON.parse(requestBody as string)).toEqual({
       content: "Look",
-      authorId: "user-1",
       source: "web",
       attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
     });

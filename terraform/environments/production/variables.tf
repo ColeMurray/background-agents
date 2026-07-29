@@ -306,12 +306,6 @@ variable "repo_secrets_encryption_key" {
   sensitive   = true
 }
 
-variable "internal_callback_secret" {
-  description = "Shared secret for internal service communication (generate with: openssl rand -base64 32)"
-  type        = string
-  sensitive   = true
-}
-
 variable "modal_api_secret" {
   description = "Shared secret for authenticating control plane to Modal API calls (generate with: openssl rand -hex 32)"
   type        = string
@@ -492,9 +486,14 @@ variable "e2b_auto_pause" {
 }
 
 variable "nextauth_secret" {
-  description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
+  description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(regexall("\\S", var.nextauth_secret)) >= 32
+    error_message = "nextauth_secret must contain at least 32 non-whitespace characters."
+  }
 }
 
 # =============================================================================

@@ -1,11 +1,11 @@
 import {
-  buildInternalAuthHeaders,
   completeExternalUpload,
   getExternalUploadUrl,
   uploadToExternalUrl,
   type MediaArtifactInfo,
 } from "@open-inspect/shared";
 import type { Env } from "../types";
+import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
@@ -141,10 +141,11 @@ async function stageArtifact(
     artifact_id: artifact.id,
     artifact_type: artifact.type,
   };
-  const headers = await buildInternalAuthHeaders(input.env.INTERNAL_CALLBACK_SECRET, input.traceId);
-  const response = await input.env.CONTROL_PLANE.fetch(
-    `https://internal/sessions/${encodeURIComponent(input.sessionId)}/media/${encodeURIComponent(artifact.id)}`,
-    { headers, signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
+  const mediaUrl = `https://internal/sessions/${encodeURIComponent(input.sessionId)}/media/${encodeURIComponent(artifact.id)}`;
+  const response = await signedControlPlaneFetch(
+    input.env,
+    { method: "GET", url: mediaUrl, traceId: input.traceId },
+    { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
   );
   if (!response.ok || !response.body) {
     await cancelBody(response.body);

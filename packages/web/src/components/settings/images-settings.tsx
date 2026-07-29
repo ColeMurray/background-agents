@@ -12,6 +12,7 @@ import { RefreshIcon } from "@/components/ui/icons";
 import { IMAGE_BUILDS_KEY, parsePrimaryBuildSha, type ImageBuildsFeed } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export function ImagesSettings() {
   const repoImagesSupported = supportsRepoImages();
@@ -55,7 +56,7 @@ export function ImagesSettings() {
     setError("");
 
     try {
-      const res = await fetch(
+      const res = await browserApiFetch(
         `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/toggle`,
         {
           method: "PUT",
@@ -87,7 +88,7 @@ export function ImagesSettings() {
     setError("");
 
     try {
-      const res = await fetch(
+      const res = await browserApiFetch(
         `/api/image-builds/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/trigger`,
         { method: "POST" }
       );

@@ -1,15 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ owner: string; name: string }> }
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -27,7 +26,7 @@ export async function POST(
   const { owner, name } = await params;
 
   try {
-    const response = await controlPlaneFetch(
+    const response = await controlPlaneUserFetch(
       `/image-builds/trigger/repo/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
       { method: "POST" }
     );

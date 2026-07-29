@@ -1,10 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import { commitSigningMetadataSchema } from "@open-inspect/shared";
 
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 
@@ -13,7 +12,7 @@ function response(data: unknown, status = 200): NextResponse {
 }
 
 async function authorized(): Promise<boolean> {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   return Boolean(session?.user);
 }
 
@@ -33,7 +32,7 @@ async function proxy(
   }
 
   try {
-    const controlPlaneResponse = await controlPlaneFetch(
+    const controlPlaneResponse = await controlPlaneUserFetch(
       "/commit-signing",
       method === "GET"
         ? undefined

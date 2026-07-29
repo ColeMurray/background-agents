@@ -153,6 +153,8 @@ describe("SessionChangesPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/sessions/session-1/diff/retry", {
       method: "POST",
+      mode: "same-origin",
+      credentials: "same-origin",
     });
     expect(await screen.findByText("Sandbox is not connected")).toBeVisible();
   });

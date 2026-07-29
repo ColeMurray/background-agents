@@ -7,3 +7,8 @@ export function isUniqueConstraintError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.toLowerCase().includes("unique constraint failed");
 }
+
+export function isCheckConstraintError(err: unknown, constraint: string): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.toLowerCase().includes(`check constraint failed: ${constraint.toLowerCase()}`);
+}

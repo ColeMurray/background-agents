@@ -4,6 +4,7 @@ import {
   fetchIssueDetails,
   fetchUser,
   getRepoSuggestions,
+  postIssueComment,
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
 
@@ -198,5 +199,67 @@ describe("emitAgentActivity", () => {
         body: "Finished",
       })
     ).resolves.toBe(false);
+  });
+});
+
+describe("postIssueComment", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns success from a valid comment mutation response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { commentCreate: { success: true } } }),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: true,
+    });
+  });
+
+  it("returns false when the nullable comment mutation result is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { commentCreate: null } }),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
+    });
+  });
+
+  it("returns false when the comment mutation response is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { commentCreate: { success: "yes" } } }),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
+    });
+  });
+
+  it("returns false when the comment mutation response is not valid JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
+    });
   });
 });

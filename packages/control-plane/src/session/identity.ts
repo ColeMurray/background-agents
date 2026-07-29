@@ -1,10 +1,12 @@
-import {
-  formatGitHubNoreplyEmail,
-  githubLoginSchema,
-  type SpawnSource,
-} from "@open-inspect/shared";
+import { formatGitHubNoreplyEmail, githubLoginSchema } from "@open-inspect/shared";
+import { z } from "zod";
+import { encryptToken } from "../auth/crypto";
+import type {
+  GitHubAccountSelection,
+  GitHubCredentialAuthority,
+} from "../source-control/github-credential-authority";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
-import type { ProviderIdentity, UserStore } from "../db/user-store";
+import type { UserStore } from "../db/user-store";
 import type { SourceControlProviderName } from "../source-control";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
@@ -56,118 +58,82 @@ export interface GitHubEnrichment {
   tokenExpiresAt?: number;
 }
 
-export interface SessionIdentityFields {
-  userId?: string;
-  spawnSource?: SpawnSource;
+const browserAccessTokenSchema = z.object({
+  accessToken: z.string().min(1),
+  accessTokenExpiresAt: z.coerce.date().optional(),
+});
 
-  // Provider-agnostic authentication identity — "who logged in". The web client
-  // populates this for every auth provider (GitHub or Google); it resolves the
-  // canonical D1 user. Kept separate from scm* (GitHub-only SCM credentials and
-  // git-commit attribution) so a pure-Google session carries auth* and no scm*.
-  authProvider?: "github" | "google";
-  authUserId?: string;
-  authEmail?: string;
-  authName?: string;
-  authAvatarUrl?: string;
+const browserGitHubAccountInfoSchema = z.object({
+  user: z.object({
+    id: z.string().min(1),
+  }),
+  data: z.object({
+    provider: z.literal("github"),
+    issuer: z.literal("https://github.com"),
+    subject: z.string().min(1),
+    login: githubLoginSchema,
+    displayName: z.string().min(1).optional(),
+    verifiedEmails: z.array(z.string()),
+    primaryEmail: z.string().nullable(),
+  }),
+});
 
-  // GitHub SCM credentials + git-commit attribution (GitHub-only, optional).
-  scmUserId?: string;
-  scmLogin?: string;
-  scmName?: string;
-  scmEmail?: string;
-  scmAvatarUrl?: string;
-
-  // Slack / Linear bot actor identity.
-  actorUserId?: string;
-  actorDisplayName?: string;
-  actorEmail?: string;
-  actorAvatarUrl?: string;
+export interface BrowserGitHubEnrichmentDependencies {
+  readonly getAccessToken: (selection: {
+    providerId: "github";
+    accountId: string;
+    userId: string;
+  }) => Promise<unknown>;
+  readonly getAccountInfo: (selection: {
+    providerId: "github";
+    accountId: string;
+    userId: string;
+  }) => Promise<unknown>;
+  readonly encryptAccessToken: (accessToken: string) => Promise<string>;
 }
 
 /**
- * Derives a ProviderIdentity from spawnSource and the request body.
+ * Resolve GitHub attribution and a current provider token from Better Auth.
  *
- * - Web users (spawnSource "user"): the provider-agnostic auth* block identifies
- *   who logged in (GitHub or Google). Falls back to scm* so that in-flight
- *   old-web payloads — which send only scm* and no auth* during the rollout
- *   window — still resolve to a user_id.
- * - github-bot: GitHub identity from scm* fields.
- * - Slack / Linear bots: actor* fields.
- *
- * Returns null when the caller hasn't supplied the required provider-specific ID
- * (authUserId/scmUserId for web users, scmUserId for github-bot, actorUserId for
- * Slack/Linear). Such sessions get user_id = NULL.
+ * Better Auth owns refresh-token storage and rotation. Session state receives
+ * only a re-encrypted, currently valid access token; it never copies the
+ * long-lived refresh credential into a second store.
  */
-export function resolveProviderIdentity(
-  spawnSource: SpawnSource,
-  body: SessionIdentityFields
-): ProviderIdentity | null {
-  switch (spawnSource) {
-    case "user": {
-      // Web users (GitHub or Google). Identity comes from the auth* block; we
-      // fall back to scm* only for old-web payloads that predate auth* (always
-      // GitHub). provider and providerUserId are taken from the SAME source so a
-      // malformed payload can't pair a Google id with provider "github", and the
-      // discriminator is allowlisted (fail closed) rather than persisted raw —
-      // mirroring the /provider-identities/:provider route guard.
-      if (body.authUserId) {
-        if (body.authProvider !== "github" && body.authProvider !== "google") return null;
-        return {
-          provider: body.authProvider,
-          providerUserId: body.authUserId,
-          providerLogin: body.scmLogin,
-          providerEmail: body.authEmail ?? body.scmEmail,
-          displayName: body.authName ?? (body.scmName || body.scmLogin),
-          avatarUrl: body.authAvatarUrl ?? body.scmAvatarUrl,
-        };
-      }
-      if (!body.scmUserId) return null;
-      return {
-        provider: "github",
-        providerUserId: body.scmUserId,
-        providerLogin: body.scmLogin,
-        providerEmail: body.scmEmail,
-        displayName: body.scmName || body.scmLogin,
-        avatarUrl: body.scmAvatarUrl,
-      };
-    }
-
-    case "github-bot":
-      return body.scmUserId
-        ? {
-            provider: "github",
-            providerUserId: body.scmUserId,
-            providerLogin: body.scmLogin,
-            providerEmail: body.scmEmail,
-            displayName: body.scmName || body.scmLogin,
-            avatarUrl: body.scmAvatarUrl,
-          }
-        : null;
-
-    case "slack-bot":
-      return body.actorUserId
-        ? {
-            provider: "slack",
-            providerUserId: body.actorUserId,
-            providerEmail: body.actorEmail,
-            displayName: body.actorDisplayName,
-            avatarUrl: body.actorAvatarUrl,
-          }
-        : null;
-
-    case "linear-bot":
-      return body.actorUserId
-        ? {
-            provider: "linear",
-            providerUserId: body.actorUserId,
-            providerEmail: body.actorEmail,
-            displayName: body.actorDisplayName,
-          }
-        : null;
-
-    default:
-      return null;
+export async function resolveBrowserGitHubEnrichment(
+  userId: string,
+  account: GitHubAccountSelection,
+  dependencies: BrowserGitHubEnrichmentDependencies
+): Promise<GitHubEnrichment> {
+  const selection = {
+    providerId: "github" as const,
+    accountId: account.subject,
+    userId,
+  };
+  const token = browserAccessTokenSchema.parse(await dependencies.getAccessToken(selection));
+  const profile = browserGitHubAccountInfoSchema.parse(
+    await dependencies.getAccountInfo(selection)
+  );
+  if (profile.user.id !== account.subject || profile.data.subject !== account.subject) {
+    throw new Error("Better Auth returned a mismatched GitHub account");
   }
+
+  const accessTokenEncrypted = await dependencies.encryptAccessToken(token.accessToken);
+  const author = resolveGitAuthorIdentity({
+    scmProvider: "github",
+    scmUserId: profile.data.subject,
+    scmLogin: profile.data.login,
+    scmName: profile.data.displayName,
+    scmEmail: profile.data.primaryEmail,
+  });
+
+  return {
+    scmUserId: profile.data.subject,
+    scmLogin: profile.data.login,
+    displayName: profile.data.displayName ?? profile.data.login,
+    email: author?.email,
+    accessTokenEncrypted,
+    ...(token.accessTokenExpiresAt ? { tokenExpiresAt: token.accessTokenExpiresAt.getTime() } : {}),
+  };
 }
 
 /**
@@ -180,24 +146,6 @@ export function parseAuthorId(
   const match = authorId.match(/^(github|slack|linear):(.+)$/);
   if (!match) return null;
   return { provider: match[1], providerUserId: match[2] };
-}
-
-/**
- * Construct the participant user ID used inside a session, matching the format
- * each bot uses for prompt `authorId`. Canonical platform user IDs are the D1
- * user IDs resolved through provider identities.
- */
-export function deriveParticipantUserId(body: SessionIdentityFields): string {
-  switch (body.spawnSource) {
-    case "github-bot":
-      return body.scmUserId ? `github:${body.scmUserId}` : "anonymous";
-    case "slack-bot":
-      return body.actorUserId ? `slack:${body.actorUserId}` : "anonymous";
-    case "linear-bot":
-      return body.actorUserId ? `linear:${body.actorUserId}` : "anonymous";
-    default:
-      return body.userId || "anonymous";
-  }
 }
 
 /**
@@ -241,4 +189,31 @@ export async function resolveGitHubEnrichment(
     refreshTokenEncrypted: tokens?.refreshTokenEncrypted,
     tokenExpiresAt: tokens?.expiresAt,
   };
+}
+
+/**
+ * Select the credential authority associated with the authenticated request.
+ *
+ * Browser sessions read/refresh through Better Auth. Bot identities retain
+ * their existing actor identity/token-store lookup.
+ */
+export async function resolveGitHubEnrichmentForRequest(
+  env: Env,
+  db: SqlDatabase,
+  userStore: UserStore,
+  userId: string,
+  authority: GitHubCredentialAuthority
+): Promise<GitHubEnrichment | null> {
+  if (authority.kind === "legacy") {
+    return resolveGitHubEnrichment(env, db, userStore, userId);
+  }
+
+  const accountClient = authority.accountClient;
+  const githubAccount = authority.githubAccount;
+  if (!githubAccount) return null;
+  return resolveBrowserGitHubEnrichment(userId, githubAccount, {
+    getAccessToken: (selection) => accountClient.getAccessToken({ body: selection }),
+    getAccountInfo: (selection) => accountClient.accountInfo({ query: selection }),
+    encryptAccessToken: (accessToken) => encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY),
+  });
 }

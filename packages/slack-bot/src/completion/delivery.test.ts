@@ -30,7 +30,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
-    INTERNAL_CALLBACK_SECRET: "internal-secret",
+    SERVICE_AUTH_SECRET: "internal-secret",
     LOG_LEVEL: "error",
     ...overrides,
   };
@@ -111,6 +111,24 @@ describe("processSlackCompletion", () => {
 
     expect(deliverMediaArtifacts).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets Slack derive accessible fallback text from completion blocks", async () => {
+    vi.mocked(extractAgentResponse).mockResolvedValue({
+      ...successfulAgentResponse(),
+      mediaArtifacts: [],
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ ok: true, channel: "C123", ts: "333.444" }))
+      .mockResolvedValueOnce(Response.json({ ok: true }));
+
+    await processSlackCompletion(job(), makeEnv());
+
+    const request = fetchMock.mock.calls[0]?.[1];
+    const body = JSON.parse(String(request?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("text");
+    expect(body.blocks).toBeDefined();
   });
 
   it("skips media when the ordinary completion post fails", async () => {

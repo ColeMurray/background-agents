@@ -1,15 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerAuthSession } from "@/lib/server-auth-session";
 import type { ImageBuildRecordView } from "@open-inspect/shared";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { excludeSupersededBuilds } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 /** Per-environment image-build status (the environment's recent build rows). */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -27,7 +26,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
 
   try {
-    const response = await controlPlaneFetch(
+    const response = await controlPlaneUserFetch(
       `/image-builds/status?scope_kind=environment&scope_id=${encodeURIComponent(id)}`
     );
     const data = await response.json();

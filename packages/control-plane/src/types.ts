@@ -59,6 +59,9 @@ export interface Env {
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
@@ -68,7 +71,15 @@ export interface Env {
   DAYTONA_API_KEY?: string; // Daytona REST API key (Bearer auth + HMAC derivation)
   OPENCOMPUTER_API_KEY?: string; // OpenComputer REST API key (X-API-Key auth + HMAC derivation)
   VERCEL_TOKEN?: string; // Vercel API access token for Sandbox API
-  INTERNAL_CALLBACK_SECRET?: string; // For signing callbacks to slack-bot
+  // Pepper for image-build callback token hashes.
+  IMAGE_CALLBACK_TOKEN_PEPPER?: string;
+  // Per-service sig1 verification keys. Absent ⇒ that service cannot
+  // authenticate.
+  SERVICE_AUTH_SECRET_WEB?: string;
+  SERVICE_AUTH_SECRET_SLACK_BOT?: string;
+  SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
+  SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
+  SERVICE_AUTH_SECRET_MODAL?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)
@@ -86,6 +97,11 @@ export interface Env {
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
+  ALLOWED_USERS?: string;
+  ALLOWED_EMAIL_DOMAINS?: string;
+  ALLOWED_EMAILS?: string;
+  ALLOWED_GITHUB_ORGS?: string;
+  UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
   MODAL_WORKSPACE?: string; // Modal workspace name

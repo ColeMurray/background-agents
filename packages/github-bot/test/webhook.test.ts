@@ -42,7 +42,7 @@ function makeEnv() {
       fetch: vi.fn(async () => new Response(null, { status: 204 })),
     },
     GITHUB_WEBHOOK_SECRET: SECRET,
-    INTERNAL_CALLBACK_SECRET: "test-internal-secret",
+    SERVICE_AUTH_SECRET: "test-internal-secret",
     GITHUB_BOT_USERNAME: "test-bot[bot]",
     DEPLOYMENT_NAME: "test",
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",

@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
-  getTriggerConfig,
   getUserPreferences,
   lookupIssueSession,
   storeIssueSession,
   isDuplicateEvent,
-  DEFAULT_TRIGGER_CONFIG,
 } from "./kv-store";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
@@ -52,38 +50,6 @@ describe("getProjectRepoMapping", () => {
 
   it("returns {} when KV throws", async () => {
     expect(await getProjectRepoMapping(makeLinearBotEnv(errorKv))).toEqual({});
-  });
-});
-
-// ─── getTriggerConfig ────────────────────────────────────────────────────────
-
-describe("getTriggerConfig", () => {
-  it("returns defaults when KV has no data", async () => {
-    const { kv } = createFakeKV();
-    expect(await getTriggerConfig(makeLinearBotEnv(kv))).toEqual(DEFAULT_TRIGGER_CONFIG);
-  });
-
-  it("merges partial config with defaults", async () => {
-    const partial = { autoTriggerOnCreate: true };
-    const { kv } = createFakeKV({ "config:triggers": JSON.stringify(partial) });
-    expect(await getTriggerConfig(makeLinearBotEnv(kv))).toEqual({
-      ...DEFAULT_TRIGGER_CONFIG,
-      autoTriggerOnCreate: true,
-    });
-  });
-
-  it("returns full override when all fields set", async () => {
-    const full = {
-      triggerLabel: "bot",
-      autoTriggerOnCreate: true,
-      triggerCommand: "@bot",
-    };
-    const { kv } = createFakeKV({ "config:triggers": JSON.stringify(full) });
-    expect(await getTriggerConfig(makeLinearBotEnv(kv))).toEqual(full);
-  });
-
-  it("returns defaults when KV throws", async () => {
-    expect(await getTriggerConfig(makeLinearBotEnv(errorKv))).toEqual(DEFAULT_TRIGGER_CONFIG);
   });
 });
 

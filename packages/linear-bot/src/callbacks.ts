@@ -13,10 +13,10 @@ import {
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
 import { resolveAppName } from "@open-inspect/shared";
-import { verifyCallbackSignature } from "./utils/crypto";
 import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
+import { rejectInvalidCallback } from "./callbacks/reject-invalid-callback";
 
 const log = createLogger("callback");
 
@@ -65,30 +65,12 @@ callbacksRouter.post("/complete", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  if (!c.env.INTERNAL_CALLBACK_SECRET) {
-    log.error("http.request", {
-      trace_id: traceId,
-      http_path: "/callbacks/complete",
-      http_status: 500,
-      outcome: "error",
-      reject_reason: "secret_not_configured",
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "not configured" }, 500);
-  }
-
-  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
-  if (!isValid) {
-    log.warn("http.request", {
-      trace_id: traceId,
-      http_path: "/callbacks/complete",
-      http_status: 401,
-      outcome: "rejected",
-      reject_reason: "invalid_signature",
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "unauthorized" }, 401);
-  }
+  const rejection = await rejectInvalidCallback(c, payload, {
+    path: "/callbacks/complete",
+    traceId,
+    startTime,
+  });
+  if (rejection) return rejection;
 
   c.executionCtx.waitUntil(handleCompletionCallback(payload, c.env, traceId));
 
@@ -162,31 +144,13 @@ callbacksRouter.post("/tool_call", async (c) => {
     return c.json({ error: "invalid payload" }, 400);
   }
 
-  if (!c.env.INTERNAL_CALLBACK_SECRET) {
-    log.error("http.request", {
-      trace_id: traceId,
-      http_path: "/callbacks/tool_call",
-      http_status: 500,
-      outcome: "error",
-      reject_reason: "secret_not_configured",
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "not configured" }, 500);
-  }
-
-  const isValid = await verifyCallbackSignature(payload, c.env.INTERNAL_CALLBACK_SECRET);
-  if (!isValid) {
-    log.warn("http.request", {
-      trace_id: traceId,
-      http_path: "/callbacks/tool_call",
-      http_status: 401,
-      outcome: "rejected",
-      reject_reason: "invalid_signature",
-      session_id: payload.sessionId,
-      duration_ms: Date.now() - startTime,
-    });
-    return c.json({ error: "unauthorized" }, 401);
-  }
+  const rejection = await rejectInvalidCallback(c, payload, {
+    path: "/callbacks/tool_call",
+    traceId,
+    startTime,
+    sessionId: payload.sessionId,
+  });
+  if (rejection) return rejection;
 
   c.executionCtx.waitUntil(
     (async () => {

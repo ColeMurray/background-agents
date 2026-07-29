@@ -1,29 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({ getServerSession: vi.fn() }));
-vi.mock("@/lib/auth", () => ({ authOptions: {} }));
-vi.mock("@/lib/control-plane", () => ({ controlPlaneFetch: vi.fn() }));
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
+}));
+vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
-import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { POST } from "./route";
 
 describe("session diff retry API route", () => {
   beforeEach(() => vi.resetAllMocks());
 
   it("requires authentication", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
     const response = await POST(new Request("http://local"), {
       params: Promise.resolve({ id: "session-1" }),
     });
 
     expect(response.status).toBe(401);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("proxies retry responses and preserves the upstream explanation", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Sandbox is not connected" }, { status: 409 })
     );
 
@@ -31,7 +32,7 @@ describe("session diff retry API route", () => {
       params: Promise.resolve({ id: "session-1" }),
     });
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/sessions/session-1/diff/retry", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/sessions/session-1/diff/retry", {
       method: "POST",
     });
     expect(response.status).toBe(409);

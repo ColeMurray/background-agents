@@ -1,10 +1,11 @@
 import {
   escapeMrkdwnText,
-  getMessageFiles,
+  getMessageDetails,
   postMessage,
   updateMessage,
 } from "@open-inspect/shared";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
+import { collectForwardedMessages } from "../forwarded-messages";
 import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
@@ -64,14 +65,17 @@ export async function handleTargetSelection(
   // files from Slack now that the target is known.
   let images: SlackImageAttachment[] = [];
   if (sourceMessage) {
-    const lookup = await getMessageFiles(
+    const lookup = await getMessageDetails(
       env.SLACK_BOT_TOKEN,
       channel,
       sourceMessage.ts,
       sourceMessage.threadTs
     );
     if (lookup.ok) {
-      images = toImageAttachments(lookup.files, traceId);
+      // The saved request text already quotes any forwarded message, but its
+      // images live on the attachment and are re-fetched here like the rest.
+      const forwarded = collectForwardedMessages(lookup.attachments);
+      images = toImageAttachments([...lookup.files, ...forwarded.files], traceId);
     } else {
       log.warn("slack.attachment.file_lookup_failed", {
         trace_id: traceId,

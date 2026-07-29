@@ -14,6 +14,7 @@ import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";
 import { usePanelWidth } from "@/hooks/use-panel-width";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
 import type { DiffSelection, ResolvedDiffSelection } from "@/lib/session-diffs";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { cn } from "@/lib/utils";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
@@ -36,8 +37,8 @@ class DiffPatchError extends Error {
   }
 }
 
-async function fetchPatch(url: string): Promise<string> {
-  const response = await fetch(url);
+async function fetchPatch(url: BrowserApiPath): Promise<string> {
+  const response = await browserApiFetch(url);
   if (!response.ok) {
     let code: SessionDiffErrorCode | undefined;
     try {

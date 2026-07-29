@@ -2,6 +2,22 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## July 26, 2026
+
+**Better Auth browser authentication.** Browser sign-in now uses control-plane-owned Better Auth
+sessions with GitHub and optional Google providers. The web app forwards an exact allowlist of
+authentication routes through a signed proxy, and browser resource requests require both that signed
+web-service channel and the browser session. Legacy browser tokens are retired during migration, so
+existing users must sign in again after upgrading.
+
+Note: GitHub sign-in requires the GitHub App `Email addresses: Read-only` account permission —
+without it the callback fails with a misleading `state_mismatch` error.
+
+## July 24, 2026
+
+**Claude Opus 5.** Adds `claude-opus-5` to the model picker and integrations, with adaptive thinking
+and reasoning efforts from low through max.
+
 ## July 23, 2026
 
 **Slack image attachments.** Attach PNG, JPEG, WebP, and GIF images to Slack direct messages, app

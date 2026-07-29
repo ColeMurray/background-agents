@@ -259,6 +259,23 @@ class TestBuildPromptRequestBody:
             "outputConfig": {"effort": "medium"},
         }
 
+    def test_with_opus_5_adaptive_thinking(self, bridge: AgentBridge):
+        """Opus 5 should use adaptive thinking instead of manual budgets."""
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-opus-5",
+            reasoning_effort="xhigh",
+        )
+
+        assert body["model"] == {
+            "providerID": "anthropic",
+            "modelID": "claude-opus-5",
+            "options": {
+                "thinking": {"type": "adaptive"},
+                "outputConfig": {"effort": "xhigh"},
+            },
+        }
+
     def test_with_sonnet_4_6_adaptive_thinking(self, bridge: AgentBridge):
         """Sonnet 4.6 should use adaptive thinking instead of manual budgets."""
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(

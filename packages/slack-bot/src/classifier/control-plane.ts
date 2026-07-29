@@ -3,8 +3,8 @@
  * authenticated fetch and the cache TTLs every cached read uses.
  */
 
-import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import type { Env } from "../types";
+import { signedControlPlaneFetch } from "../internal-auth";
 
 /**
  * Local cache TTL in milliseconds (1 minute).
@@ -21,24 +21,19 @@ export const LOCAL_CACHE_TTL_MS = 60 * 1000;
 export const KV_CACHE_TTL_SECONDS = 300;
 
 /**
- * Issue an authenticated GET to the control plane, preferring the service
- * binding and falling back to URL-based fetch. Centralizes the internal-auth
- * headers and binding-vs-URL switch shared by every control-plane read.
+ * Issue an authenticated GET to the control plane through the service
+ * binding — the one signed read path shared by every classifier data module.
  */
 export async function controlPlaneFetch(
   env: Env,
   path: string,
   traceId?: string
 ): Promise<Response> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-  return env.CONTROL_PLANE
-    ? env.CONTROL_PLANE.fetch(`https://internal${path}`, { headers })
-    : fetch(`${env.CONTROL_PLANE_URL}${path}`, {
-        headers: { ...headers, "User-Agent": "open-inspect-slack-bot" },
-      });
+  return signedControlPlaneFetch(
+    env,
+    { method: "GET", url: `https://internal${path}`, traceId },
+    { headers: { Accept: "application/json" } }
+  );
 }
 
 /** A non-OK control-plane response, carrying the status for structured logs. */

@@ -2,12 +2,13 @@ import {
   addReaction,
   escapeMrkdwnText,
   getChannelInfo,
-  getMessageFiles,
+  getMessageDetails,
   getThreadMessages,
   postMessage,
   resolveUserNames,
   updateMessage,
   type CallbackContext,
+  type SlackMessageAttachment,
   type SlackMessageFile,
 } from "@open-inspect/shared";
 import {
@@ -19,13 +20,18 @@ import {
 import { createClassifier } from "../classifier";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { stripMentions } from "../dm-utils";
+import { collectForwardedMessages, FORWARD_ONLY_PROMPT_TEXT } from "../forwarded-messages";
 import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
-import { formatChannelContext, formatInterimThreadContext } from "../messages/context";
+import {
+  formatChannelContext,
+  formatForwardedContext,
+  formatInterimThreadContext,
+} from "../messages/context";
 import { storePendingRequest } from "../pending-requests/pending-request-store";
 import { deliverPrompt } from "../sessions/prompt-delivery";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
@@ -101,6 +107,8 @@ interface IncomingMessageParams {
   channelDescription?: string;
   /** Images attached to the Slack message, normalized at event ingress. */
   images: SlackImageAttachment[];
+  /** Quoted entries for the messages forwarded with this request. */
+  forwardedMessages: string[];
   env: Env;
   traceId?: string;
   scheduleBackground: BackgroundTaskScheduler;
@@ -109,7 +117,8 @@ interface IncomingMessageParams {
 /**
  * Route one user message: follow up on the thread's existing session when there
  * is one, otherwise classify the target and launch a new session (or ask for
- * clarification). Image files are forwarded as session attachments.
+ * clarification). Image files are forwarded as session attachments, and the
+ * bodies of any forwarded Slack messages are quoted into the prompt.
  */
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
@@ -121,11 +130,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channelName,
     channelDescription,
     images,
+    forwardedMessages,
     env,
     traceId,
     scheduleBackground,
   } = params;
-  if (!messageText && images.length === 0) {
+  if (!messageText && images.length === 0 && forwardedMessages.length === 0) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -134,9 +144,15 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     );
     return;
   }
-  // An image-only message still needs prompt content for the agent to act on.
-  const imageOnly = !messageText;
-  const promptText = messageText || IMAGE_ONLY_PROMPT_TEXT;
+  // A message with no text of its own still needs prompt content for the agent
+  // to act on; what it carried instead decides which stand-in to use.
+  const imageOnly = !messageText && forwardedMessages.length === 0;
+  const requestText =
+    messageText ||
+    (forwardedMessages.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
+  // Forwarded bodies lead: the user's own text ("deal with this") is the
+  // instruction and reads as one when it comes last.
+  const promptText = formatForwardedContext(forwardedMessages) + requestText;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -297,7 +313,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
 
 /**
  * Handle an `app_mention` event: strip the mention, recover the message's
- * files (mention events never carry them), and hand off to the shared
+ * files and attachments (mention events never carry files, and may omit the
+ * attachments that hold forwarded message bodies), and hand off to the shared
  * message flow.
  */
 export async function handleAppMention(
@@ -309,6 +326,7 @@ export async function handleAppMention(
     ts: string;
     thread_ts?: string;
     files?: SlackMessageFile[];
+    attachments?: SlackMessageAttachment[];
   },
   env: Env,
   traceId: string | undefined,
@@ -319,33 +337,52 @@ export async function handleAppMention(
   if (messageText)
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
 
-  // app_mention events don't carry the message's `files` array, so when the
-  // event has none we recover them from conversation history — overlapped with
-  // the channel-info fetch to keep the extra round trip off the critical path.
-  const filesPromise: Promise<SlackMessageFile[]> = event.files?.length
-    ? Promise.resolve(event.files)
-    : getMessageFiles(env.SLACK_BOT_TOKEN, event.channel, event.ts, event.thread_ts).then(
-        (lookup) => {
-          if (lookup.ok) return lookup.files;
-          // Failure is not "no files": any images on the message are lost
-          // here, so make the drop visible in logs.
-          log.warn("slack.attachment.file_lookup_failed", {
-            trace_id: traceId,
-            channel: event.channel,
-            message_ts: event.ts,
-            slack_error: lookup.error,
-          });
-          return [];
-        }
-      );
+  // app_mention events don't carry the message's `files` array and may arrive
+  // without its `attachments`, so when either is missing we recover the message
+  // from conversation history — overlapped with the channel-info fetch to keep
+  // the extra round trip off the critical path. Whatever the event did carry
+  // wins; the lookup only fills gaps.
+  type MessageDetails = { files: SlackMessageFile[]; attachments: SlackMessageAttachment[] };
+  const eventDetails: MessageDetails = {
+    files: event.files ?? [],
+    attachments: event.attachments ?? [],
+  };
+  const detailsPromise: Promise<MessageDetails> =
+    eventDetails.files.length && eventDetails.attachments.length
+      ? Promise.resolve(eventDetails)
+      : getMessageDetails(env.SLACK_BOT_TOKEN, event.channel, event.ts, event.thread_ts).then(
+          (lookup) => {
+            if (lookup.ok) {
+              return {
+                files: eventDetails.files.length ? eventDetails.files : lookup.files,
+                attachments: eventDetails.attachments.length
+                  ? eventDetails.attachments
+                  : lookup.attachments,
+              };
+            }
+            // Failure is not "the message has none": any images and forwarded
+            // messages are lost here, so make the drop visible in logs.
+            log.warn("slack.attachment.file_lookup_failed", {
+              trace_id: traceId,
+              channel: event.channel,
+              message_ts: event.ts,
+              slack_error: lookup.error,
+            });
+            return eventDetails;
+          }
+        );
   // Fetched unconditionally: image-only mentions rely on channel context as
-  // their main classifier signal, and filesPromise is awaited anyway.
+  // their main classifier signal, and detailsPromise is awaited anyway.
   const channelInfoPromise = getChannelInfo(env.SLACK_BOT_TOKEN, event.channel).catch(
     () => undefined
   );
-  const [files, channelInfo] = await Promise.all([filesPromise, channelInfoPromise]);
-  const images = toImageAttachments(files, traceId);
-  if (!messageText && images.length > 0) {
+  const [details, channelInfo] = await Promise.all([detailsPromise, channelInfoPromise]);
+  const forwarded = collectForwardedMessages(details.attachments);
+  // A forwarded message's own images are Slack-hosted message files, so they
+  // join the message's own images on the single attachment path.
+  const images = toImageAttachments([...details.files, ...forwarded.files], traceId);
+  const forwardedMessages = forwarded.entries;
+  if (!messageText && (images.length > 0 || forwardedMessages.length > 0)) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
   let channelName: string | undefined;
@@ -363,6 +400,7 @@ export async function handleAppMention(
     channelName,
     channelDescription,
     images,
+    forwardedMessages,
     env,
     traceId,
     scheduleBackground,
@@ -380,6 +418,7 @@ export async function handleDirectMessage(
     thread_ts?: string;
     channel_type?: string;
     files?: SlackMessageFile[];
+    attachments?: SlackMessageAttachment[];
   },
   env: Env,
   traceId: string | undefined,
@@ -387,8 +426,10 @@ export async function handleDirectMessage(
 ): Promise<void> {
   log.info("slack.dm.received", { trace_id: traceId, user: event.user, channel: event.channel });
   const messageText = stripMentions(event.text);
-  const images = toImageAttachments(event.files, traceId);
-  const hasContent = Boolean(messageText) || images.length > 0;
+  const forwarded = collectForwardedMessages(event.attachments);
+  const images = toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId);
+  const forwardedMessages = forwarded.entries;
+  const hasContent = Boolean(messageText) || images.length > 0 || forwardedMessages.length > 0;
   const threadKey = event.thread_ts || event.ts;
   if (hasContent)
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
@@ -399,6 +440,7 @@ export async function handleDirectMessage(
     ts: event.ts,
     threadTs: event.thread_ts,
     images,
+    forwardedMessages,
     env,
     traceId,
     scheduleBackground,

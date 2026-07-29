@@ -22,6 +22,7 @@ import {
   type TriggerConfig,
 } from "@open-inspect/shared";
 import { z } from "zod";
+import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
   AutomationStore,
   toAutomationRun,
@@ -1102,10 +1103,10 @@ export class SchedulerDO extends DurableObject<Env> {
   /**
    * Tell the slack-bot to post a slack-triggered run's result into the triggering
    * message's thread and clear the `eyes` reaction, via its
-   * `/callbacks/automation-complete` endpoint. Signs the body with
-   * `INTERNAL_CALLBACK_SECRET` (in-body HMAC, matching the bot's other callbacks).
-   * No-ops when the run has no triggering message, when `SLACK_BOT` is unbound, or
-   * when the secret is unset — all best-effort.
+   * `/callbacks/automation-complete` endpoint. Signs the body with the
+   * slack-bot's own service secret (in-body HMAC, matching the bot's other
+   * callbacks). No-ops when the run has no triggering message, when
+   * `SLACK_BOT` is unbound, or when the secret is unset — all best-effort.
    */
   private async notifySlackCompletion(
     run: AutomationRunRow,
@@ -1113,7 +1114,7 @@ export class SchedulerDO extends DurableObject<Env> {
     ctx: SlackCompletionContext
   ): Promise<void> {
     const binding = this.env.SLACK_BOT;
-    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
     const body = buildSlackCompletionNotification(meta, ctx);
@@ -1151,7 +1152,7 @@ export class SchedulerDO extends DurableObject<Env> {
    */
   private async notifySlackConcurrencySkip(event: SlackAutomationEvent): Promise<void> {
     const binding = this.env.SLACK_BOT;
-    const secret = this.env.INTERNAL_CALLBACK_SECRET;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
     if (!binding || !secret) return;
 
     const body = buildSlackSkipNotification({
@@ -1213,7 +1214,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // (handleCreateAutomation resolves it for both GitHub and Google users), so this
     // lookup is skipped for them. The fallback below only covers legacy rows with
     // user_id = NULL: those predate Google login and store the GitHub numeric user ID
-    // in created_by (from NextAuth session.user.id), so a github-only identity lookup
+    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
     // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {

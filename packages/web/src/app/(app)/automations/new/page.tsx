@@ -12,6 +12,7 @@ import { getTemplateById } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import Link from "next/link";
 
 function NewAutomationContent() {
@@ -39,7 +40,7 @@ function NewAutomationContent() {
     setError("");
 
     try {
-      const res = await fetch("/api/automations", {
+      const res = await browserApiFetch("/api/automations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),

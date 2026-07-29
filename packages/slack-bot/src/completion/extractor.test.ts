@@ -61,6 +61,7 @@ describe("extractAgentResponse", () => {
 
     const env = {
       CONTROL_PLANE: { fetch: fetchMock },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     const response = await extractAgentResponse(env, "session-1", "msg-1");
@@ -121,6 +122,7 @@ describe("extractAgentResponse", () => {
 
     const env = {
       CONTROL_PLANE: { fetch: fetchMock },
+      SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
     const response = await extractAgentResponse(env, "session-2", "msg-2");

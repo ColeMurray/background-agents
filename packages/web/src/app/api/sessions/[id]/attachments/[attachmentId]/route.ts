@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const ATTACHMENT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
@@ -10,7 +9,7 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string; attachmentId: string }> }
 ) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -27,8 +26,8 @@ export async function GET(
     const range = request.headers.get("Range");
     const attachmentPath = `/sessions/${sessionId}/attachments/${attachmentId}`;
     const response = range
-      ? await controlPlaneFetch(attachmentPath, { headers: { Range: range } })
-      : await controlPlaneFetch(attachmentPath);
+      ? await controlPlaneUserFetch(attachmentPath, { headers: { Range: range } })
+      : await controlPlaneUserFetch(attachmentPath);
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`Failed to fetch attachment: ${errorText}`);
@@ -43,13 +42,7 @@ export async function GET(
       Vary: "Cookie",
     });
 
-    for (const headerName of [
-      "Content-Type",
-      "Content-Length",
-      "Content-Range",
-      "Accept-Ranges",
-      "ETag",
-    ]) {
+    for (const headerName of ["Content-Type", "Content-Range", "Accept-Ranges", "ETag"]) {
       const headerValue = response.headers.get(headerName);
       if (headerValue) {
         headers.set(headerName, headerValue);

@@ -13,14 +13,15 @@
  */
 
 import {
-  buildInternalAuthHeaders,
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   postMessage,
+  readBodyCapped,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   type SessionAttachmentReference,
   type SlackMessageFile,
 } from "@open-inspect/shared";
+import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";
 import type { Env } from "./types";
@@ -136,31 +137,6 @@ export function toImageAttachments(
   return attachments;
 }
 
-/** Read the body with a hard byte cap, cancelling as soon as it is exceeded. */
-async function readBodyCapped(res: Response, maxBytes: number): Promise<Uint8Array | null> {
-  if (!res.body) return new Uint8Array();
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
-}
-
 /**
  * Fetch an image's bytes with the bot token, enforcing the trusted host policy
  * (re-checked here as defense in depth) and the image byte cap. Returns a drop
@@ -199,7 +175,7 @@ async function downloadSlackFile(
       });
       return { dropReason: "too_large" };
     }
-    const bytes = await readBodyCapped(res, SESSION_ATTACHMENT_IMAGE_MAX_BYTES);
+    const bytes = await readBodyCapped(res.body, SESSION_ATTACHMENT_IMAGE_MAX_BYTES);
     if (bytes === null || bytes.byteLength === 0) {
       log.warn("slack.attachment.size_rejected", {
         trace_id: traceId,
@@ -283,15 +259,25 @@ async function uploadToSession(
   try {
     const formData = new FormData();
     formData.append("file", new File([bytes], attachment.name, { type: attachment.mimetype }));
-    const response = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${sessionId}/attachments`,
+    // sig1 hashes the exact body bytes, so the multipart form (whose boundary
+    // is generated at serialization time) is serialized ONCE here; the signed
+    // bytes, the Content-Type boundary, and the bytes sent are all from this
+    // single serialization.
+    const serialized = new Request("https://internal/", { method: "POST", body: formData });
+    const multipartBytes = new Uint8Array(await serialized.arrayBuffer());
+    const contentType = serialized.headers.get("Content-Type");
+    if (!contentType) {
+      throw new Error("FormData serialization produced no Content-Type");
+    }
+    const response = await signedControlPlaneFetch(
+      env,
       {
         method: "POST",
-        // No Content-Type here: FormData sets the multipart boundary itself.
-        headers: await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId),
-        body: formData,
-        signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
-      }
+        url: `https://internal/sessions/${sessionId}/attachments`,
+        body: { bytes: multipartBytes, contentType },
+        traceId,
+      },
+      { signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS) }
     );
     if (!response.ok) {
       log.warn("slack.attachment.upload_failed", {

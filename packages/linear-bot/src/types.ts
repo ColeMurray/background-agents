@@ -33,7 +33,7 @@ export interface Env {
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
   ANTHROPIC_API_KEY: string;
-  INTERNAL_CALLBACK_SECRET?: string;
+  SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }
 
@@ -88,16 +88,6 @@ export type {
  */
 export interface ProjectRepoMapping {
   [projectId: string]: { owner: string; name: string } | { environmentId: string };
-}
-
-/**
- * Trigger configuration stored in KV under "config:triggers".
- */
-export interface TriggerConfig {
-  triggerLabel: string;
-  triggerAssignee?: string;
-  autoTriggerOnCreate: boolean;
-  triggerCommand?: string;
 }
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────

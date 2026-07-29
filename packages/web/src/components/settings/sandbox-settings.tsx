@@ -8,6 +8,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
 import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   DEFAULT_CODE_SERVER_PORT,
@@ -40,7 +41,7 @@ interface EnvironmentSettingsResponse {
   settings: SandboxSettings | null;
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = (url: BrowserApiPath) => browserApiFetch(url).then((r) => r.json());
 
 function isValidPort(value: string): boolean {
   return /^\d+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535;
@@ -65,6 +66,25 @@ function isValidBuildTimeout(value: string): boolean {
   if (!/^\d+$/.test(value)) return false;
   const n = Number(value);
   return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
+}
+
+/** Trim, filter empty, validate, parse to number, dedupe. */
+function normalizePorts(input: string[]): { ports: number[]; invalid: string[] } {
+  const ports = new Set<number>();
+  const invalid: string[] = [];
+
+  for (const value of input) {
+    const trimmed = value.trim();
+    if (trimmed === "") continue;
+
+    if (isValidPort(trimmed)) {
+      ports.add(Number(trimmed));
+    } else {
+      invalid.push(value);
+    }
+  }
+
+  return { ports: [...ports], invalid };
 }
 
 const numOrUndef = (v: number | null | undefined): number | undefined =>
@@ -115,7 +135,7 @@ function numberPayloadValue(
 
 /** What a sandbox-settings scope reads/writes and what it inherits from. */
 interface SandboxScopeModel {
-  apiUrl: string;
+  apiUrl: BrowserApiPath;
   /** This scope's own stored settings (at global scope, the stored defaults). */
   ownSettings: SandboxSettings | undefined;
   /** The layer beneath this scope's overrides (undefined at global scope). */
@@ -143,11 +163,11 @@ function useSandboxSettingsScope(
   environmentId?: string
 ): SandboxScopeModel {
   const isGlobal = scope === "global";
-  const globalApiUrl = "/api/integration-settings/sandbox";
+  const globalApiUrl: BrowserApiPath = "/api/integration-settings/sandbox";
   const repoPath =
     owner && name ? encodeRepositoryPathSegments({ repoOwner: owner, repoName: name }) : "";
-  const repoApiUrl = `/api/integration-settings/sandbox/repos/${repoPath}`;
-  const apiUrl = isGlobal
+  const repoApiUrl: BrowserApiPath = `/api/integration-settings/sandbox/repos/${repoPath}`;
+  const apiUrl: BrowserApiPath = isGlobal
     ? globalApiUrl
     : scope === "repo"
       ? repoApiUrl
@@ -287,16 +307,6 @@ export function SandboxSettingsEditor({
   const handleRemoveRow = (index: number) => {
     const updated = rows.filter((_, i) => i !== index);
     setPortRows(updated);
-  };
-
-  /** Trim, filter empty, validate, parse to number, dedupe. */
-  const normalizePorts = (input: string[]): { ports: number[]; invalid: string[] } => {
-    const nonEmpty = input.filter((r) => r.trim() !== "");
-    const invalid = nonEmpty.filter((r) => !isValidPort(r.trim()));
-    const ports = [
-      ...new Set(nonEmpty.filter((r) => isValidPort(r.trim())).map((r) => Number(r.trim()))),
-    ];
-    return { ports, invalid };
   };
 
   const handleSave = useCallback(async () => {
@@ -442,7 +452,7 @@ export function SandboxSettingsEditor({
         ? { settings: { defaults: settingsPayload, enabledRepos } }
         : { settings: settingsPayload };
 
-      const res = await fetch(apiUrl, {
+      const res = await browserApiFetch(apiUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -545,12 +555,18 @@ export function SandboxSettingsEditor({
       <div className="max-w-sm">
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-foreground">Web Terminal</label>
+            <label
+              htmlFor="web-terminal-enabled"
+              className="block text-sm font-medium text-foreground"
+            >
+              Web Terminal
+            </label>
             <p className="text-xs text-muted-foreground">
               Enable a browser-based terminal in sandbox sessions.
             </p>
           </div>
           <button
+            id="web-terminal-enabled"
             type="button"
             role="switch"
             aria-checked={resolvedTerminalEnabled}

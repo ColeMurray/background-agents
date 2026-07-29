@@ -146,7 +146,11 @@ describe("CommitSigningSettings", () => {
 
     await user.click(screen.getByRole("button", { name: "Disable commit signing" }));
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/commit-signing", { method: "DELETE" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/commit-signing", {
+      method: "DELETE",
+      mode: "same-origin",
+      credentials: "same-origin",
+    });
     expect(mutateMock).toHaveBeenCalledWith({ enabled: false }, false);
   });
 

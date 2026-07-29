@@ -15,6 +15,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon, PencilIcon } from "@/components/ui/icons";
 import { formatModelNameLower } from "@/lib/format";
 import { formatAutomationTargetsLabel } from "@/lib/repo-label";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 const HISTORY_PAGE_SIZE = 20;
 
@@ -45,7 +46,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const handleAction = async (action: "pause" | "resume" | "trigger") => {
     setActionError(null);
     try {
-      const res = await fetch(`/api/automations/${id}/${action}`, { method: "POST" });
+      const res = await browserApiFetch(`/api/automations/${id}/${action}`, { method: "POST" });
       if (!res.ok) {
         setActionError(`Failed to ${action} automation`);
         return;
@@ -61,7 +62,7 @@ export default function AutomationDetailPage({ params }: { params: Promise<{ id:
   const handleDelete = async () => {
     setActionError(null);
     try {
-      const res = await fetch(`/api/automations/${id}`, { method: "DELETE" });
+      const res = await browserApiFetch(`/api/automations/${id}`, { method: "DELETE" });
       if (!res.ok) {
         setActionError("Failed to delete automation");
         return;

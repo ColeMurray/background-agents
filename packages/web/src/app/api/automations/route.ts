@@ -1,14 +1,12 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { getToken } from "next-auth/jwt";
-import { authOptions } from "@/lib/auth";
-import { buildAuthIdentity, buildScmCredentials } from "@/lib/build-auth-identity";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { buildAuthDisplay } from "@/lib/build-auth-identity";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -16,7 +14,7 @@ export async function GET(request: NextRequest) {
   const path = buildControlPlanePath("/automations", request.nextUrl.searchParams);
 
   try {
-    const response = await controlPlaneFetch(path);
+    const response = await controlPlaneUserFetch(path);
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });
   } catch (error) {
@@ -26,7 +24,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -34,24 +32,29 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const jwt = await getToken({ req: request });
-
-    // Derive identity from the server-side NextAuth session, routed through the
-    // shared chokepoint (same as the sessions/ws-token routes): provider-agnostic
-    // auth* resolves the canonical user for BOTH GitHub and Google, while the
-    // GitHub-only scm* block is empty for Google — so a Google sub never reaches
-    // the SCM path (F1/F2).
+    // Explicitly pick allowed fields from the client body. Creator identity
+    // and SCM provenance derive from authenticated control-plane state.
     const user = session.user;
-    const userId = user.id || user.email || "anonymous";
 
-    const response = await controlPlaneFetch("/automations", {
+    const automationBody = {
+      name: body.name,
+      instructions: body.instructions,
+      triggerType: body.triggerType,
+      scheduleCron: body.scheduleCron,
+      scheduleTz: body.scheduleTz,
+      model: body.model,
+      reasoningEffort: body.reasoningEffort,
+      eventType: body.eventType,
+      triggerConfig: body.triggerConfig,
+      sentryClientSecret: body.sentryClientSecret,
+      repositories: body.repositories,
+      environmentIds: body.environmentIds,
+      ...buildAuthDisplay(user),
+    };
+
+    const response = await controlPlaneUserFetch("/automations", {
       method: "POST",
-      body: JSON.stringify({
-        ...body,
-        userId,
-        ...buildAuthIdentity(user),
-        ...buildScmCredentials(user, jwt),
-      }),
+      body: JSON.stringify(automationBody),
     });
     const data = await response.json();
     return NextResponse.json(data, { status: response.status });

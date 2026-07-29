@@ -94,6 +94,15 @@ export const MODEL_CATALOG = [
         },
       },
       {
+        id: "anthropic/claude-opus-5",
+        name: "Claude Opus 5",
+        description: "Latest Opus, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
+      },
+      {
         id: "anthropic/claude-fable-5",
         name: "Claude Fable 5",
         description: "Most powerful, new tier above Opus",

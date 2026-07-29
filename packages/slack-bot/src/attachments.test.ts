@@ -1,4 +1,9 @@
-import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES, type SlackMessageFile } from "@open-inspect/shared";
+import {
+  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  sha256Hex,
+  verifyServiceSignature,
+  type SlackMessageFile,
+} from "@open-inspect/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   notifyDroppedAttachments,
@@ -22,7 +27,7 @@ function makeEnv(controlPlaneFetch = vi.fn()): Env {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    SERVICE_AUTH_SECRET: "callback-secret",
     LOG_LEVEL: "error",
   } as Env;
 }
@@ -235,12 +240,42 @@ describe("uploadPreparedAttachments", () => {
     const [uploadUrl, uploadInit] = controlPlaneFetch.mock.calls[0]!;
     expect(uploadUrl).toBe("https://internal/sessions/sess-1/attachments");
     expect(uploadInit.method).toBe("POST");
-    expect(uploadInit.body).toBeInstanceOf(FormData);
-    // Workers-types FormData.get() is typed string | null, so narrow via unknown.
-    const uploaded = (uploadInit.body as FormData).get("file") as unknown as File;
+    // The multipart form is serialized before signing, so the body is the
+    // exact bytes and the Content-Type header carries the boundary they were
+    // serialized with. Round-trip them to prove the pair stays parseable.
+    expect(uploadInit.body).toBeInstanceOf(Uint8Array);
+    const contentType = new Headers(uploadInit.headers).get("Content-Type");
+    expect(contentType).toMatch(/^multipart\/form-data; boundary=/);
+    const roundTripped = await new Request("https://internal/", {
+      method: "POST",
+      headers: { "Content-Type": contentType! },
+      body: uploadInit.body,
+    }).formData();
+    const uploaded = roundTripped.get("file") as unknown as File;
     expect(uploaded).toBeInstanceOf(File);
     expect(uploaded.name).toBe("screenshot.png");
     expect(uploaded.type).toBe("image/png");
+  });
+
+  it("signs the exact multipart bytes when the sig1 credential is bound", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
+    const controlPlaneFetch = vi.fn().mockResolvedValueOnce(uploadCreatedResponse());
+    const env = { ...makeEnv(controlPlaneFetch), SERVICE_AUTH_SECRET: "slack-sig1-secret" };
+
+    await prepareAndUpload(env, "sess-1", [pngFile]);
+
+    const [uploadUrl, uploadInit] = controlPlaneFetch.mock.calls[0]!;
+    const headers = new Headers(uploadInit.headers);
+    const verified = await verifyServiceSignature({
+      signatureHeader: headers.get("X-OpenInspect-Service-Signature")!,
+      service: "slack-bot",
+      secret: "slack-sig1-secret",
+      method: "POST",
+      url: uploadUrl,
+      bodySha256Hex: await sha256Hex(uploadInit.body as Uint8Array),
+      actor: "",
+    });
+    expect(verified).toMatchObject({ ok: true });
   });
 
   it("counts rejected uploads as dropped and carries prepare-stage drops forward", async () => {

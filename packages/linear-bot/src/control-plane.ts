@@ -4,8 +4,8 @@
  * cached read uses. Mirrors slack-bot's classifier/control-plane.ts.
  */
 
-import { buildInternalAuthHeaders } from "@open-inspect/shared";
 import type { Env } from "./types";
+import { signedControlPlaneFetch } from "./internal-auth";
 
 /** Local cache TTL in milliseconds (1 minute). */
 export const LOCAL_CACHE_TTL_MS = 60 * 1000;
@@ -37,11 +37,11 @@ export async function fetchControlPlaneJson(
   path: string,
   traceId?: string
 ): Promise<unknown> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-  const response = await env.CONTROL_PLANE.fetch(`https://internal${path}`, { headers });
+  const response = await signedControlPlaneFetch(
+    env,
+    { method: "GET", url: `https://internal${path}`, traceId },
+    { headers: { Accept: "application/json" } }
+  );
   if (!response.ok) {
     throw new ControlPlaneRequestError(path, response.status);
   }

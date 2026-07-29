@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SELF, env } from "cloudflare:test";
-import { generateInternalToken } from "../../src/auth/internal";
+import { SELF } from "cloudflare:test";
 import { SESSION_DIFF_FAILURE_BODY_MAX_BYTES } from "@open-inspect/shared";
 import { SESSION_DIFF_UPLOAD_BODY_MAX_BYTES } from "../../src/routes/session-diffs";
 import {
@@ -9,12 +8,8 @@ import {
   openSandboxWs,
   queryDO,
   seedSandboxAuth,
+  serviceFetch,
 } from "./helpers";
-
-async function internalAuthHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}` };
-}
 
 async function reportReady(
   stub: DurableObjectStub,
@@ -191,10 +186,7 @@ describe("session diff routes", () => {
     expect(rows).toHaveLength(1);
     expect(JSON.parse(rows[0]!.bundle_json).repositories[0].files[0].patch).toBe(patch);
 
-    const authHeaders = await internalAuthHeaders();
-    const stateResponse = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
-      headers: authHeaders,
-    });
+    const stateResponse = await serviceFetch(`https://test.local/sessions/${sessionName}/diff`);
     expect(stateResponse.status).toBe(200);
     const state = await stateResponse.json<Record<string, unknown>>();
     expect(state).toMatchObject({
@@ -208,18 +200,16 @@ describe("session diff routes", () => {
     });
     expect(JSON.stringify(state)).not.toContain("diff --git");
 
-    const file = await SELF.fetch(
-      `https://test.local/sessions/${sessionName}/diff/${revisionId}/files/file-1`,
-      { headers: authHeaders }
+    const file = await serviceFetch(
+      `https://test.local/sessions/${sessionName}/diff/${revisionId}/files/file-1`
     );
     expect(file.status).toBe(200);
     expect(file.headers.get("Content-Type")).toContain("text/x-diff");
     expect(file.headers.get("X-Content-Type-Options")).toBe("nosniff");
     await expect(file.text()).resolves.toBe(patch);
 
-    const stale = await SELF.fetch(
-      `https://test.local/sessions/${sessionName}/diff/old-revision/files/file-1`,
-      { headers: authHeaders }
+    const stale = await serviceFetch(
+      `https://test.local/sessions/${sessionName}/diff/old-revision/files/file-1`
     );
     expect(stale.status).toBe(409);
     await expect(stale.json()).resolves.toMatchObject({
@@ -256,9 +246,7 @@ describe("session diff routes", () => {
       ).status
     ).toBe(204);
 
-    const state = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
-      headers: await internalAuthHeaders(),
-    });
+    const state = await serviceFetch(`https://test.local/sessions/${sessionName}/diff`);
     await expect(state.json()).resolves.toMatchObject({
       current: { revisionId },
       lastError: { message: "git timed out" },
@@ -326,9 +314,7 @@ describe("session diff routes", () => {
       body: JSON.stringify(partial),
     });
     expect(response.status).toBe(200);
-    const state = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff`, {
-      headers: await internalAuthHeaders(),
-    });
+    const state = await serviceFetch(`https://test.local/sessions/${sessionName}/diff`);
     await expect(state.json()).resolves.toMatchObject({
       current: {
         repositories: [
@@ -352,9 +338,8 @@ describe("session diff routes", () => {
       timeoutMs: 2_000,
     });
 
-    const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/diff/retry`, {
+    const response = await serviceFetch(`https://test.local/sessions/${sessionName}/diff/retry`, {
       method: "POST",
-      headers: await internalAuthHeaders(),
     });
 
     expect(response.status).toBe(202);

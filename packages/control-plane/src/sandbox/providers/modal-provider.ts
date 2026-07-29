@@ -34,6 +34,8 @@ export interface TriggerModalImageBuildConfig {
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   callbackUrl: string;
   failureCallbackUrl: string;
+  /** Single-use token the builder presents as the callback bearer. */
+  callbackToken: string;
   userEnvVars?: Record<string, string>;
   /**
    * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
@@ -241,6 +243,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           buildId: config.buildId,
           callbackUrl: config.callbackUrl,
           failureCallbackUrl: config.failureCallbackUrl,
+          callbackToken: config.callbackToken,
           repositories: config.repositories,
           userEnvVars: config.userEnvVars,
           buildTimeoutSeconds:

@@ -3,20 +3,17 @@ import {
   isValidReasoningEffort,
   type RepositoryRef,
 } from "@open-inspect/shared";
-import { encryptTokenPair, generateId } from "../auth/crypto";
+import { generateId } from "../auth/crypto";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
+import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
-import { DEFAULT_TOKEN_LIFETIME_MS, UserScmTokenStore } from "../db/user-scm-tokens";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
-import {
-  deriveParticipantUserId,
-  resolveGitHubEnrichment,
-  resolveProviderIdentity,
-} from "../session/identity";
+import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
 import {
@@ -48,6 +45,13 @@ async function handleCreateSession(
   const parsed = await parseCreateSessionInput(request);
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
+
+  // Identity comes from the verified principal; caller-asserted identity/SCM
+  // body fields are rejected. SCM credentials flow only through
+  // server-side enrichment from the token store.
+  const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
+  if (enforcement.rejection) return enforcement.rejection;
+  const enforced = enforcement.enforced;
 
   let repositoryContext: RepositoryPair | null;
   try {
@@ -108,76 +112,52 @@ async function handleCreateSession(
     defaultBranch = resolved.defaultBranch;
   }
 
-  const participantUserId = deriveParticipantUserId(body);
+  const participantUserId = enforced.participantUserId;
+  const spawnSource = enforced.spawnSource ?? undefined;
 
-  // Resolve canonical user model ID (for D1 session index).
-  // Best-effort: if resolution fails, the session is created without a user_id.
+  // Resolve canonical user model ID (for D1 session index) from the verified
+  // principal, failing closed; body display fields stay cosmetic.
   const userStore = new UserStore(ctx.db);
-  let resolvedUserId: string | null = null;
-  const providerIdentity = resolveProviderIdentity(body.spawnSource ?? "user", body);
-  if (providerIdentity) {
-    try {
-      const resolvedUser = await userStore.resolveOrCreateUser(providerIdentity);
-      resolvedUserId = resolvedUser.id;
-    } catch (e) {
-      logger.warn("Failed to resolve user identity, session will have no user_id", {
-        error: e instanceof Error ? e : String(e),
-        provider: providerIdentity.provider,
-      });
-    }
-  }
+  const resolution = await resolveCanonicalUserId(userStore, ctx, enforced, {
+    displayName: body.actorDisplayName,
+    email: body.actorEmail,
+    avatarUrl: body.actorAvatarUrl,
+  });
+  if (resolution instanceof Response) return resolution;
+  const resolvedUserId = resolution.userId;
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
   let scmName = body.scmName;
   let scmEmail = body.scmEmail;
-  const scmToken = body.scmToken;
-  const scmRefreshToken = body.scmRefreshToken;
-  let scmTokenExpiresAt = body.scmTokenExpiresAt;
-  let scmUserId = body.scmUserId;
+  // SCM credentials never arrive in the body; enrichment below fills them
+  // from the token store via the canonical user.
+  let scmTokenExpiresAt: number | undefined;
+  let scmUserId: string | undefined;
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
-  if (env.TOKEN_ENCRYPTION_KEY) {
+  // Browser sessions resolve a linked GitHub identity/token through Better
+  // Auth only when SCM enrichment is needed. Transitional callers retain the
+  // legacy D1 lookup. A user without a linked GitHub account uses the GitHub
+  // App bot fallback; account linking is intentionally deferred.
+  if (githubDeployment) {
     try {
-      ({
-        accessTokenEncrypted: scmTokenEncrypted,
-        refreshTokenEncrypted: scmRefreshTokenEncrypted,
-      } = await encryptTokenPair(scmToken, scmRefreshToken, env.TOKEN_ENCRYPTION_KEY));
-    } catch (e) {
-      logger.error("Failed to encrypt SCM token", {
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return error("Failed to process SCM token", 500);
-    }
-  }
-
-  // On GitHub deployments, enrich the owner with their linked GitHub identity
-  // from D1: fill in SCM fields the caller didn't provide (email, display name,
-  // OAuth token). Other SCM deployments retain their provider-native identity
-  // and credentials unchanged.
-  //
-  // This intentionally applies even when the session was authenticated via a
-  // non-GitHub provider (e.g. Google): if the canonical user has ALSO linked a
-  // verified-email GitHub identity, enrichment surfaces THAT identity's token so
-  // the same human keeps GitHub-attributed commits/PRs. resolveGitHubEnrichment
-  // keys off the linked `provider === "github"` identity, never the Google
-  // credential; a user with no linked GitHub identity gets null here and falls
-  // back to the App bot. The invariant is "a Google credential is never used as
-  // an SCM credential", not "a Google-authenticated session carries no SCM state".
-  if (resolvedUserId && githubDeployment) {
-    try {
-      const enrichment = await resolveGitHubEnrichment(env, ctx.db, userStore, resolvedUserId);
+      const enrichment = await resolveGitHubEnrichmentForRequest(
+        env,
+        ctx.db,
+        userStore,
+        resolvedUserId,
+        await resolveGitHubCredentialAuthority(ctx, request.headers)
+      );
       if (enrichment) {
-        scmUserId ??= enrichment.scmUserId;
+        scmUserId = enrichment.scmUserId;
         scmLogin ??= enrichment.scmLogin;
         scmName ??= enrichment.displayName;
         scmEmail ??= enrichment.email;
-        if (!scmTokenEncrypted) {
-          scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
-          scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
-          scmTokenExpiresAt = enrichment.tokenExpiresAt;
-        }
+        scmTokenEncrypted = enrichment.accessTokenEncrypted ?? null;
+        scmRefreshTokenEncrypted = enrichment.refreshTokenEncrypted ?? null;
+        scmTokenExpiresAt = enrichment.tokenExpiresAt;
       }
     } catch (e) {
       logger.warn("Failed to enrich session with GitHub identity", {
@@ -229,7 +209,7 @@ async function handleCreateSession(
     scmTokenExpiresAt,
     codeServerEnabled,
     sandboxSettings,
-    spawnSource: body.spawnSource,
+    spawnSource,
   };
 
   try {
@@ -241,25 +221,6 @@ async function handleCreateSession(
       trace_id: ctx.trace_id,
     });
     return error("Failed to create session", 500);
-  }
-
-  // Populate D1 with the user's SCM tokens (non-blocking) so centralized refresh works
-  if (scmUserId && scmToken && scmRefreshToken && env.TOKEN_ENCRYPTION_KEY) {
-    ctx.executionCtx?.waitUntil(
-      new UserScmTokenStore(ctx.db, env.TOKEN_ENCRYPTION_KEY)
-        .upsertTokens(
-          scmUserId,
-          scmToken,
-          scmRefreshToken,
-          scmTokenExpiresAt ?? Date.now() + DEFAULT_TOKEN_LIFETIME_MS,
-          resolvedUserId
-        )
-        .catch((e) =>
-          logger.error("Failed to write tokens to D1", {
-            error: e instanceof Error ? e : String(e),
-          })
-        )
-    );
   }
 
   const result: CreateSessionResponse = {

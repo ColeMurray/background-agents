@@ -6,11 +6,13 @@
  * GitHub App installation to get the list of accessible repositories.
  */
 
-import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
+import type { Env, RepoConfig } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
+  controlPlaneReposResponseSchema,
   createKvCacheStore,
   normalizeRoutingRules,
+  repoConfigSchema,
   type SlackGlobalConfig,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
@@ -48,11 +50,13 @@ const watchedChannelsResponseSchema = z.object({
   channels: watchedChannelsSchema.optional(),
 });
 
+type ParsedControlPlaneRepo = z.infer<typeof controlPlaneReposResponseSchema>["repos"][number];
+
 /**
  * Convert a control plane repo to a RepoConfig.
  * Normalizes identifiers to lowercase for consistent comparison.
  */
-function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
+function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
   const normalizedOwner = repo.owner.toLowerCase();
   const normalizedName = repo.name.toLowerCase();
 
@@ -102,8 +106,17 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
       return getFromCacheOrFallback(env);
     }
 
-    const data = (await response.json()) as ControlPlaneReposResponse;
-    const repos = data.repos.map(toRepoConfig);
+    const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("control_plane.fetch_repos", {
+        trace_id: traceId,
+        outcome: "invalid_response",
+        duration_ms: Date.now() - startTime,
+      });
+      return getFromCacheOrFallback(env);
+    }
+
+    const repos = parsed.data.repos.map(toRepoConfig);
 
     // Update local cache
     localCache = {
@@ -149,9 +162,10 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
   try {
     const cached = await createKvCacheStore(env.SLACK_KV).get("repos:cache", "json");
-    if (cached && Array.isArray(cached)) {
+    const parsed = z.array(repoConfigSchema).safeParse(cached);
+    if (parsed.success) {
       log.info("control_plane.fetch_repos", { source: "kv_cache" });
-      return cached as RepoConfig[];
+      return parsed.data;
     }
   } catch (e) {
     log.warn("kv.get", {

@@ -1,19 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
-import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET } from "./route";
 
 describe("analytics timeseries API route", () => {
@@ -22,7 +18,7 @@ describe("analytics timeseries API route", () => {
   });
 
   it("returns 401 when the user session is missing", async () => {
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await GET(
       new Request("http://localhost/api/analytics/timeseries?days=30") as never
@@ -33,21 +29,23 @@ describe("analytics timeseries API route", () => {
   });
 
   it("forwards only the days query param", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ series: [] }, { status: 200 }));
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ series: [] }, { status: 200 })
+    );
 
     const response = await GET(
       new Request("http://localhost/api/analytics/timeseries?trace=1&view=status&days=7") as never
     );
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/analytics/timeseries?days=7");
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/analytics/timeseries?days=7");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ series: [] });
   });
 
   it("passes through upstream error statuses", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "user-1" } } as never);
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ error: "Bad request" }, { status: 400 })
     );
 

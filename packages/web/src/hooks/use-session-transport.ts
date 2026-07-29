@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { serverMessageSchema } from "@open-inspect/shared";
 import type { ServerMessage } from "@open-inspect/shared";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 // WebSocket URL (should come from env in production)
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
@@ -112,7 +113,7 @@ export function useSessionTransport(
 
   const fetchWsToken = useCallback(async (): Promise<string | null> => {
     try {
-      const response = await fetch(`/api/sessions/${sessionId}/ws-token`, {
+      const response = await browserApiFetch(`/api/sessions/${sessionId}/ws-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

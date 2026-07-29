@@ -3,6 +3,23 @@ import type { Env } from "../types";
 import { getLinearConfig } from "./integration-config";
 
 describe("getLinearConfig", () => {
+  function envForFetchResponse(response: Response): Env {
+    const fetch = vi.fn().mockResolvedValue(response);
+    return {
+      SERVICE_AUTH_SECRET: "test-secret",
+      CONTROL_PLANE: { fetch },
+    } as unknown as Env;
+  }
+
+  function envForResponse(body: unknown): Env {
+    return envForFetchResponse(
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    );
+  }
+
   it("encodes nested repository owners as one route segment", async () => {
     const fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ config: null }), {
@@ -11,7 +28,7 @@ describe("getLinearConfig", () => {
       })
     );
     const env = {
-      INTERNAL_CALLBACK_SECRET: "test-secret",
+      SERVICE_AUTH_SECRET: "test-secret",
       CONTROL_PLANE: { fetch },
     } as unknown as Env;
 
@@ -21,5 +38,76 @@ describe("getLinearConfig", () => {
       "https://internal/integration-settings/linear/resolved/group%2Fsubgroup/web",
       expect.any(Object)
     );
+  });
+
+  it("returns a parsed resolved config", async () => {
+    await expect(
+      getLinearConfig(
+        envForResponse({
+          config: {
+            model: "openai/gpt-5.4",
+            reasoningEffort: null,
+            allowUserPreferenceOverride: false,
+            allowLabelModelOverride: true,
+            emitToolProgressActivities: false,
+            issueSessionInstructions: "Use small commits.",
+            enabledRepos: ["acme/backend"],
+          },
+        }),
+        "acme/backend"
+      )
+    ).resolves.toEqual({
+      model: "openai/gpt-5.4",
+      reasoningEffort: null,
+      allowUserPreferenceOverride: false,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: false,
+      issueSessionInstructions: "Use small commits.",
+      enabledRepos: ["acme/backend"],
+    });
+  });
+
+  it("falls back when the response shape is malformed", async () => {
+    await expect(
+      getLinearConfig(
+        envForResponse({
+          config: {
+            model: "openai/gpt-5.4",
+            allowUserPreferenceOverride: "yes",
+          },
+        }),
+        "acme/backend"
+      )
+    ).resolves.toEqual({
+      model: null,
+      reasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: true,
+      issueSessionInstructions: null,
+      enabledRepos: null,
+    });
+  });
+
+  it("falls back when the response is invalid JSON", async () => {
+    await expect(
+      getLinearConfig(
+        envForFetchResponse(
+          new Response("{not-json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          })
+        ),
+        "acme/backend"
+      )
+    ).resolves.toEqual({
+      model: null,
+      reasoningEffort: null,
+      allowUserPreferenceOverride: true,
+      allowLabelModelOverride: true,
+      emitToolProgressActivities: true,
+      issueSessionInstructions: null,
+      enabledRepos: null,
+    });
   });
 });

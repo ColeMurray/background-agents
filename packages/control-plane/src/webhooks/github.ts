@@ -15,8 +15,8 @@ import { createSessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
 import type { RequestContext, Route } from "../routes/shared";
 import { error, parsePattern } from "../routes/shared";
+import { requireEventPoster } from "../auth/identity-enforcement";
 import {
-  authenticateAutomationEvent,
   forwardAutomationEventToScheduler,
   validateAutomationEventEnvelope,
 } from "./automation-event";
@@ -119,7 +119,7 @@ async function handleGitHubAutomationEvent(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const authFailure = await authenticateAutomationEvent(request, env);
+  const authFailure = requireEventPoster(ctx, "github");
   if (authFailure) return authFailure;
 
   let body: unknown;

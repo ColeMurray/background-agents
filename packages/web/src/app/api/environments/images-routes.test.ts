@@ -5,24 +5,20 @@ const mocks = vi.hoisted(() => ({
   supportsRepoImagesValue: true,
 }));
 
-vi.mock("next-auth", () => ({
-  getServerSession: vi.fn(),
-}));
-
-vi.mock("@/lib/auth", () => ({
-  authOptions: {},
+vi.mock("@/lib/server-auth-session", () => ({
+  getServerAuthSession: vi.fn(),
 }));
 
 vi.mock("@/lib/control-plane", () => ({
-  controlPlaneFetch: vi.fn(),
+  controlPlaneUserFetch: vi.fn(),
 }));
 
 vi.mock("@/lib/sandbox-provider", () => ({
   supportsRepoImages: () => mocks.supportsRepoImagesValue,
 }));
 
-import { getServerSession } from "next-auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { GET as getEnvironmentStatus } from "./[id]/images/route";
 import { POST as triggerBuild } from "./[id]/images/trigger/route";
 
@@ -48,32 +44,32 @@ describe.each(routes)("$name", ({ call }) => {
 
   it("returns 401 before disclosing provider support when unauthenticated", async () => {
     mocks.supportsRepoImagesValue = false;
-    vi.mocked(getServerSession).mockResolvedValue(null);
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
 
     const response = await call();
 
     expect(response.status).toBe(401);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("returns 501 for authenticated users on a provider without image support", async () => {
     mocks.supportsRepoImagesValue = false;
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
 
     const response = await call();
 
     expect(response.status).toBe(501);
-    expect(controlPlaneFetch).not.toHaveBeenCalled();
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("proxies to the control plane for authenticated users", async () => {
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
-    vi.mocked(controlPlaneFetch).mockImplementation(async () => Response.json({ images: [] }));
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async () => Response.json({ images: [] }));
 
     const response = await call();
 
     expect(response.status).toBe(200);
-    expect(controlPlaneFetch).toHaveBeenCalledTimes(1);
+    expect(controlPlaneUserFetch).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -81,7 +77,7 @@ describe("unified route consumption", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.supportsRepoImagesValue = true;
-    vi.mocked(getServerSession).mockResolvedValue({ user: { id: "12345" } } as never);
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "12345" } } as never);
   });
 
   it("status reads the per-scope unified status and filters superseded rows", async () => {
@@ -97,24 +93,24 @@ describe("unified route consumption", () => {
       error_message: null,
       created_at: 1700000000000,
     };
-    vi.mocked(controlPlaneFetch).mockResolvedValue(
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ images: [readyRow, { ...readyRow, id: "build-0", status: "superseded" }] })
     );
 
     const response = await getEnvironmentStatus(request, params);
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith(
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
       "/image-builds/status?scope_kind=environment&scope_id=env-1"
     );
     await expect(response.json()).resolves.toEqual({ images: [readyRow] });
   });
 
   it("trigger posts to the unified environment trigger route", async () => {
-    vi.mocked(controlPlaneFetch).mockResolvedValue(Response.json({ ok: true }));
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({ ok: true }));
 
     await triggerBuild(request, params);
 
-    expect(controlPlaneFetch).toHaveBeenCalledWith("/image-builds/trigger/environment/env-1", {
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/image-builds/trigger/environment/env-1", {
       method: "POST",
     });
   });

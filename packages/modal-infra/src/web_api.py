@@ -493,6 +493,7 @@ async def api_build_image(
         "build_id": "...",
         "callback_url": "...",
         "failure_callback_url": "...",
+        "callback_token": "...",  # bearer for both callbacks
         "repositories": [{"repo_owner": "...", "repo_name": "...", "branch": "..."}],
         "user_env_vars": {...},          // optional
         "build_timeout_seconds": 1800    // optional
@@ -516,6 +517,7 @@ async def api_build_image(
         build_id = request.get("build_id", "")
         callback_url = request.get("callback_url", "")
         failure_callback_url = request.get("failure_callback_url", "")
+        callback_token = request.get("callback_token", "")
         repositories = request.get("repositories")
         user_env_vars = request.get("user_env_vars") or None
         # Already capped by the control plane; default when absent/null.
@@ -531,6 +533,12 @@ async def api_build_image(
 
         if not failure_callback_url:
             raise HTTPException(status_code=400, detail="failure_callback_url is required")
+
+        if not callback_token:
+            # A tokenless build could never report success or failure — the
+            # control plane requires the callback bearer — so it would wedge
+            # as 'building' until the stale sweep reaps it. Fail fast instead.
+            raise HTTPException(status_code=400, detail="callback_token is required")
 
         if not isinstance(repositories, list) or not repositories:
             raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
@@ -555,6 +563,7 @@ async def api_build_image(
             repositories=repositories,
             callback_url=callback_url,
             failure_callback_url=failure_callback_url,
+            callback_token=callback_token,
             build_id=build_id,
             user_env_vars=user_env_vars,
             build_timeout_seconds=build_timeout_seconds,
