@@ -724,7 +724,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * Restore a sandbox from a filesystem snapshot.
    */
   private async restoreFromSnapshot(snapshotImageId: string): Promise<void> {
-    if (!this.provider.restoreFromSnapshot) {
+    if (!this.provider.capabilities.supportsRestore || !this.provider.restoreFromSnapshot) {
       this.log.info("Provider does not support restore, falling back to fresh spawn");
       // Fall back to fresh spawn
       await this.doSpawn();
@@ -964,7 +964,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    * Trigger a filesystem snapshot of the sandbox.
    */
   async triggerSnapshot(reason: string): Promise<void> {
-    if (!this.provider.takeSnapshot) {
+    if (!this.provider.capabilities.supportsSnapshots || !this.provider.takeSnapshot) {
       this.log.debug("Provider does not support snapshots");
       return;
     }

@@ -35,7 +35,12 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     pauseSandbox: vi.fn(async () => {}),
-    connectSandbox: vi.fn(async (): Promise<void> => {}),
+    connectSandbox: vi.fn(async () => ({
+      sandboxID: "e2b-id",
+      templateID: "tmpl",
+      envdAccessToken: "fresh-envd-token",
+    })),
+    updateSandboxNetwork: vi.fn(async () => {}),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
     createSnapshot: vi.fn(async () => ({ snapshotID: "snap-abc:default", names: ["oi/snap"] })),
@@ -446,7 +451,7 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(env.REPO_IMAGE_SHA).toBe("abc123");
   });
 
-  it("restoreFromSnapshot spawns from the snapshot id and sets RESTORED_FROM_SNAPSHOT", async () => {
+  it("restoreFromSnapshot quarantines captured memory, cold-boots, then delivers fresh env", async () => {
     const client = mockClient();
     const result = await new E2BSandboxProvider(client, providerConfig).restoreFromSnapshot({
       ...baseCreateConfig,
@@ -455,25 +460,58 @@ describe("E2BSandboxProvider prebuilt images / snapshots", () => {
     expect(result.success).toBe(true);
     expect(result.providerObjectId).toBe("e2b-id");
     expect(client.createSandbox).toHaveBeenCalledWith(
-      expect.objectContaining({ templateID: "snap-restore:default" })
+      expect.objectContaining({
+        templateID: "snap-restore:default",
+        allowInternetAccess: false,
+        secure: true,
+      })
     );
+    expect(client.pauseSandbox).toHaveBeenCalledWith("e2b-id", { memory: false });
+    expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
+    expect(client.updateSandboxNetwork).toHaveBeenCalledWith("e2b-id", {
+      allowInternetAccess: true,
+    });
     const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
     expect(env.RESTORED_FROM_SNAPSHOT).toBe("true");
+    expect(client.writeSessionEnv).toHaveBeenCalledWith(
+      "e2b-id",
+      expect.any(Object),
+      expect.objectContaining({ envdAccessToken: "fresh-envd-token" })
+    );
+    const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
+    const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
+    const networkOrder = vi.mocked(client.updateSandboxNetwork).mock.invocationCallOrder[0];
+    const envOrder = vi.mocked(client.writeSessionEnv).mock.invocationCallOrder[0];
+    expect(pauseOrder).toBeLessThan(connectOrder);
+    expect(connectOrder).toBeLessThan(networkOrder);
+    expect(networkOrder).toBeLessThan(envOrder);
   });
 
-  it("takeSnapshot sanitizes via pause(memory:false)+connect before createSnapshot", async () => {
+  it("takeSnapshot snapshots a live session without pausing or reconnecting it", async () => {
     const client = mockClient();
     const provider = new E2BSandboxProvider(client, providerConfig);
-    const result = await provider.takeSnapshot({
+    const liveResult = await provider.takeSnapshot({
+      providerObjectId: "build-sbx",
+      sessionId: "build-1",
+      reason: "execution_complete",
+    });
+    expect(client.pauseSandbox).not.toHaveBeenCalled();
+    expect(client.connectSandbox).not.toHaveBeenCalled();
+    expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx");
+    expect(liveResult).toEqual({ success: true, imageId: "snap-abc:default" });
+  });
+
+  it("takePrebuiltImageSnapshot sanitizes via pause(memory:false)+connect before snapshot", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    const result = await provider.takePrebuiltImageSnapshot({
       providerObjectId: "build-sbx",
       sessionId: "build-1",
       reason: "environment_image_build",
     });
-    // Drop process memory (build supervisor + secrets), then cold-boot, then bake.
     expect(client.pauseSandbox).toHaveBeenCalledWith("build-sbx", { memory: false });
     expect(client.connectSandbox).toHaveBeenCalledWith("build-sbx", expect.any(Number));
     expect(client.createSnapshot).toHaveBeenCalledWith("build-sbx");
-    // Ordering: pause → connect → snapshot.
     const pauseOrder = vi.mocked(client.pauseSandbox).mock.invocationCallOrder[0];
     const connectOrder = vi.mocked(client.connectSandbox).mock.invocationCallOrder[0];
     const snapOrder = vi.mocked(client.createSnapshot).mock.invocationCallOrder[0];

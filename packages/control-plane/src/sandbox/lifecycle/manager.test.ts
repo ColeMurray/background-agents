@@ -882,6 +882,30 @@ describe("SandboxLifecycleManager", () => {
       expect(provider.createSandbox).not.toHaveBeenCalled();
     });
 
+    it("falls back to a fresh spawn when restore capability is disabled", async () => {
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const provider = createMockProvider({
+        capabilities: { supportsRestore: false },
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(createMockSession(), sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).not.toHaveBeenCalled();
+      expect(provider.createSandbox).toHaveBeenCalled();
+    });
+
     it("logs one terminal sandbox.restore event for success", async () => {
       const sandbox = createMockSandbox({
         status: "stopped",
@@ -1453,6 +1477,30 @@ describe("SandboxLifecycleManager", () => {
 
       // Should not crash, just skip
       expect(storage.calls).not.toContain("updateSandboxSnapshotImageId");
+    });
+
+    it("honors a disabled snapshot capability even when the method exists", async () => {
+      const takeSnapshot = vi.fn(async () => ({
+        success: true,
+        imageId: "should-not-be-used",
+      }));
+      const provider = createMockProvider({
+        capabilities: { supportsSnapshots: false },
+        takeSnapshot,
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(createMockSession(), createMockSandbox({ status: "ready" })),
+        createMockBroadcaster(),
+        createMockWebSocketManager(),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.triggerSnapshot("execution_complete");
+
+      expect(takeSnapshot).not.toHaveBeenCalled();
     });
 
     it("stores returned imageId", async () => {

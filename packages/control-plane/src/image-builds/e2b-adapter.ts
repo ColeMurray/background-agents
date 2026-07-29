@@ -20,7 +20,8 @@ const MS_PER_SECOND = 1000;
  * build sandbox (E2B stop only pauses, which would leak the single-use box).
  *
  * Quiescing the build process before the snapshot is owned by the provider's
- * takeSnapshot (pause keepMemory:false → connect cold-boot → snapshot), so the
+ * takePrebuiltImageSnapshot (pause memory:false → connect cold-boot → snapshot),
+ * so the
  * adapter neither waits nor guesses when the build supervisor has exited.
  */
 export class E2BImageBuildAdapter implements ImageBuildAdapter {
@@ -49,7 +50,7 @@ export class E2BImageBuildAdapter implements ImageBuildAdapter {
   async finalizeSuccessfulBuild(
     input: FinalizeImageBuildInput
   ): Promise<ImageBuildProviderImageRef> {
-    const snapshot = await this.provider.takeSnapshot({
+    const snapshot = await this.provider.takePrebuiltImageSnapshot({
       providerObjectId: input.providerSessionId,
       sessionId: input.buildId,
       reason: "environment_image_build",

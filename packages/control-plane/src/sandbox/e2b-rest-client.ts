@@ -19,6 +19,7 @@ export interface E2BRestConfig {
 const TIMEOUT_CREATE_MS = 90_000;
 const TIMEOUT_CONNECT_MS = 60_000;
 const TIMEOUT_PAUSE_MS = 30_000;
+const TIMEOUT_NETWORK_UPDATE_MS = 15_000;
 const TIMEOUT_KILL_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
@@ -98,6 +99,8 @@ export interface E2BCreateSandboxParams {
    * envd accepts unauthenticated reads/writes of the uploaded session env.
    */
   secure?: boolean;
+  /** Whether the sandbox may make outbound internet requests. */
+  allowInternetAccess?: boolean;
 }
 
 export class E2BNotFoundError extends Error {
@@ -150,6 +153,7 @@ export class E2BRestClient {
             metadata: params.metadata,
             timeout: params.timeoutSeconds,
             secure: params.secure ?? false,
+        allow_internet_access: params.allowInternetAccess,
             autoPause: params.autoPause ?? false,
             autoResume: { enabled: params.autoResume ?? false },
           },
@@ -256,12 +260,30 @@ export class E2BRestClient {
    *
    * Connect answers with the create-style `Sandbox` shape — `sandboxID`/`templateID`,
    * no `state`, which only `GET /sandboxes/{id}` returns. Callers re-read state
-   * through getSandbox when they need it, so this is a command: the success body
-   * carries nothing we act on and is discarded.
+   * through getSandbox when they need it. The body is returned rather than
+   * discarded because a secure sandbox's envd access token is reissued on
+   * connect: a cold boot invalidates the create-time token, so the restore path
+   * needs the fresh one to write the per-session env.
    */
-  async connectSandbox(id: string, timeoutSeconds: number): Promise<void> {
-    await this.requestVoid("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
-      body: { timeout: timeoutSeconds },
+  async connectSandbox(id: string, timeoutSeconds: number): Promise<E2BSandboxCreated> {
+    return this.requestJson(
+      "POST",
+      `/sandboxes/${id}/connect`,
+      TIMEOUT_CONNECT_MS,
+      e2bSandboxCreatedSchema,
+      { body: { timeout: timeoutSeconds } }
+    );
+  }
+
+  /**
+   * Toggle a running sandbox's outbound internet access
+   * (`PUT /sandboxes/{id}/network`). Session restores boot with the network off
+   * so a snapshotted supervisor cannot act on stale credentials, then re-enable
+   * it once the process memory has been dropped.
+   */
+  async updateSandboxNetwork(id: string, options: { allowInternetAccess: boolean }): Promise<void> {
+    await this.requestVoid("PUT", `/sandboxes/${id}/network`, TIMEOUT_NETWORK_UPDATE_MS, {
+      body: { allow_internet_access: options.allowInternetAccess },
     });
   }
 
@@ -298,16 +320,14 @@ export class E2BRestClient {
   }
 
   /**
-   * Delete a snapshot template (`DELETE /templates/{templateID}`). A snapshot id
-   * carries a build tag (`abc123:default`); the templates path takes the bare
-   * template id, so the tag is stripped. Used by the image-build reaper to
-   * reclaim superseded prebuilt images.
+   * Delete a snapshot template (`DELETE /templates/{templateID}`). Snapshot ids,
+   * build tag included, are passed verbatim as the E2B API requires. Used by the
+   * image-build reaper to reclaim superseded prebuilt images.
    */
   async deleteTemplate(templateId: string): Promise<void> {
-    const bareTemplateId = stripSnapshotTag(templateId);
     await this.requestVoid(
       "DELETE",
-      `/templates/${encodeURIComponent(bareTemplateId)}`,
+      `/templates/${encodeURIComponent(templateId)}`,
       TIMEOUT_DELETE_TEMPLATE_MS
     );
   }
@@ -328,7 +348,7 @@ export class E2BRestClient {
    * `schema`, otherwise the call fails as an invalid response.
    */
   private requestJson<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     schema: z.ZodType<T>,
@@ -353,7 +373,7 @@ export class E2BRestClient {
    * can fail the call.
    */
   private requestVoid(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     options?: { body?: unknown }
@@ -367,7 +387,7 @@ export class E2BRestClient {
    * abort raised there is translated like any other (see the catch below).
    */
   private async send<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
     options: { body?: unknown } | undefined,
@@ -422,18 +442,6 @@ export class E2BRestClient {
       clearTimeout(timeoutId);
     }
   }
-}
-
-/**
- * Strip the build tag from a snapshot id for the templates delete path.
- * `abc123:default` → `abc123`, `team/my-snapshot:v2` → `team/my-snapshot`.
- * The tag is the final `:`-delimited segment (never contains a slash).
- */
-export function stripSnapshotTag(snapshotId: string): string {
-  const lastColon = snapshotId.lastIndexOf(":");
-  if (lastColon === -1) return snapshotId;
-  const tag = snapshotId.slice(lastColon + 1);
-  return tag.includes("/") ? snapshotId : snapshotId.slice(0, lastColon);
 }
 
 export function createE2BRestClient(config: E2BRestConfig): E2BRestClient {
