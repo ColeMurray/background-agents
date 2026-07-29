@@ -198,6 +198,8 @@ function sliceAtCodePointBoundary(text: string, maxChars: number): string {
   let end = Math.min(maxChars, text.length);
   const lastCodeUnit = text.charCodeAt(end - 1);
   const nextCodeUnit = text.charCodeAt(end);
+  // Back up when the cut falls between a UTF-16 high and low surrogate, so a
+  // supplementary code point is never split across sections.
   if (
     lastCodeUnit >= 0xd800 &&
     lastCodeUnit <= 0xdbff &&
