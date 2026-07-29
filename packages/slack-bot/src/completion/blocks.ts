@@ -211,6 +211,112 @@ function sliceAtCodePointBoundary(text: string, maxChars: number): string {
   return text.slice(0, end);
 }
 
+class SlackSectionAccumulator {
+  private readonly sections: string[] = [];
+  private sectionStart = CLOSED_FENCE;
+  private sectionEnd = CLOSED_FENCE;
+  private body = "";
+  private truncated = false;
+
+  constructor(
+    private readonly maxChars: number,
+    private readonly maxSections: number
+  ) {}
+
+  appendSourceToken(sourceToken: string): boolean {
+    if (!sourceToken) return true;
+    if (sourceToken.startsWith("\n\n") || sourceToken.length <= this.maxChars) {
+      return this.appendToken(sourceToken);
+    }
+
+    // Oversized paragraphs (long tables, big code blocks) fall back to line
+    // tokens while retaining their line endings.
+    for (const lineToken of sourceToken.split(/(\n)/)) {
+      if (lineToken && !this.appendToken(lineToken)) return false;
+    }
+    return true;
+  }
+
+  finish(): string[] {
+    if (!this.truncated) this.flush();
+    if (!this.truncated) return this.sections;
+
+    const lastIndex = this.sections.length - 1;
+    this.sections[lastIndex] = withTruncationMarker(this.sections[lastIndex], this.maxChars);
+    return this.sections;
+  }
+
+  private appendToken(token: string): boolean {
+    if (this.tryAppend(token)) return true;
+
+    this.flush();
+    if (this.stopAtSectionLimit()) return false;
+    if (this.tryAppend(token)) return true;
+
+    return this.appendOversizedToken(token);
+  }
+
+  private tryAppend(token: string): boolean {
+    const joined = this.body + token;
+    const joinedEnd = advanceFence(this.sectionEnd, token);
+    if (this.render(joined, joinedEnd).length > this.maxChars) return false;
+
+    this.body = joined;
+    this.sectionEnd = joinedEnd;
+    return true;
+  }
+
+  private appendOversizedToken(token: string): boolean {
+    let rest = token;
+    while (rest.length > 0) {
+      const taken = this.takeHardSlice(rest);
+      rest = rest.slice(taken.length);
+      if (rest.length === 0) continue;
+
+      this.flush();
+      if (this.stopAtSectionLimit()) return false;
+    }
+    return true;
+  }
+
+  private takeHardSlice(text: string): string {
+    const start = this.sectionEnd;
+    // Reserve the closing fence whenever this slice could end inside one.
+    const reserveClose = start.open || advanceFence(start, text).open;
+    const budget =
+      this.maxChars -
+      reopenPrefix(start).length -
+      (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
+    const taken = sliceAtCodePointBoundary(text, Math.max(1, budget));
+    if (!taken) {
+      throw new RangeError("Section budget is too small to fit the next Unicode code point");
+    }
+
+    this.sectionStart = start;
+    this.body = taken;
+    this.sectionEnd = advanceFence(start, taken);
+    return taken;
+  }
+
+  private flush(): void {
+    if (!this.body) return;
+    this.sections.push(this.render(this.body, this.sectionEnd));
+    // A fence left open carries into the next section, which reopens it.
+    this.sectionStart = this.sectionEnd;
+    this.body = "";
+  }
+
+  private stopAtSectionLimit(): boolean {
+    if (this.sections.length < this.maxSections) return false;
+    this.truncated = true;
+    return true;
+  }
+
+  private render(content: string, end: FenceState): string {
+    return `${reopenPrefix(this.sectionStart)}${content}${closeSuffix(end)}`;
+  }
+}
+
 /**
  * Split agent prose into Slack section blocks, preferring paragraph boundaries.
  *
@@ -239,90 +345,11 @@ export function splitIntoSlackSections(
   if (!text.trim()) return [];
   if (text.length <= maxChars) return [text];
 
-  const sections: string[] = [];
-  // Fence state where the in-progress section began, and where its body now ends.
-  let sectionStart = CLOSED_FENCE;
-  let sectionEnd = CLOSED_FENCE;
-  let body = "";
-  let truncated = false;
-
-  const render = (start: FenceState, content: string, end: FenceState): string =>
-    `${reopenPrefix(start)}${content}${closeSuffix(end)}`;
-
-  const flush = (): void => {
-    if (!body) return;
-    sections.push(render(sectionStart, body, sectionEnd));
-    // A fence left open carries into the next section, which reopens it.
-    sectionStart = sectionEnd;
-    body = "";
-  };
-
-  const appendToken = (token: string): boolean => {
-    const joined = body + token;
-    const joinedEnd = advanceFence(sectionEnd, token);
-    if (render(sectionStart, joined, joinedEnd).length <= maxChars) {
-      body = joined;
-      sectionEnd = joinedEnd;
-      return true;
-    }
-
-    flush();
-    if (sections.length >= maxSections) {
-      truncated = true;
-      return false;
-    }
-    const aloneEnd = advanceFence(sectionEnd, token);
-    if (render(sectionStart, token, aloneEnd).length <= maxChars) {
-      body = token;
-      sectionEnd = aloneEnd;
-      return true;
-    }
-
-    // Token exceeds a whole section on its own: slice it against the real budget.
-    let rest = token;
-    while (rest.length > 0) {
-      const start = sectionEnd;
-      // Reserve the closing fence whenever this slice could end inside one.
-      const reserveClose = start.open || advanceFence(start, rest).open;
-      const budget =
-        maxChars - reopenPrefix(start).length - (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
-      const taken = sliceAtCodePointBoundary(rest, Math.max(1, budget));
-      if (!taken) {
-        throw new RangeError("Section budget is too small to fit the next Unicode code point");
-      }
-      sectionStart = start;
-      body = taken;
-      sectionEnd = advanceFence(start, taken);
-      rest = rest.slice(taken.length);
-      if (rest.length > 0) {
-        flush();
-        if (sections.length >= maxSections) {
-          truncated = true;
-          return false;
-        }
-      }
-    }
-    return true;
-  };
-
-  sourceTokens: for (const sourceToken of text.split(/(\n{2,})/)) {
-    if (!sourceToken) continue;
-    if (sourceToken.startsWith("\n\n") || sourceToken.length <= maxChars) {
-      if (!appendToken(sourceToken)) break;
-      continue;
-    }
-    // Oversized paragraph (long table, big code block): keep its line endings as
-    // source tokens so section boundaries never rewrite the original response.
-    for (const lineToken of sourceToken.split(/(\n)/)) {
-      if (lineToken && !appendToken(lineToken)) break sourceTokens;
-    }
+  const accumulator = new SlackSectionAccumulator(maxChars, maxSections);
+  for (const sourceToken of text.split(/(\n{2,})/)) {
+    if (!accumulator.appendSourceToken(sourceToken)) break;
   }
-  if (!truncated) flush();
-
-  if (!truncated) return sections;
-  const lastIndex = sections.length - 1;
-  sections[lastIndex] = withTruncationMarker(sections[lastIndex], maxChars);
-  return sections;
+  return accumulator.finish();
 }
 
 /**
