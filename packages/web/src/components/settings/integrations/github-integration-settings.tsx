@@ -105,7 +105,11 @@ export function GitHubIntegrationSettings() {
 
       <CommitSigningSettings />
 
-      <GlobalSettingsSection settings={settings} availableRepos={availableRepos} />
+      <GlobalSettingsSection
+        settings={settings}
+        availableRepos={availableRepos}
+        enabledModelOptions={enabledModelOptions}
+      />
 
       <Section
         title="Repository Overrides"
@@ -125,10 +129,14 @@ export function GitHubIntegrationSettings() {
 function GlobalSettingsSection({
   settings,
   availableRepos,
+  enabledModelOptions,
 }: {
   settings: GitHubGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
+  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
 }) {
+  const [model, setModel] = useState(settings?.defaults?.model ?? "");
+  const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -158,6 +166,8 @@ function GlobalSettingsSection({
   useEffect(() => {
     if (settings !== undefined && !initialized) {
       if (settings) {
+        setModel(settings.defaults?.model ?? "");
+        setEffort(settings.defaults?.reasoningEffort ?? "");
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -173,6 +183,7 @@ function GlobalSettingsSection({
   }, [settings, initialized]);
 
   const isConfigured = settings !== null && settings !== undefined;
+  const reasoningConfig = model ? MODEL_REASONING_CONFIG[model as ValidModel] : undefined;
 
   const handleReset = () => {
     setShowResetDialog(true);
@@ -187,6 +198,8 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
+        setModel("");
+        setEffort("");
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -215,6 +228,8 @@ function GlobalSettingsSection({
     const body: GitHubGlobalConfig = {
       defaults: {
         autoReviewOnOpen,
+        ...(model ? { model } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
         ...(commentActionInstructions ? { commentActionInstructions } : {}),
@@ -269,6 +284,63 @@ function GlobalSettingsSection({
   return (
     <Section title="Defaults & Scope" description="Global behavior and repository scope.">
       {error && <Message tone="error" text={error} />}
+
+      <div className="grid sm:grid-cols-2 gap-3 mb-4">
+        <label className="text-sm">
+          <span className="block text-foreground font-medium mb-1">Default model</span>
+          <Select
+            value={model}
+            onValueChange={(nextModel) => {
+              setModel(nextModel);
+              if (effort && !isValidReasoningEffort(nextModel, effort)) {
+                setEffort("");
+              }
+              setDirty(true);
+              setError("");
+            }}
+          >
+            <SelectTrigger className="w-full" aria-label="Default model">
+              <SelectValue placeholder="Use system default" />
+            </SelectTrigger>
+            <SelectContent>
+              {enabledModelOptions.map((group) => (
+                <SelectGroup key={group.category}>
+                  <SelectLabel>{group.category}</SelectLabel>
+                  {group.models.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+
+        <label className="text-sm">
+          <span className="block text-foreground font-medium mb-1">Default reasoning effort</span>
+          <Select
+            value={effort}
+            onValueChange={(value) => {
+              setEffort(value);
+              setDirty(true);
+              setError("");
+            }}
+            disabled={!reasoningConfig}
+          >
+            <SelectTrigger className="w-full" aria-label="Default reasoning effort">
+              <SelectValue placeholder="Use model default" />
+            </SelectTrigger>
+            <SelectContent>
+              {(reasoningConfig?.efforts ?? []).map((value) => (
+                <SelectItem key={value} value={value}>
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+      </div>
 
       <label
         htmlFor="auto-review-toggle"

@@ -31,7 +31,12 @@ vi.mock("swr", () => ({
 
 vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
-    enabledModelOptions: [],
+    enabledModelOptions: [
+      {
+        category: "Anthropic",
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+    ],
   }),
 }));
 
@@ -134,6 +139,50 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("renders and preserves global model and reasoning defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          autoReviewOnOpen: true,
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "high",
+        },
+      },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    expect(screen.getByText("Default model")).toBeInTheDocument();
+    expect(screen.getByText("Default reasoning effort")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Default model" })).toHaveTextContent(
+      "Claude Sonnet 4.6"
+    );
+    expect(screen.getByRole("combobox", { name: "Default reasoning effort" })).toHaveTextContent(
+      "high"
+    );
+
+    await user.click(screen.getByRole("switch", { name: /auto-review new prs/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: false,
+              model: "anthropic/claude-sonnet-4-6",
+              reasoningEffort: "high",
+            },
+          },
+        }),
+      })
+    );
+  });
+
   it("repo auto-review override without an explicit value seeds from global default when saved", async () => {
     const user = userEvent.setup();
     setupSWR({
