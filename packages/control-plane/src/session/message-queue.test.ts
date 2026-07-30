@@ -229,7 +229,7 @@ describe("SessionMessageQueue", () => {
       }),
       event: expect.objectContaining({
         type: "user_message",
-        data: expect.stringContaining('"messageId":"msg-'),
+        data: expect.any(String),
       }),
       feedbackKey: command.feedbackKey,
       pullRequestKey: "github:99:42",
@@ -237,6 +237,11 @@ describe("SessionMessageQueue", () => {
       attemptLimit: 10,
       windowStart: expect.any(Number),
     });
+    const [admission] = h.repository.admitAutofixMessage.mock.calls[0] as unknown as [
+      Parameters<SessionRepository["admitAutofixMessage"]>[0],
+    ];
+    const event = JSON.parse(String(admission.event.data)) as { messageId?: unknown };
+    expect(event.messageId).toBe(admission.message.id);
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
   });
 
