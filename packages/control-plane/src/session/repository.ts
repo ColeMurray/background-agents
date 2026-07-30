@@ -30,6 +30,7 @@ import {
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
+import type { SessionRepositoryRow } from "./repository-row";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
@@ -88,20 +89,6 @@ export interface UpsertSessionData {
   environmentId?: string | null;
   createdAt: number;
   updatedAt: number;
-}
-
-/**
- * One member repository row, in position order (position 0 = primary).
- */
-export interface SessionRepositoryRow {
-  position: number;
-  repo_owner: string;
-  repo_name: string;
-  repo_id: number | null;
-  base_branch: string;
-  branch_name: string | null;
-  base_sha: string | null;
-  current_sha: string | null;
 }
 
 /**
