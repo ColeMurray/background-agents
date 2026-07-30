@@ -116,25 +116,21 @@ export const analyticsRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/analytics/summary"),
-    scmAgnostic: true,
     handler: handleSummary,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/timeseries"),
-    scmAgnostic: true,
     handler: handleTimeseries,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/breakdown"),
-    scmAgnostic: true,
     handler: handleBreakdown,
   },
   {
     method: "GET",
     pattern: parsePattern("/analytics/pull-requests"),
-    scmAgnostic: true,
     handler: handlePullRequests,
   },
 ];

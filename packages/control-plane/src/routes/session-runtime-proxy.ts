@@ -13,7 +13,6 @@ type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
-  scmAgnostic?: boolean;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -32,7 +31,6 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
   return sessionRoute({
     method: config.method,
     pattern: parsePattern(config.routePath),
-    scmAgnostic: config.scmAgnostic,
     handler: async (request, _env, match, ctx) => {
       const sessionId = getSessionId(match);
       if (sessionId instanceof Response) return sessionId;
@@ -246,7 +244,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/participant-profiles"),
-    scmAgnostic: true,
     handler: handleParticipantProfiles,
   }),
   sessionRoute({
@@ -282,7 +279,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     routePath: "/sessions/:id/tunnel-urls",
     internalPath: SessionInternalPaths.tunnelUrls,
     runtimeMethod: "GET",
-    scmAgnostic: true,
   }),
   lifecycleProxyRoute("PATCH", "/sessions/:id/title", SessionInternalPaths.updateTitle),
   lifecycleProxyRoute("POST", "/sessions/:id/archive", SessionInternalPaths.archive),

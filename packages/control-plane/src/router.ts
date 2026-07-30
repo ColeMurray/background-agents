@@ -2,6 +2,7 @@
  * API router for Open-Inspect Control Plane.
  */
 
+import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
@@ -158,14 +159,30 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
+function isWebServiceAuthRoute(method: string, path: string): boolean {
+  return (
+    isBrowserAuthProxyRoute(method, path) ||
+    (method === "GET" && path === "/internal/auth/sign-in-providers")
+  );
+}
+
+function isScmAgnosticRoute(method: string, path: string): boolean {
+  return (
+    isWebServiceAuthRoute(method, path) ||
+    /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
+    /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
+  );
+}
+
 function isProviderImplementedRoute(provider: SourceControlProviderName, path: string): boolean {
   if (provider === "github") return true;
   return provider === "gitlab" && /^\/sessions\/[^/]+\/scm-credentials$/.test(path);
 }
 
 function enforceImplementedScmProvider(
+  method: string,
   path: string,
-  route: Route,
   env: Env,
   ctx: RequestContext
 ): Response | null {
@@ -174,7 +191,7 @@ function enforceImplementedScmProvider(
     if (
       !isProviderImplementedRoute(provider, path) &&
       !isPublicRoute(path) &&
-      route.scmAgnostic !== true
+      !isScmAgnosticRoute(method, path)
     ) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
@@ -431,7 +448,7 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: matchedRoute.route.webServiceAuth ?? "user",
+        webService: isWebServiceAuthRoute(method, path) ? "service" : "user",
       });
 
       if (isAuthError(authResult)) {
@@ -464,7 +481,7 @@ export async function handleRequest(
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, matchedRoute.route, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(method, path, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }

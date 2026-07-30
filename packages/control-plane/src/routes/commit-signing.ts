@@ -227,13 +227,11 @@ export const commitSigningRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/sessions/:id/commit-signing"),
-    scmAgnostic: true,
     handler: handleGetSandboxCommitSigning,
   },
   {
     method: "POST",
     pattern: parsePattern("/sessions/:id/commit-signing"),
-    scmAgnostic: true,
     handler: handlePostSandboxCommitSigning,
   },
 ];

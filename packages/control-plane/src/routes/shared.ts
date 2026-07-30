@@ -50,10 +50,6 @@ export type RequestContext = CorrelationContext & {
 export interface Route {
   method: string;
   pattern: RegExp;
-  /** Whether a verified web signature represents the service or an end user. */
-  webServiceAuth?: "service" | "user";
-  /** Whether this route is independent of the deployment SCM provider. */
-  scmAgnostic?: boolean;
   handler: (
     request: Request,
     env: Env,

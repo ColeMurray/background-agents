@@ -53,6 +53,28 @@ describe("browser auth router", () => {
     });
   });
 
+  it("keeps provider discovery available on GitLab deployments", async () => {
+    const url = `${CONTROL_PLANE_ORIGIN}/internal/auth/sign-in-providers`;
+    const request = new Request(url, {
+      headers: await buildServiceAuthHeaders({
+        service: "web",
+        secret: WEB_SERVICE_SECRET,
+        method: "GET",
+        url,
+      }),
+    });
+
+    const response = await handleRequest(request, {
+      ...env,
+      SCM_PROVIDER: "gitlab",
+    } as Env);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      providers: ["github", "google"],
+    });
+  });
+
   it("keeps the provider query exact and web-service-only", async () => {
     const path = "/internal/auth/sign-in-providers";
     const url = `${CONTROL_PLANE_ORIGIN}${path}`;

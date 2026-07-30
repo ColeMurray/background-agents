@@ -36,8 +36,6 @@ export const signInProviderRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/internal/auth/sign-in-providers"),
-    webServiceAuth: "service",
-    scmAgnostic: true,
     handler: handleSignInProviders,
   },
 ];
