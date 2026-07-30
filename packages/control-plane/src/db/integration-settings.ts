@@ -122,7 +122,13 @@ export class IntegrationSettingsStore {
     ) as SlackGlobalSettings;
     const normalized = this.validateSlackSettings(values, "global") as Record<string, unknown>;
     const normalizedPatch = Object.fromEntries(
-      Object.entries(patch).map(([key, value]) => [key, value === null ? null : normalized[key]])
+      Object.entries(patch).map(([key, value]) => [
+        key,
+        value === null ||
+        (key === "sessionInstructions" && typeof value === "string" && !value.trim())
+          ? null
+          : normalized[key],
+      ])
     );
     const mergePatch = JSON.stringify({ defaults: normalizedPatch });
     const now = Date.now();
@@ -505,15 +511,23 @@ export class IntegrationSettingsStore {
       );
     }
 
+    const normalizedSettings = { ...settings };
+    if (
+      typeof normalizedSettings.sessionInstructions === "string" &&
+      !normalizedSettings.sessionInstructions.trim()
+    ) {
+      delete normalizedSettings.sessionInstructions;
+    }
+
     // Routing rules are workspace-wide (the allowedKeys gate above already
     // rejects them at the per-repo level). Validate structure here; normalize
     // for storage. Target existence is not checked (the repo list isn't
     // available at this layer) — the bot skips stale targets at match time.
     if (settings.routingRules !== undefined) {
-      return { ...settings, routingRules: this.validateRoutingRules(settings.routingRules) };
+      normalizedSettings.routingRules = this.validateRoutingRules(settings.routingRules);
     }
 
-    return settings;
+    return normalizedSettings;
   }
 
   private validateRoutingRules(rules: unknown): SlackRoutingRule[] {

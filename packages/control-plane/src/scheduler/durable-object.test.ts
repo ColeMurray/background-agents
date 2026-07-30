@@ -174,12 +174,18 @@ function createEmptyDbMock(): D1Database {
   } as unknown as D1Database;
 }
 
-function createIntegrationSettingsDbMock(slackSessionInstructions?: string): D1Database {
+function createIntegrationSettingsDbMock(
+  slackSessionInstructions?: string,
+  throwOnSlackSettings = false
+): D1Database {
   return {
     prepare: vi.fn((query: string) => ({
       bind: vi.fn((integrationId: string, repo?: string) => ({
         first: vi.fn(async () => {
           if (query.includes("integration_settings")) {
+            if (integrationId === "slack" && throwOnSlackSettings) {
+              throw new Error("settings unavailable");
+            }
             if (integrationId === "code-server") {
               return {
                 settings: JSON.stringify({ enabledRepos: null, defaults: { enabled: true } }),
@@ -2452,6 +2458,23 @@ describe("SchedulerDO", () => {
 
       await scheduler.fetch(slackEventRequest());
 
+      const prompt = await getPromptBody(vi.mocked(stub.fetch));
+      expect(prompt.content).toBe("A message was posted in #ops.\n---\n\nRun tests");
+    });
+
+    it("launches without workspace instructions when the settings read fails", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock(undefined, true) });
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const scheduler = createSchedulerDO(env);
+
+      const response = await scheduler.fetch(slackEventRequest());
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe("A message was posted in #ops.\n---\n\nRun tests");
     });

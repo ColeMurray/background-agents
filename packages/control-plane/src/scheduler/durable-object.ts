@@ -113,6 +113,20 @@ function formatRunRepositoryLabel(
   return run?.repo_owner && run?.repo_name ? `${run.repo_owner}/${run.repo_name}` : "No repository";
 }
 
+async function getSlackSessionInstructions(db: SqlDatabase): Promise<string | undefined> {
+  try {
+    const instructions = (await new IntegrationSettingsStore(db).getGlobal("slack"))?.defaults
+      ?.sessionInstructions;
+    return typeof instructions === "string" && instructions.trim() ? instructions : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendSlackSessionInstructions(prompt: string, instructions: string | undefined): string {
+  return instructions ? `${prompt}\n\n## Additional Instructions\n\n${instructions}` : prompt;
+}
+
 const manualTriggerBodySchema = z.object({
   automationId: z.string().min(1),
 });
@@ -892,13 +906,7 @@ export class SchedulerDO extends DurableObject<Env> {
       }
 
       if (event.source === "slack" && !slackSettingsLoaded) {
-        const configuredInstructions = (
-          await new IntegrationSettingsStore(this.db).getGlobal("slack")
-        )?.defaults?.sessionInstructions;
-        slackSessionInstructions =
-          typeof configuredInstructions === "string" && configuredInstructions.trim()
-            ? configuredInstructions
-            : undefined;
+        slackSessionInstructions = await getSlackSessionInstructions(this.db);
         slackSettingsLoaded = true;
       }
 
@@ -914,11 +922,10 @@ export class SchedulerDO extends DurableObject<Env> {
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
-        instructionsOverride:
-          `${event.contextBlock}\n---\n\n${automation.instructions}` +
-          (slackSessionInstructions
-            ? `\n\n## Additional Instructions\n\n${slackSessionInstructions}`
-            : ""),
+        instructionsOverride: appendSlackSessionInstructions(
+          `${event.contextBlock}\n---\n\n${automation.instructions}`,
+          slackSessionInstructions
+        ),
       });
 
       switch (result.outcome) {

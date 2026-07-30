@@ -161,6 +161,29 @@ describe("Integration settings API", () => {
       expect(body.settings.defaults).toEqual({ mentionsPolicy: "escape" });
     });
 
+    it("canonicalizes whitespace-only session instructions as deleted", async () => {
+      await serviceFetch("https://test.local/integration-settings/slack", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              mentionsPolicy: "allow",
+              sessionInstructions: "Run tests.",
+            },
+          },
+        }),
+      });
+
+      const response = await serviceFetch("https://test.local/integration-settings/slack", {
+        method: "PATCH",
+        body: JSON.stringify({ defaults: { sessionInstructions: "  \n " } }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json<{ settings: { defaults: Record<string, unknown> } }>();
+      expect(body.settings.defaults).toEqual({ mentionsPolicy: "allow" });
+    });
+
     it("rejects unknown nullable defaults", async () => {
       const response = await serviceFetch("https://test.local/integration-settings/slack", {
         method: "PATCH",
