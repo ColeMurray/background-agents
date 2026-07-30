@@ -12,11 +12,17 @@ vi.mock("@/lib/control-plane", () => ({
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { hostileIdentityFields } from "../hostile-identity.test-fixture";
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 function postRequest(body: unknown) {
   return {
     json: async () => body,
+  } as unknown as NextRequest;
+}
+
+function getRequest(searchParams: Record<string, string>) {
+  return {
+    nextUrl: { searchParams: new URLSearchParams(searchParams) },
   } as unknown as NextRequest;
 }
 
@@ -32,6 +38,35 @@ const validBody = {
   scheduleTz: "UTC",
   instructions: "Run tests",
 };
+
+describe("automations API route (GET)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("forwards only automation list parameters", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ automations: [], hasMore: false, nextCursor: null })
+    );
+
+    const response = await GET(
+      getRequest({
+        search: "daily sync",
+        limit: "25",
+        cursor: "123:auto-1",
+        repoOwner: "acme",
+        repoName: "web-app",
+        offset: "50",
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/automations?search=daily+sync&limit=25&cursor=123%3Aauto-1&repoOwner=acme&repoName=web-app"
+    );
+  });
+});
 
 describe("automations API route (POST)", () => {
   beforeEach(() => {

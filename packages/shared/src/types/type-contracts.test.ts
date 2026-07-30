@@ -18,6 +18,7 @@ import type {
   CreateSessionInput,
   CreateSessionRequest,
   ListAutomationsResponse,
+  ListAutomationsPageResponse,
   RepositoryInput,
   SandboxEvent,
   ServerMessage,
@@ -105,6 +106,10 @@ it("preserves representative automation contracts", () => {
 
   expectTypeOf<Automation["repositories"]>().toEqualTypeOf<AutomationRepository[]>();
   expectTypeOf<ListAutomationsResponse["automations"]>().toEqualTypeOf<Automation[]>();
+  expectTypeOf<ListAutomationsResponse["total"]>().toEqualTypeOf<number>();
+  expectTypeOf<ListAutomationsPageResponse["automations"]>().toEqualTypeOf<Automation[]>();
+  expectTypeOf<ListAutomationsPageResponse["hasMore"]>().toEqualTypeOf<boolean>();
+  expectTypeOf<ListAutomationsPageResponse["nextCursor"]>().toEqualTypeOf<string | null>();
 
   void request;
 });
