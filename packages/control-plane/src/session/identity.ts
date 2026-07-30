@@ -1,4 +1,7 @@
-import { formatGitHubNoreplyEmail, githubLoginSchema } from "@open-inspect/shared";
+import {
+  formatGitHubNoreplyEmail,
+  githubLoginSchema,
+} from "@open-inspect/shared/types/github-identity";
 import { z } from "zod";
 import { encryptToken } from "../auth/crypto";
 import type {

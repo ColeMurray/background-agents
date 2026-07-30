@@ -34,9 +34,21 @@
       "import": "./dist/app-name.js",
       "types": "./dist/app-name.d.ts"
     },
+    "./user-id": {
+      "import": "./dist/user-id.js",
+      "types": "./dist/user-id.d.ts"
+    },
+    "./browser-auth-routes": {
+      "import": "./dist/browser-auth-routes.js",
+      "types": "./dist/browser-auth-routes.d.ts"
+    },
     "./types/commit-signing": {
       "import": "./dist/types/commit-signing.js",
       "types": "./dist/types/commit-signing.d.ts"
+    },
+    "./types/github-identity": {
+      "import": "./dist/types/github-identity.js",
+      "types": "./dist/types/github-identity.d.ts"
     }
   },
   "scripts": {

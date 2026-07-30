@@ -2,7 +2,7 @@
  * API router for Open-Inspect Control Plane.
  */
 
-import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
+import { isBrowserAuthProxyRoute } from "@open-inspect/shared/browser-auth-routes";
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";

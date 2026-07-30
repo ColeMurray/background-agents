@@ -1,4 +1,7 @@
-import { BROWSER_AUTH_CLIENT_IP_HEADER, isBrowserAuthProxyRoute } from "@open-inspect/shared";
+import {
+  BROWSER_AUTH_CLIENT_IP_HEADER,
+  isBrowserAuthProxyRoute,
+} from "@open-inspect/shared/browser-auth-routes";
 import { dispatchWebServiceRequest } from "./control-plane-service";
 
 const REQUEST_HEADERS = [
