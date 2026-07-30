@@ -60,6 +60,29 @@ export default tseslint.config(
         "error",
         { prefer: "type-imports", fixStyle: "separate-type-imports" },
       ],
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@open-inspect/shared",
+              importNames: [
+                "TOKEN_VALIDITY_MS",
+                "timingSafeEqual",
+                "bytesToHex",
+                "computeHmacHex",
+                "generateInternalToken",
+                "verifyCallbackSignature",
+                "verifyCallbackFromControlPlane",
+                "verifyInternalToken",
+              ],
+              message: "Import auth-owned names from @open-inspect/shared/auth.",
+              allowTypeImports: true,
+            },
+          ],
+        },
+      ],
       // Allow console in backend/server code - disable per-file if needed
       "no-console": "off",
     },
