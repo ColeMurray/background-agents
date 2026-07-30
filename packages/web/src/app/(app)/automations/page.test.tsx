@@ -100,6 +100,19 @@ describe("AutomationsPage", () => {
     expect(screen.getByText("Daily sync")).toBeInTheDocument();
   });
 
+  it("keeps the load-more control visible while the next page loads", () => {
+    mockUseAutomations.mockReturnValue({
+      ...defaultHookResult,
+      hasMore: false,
+      loadingMore: true,
+    });
+
+    render(<AutomationsPage />);
+
+    expect(screen.getByRole("button", { name: "Load more automations" })).toBeDisabled();
+    expect(screen.getByText("Loading more...")).toBeInTheDocument();
+  });
+
   it("follows search URL changes from browser navigation", () => {
     const { rerender } = render(<AutomationsPage />);
 
