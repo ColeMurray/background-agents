@@ -9,7 +9,6 @@ const mocks = vi.hoisted(() => ({
   getServerAuthSession: vi.fn(),
   getEnabledSignInProviders: vi.fn(),
   redirect: vi.fn(),
-  unstableRethrow: vi.fn(),
 }));
 
 vi.mock("@/lib/server-auth-session", () => ({
@@ -26,9 +25,9 @@ vi.mock("@/lib/auth-session", () => ({
 
 vi.mock("next/navigation", () => ({
   redirect: mocks.redirect,
-  unstable_rethrow: mocks.unstableRethrow,
 }));
 
+import { AuthenticationUnavailableError } from "@/lib/authentication-unavailable-error";
 import LoginPage, { dynamic } from "./page";
 
 expect.extend(matchers);
@@ -67,9 +66,13 @@ describe("LoginPage", () => {
     "renders a sanitized retryable unavailable state when %s resolution fails",
     async (failure) => {
       if (failure === "session") {
-        mocks.getServerAuthSession.mockRejectedValue(new Error("sensitive session error"));
+        mocks.getServerAuthSession.mockRejectedValue(
+          new AuthenticationUnavailableError(new Error("sensitive session error"))
+        );
       } else {
-        mocks.getEnabledSignInProviders.mockRejectedValue(new Error("sensitive provider error"));
+        mocks.getEnabledSignInProviders.mockRejectedValue(
+          new AuthenticationUnavailableError(new Error("sensitive provider error"))
+        );
       }
 
       render(await LoginPage());
@@ -81,20 +84,16 @@ describe("LoginPage", () => {
   );
 
   it.each(["session", "providers"] as const)(
-    "propagates Next.js control-flow errors from the %s seam",
+    "propagates unexpected errors from the %s seam",
     async (failure) => {
-      const frameworkSignal = new Error(`NEXT_${failure.toUpperCase()}_SIGNAL`);
-      mocks.unstableRethrow.mockImplementation((error: unknown) => {
-        if (error === frameworkSignal) throw error;
-      });
+      const unexpectedError = new Error(`unexpected ${failure} failure`);
       if (failure === "session") {
-        mocks.getServerAuthSession.mockRejectedValue(frameworkSignal);
+        mocks.getServerAuthSession.mockRejectedValue(unexpectedError);
       } else {
-        mocks.getEnabledSignInProviders.mockRejectedValue(frameworkSignal);
+        mocks.getEnabledSignInProviders.mockRejectedValue(unexpectedError);
       }
 
-      await expect(LoginPage()).rejects.toBe(frameworkSignal);
-      expect(mocks.unstableRethrow).toHaveBeenCalledWith(frameworkSignal);
+      await expect(LoginPage()).rejects.toBe(unexpectedError);
     }
   );
 

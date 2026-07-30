@@ -20,6 +20,7 @@ vi.mock("./logger", () => ({
   createLogger: () => ({ error: mocks.logError }),
 }));
 
+import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
 import { getEnabledSignInProviders } from "./sign-in-providers";
 
 describe("getEnabledSignInProviders", () => {
@@ -52,6 +53,15 @@ describe("getEnabledSignInProviders", () => {
     });
   });
 
+  it("propagates request-context failures without logging, wrapping, or dispatching", async () => {
+    const frameworkSignal = new Error("NEXT_REQUEST_CONTEXT_SIGNAL");
+    mocks.getRequestCorrelation.mockRejectedValue(frameworkSignal);
+
+    await expect(getEnabledSignInProviders()).rejects.toBe(frameworkSignal);
+    expect(mocks.dispatchWebServiceRequest).not.toHaveBeenCalled();
+    expect(mocks.logError).not.toHaveBeenCalled();
+  });
+
   it.each([
     Response.json({ providers: [] }),
     Response.json({ providers: ["github", "github"] }),
@@ -61,7 +71,9 @@ describe("getEnabledSignInProviders", () => {
   ])("fails closed on an invalid or unavailable provider response", async (response) => {
     mocks.dispatchWebServiceRequest.mockResolvedValue(response);
 
-    await expect(getEnabledSignInProviders()).rejects.toThrow("Sign-in providers are unavailable");
+    await expect(getEnabledSignInProviders()).rejects.toBeInstanceOf(
+      AuthenticationUnavailableError
+    );
     expect(mocks.logError).toHaveBeenCalledOnce();
   });
 });

@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { redirect, unstable_rethrow } from "next/navigation";
+import { redirect } from "next/navigation";
 import { SignInProviderButtons } from "@/components/sign-in-provider-buttons";
 import { ErrorBanner } from "@/components/ui/error-banner";
+import { AuthenticationUnavailableError } from "@/lib/authentication-unavailable-error";
 import { getServerAuthSession, type ServerAuthSession } from "@/lib/server-auth-session";
 import { getEnabledSignInProviders } from "@/lib/sign-in-providers";
 import { APP_NAME } from "@/lib/site-config";
@@ -26,8 +27,8 @@ export default async function LoginPage() {
   try {
     session = await getServerAuthSession();
   } catch (error) {
-    unstable_rethrow(error);
-    return <LoginUnavailable />;
+    if (error instanceof AuthenticationUnavailableError) return <LoginUnavailable />;
+    throw error;
   }
   if (session) redirect("/");
 
@@ -35,8 +36,8 @@ export default async function LoginPage() {
   try {
     providers = await getEnabledSignInProviders();
   } catch (error) {
-    unstable_rethrow(error);
-    return <LoginUnavailable />;
+    if (error instanceof AuthenticationUnavailableError) return <LoginUnavailable />;
+    throw error;
   }
 
   return (

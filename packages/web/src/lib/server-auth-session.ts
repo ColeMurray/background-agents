@@ -4,6 +4,7 @@ import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,
 } from "./browser-auth-session-contract";
+import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
 import { serializeBrowserSessionCookies } from "./browser-session-cookie";
 
 export type ServerAuthUser = BrowserAuthSessionUser;
@@ -29,19 +30,24 @@ export async function getServerAuthSession(): Promise<ServerAuthSession | null> 
   const cookieStore = await cookies();
   const cookieHeader = serializeBrowserSessionCookies(cookieStore.getAll());
   if (!cookieHeader) return null;
-  const response = await dispatchBrowserAuthRequest({
-    method: "GET",
-    pathname: "/api/auth/get-session",
-    headers: { Cookie: cookieHeader },
-  });
 
-  if (response.status === 401) return null;
-  if (!response.ok) {
-    throw new Error(`Browser authentication failed with status ${response.status}`);
+  try {
+    const response = await dispatchBrowserAuthRequest({
+      method: "GET",
+      pathname: "/api/auth/get-session",
+      headers: { Cookie: cookieHeader },
+    });
+
+    if (response.status === 401) return null;
+    if (!response.ok) {
+      throw new Error(`Browser authentication failed with status ${response.status}`);
+    }
+
+    const payload: unknown = await response.json();
+    if (payload === null) return null;
+    const session = browserAuthSessionResponseSchema.parse(payload);
+    return { user: session.user };
+  } catch (cause) {
+    throw new AuthenticationUnavailableError(cause);
   }
-
-  const payload: unknown = await response.json();
-  if (payload === null) return null;
-  const session = browserAuthSessionResponseSchema.parse(payload);
-  return { user: session.user };
 }

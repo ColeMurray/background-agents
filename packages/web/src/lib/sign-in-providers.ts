@@ -1,6 +1,7 @@
 import "server-only";
 
 import { parseEnabledSignInProviders, type SignInProvider } from "@open-inspect/shared";
+import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
 import { dispatchWebServiceRequest } from "./control-plane-service";
 import { createLogger } from "./logger";
 import { getCorrelationLogFields } from "./request-correlation";
@@ -37,6 +38,6 @@ export async function getEnabledSignInProviders(): Promise<readonly SignInProvid
       http_path: SIGN_IN_PROVIDERS_PATH,
       error: cause instanceof Error ? cause : new Error(String(cause)),
     });
-    throw new Error("Sign-in providers are unavailable", { cause });
+    throw new AuthenticationUnavailableError(cause);
   }
 }
