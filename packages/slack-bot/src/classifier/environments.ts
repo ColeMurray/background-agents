@@ -8,7 +8,10 @@
  * like rules targeting an inaccessible repository.
  */
 
-import type { Environment, ListEnvironmentsResponse } from "@open-inspect/shared";
+import type {
+  Environment,
+  ListEnvironmentsResponse,
+} from "@open-inspect/shared/types/environments";
 import type { Env } from "../types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";

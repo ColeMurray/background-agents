@@ -81,7 +81,8 @@ export interface ClassificationResult {
   needsClarification: boolean;
 }
 
-export type { ConfidenceLevel, Environment } from "@open-inspect/shared";
+export type { ConfidenceLevel } from "@open-inspect/shared";
+export type { Environment } from "@open-inspect/shared/types/environments";
 export type { SlackSessionTarget } from "../targets";
 
 /**
