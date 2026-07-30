@@ -8,7 +8,10 @@
  * - Enabled-scope and status queries
  */
 
-import type { ImageBuildRecordView, RepositoryShaEntry } from "@open-inspect/shared";
+import type {
+  ImageBuildRecordView,
+  RepositoryShaEntry,
+} from "@open-inspect/shared/types/image-builds";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";

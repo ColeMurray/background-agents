@@ -36,9 +36,9 @@ import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/
 import { createLogger } from "../logger";
 import {
   automationRepositoriesInputSchema,
-  isEnvironmentId,
   MAX_AUTOMATION_REPOSITORIES,
 } from "@open-inspect/shared";
+import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   type Route,
   type RequestContext,

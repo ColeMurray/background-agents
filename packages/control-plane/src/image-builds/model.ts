@@ -9,12 +9,11 @@
  * (`repository_shas`) and spawn selection is gated by the runtime version
  * baked at build time.
  */
-import {
-  formatRepositoryFullName,
-  parseRepositoryFullName,
-  type ImageBuildScopeKind,
-  type ImageBuildStatus,
-} from "@open-inspect/shared";
+import { formatRepositoryFullName, parseRepositoryFullName } from "@open-inspect/shared";
+import type {
+  ImageBuildScopeKind,
+  ImageBuildStatus,
+} from "@open-inspect/shared/types/image-builds";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,

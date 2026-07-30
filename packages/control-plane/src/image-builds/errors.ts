@@ -3,7 +3,7 @@
  * workflow and planner throw these instead of returning Responses.
  */
 
-import type { ImageBuildScopeKind } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 
 export type ImageBuildErrorCode =
   | "scope_not_found"
