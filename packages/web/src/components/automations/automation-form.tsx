@@ -2,10 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import {
-  DEFAULT_MODEL,
-  getReasoningConfig,
   isValidCron,
-  isValidReasoningEffort,
   triggerSources,
   MAX_AUTOMATION_REPOSITORIES,
   TRIGGER_TYPE_TO_SOURCE,
@@ -15,6 +12,11 @@ import {
   type TriggerCondition,
   type TriggerConfig,
 } from "@open-inspect/shared";
+import {
+  DEFAULT_MODEL,
+  getReasoningConfig,
+  isValidReasoningEffort,
+} from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";

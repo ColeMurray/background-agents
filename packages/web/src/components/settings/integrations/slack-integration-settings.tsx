@@ -7,7 +7,6 @@ import {
   DEFAULT_MENTIONS_POLICY,
   encodeRepositoryPathSegments,
   MAX_SLACK_ROUTING_RULES,
-  MODEL_OPTIONS,
   parseRepositoryFullName,
   type EnrichedRepository,
   type Environment,
@@ -18,6 +17,7 @@ import {
   type SlackRepoSettings,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { MODEL_OPTIONS } from "@open-inspect/shared/models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";

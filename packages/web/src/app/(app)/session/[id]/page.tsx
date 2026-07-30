@@ -27,11 +27,8 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  type SessionAttachmentReference,
-} from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {

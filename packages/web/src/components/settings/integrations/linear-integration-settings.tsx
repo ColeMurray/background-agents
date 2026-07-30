@@ -5,15 +5,17 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   encodeRepositoryPathSegments,
-  MODEL_REASONING_CONFIG,
   parseRepositoryFullName,
-  isValidReasoningEffort,
   type EnrichedRepository,
   type LinearBotSettings,
   type LinearGlobalConfig,
+} from "@open-inspect/shared";
+import {
+  MODEL_REASONING_CONFIG,
+  isValidReasoningEffort,
   type ModelCategory,
   type ValidModel,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
