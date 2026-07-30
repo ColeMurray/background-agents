@@ -218,6 +218,7 @@ export class SessionDO extends DurableObject<Env> {
     init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
     prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
+    autofix: (request, _url, log) => this.messagesHandler.autofix(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),

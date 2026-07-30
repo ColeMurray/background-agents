@@ -7,6 +7,8 @@ import type {
 } from "@open-inspect/shared/types/session-attachments";
 import {
   DEFAULT_MODEL,
+  type GitHubAutofixSessionCommand,
+  type GitHubAutofixSessionResponse,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
@@ -64,6 +66,8 @@ interface EnqueuedPrompt {
   position: number;
 }
 
+const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
 function resolveParticipantGitIdentity(
   participant: ParticipantRow | null,
   scmProvider: SourceControlProviderName
@@ -102,6 +106,52 @@ export class SessionMessageQueue {
     private readonly executionTimeoutMs: number,
     private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
+
+  async enqueueAutofix(
+    command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
+  ): Promise<GitHubAutofixSessionResponse> {
+    const userId = `github:${command.author.id}`;
+    let participant = this.participantService.getByUserId(userId);
+    if (!participant) {
+      participant = this.participantService.create(userId, command.author.login);
+    }
+    this.repository.updateParticipantCoalesce(participant.id, {
+      scmUserId: command.author.id,
+      scmLogin: command.author.login,
+      scmName: command.author.login,
+    });
+
+    const now = Date.now();
+    const admission = this.repository.admitAutofixMessage({
+      message: {
+        id: generateId(),
+        authorId: participant.id,
+        content: command.prompt,
+        source: "github",
+        status: "pending",
+        createdAt: now,
+      },
+      feedbackKey: command.feedbackKey,
+      pullRequestKey: `github:${command.pullRequest.repositoryId}:${command.pullRequest.number}`,
+      originContext: JSON.stringify(command.origin),
+      attemptLimit: command.attemptLimit,
+      windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
+    });
+    if (admission.kind !== "enqueued") {
+      return admission;
+    }
+
+    await this.sessionStatus.transition("active");
+    this.writeUserMessageEvent(participant, command.prompt, admission.messageId, now);
+    this.log.info("autofix.enqueue", {
+      feedback_key: command.feedbackKey,
+      message_id: admission.messageId,
+      pull_request_number: command.pullRequest.number,
+      artifact_id: command.pullRequest.artifactId,
+    });
+    await this.processMessageQueue();
+    return admission;
+  }
 
   async handlePromptMessage(
     ws: WebSocket,

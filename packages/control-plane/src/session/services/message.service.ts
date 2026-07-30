@@ -1,5 +1,9 @@
 import type { ArtifactRow } from "../types";
-import type { SessionMessage } from "@open-inspect/shared";
+import type {
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+  SessionMessage,
+} from "@open-inspect/shared";
 import type { ArtifactResponse, ListEventsResponse } from "../../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
@@ -33,6 +37,15 @@ export class MessageService {
 
   enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
     return this.deps.messageQueue.enqueuePromptFromApi(request);
+  }
+
+  handleAutofix(command: GitHubAutofixSessionCommand): Promise<GitHubAutofixSessionResponse> {
+    if (command.type === "enqueue_feedback") {
+      return this.deps.messageQueue.enqueueAutofix(command);
+    }
+
+    const messageId = this.deps.repository.getAutofixMessageId(command.feedbackKey);
+    return Promise.resolve(messageId ? { kind: "found", messageId } : { kind: "not_found" });
   }
 
   async stop(): Promise<{ status: "stopping" }> {

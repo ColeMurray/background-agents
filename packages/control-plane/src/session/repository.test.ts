@@ -103,6 +103,116 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("admitAutofixMessage", () => {
+    it("returns the existing message for a duplicate feedback key", () => {
+      mock.setData(`SELECT id FROM messages WHERE autofix_feedback_key = ? LIMIT 1`, [
+        { id: "msg-existing" },
+      ]);
+
+      const result = repo.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "part-1",
+          content: "Address the review feedback.",
+          source: "github",
+          status: "pending",
+          createdAt: 2_000,
+        },
+        feedbackKey: "github:review:1234",
+        pullRequestKey: "github:99:42",
+        originContext: JSON.stringify({
+          kind: "review",
+          authorType: "human",
+          feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+        }),
+        attemptLimit: 10,
+        windowStart: 1_000,
+      });
+
+      expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
+      expect(mock.calls).toHaveLength(1);
+    });
+
+    it("rejects new feedback when the owning session is closed", () => {
+      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", status: "archived" }]);
+
+      const result = repo.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "part-1",
+          content: "Address the review feedback.",
+          source: "github",
+          status: "pending",
+          createdAt: 2_000,
+        },
+        feedbackKey: "github:review:1234",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 10,
+        windowStart: 1_000,
+      });
+
+      expect(result).toEqual({ kind: "rejected", reason: "session_closed" });
+      expect(mock.calls.some((call) => call.query.includes("INSERT INTO messages"))).toBe(false);
+    });
+
+    it("rejects new feedback after the rolling PR attempt limit is reached", () => {
+      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", status: "active" }]);
+      mock.setOne({ count: 10 });
+
+      const result = repo.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "part-1",
+          content: "Address the review feedback.",
+          source: "github",
+          status: "pending",
+          createdAt: 2_000,
+        },
+        feedbackKey: "github:review:1234",
+        pullRequestKey: "github:99:42",
+        originContext: "{}",
+        attemptLimit: 10,
+        windowStart: 1_000,
+      });
+
+      expect(result).toEqual({ kind: "rejected", reason: "attempt_limit" });
+      expect(mock.calls.some((call) => call.query.includes("INSERT INTO messages"))).toBe(false);
+    });
+
+    it("atomically admits feedback below the attempt limit with provenance", () => {
+      mock.setData(`SELECT * FROM session LIMIT 1`, [{ id: "sess-1", status: "active" }]);
+      mock.setOne({ count: 9 });
+      const originContext = JSON.stringify({
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      });
+
+      const result = repo.admitAutofixMessage({
+        message: {
+          id: "msg-new",
+          authorId: "part-1",
+          content: "Address the review feedback.",
+          source: "github",
+          status: "pending",
+          createdAt: 2_000,
+        },
+        feedbackKey: "github:review:1234",
+        pullRequestKey: "github:99:42",
+        originContext,
+        attemptLimit: 10,
+        windowStart: 1_000,
+      });
+
+      expect(result).toEqual({ kind: "enqueued", messageId: "msg-new" });
+      const insert = mock.calls.find((call) => call.query.includes("INSERT INTO messages"));
+      expect(insert?.params).toContain("github:review:1234");
+      expect(insert?.params).toContain("github:99:42");
+      expect(insert?.params).toContain(originContext);
+    });
+  });
+
   describe("upsertSession", () => {
     it("executes correct SQL with all parameters", () => {
       repo.upsertSession({
@@ -714,6 +824,9 @@ describe("SessionRepository", () => {
         null,
         "[]",
         '{"channel":"C123"}',
+        null,
+        null,
+        null,
         "pending",
         1000,
       ]);

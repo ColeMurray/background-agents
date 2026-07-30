@@ -7,6 +7,8 @@
 import { handleRequest } from "./router";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
+import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
+import { handleAutofixQueue } from "./autofix/handler";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 
@@ -63,7 +65,14 @@ export default {
     await stub.fetch("http://internal/internal/tick", { method: "POST" });
   },
 
-  queue: consumeImageBuildFinalizations,
+  async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    if (!batch.queue.includes("github-autofix")) {
+      await consumeImageBuildFinalizations(batch, env);
+      return;
+    }
+    // eslint-disable-next-line no-restricted-syntax -- worker composition root: inject D1 once
+    await handleAutofixQueue(batch as MessageBatch<GitHubAutofixEnvelope>, env, env.DB);
+  },
 };
 
 /**

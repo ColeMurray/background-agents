@@ -10,6 +10,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
+import type { GitHubAutofixSessionCommand } from "@open-inspect/shared";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -70,6 +71,9 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    autofix_feedback_key: null,
+    autofix_pr_key: null,
+    origin_context: null,
     status: "pending",
     error_message: null,
     created_at: 1000,
@@ -108,6 +112,7 @@ function buildQueue() {
     getParticipantById: vi.fn(() => createParticipant()),
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
+    admitAutofixMessage: vi.fn(() => ({ kind: "enqueued", messageId: "msg-autofix" }) as const),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
   };
@@ -188,6 +193,46 @@ function buildQueue() {
 }
 
 describe("SessionMessageQueue", () => {
+  it("admits human feedback into the owning session queue with stable provenance", async () => {
+    const h = buildQueue();
+    const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: {
+        repositoryId: "99",
+        number: 42,
+        artifactId: "artifact-1",
+      },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      },
+      attemptLimit: 10,
+    };
+
+    const result = await h.queue.enqueueAutofix(command);
+
+    expect(result).toEqual({ kind: "enqueued", messageId: "msg-autofix" });
+    expect(h.participantService.getByUserId).toHaveBeenCalledWith("github:7");
+    expect(h.repository.admitAutofixMessage).toHaveBeenCalledWith({
+      message: expect.objectContaining({
+        authorId: "part-1",
+        content: command.prompt,
+        source: "github",
+        status: "pending",
+      }),
+      feedbackKey: command.feedbackKey,
+      pullRequestKey: "github:99:42",
+      originContext: JSON.stringify(command.origin),
+      attemptLimit: 10,
+      windowStart: expect.any(Number),
+    });
+    expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+  });
+
   it("spawns sandbox when queue has work but no sandbox socket", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());

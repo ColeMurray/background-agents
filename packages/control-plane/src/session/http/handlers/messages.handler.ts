@@ -6,6 +6,7 @@ import {
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { githubAutofixSessionCommandSchema } from "@open-inspect/shared";
 
 /**
  * Valid event types for filtering.
@@ -39,6 +40,7 @@ export interface MessagesHandlerDeps {
 
 export interface MessagesHandler {
   enqueuePrompt: (request: Request, log: Logger) => Promise<Response>;
+  autofix: (request: Request, log: Logger) => Promise<Response>;
   stop: () => Promise<Response>;
   listEvents: (url: URL) => Response;
   listArtifacts: (url: URL) => Response;
@@ -47,6 +49,21 @@ export interface MessagesHandler {
 
 export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandler {
   return {
+    async autofix(request: Request, log: Logger): Promise<Response> {
+      try {
+        const result = githubAutofixSessionCommandSchema.safeParse(await request.json());
+        if (!result.success) {
+          return Response.json({ error: "Invalid Autofix command" }, { status: 400 });
+        }
+        return Response.json(await deps.messageService.handleAutofix(result.data));
+      } catch (error) {
+        log.error("handleAutofix error", {
+          error: error instanceof Error ? error : String(error),
+        });
+        throw error;
+      }
+    },
+
     async enqueuePrompt(request: Request, log: Logger): Promise<Response> {
       try {
         const raw = await request.json();

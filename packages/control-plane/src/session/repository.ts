@@ -161,9 +161,26 @@ export interface CreateMessageData {
   reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
+  autofixFeedbackKey?: string | null;
+  autofixPrKey?: string | null;
+  originContext?: string | null;
   status: MessageStatus;
   createdAt: number;
 }
+
+export interface AdmitAutofixMessageData {
+  message: CreateMessageData;
+  feedbackKey: string;
+  pullRequestKey: string;
+  originContext: string;
+  attemptLimit: number;
+  windowStart: number;
+}
+
+export type AutofixMessageAdmission =
+  | { kind: "enqueued"; messageId: string }
+  | { kind: "duplicate"; messageId: string }
+  | { kind: "rejected"; reason: "session_closed" | "attempt_limit" };
 
 /**
  * Data for creating an event.
@@ -735,6 +752,48 @@ export class SessionRepository {
 
   // === MESSAGES ===
 
+  getAutofixMessageId(feedbackKey: string): string | null {
+    const row = this.rows<{ id: string }>(
+      this.sql.exec(`SELECT id FROM messages WHERE autofix_feedback_key = ? LIMIT 1`, feedbackKey)
+    )[0];
+    return row?.id ?? null;
+  }
+
+  admitAutofixMessage(data: AdmitAutofixMessageData): AutofixMessageAdmission {
+    return this.transactionSync(() => {
+      const existingMessageId = this.getAutofixMessageId(data.feedbackKey);
+      if (existingMessageId) {
+        return { kind: "duplicate", messageId: existingMessageId };
+      }
+
+      const session = this.getSession();
+      if (!session || session.status === "archived" || session.status === "cancelled") {
+        return { kind: "rejected", reason: "session_closed" };
+      }
+
+      const { count } = this.sql
+        .exec(
+          `SELECT COUNT(*) AS count
+           FROM messages
+           WHERE autofix_pr_key = ? AND created_at >= ?`,
+          data.pullRequestKey,
+          data.windowStart
+        )
+        .one() as { count: number };
+      if (count >= data.attemptLimit) {
+        return { kind: "rejected", reason: "attempt_limit" };
+      }
+
+      this.createMessage({
+        ...data.message,
+        autofixFeedbackKey: data.feedbackKey,
+        autofixPrKey: data.pullRequestKey,
+        originContext: data.originContext,
+      });
+      return { kind: "enqueued", messageId: data.message.id };
+    });
+  }
+
   getActiveDurationMs(): number {
     const result = this.sql.exec(
       `SELECT COALESCE(SUM(completed_at - started_at), 0) as duration_ms
@@ -802,8 +861,11 @@ export class SessionRepository {
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (
+         id, author_id, content, source, model, reasoning_effort, attachments,
+         callback_context, autofix_feedback_key, autofix_pr_key, origin_context,
+         status, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -812,6 +874,9 @@ export class SessionRepository {
       data.reasoningEffort ?? null,
       data.attachments ?? null,
       data.callbackContext ?? null,
+      data.autofixFeedbackKey ?? null,
+      data.autofixPrKey ?? null,
+      data.originContext ?? null,
       data.status,
       data.createdAt
     );
