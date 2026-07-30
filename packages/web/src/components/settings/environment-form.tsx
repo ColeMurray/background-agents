@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { parseRepositoryFullName, type RepositoryInput } from "@open-inspect/shared";
 import {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
-  parseRepositoryFullName,
   type Environment,
-  type RepositoryInput,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/environments";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";

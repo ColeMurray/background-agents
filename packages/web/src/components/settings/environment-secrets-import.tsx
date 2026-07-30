@@ -3,11 +3,8 @@
 import { useMemo, useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
-import {
-  encodeRepositoryPathSegments,
-  formatRepositoryFullName,
-  type EnvironmentRepository,
-} from "@open-inspect/shared";
+import { encodeRepositoryPathSegments, formatRepositoryFullName } from "@open-inspect/shared";
+import type { EnvironmentRepository } from "@open-inspect/shared/types/environments";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { RepoIcon, ChevronDownIcon } from "@/components/ui/icons";

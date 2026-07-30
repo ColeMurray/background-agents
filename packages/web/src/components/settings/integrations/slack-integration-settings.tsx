@@ -6,18 +6,22 @@ import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
   encodeRepositoryPathSegments,
-  MAX_SESSION_INSTRUCTIONS_LENGTH,
-  MAX_SLACK_ROUTING_RULES,
   parseRepositoryFullName,
   type EnrichedRepository,
-  type Environment,
-  type ListEnvironmentsResponse,
+} from "@open-inspect/shared";
+import type {
+  Environment,
+  ListEnvironmentsResponse,
+} from "@open-inspect/shared/types/environments";
+import {
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
+  MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRepoSettings,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useEnabledModels } from "@/hooks/use-enabled-models";

@@ -3,7 +3,8 @@
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
-import type { Environment, ImageBuildRecordView } from "@open-inspect/shared";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
