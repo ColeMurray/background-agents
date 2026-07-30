@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.sandbox.build_session import BuildSessionNotFoundError, ModalBuildSessionService
+from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 
 
 def _async_method(return_value=None):
@@ -82,6 +83,27 @@ async def test_start_build_refuses_mismatched_tags(monkeypatch):
         )
 
     sandbox.exec.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
+    snapshot_filesystem = _async_method(SimpleNamespace(object_id="im-snapshot-1"))
+    sandbox = SimpleNamespace(
+        get_tags=_async_method(
+            {"openinspect_kind": "image-build", "openinspect_build_id": "build-1"}
+        ),
+        snapshot_filesystem=snapshot_filesystem,
+    )
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", lambda _id: sandbox)
+
+    image_id = await ModalBuildSessionService().snapshot(
+        build_id="build-1",
+        provider_session_id="modal-session-1",
+    )
+
+    assert image_id == "im-snapshot-1"
+    snapshot_filesystem.assert_not_called()
+    snapshot_filesystem.aio.assert_awaited_once_with(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
 
 
 @pytest.mark.asyncio

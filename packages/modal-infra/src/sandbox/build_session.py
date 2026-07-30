@@ -152,7 +152,7 @@ class ModalBuildSessionService:
 
     async def snapshot(self, *, build_id: str, provider_session_id: str) -> str:
         sandbox = await self._resolve(build_id, provider_session_id)
-        image = sandbox.snapshot_filesystem(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
+        image = await sandbox.snapshot_filesystem.aio(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
         log.info(
             "sandbox.snapshot_build",
             build_id=build_id,
