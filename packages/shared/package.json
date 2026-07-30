@@ -11,16 +11,16 @@
       "types": "./dist/index.d.ts"
     },
     "./session": {
-      "import": "./dist/subpaths/session/index.js",
-      "types": "./dist/subpaths/session/index.d.ts"
+      "import": "./dist/session/index.js",
+      "types": "./dist/session/index.d.ts"
     },
     "./session/events": {
-      "import": "./dist/subpaths/session/events.js",
-      "types": "./dist/subpaths/session/events.d.ts"
+      "import": "./dist/session/events.js",
+      "types": "./dist/session/events.d.ts"
     },
     "./session/artifacts": {
-      "import": "./dist/subpaths/session/artifacts.js",
-      "types": "./dist/subpaths/session/artifacts.d.ts"
+      "import": "./dist/session/artifacts.js",
+      "types": "./dist/session/artifacts.d.ts"
     },
     "./session/attachments": {
       "import": "./dist/types/session-attachments.js",
@@ -35,28 +35,28 @@
       "types": "./dist/types/session-api.d.ts"
     },
     "./repository": {
-      "import": "./dist/subpaths/repository.js",
-      "types": "./dist/subpaths/repository.d.ts"
+      "import": "./dist/repository/index.js",
+      "types": "./dist/repository/index.d.ts"
     },
     "./automation": {
-      "import": "./dist/subpaths/automation.js",
-      "types": "./dist/subpaths/automation.d.ts"
+      "import": "./dist/automation/index.js",
+      "types": "./dist/automation/index.d.ts"
     },
     "./environment": {
       "import": "./dist/types/environments.js",
       "types": "./dist/types/environments.d.ts"
     },
     "./sandbox": {
-      "import": "./dist/subpaths/sandbox.js",
-      "types": "./dist/subpaths/sandbox.d.ts"
+      "import": "./dist/sandbox/index.js",
+      "types": "./dist/sandbox/index.d.ts"
     },
     "./image-build": {
       "import": "./dist/types/image-builds.js",
       "types": "./dist/types/image-builds.d.ts"
     },
     "./integration": {
-      "import": "./dist/subpaths/integration.js",
-      "types": "./dist/subpaths/integration.d.ts"
+      "import": "./dist/integration/index.js",
+      "types": "./dist/integration/index.d.ts"
     },
     "./model": {
       "import": "./dist/models.js",
@@ -67,12 +67,12 @@
       "types": "./dist/types/analytics.d.ts"
     },
     "./slack": {
-      "import": "./dist/subpaths/slack.js",
-      "types": "./dist/subpaths/slack.d.ts"
+      "import": "./dist/slack/index.js",
+      "types": "./dist/slack/index.d.ts"
     },
     "./completion": {
-      "import": "./dist/subpaths/completion.js",
-      "types": "./dist/subpaths/completion.d.ts"
+      "import": "./dist/completion/index.js",
+      "types": "./dist/completion/index.d.ts"
     },
     "./auth": {
       "import": "./dist/auth.js",

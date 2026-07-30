@@ -8,8 +8,8 @@ export {
   toArtifactType,
   toEventArtifactInfo,
   toEventMediaArtifactInfo,
-} from "../completion/extractor";
-export type { BuildAgentResponseOptions, ExtractorDeps } from "../completion/extractor";
+} from "./extractor";
+export type { BuildAgentResponseOptions, ExtractorDeps } from "./extractor";
 
 export type {
   AgentResponse,

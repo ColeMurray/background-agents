@@ -1,4 +1,4 @@
-export { toDisplayStatus } from "../../types/artifacts";
+export { toDisplayStatus } from "../types/artifacts";
 export type {
   ArtifactResponse,
   ListArtifactsResponse,
@@ -11,6 +11,6 @@ export type {
   ScreenshotArtifactMetadata,
   SessionArtifact,
   VideoArtifactMetadata,
-} from "../../types/artifacts";
+} from "../types/artifacts";
 
-export type { ArtifactType } from "../../types/statuses";
+export type { ArtifactType } from "../types/statuses";

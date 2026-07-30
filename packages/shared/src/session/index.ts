@@ -1,7 +1,7 @@
 export {
   sessionParticipantProfileSchema,
   sessionParticipantProfilesResponseSchema,
-} from "../../types/sessions";
+} from "../types/sessions";
 export type {
   ParticipantPresence,
   PullRequestSummary,
@@ -11,9 +11,9 @@ export type {
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
   SessionState,
-} from "../../types/sessions";
+} from "../types/sessions";
 
-export { messageSourceSchema, sessionStatusSchema } from "../../types/statuses";
+export { messageSourceSchema, sessionStatusSchema } from "../types/statuses";
 export type {
   MessageSource,
   MessageStatus,
@@ -21,4 +21,4 @@ export type {
   SandboxStatus,
   SessionStatus,
   SpawnSource,
-} from "../../types/statuses";
+} from "../types/statuses";

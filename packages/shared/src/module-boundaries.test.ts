@@ -7,8 +7,19 @@ import { describe, expect, it } from "vitest";
 const SOURCE_ROOT = path.resolve(import.meta.dirname);
 const ROOT_BARREL = path.join(SOURCE_ROOT, "index.ts");
 const TYPES_BARREL = path.join(SOURCE_ROOT, "types", "index.ts");
-const SUBPATH_ROOT = path.join(SOURCE_ROOT, "subpaths");
-const BARRELS = new Set([ROOT_BARREL, TYPES_BARREL]);
+const PUBLIC_AGGREGATORS = new Set([
+  ROOT_BARREL,
+  TYPES_BARREL,
+  path.join(SOURCE_ROOT, "automation", "index.ts"),
+  path.join(SOURCE_ROOT, "completion", "index.ts"),
+  path.join(SOURCE_ROOT, "integration", "index.ts"),
+  path.join(SOURCE_ROOT, "repository", "index.ts"),
+  path.join(SOURCE_ROOT, "sandbox", "index.ts"),
+  path.join(SOURCE_ROOT, "session", "artifacts.ts"),
+  path.join(SOURCE_ROOT, "session", "events.ts"),
+  path.join(SOURCE_ROOT, "session", "index.ts"),
+  path.join(SOURCE_ROOT, "slack", "index.ts"),
+]);
 
 interface Dependency {
   specifier: string;
@@ -110,7 +121,7 @@ function relativePath(filePath: string): string {
 }
 
 function isAggregationEntryPoint(filePath: string): boolean {
-  return BARRELS.has(filePath) || filePath.startsWith(`${SUBPATH_ROOT}${path.sep}`);
+  return PUBLIC_AGGREGATORS.has(filePath);
 }
 
 function findDependencyCycle(graph: ReadonlyMap<string, readonly string[]>): string[] | undefined {
