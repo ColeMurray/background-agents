@@ -154,6 +154,25 @@ describe("browser auth router", () => {
     );
   });
 
+  it("rejects a provider disabled after the login page was rendered", async () => {
+    const request = await signedServiceRequest("/api/auth/sign-in/social", {
+      provider: "github",
+      callbackURL: "/",
+      disableRedirect: true,
+    });
+
+    const response = await handleRequest(request, {
+      ...env,
+      GITHUB_CLIENT_ID: undefined,
+      GITHUB_CLIENT_SECRET: undefined,
+    } as Env);
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "PROVIDER_NOT_FOUND",
+    });
+  });
+
   it("keeps browser authentication available on GitLab deployments", async () => {
     const request = await signedServiceRequest("/api/auth/sign-in/social", {
       provider: "github",
