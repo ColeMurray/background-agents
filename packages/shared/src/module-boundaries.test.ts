@@ -7,9 +7,9 @@ import { describe, expect, it } from "vitest";
 const SOURCE_ROOT = path.resolve(import.meta.dirname);
 const ROOT_BARREL = path.join(SOURCE_ROOT, "index.ts");
 const TYPES_BARREL = path.join(SOURCE_ROOT, "types", "index.ts");
+const COMPATIBILITY_BARRELS = new Set([ROOT_BARREL, TYPES_BARREL]);
 const PUBLIC_AGGREGATORS = new Set([
-  ROOT_BARREL,
-  TYPES_BARREL,
+  ...COMPATIBILITY_BARRELS,
   path.join(SOURCE_ROOT, "automation", "index.ts"),
   path.join(SOURCE_ROOT, "completion", "index.ts"),
   path.join(SOURCE_ROOT, "integration", "index.ts"),
@@ -120,7 +120,7 @@ function relativePath(filePath: string): string {
   return path.relative(SOURCE_ROOT, filePath).split(path.sep).join("/");
 }
 
-function isAggregationEntryPoint(filePath: string): boolean {
+function isPublicAggregator(filePath: string): boolean {
   return PUBLIC_AGGREGATORS.has(filePath);
 }
 
@@ -164,13 +164,13 @@ describe("shared module boundaries", () => {
     modules.map((modulePath) => [modulePath, collectDependencies(modulePath, moduleSet)])
   );
 
-  it("does not import root or aggregation entry points from implementation modules", () => {
+  it("keeps implementation modules and concept interfaces owner-directed", () => {
     const violations = modules.flatMap((modulePath) => {
-      if (isAggregationEntryPoint(modulePath)) return [];
+      if (COMPATIBILITY_BARRELS.has(modulePath)) return [];
       return (dependencies.get(modulePath) ?? [])
         .filter(
           ({ specifier, target }) =>
-            (target !== undefined && isAggregationEntryPoint(target)) ||
+            (target !== undefined && isPublicAggregator(target)) ||
             specifier === "@open-inspect/shared" ||
             specifier.startsWith("@open-inspect/shared/")
         )
