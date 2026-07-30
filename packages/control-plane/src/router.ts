@@ -165,7 +165,8 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
 function isWebServiceAuthRoute(method: string, path: string): boolean {
   return (
     isBrowserAuthProxyRoute(method, path) ||
-    (method === "GET" && path === "/internal/auth/sign-in-providers")
+    (method === "GET" &&
+      (path === "/internal/auth/sign-in-providers" || path === "/autofix/activity"))
   );
 }
 

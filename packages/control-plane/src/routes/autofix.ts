@@ -9,6 +9,10 @@ async function handleActivity(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
+  if (ctx.principal?.kind !== "service" || ctx.principal.service !== "web") {
+    return error("Unauthorized", 401);
+  }
+
   const url = new URL(request.url);
   const rawLimit = url.searchParams.get("limit") ?? "50";
   const limit = Number(rawLimit);
