@@ -16,6 +16,9 @@ Open-Inspect is designed for **single-tenant** use. Everyone in your deployment 
 GitHub App installation scope. Read the security model in [README.md](../README.md) before
 production use.
 
+The control plane is the sole sign-in-provider authority. GitHub-only, Google-only, and combined
+sign-in are supported, while GitHub App repository credentials remain required for all three.
+
 ## Prerequisites
 
 Required:
@@ -96,8 +99,8 @@ NEXT_PUBLIC_APP_ICON_URL=
 Do not commit `packages/web/.env.local`.
 
 OAuth provider credentials are not web environment variables. Better Auth runs in the control plane,
-so configure `github_client_id` and `github_client_secret`—and, when enabled, `google_client_id` and
-`google_client_secret`—on the development control plane through Terraform. See
+so configure at least one complete pair: `github_client_id` plus `github_client_secret`,
+`google_client_id` plus `google_client_secret`, or both. See
 [Create GitHub App](GETTING_STARTED.md#step-3-create-github-app) and
 [Enable Google Login](GETTING_STARTED.md#enable-google-login-optional) for the complete provider
 setup. The `/login` page reads the enabled provider set from the control plane at request time.
@@ -107,9 +110,9 @@ Use the web service secret configured in that backend deployment (the control pl
 signatures under its own copy). That backend must also be configured with
 `WEB_APP_URL=http://localhost:3000`; otherwise use its deployed web app rather than a local UI.
 
-### 3. Configure GitHub callback URL
+### 3. Configure OAuth callback URLs
 
-In GitHub App settings, include:
+If GitHub sign-in is enabled, include this callback in the GitHub App settings:
 
 `http://localhost:3000/api/auth/callback/github`
 
@@ -129,7 +132,7 @@ Open `http://localhost:3000`.
 
 ### 5. Verify it works
 
-1. Sign in with GitHub.
+1. Sign in with each configured provider.
 2. Open or create a session.
 3. Send a prompt.
 4. Confirm live events stream in the session page.

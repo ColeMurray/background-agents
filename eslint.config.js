@@ -30,6 +30,20 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
 
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+        ...globals.es2022,
+        AbortSignal: "readonly",
+        fetch: "readonly",
+      },
+    },
+  },
+
   // TypeScript files configuration
   {
     files: ["packages/**/*.{ts,tsx}"],

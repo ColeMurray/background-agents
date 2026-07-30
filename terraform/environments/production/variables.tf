@@ -110,11 +110,11 @@ variable "modal_environment_web_suffix" {
 }
 
 # =============================================================================
-# GitHub OAuth App Credentials
+# GitHub OAuth Sign-In Credentials
 # =============================================================================
 
 variable "github_client_id" {
-  description = "GitHub OAuth App client ID. Set together with github_client_secret to enable GitHub sign-in."
+  description = "GitHub App client ID used for OAuth sign-in. Set together with github_client_secret to enable GitHub sign-in; leave both empty for Google-only sign-in."
   type        = string
   default     = ""
 
@@ -125,7 +125,7 @@ variable "github_client_id" {
 }
 
 variable "github_client_secret" {
-  description = "GitHub OAuth App client secret. Set together with github_client_id to enable GitHub sign-in."
+  description = "GitHub App client secret used for OAuth sign-in. Set together with github_client_id to enable GitHub sign-in."
   type        = string
   sensitive   = true
   default     = ""
@@ -135,10 +135,10 @@ variable "github_client_secret" {
 # Google OAuth Credentials (Optional — enables "Sign in with Google")
 # =============================================================================
 # Set both google_client_id and google_client_secret to enable Google login for
-# non-developer users (PMs, support agents). Leave both empty for GitHub-only
-# deployments, which stay byte-unchanged. A Google session authenticates the user
-# but carries no SCM credentials; git operations continue to use the shared
-# GitHub App installation, and PRs fall back to the App bot.
+# non-developer users (PMs, support agents). Leave both empty when Google sign-in
+# is not wanted. A Google session authenticates the user but carries no SCM
+# credentials; git operations continue to use the shared GitHub App installation,
+# and PRs fall back to the App bot.
 
 variable "google_client_id" {
   description = "Google OAuth 2.0 client ID. Set together with google_client_secret to enable Google login; leave both empty to keep the deployment GitHub-only."

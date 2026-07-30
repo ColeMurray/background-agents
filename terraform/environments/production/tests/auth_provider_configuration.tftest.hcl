@@ -59,6 +59,15 @@ run "github_only" {
     )
     error_message = "The control plane must bind only the enabled GitHub OAuth credential pair."
   }
+
+  assert {
+    condition = (
+      output.enabled_sign_in_providers == tolist(["github"]) &&
+      strcontains(nonsensitive(output.verification_commands), "verify-login-providers.mjs") &&
+      strcontains(nonsensitive(output.verification_commands), "\"${local.web_app_url}\" \"github\"")
+    )
+    error_message = "Deployment verification must expect only the GitHub login label."
+  }
 }
 
 run "google_only" {
@@ -87,6 +96,15 @@ run "google_only" {
     )
     error_message = "The control plane must bind only the enabled Google OAuth credential pair."
   }
+
+  assert {
+    condition = (
+      output.enabled_sign_in_providers == tolist(["google"]) &&
+      strcontains(nonsensitive(output.verification_commands), "verify-login-providers.mjs") &&
+      strcontains(nonsensitive(output.verification_commands), "\"${local.web_app_url}\" \"google\"")
+    )
+    error_message = "Deployment verification must expect only the Google login label."
+  }
 }
 
 run "github_and_google" {
@@ -111,6 +129,15 @@ run "github_and_google" {
       contains(module.control_plane_worker.secret_binding_names, "GOOGLE_CLIENT_SECRET")
     )
     error_message = "The control plane must bind both enabled OAuth credential pairs."
+  }
+
+  assert {
+    condition = (
+      output.enabled_sign_in_providers == tolist(["github", "google"]) &&
+      strcontains(nonsensitive(output.verification_commands), "verify-login-providers.mjs") &&
+      strcontains(nonsensitive(output.verification_commands), "\"${local.web_app_url}\" \"github,google\"")
+    )
+    error_message = "Deployment verification must expect both login labels in canonical order."
   }
 }
 

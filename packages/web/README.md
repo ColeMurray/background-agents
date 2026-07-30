@@ -45,12 +45,14 @@ Next.js web application for interacting with Open-Inspect coding sessions.
 ### Prerequisites
 
 - Node.js 22+
-- GitHub App configured for OAuth (see below)
+- A deployed control plane with at least one sign-in provider
+- GitHub App repository credentials configured on the control plane
 
-### GitHub App Setup
+### Sign-In and GitHub App Setup
 
-The web client uses a **GitHub App** (not OAuth App) for user authentication. When creating the
-GitHub App:
+The control plane owns sign-in providers and repository credentials. A GitHub App installation is
+required for repository access even when Google is the only sign-in provider. To enable GitHub
+sign-in with that App:
 
 1. Go to GitHub → Settings → Developer settings → GitHub Apps → New GitHub App
 2. Set the **Callback URL** to: `https://your-domain.com/api/auth/callback/github`
@@ -63,10 +65,12 @@ GitHub App:
 > setting should allow users outside the organization to authenticate, but this has not been
 > extensively tested. Please verify this works for your use case.
 
-Required permissions for the GitHub App:
+Always-required repository permission for the GitHub App:
 
-- **Account permissions**: Email addresses (read-only)
 - **Repository permissions**: Contents (read & write) - for repo operations
+
+When GitHub sign-in uses email/domain admission, also grant **Account permissions: Email addresses
+(read-only)**.
 
 ### Environment Variables
 

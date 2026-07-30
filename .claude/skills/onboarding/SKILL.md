@@ -49,7 +49,8 @@ Use AskUserQuestion to gather:
    `open-inspect-{deployment_name}.vercel.app` and must be unique across all Vercel users.
 4. **Slack integration** - Yes or No
 5. **GitHub bot integration** - Yes or No (automated PR reviews and comment-triggered actions)
-6. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
+6. **Sign-in providers** - GitHub, Google, or both. At least one is required.
+7. **Prerequisites confirmation** - Confirm they have accounts on Cloudflare, Vercel, Modal,
    Anthropic
 
 ## Phase 2: Repository Setup
@@ -119,20 +120,24 @@ modal profile current
 
 ## Phase 4: GitHub App Setup
 
-Guide user through creating a GitHub App (handles both OAuth and repo access):
+Guide the user through creating a GitHub App. Its App ID, private key, and installation ID are
+always required for repository access. Its client ID and secret enable GitHub sign-in only when the
+user selected GitHub:
 
 1. Go to https://github.com/settings/apps → "New GitHub App"
 2. **Name**: `Open-Inspect-{YourName}` (globally unique)
 3. **Homepage URL**: `https://open-inspect-{deployment_name}.vercel.app`
 4. **Webhook**: Uncheck "Active"
-5. **Callback URL** (under "Identifying and authorizing users"):
-   `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
+5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
+   users"): `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
    - **CRITICAL**: Must match deployed Vercel URL exactly!
 6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
    Write), Metadata (Read-only)
-7. **Account permissions**: Email addresses (Read-only)
+7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
+   (Read-only)
 8. Create app, note **App ID**
-9. Generate **Client Secret**, note **Client ID** and **Client Secret**
+9. If GitHub sign-in is selected, generate a **Client Secret** and note the **Client ID** and
+   **Client Secret**. Otherwise leave both Terraform values empty.
 10. Generate **Private Key** (downloads .pem file)
 11. Install app on account, note **Installation ID** from URL
 
@@ -145,8 +150,8 @@ cat /tmp/github-app-key-pkcs8.pem
 
 ## Phase 4b: Google OAuth Setup (If Enabled)
 
-Only if the user wants Google login for non-developer users (PMs, support agents). Skip for
-GitHub-only deployments — leave `google_client_id` and `google_client_secret` empty.
+Only if the user selected Google sign-in. Skip for GitHub-only deployments and leave
+`google_client_id` and `google_client_secret` empty.
 
 Guide user:
 
@@ -166,6 +171,8 @@ Then in `terraform.tfvars`:
   disable)
 - Add at least one entry to `allowed_emails` (exact addresses, e.g. `pm@gmail.com`) or
   `allowed_email_domains`. Prefer `allowed_emails` for shared domains like gmail.com.
+- If Google is the only sign-in provider, leave `github_client_id` and `github_client_secret` empty.
+  Keep the GitHub App ID, private key, and installation ID configured for repository access.
 
 The next request to `/login` shows Google after both credentials are deployed; no separate web flag
 or rebuild is required. Google users get the same flat access; their PRs fall back to the App bot
@@ -316,11 +323,12 @@ npx vercel --prod
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
 curl https://{workspace}--open-inspect-api-health.modal.run
-curl -I https://open-inspect-{deployment_name}.vercel.app
+terraform output -raw verification_commands
 ```
 
-Present deployment summary table. Instruct user to test: visit web app, sign in with GitHub, create
-session, send prompt.
+Run the provider-verification command printed in step 3; it requests `/login` and checks the exact
+expected labels without credentials. Present a deployment summary table. Instruct the user to test:
+visit the web app, sign in with each configured provider, create a session, and send a prompt.
 
 ## Phase 13: CI/CD Setup (Optional)
 
