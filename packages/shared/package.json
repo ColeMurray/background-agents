@@ -46,9 +46,21 @@
       "import": "./dist/types/commit-signing.js",
       "types": "./dist/types/commit-signing.d.ts"
     },
+    "./types/environments": {
+      "import": "./dist/types/environments.js",
+      "types": "./dist/types/environments.d.ts"
+    },
     "./types/github-identity": {
       "import": "./dist/types/github-identity.js",
       "types": "./dist/types/github-identity.d.ts"
+    },
+    "./types/image-builds": {
+      "import": "./dist/types/image-builds.js",
+      "types": "./dist/types/image-builds.d.ts"
+    },
+    "./types/integrations": {
+      "import": "./dist/types/integrations.js",
+      "types": "./dist/types/integrations.d.ts"
     }
   },
   "scripts": {
