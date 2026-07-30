@@ -451,16 +451,12 @@ MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suff
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
-# 3. Print the web deployment verification commands
-terraform output -raw verification_commands
+# 3. Verify the web deployment
+curl -I "$(terraform output -raw web_app_url)"
 
 # 4. Test authenticated endpoint (should return 401)
 curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/sessions
 ```
-
-Printing `verification_commands` does not execute it. Copy and run the emitted step 3
-`verify-login-providers.mjs` command; it requests `/login` and fails unless the rendered
-`data-sign-in-provider` markers exactly match the Terraform provider configuration.
 
 ## Troubleshooting
 

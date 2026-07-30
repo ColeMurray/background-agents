@@ -326,13 +326,11 @@ npx vercel --prod
 ```bash
 curl https://open-inspect-control-plane-{deployment_name}.{subdomain}.workers.dev/health
 curl https://{workspace}--open-inspect-api-health.modal.run
-terraform output -raw verification_commands
+curl -I "$(terraform output -raw web_app_url)"
 ```
 
-Run the provider-verification command printed in step 3; it requests `/login` and checks the exact
-expected `data-sign-in-provider` markers without credentials. Present a deployment summary table.
-Instruct the user to test: visit the web app, sign in with each configured provider, create a
-session, and send a prompt.
+Present a deployment summary table. Instruct the user to test: visit the web app, sign in with each
+configured provider, create a session, and send a prompt.
 
 ## Phase 13: CI/CD Setup (Optional)
 

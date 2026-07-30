@@ -6,8 +6,7 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 **Choose GitHub, Google, or both for sign-in.** Deployments can now enable either provider
 independently, and the sign-in page shows only the methods actually configured. Terraform validates
-the setup and includes a post-deploy check. The GitHub App remains required for repository access in
-Google-only deployments.
+the setup. The GitHub App remains required for repository access in Google-only deployments.
 
 ## July 26, 2026
 

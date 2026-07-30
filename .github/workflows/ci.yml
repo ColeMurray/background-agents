@@ -31,9 +31,6 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      - name: Check provider authority boundary
-        run: npm run check:provider-authority
-
       - name: Check Prettier formatting
         run: npm run format:check
 

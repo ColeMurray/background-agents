@@ -56,7 +56,6 @@ export function SignInProviderButtons({ providers }: { providers: readonly SignI
         return (
           <Button
             key={provider}
-            data-sign-in-provider={provider}
             type="button"
             variant={presentation.variant}
             className="gap-2 px-6 py-3"

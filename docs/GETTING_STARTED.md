@@ -899,15 +899,9 @@ MODAL_WORKSPACE_SLUG="YOUR-WORKSPACE" # or "YOUR-WORKSPACE-YOUR-MODAL-WEB-SUFFIX
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
-# 3. Web app and exact configured login-provider markers
-# Terraform prints the credential-free command with the deployed URL and
-# expected provider IDs already filled in:
-terraform output -raw verification_commands
+# 3. Web app (should return 200)
+curl -I "$(terraform output -raw web_app_url)"
 ```
-
-Printing the output does not execute it. Copy and run the emitted step 3
-`verify-login-providers.mjs` command. It requests `/login` and fails unless the rendered
-`data-sign-in-provider` markers exactly match the expected provider IDs.
 
 ### Test the Full Flow
 

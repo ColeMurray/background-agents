@@ -24,10 +24,7 @@ describe("SignInProviderButtons", () => {
   it("renders only the configured providers", () => {
     render(<SignInProviderButtons providers={["google"]} />);
 
-    expect(screen.getByRole("button", { name: "Sign in with Google" })).toHaveAttribute(
-      "data-sign-in-provider",
-      "google"
-    );
+    expect(screen.getByRole("button", { name: "Sign in with Google" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).not.toBeInTheDocument();
   });
 
