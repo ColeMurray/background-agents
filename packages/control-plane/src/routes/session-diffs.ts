@@ -184,26 +184,31 @@ export const sessionDiffRoutes: Route[] = [
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/diff"),
+    scmAgnostic: true,
     handler: handleDiffState,
   }),
   sessionRoute({
     method: "PUT",
     pattern: parsePattern("/sessions/:id/diff"),
+    scmAgnostic: true,
     handler: handleDiffUpload,
   }),
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/diff/failure"),
+    scmAgnostic: true,
     handler: handleDiffFailure,
   }),
   sessionRoute({
     method: "GET",
     pattern: parsePattern("/sessions/:id/diff/:revisionId/files/:fileId"),
+    scmAgnostic: true,
     handler: handleDiffFile,
   }),
   sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/diff/retry"),
+    scmAgnostic: true,
     handler: handleDiffRetry,
   }),
 ];

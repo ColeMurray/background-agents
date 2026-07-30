@@ -2,6 +2,7 @@
 
 import useSWR, { mutate } from "swr";
 import { z } from "zod";
+import type { SignInProvider } from "@open-inspect/shared";
 import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,
@@ -15,8 +16,6 @@ export type AuthSessionUser = BrowserAuthSessionUser;
 export interface AuthSession {
   user: AuthSessionUser;
 }
-
-export type SignInProvider = "github" | "google";
 
 export type AuthSessionState =
   | {

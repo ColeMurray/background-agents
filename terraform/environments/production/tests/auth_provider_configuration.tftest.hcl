@@ -73,20 +73,7 @@ run "google_only" {
     allowed_emails       = "person@example.com"
   }
 
-  assert {
-    condition     = !local.github_oauth_enabled && local.google_enabled
-    error_message = "Google-only credentials must enable only Google."
-  }
-
-  assert {
-    condition = (
-      !contains(module.control_plane_worker.plain_text_binding_names, "GITHUB_CLIENT_ID") &&
-      contains(module.control_plane_worker.plain_text_binding_names, "GOOGLE_CLIENT_ID") &&
-      !contains(module.control_plane_worker.secret_binding_names, "GITHUB_CLIENT_SECRET") &&
-      contains(module.control_plane_worker.secret_binding_names, "GOOGLE_CLIENT_SECRET")
-    )
-    error_message = "The control plane must bind only the enabled Google OAuth credential pair."
-  }
+  expect_failures = [terraform_data.sign_in_provider_gate]
 }
 
 run "github_and_google" {

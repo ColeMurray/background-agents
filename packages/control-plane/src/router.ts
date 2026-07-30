@@ -158,15 +158,6 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isScmAgnosticRoute(path: string, route: Route): boolean {
-  return (
-    route.scmAgnostic === true ||
-    /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
-    /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
-  );
-}
-
 function isProviderImplementedRoute(provider: SourceControlProviderName, path: string): boolean {
   if (provider === "github") return true;
   return provider === "gitlab" && /^\/sessions\/[^/]+\/scm-credentials$/.test(path);
@@ -183,7 +174,7 @@ function enforceImplementedScmProvider(
     if (
       !isProviderImplementedRoute(provider, path) &&
       !isPublicRoute(path) &&
-      !isScmAgnosticRoute(path, route)
+      route.scmAgnostic !== true
     ) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
