@@ -6,6 +6,7 @@ import type { ModalImageBuildPlan } from "./types";
 function createProvider(): ModalImageBuildProvider {
   return {
     triggerImageBuild: vi.fn(async () => ({ buildId: "build-1", status: "building" })),
+    snapshotImageBuildSandbox: vi.fn(async () => ({ success: true, imageId: "modal-image-1" })),
     deleteProviderImage: vi.fn(async () => undefined),
   };
 }

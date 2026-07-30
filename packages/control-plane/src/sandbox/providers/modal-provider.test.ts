@@ -15,6 +15,7 @@ import type {
   RestoreSandboxRequest,
   RestoreSandboxResponse,
   SnapshotSandboxRequest,
+  SnapshotBuildSandboxRequest,
   SnapshotSandboxResponse,
   BuildImageRequest,
   BuildImageResponse,
@@ -29,6 +30,7 @@ function createMockModalClient(
     createSandbox: (req: CreateSandboxRequest) => Promise<CreateSandboxResponse>;
     restoreSandbox: (req: RestoreSandboxRequest) => Promise<RestoreSandboxResponse>;
     snapshotSandbox: (req: SnapshotSandboxRequest) => Promise<SnapshotSandboxResponse>;
+    snapshotBuildSandbox: (req: SnapshotBuildSandboxRequest) => Promise<SnapshotSandboxResponse>;
     buildImage: (req: BuildImageRequest) => Promise<BuildImageResponse>;
     deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
@@ -53,6 +55,12 @@ function createMockModalClient(
       async (): Promise<SnapshotSandboxResponse> => ({
         success: true,
         imageId: "image-123",
+      })
+    ),
+    snapshotBuildSandbox: vi.fn(
+      async (): Promise<SnapshotSandboxResponse> => ({
+        success: true,
+        imageId: "build-image-123",
       })
     ),
     buildImage: vi.fn(
@@ -607,6 +615,28 @@ describe("ModalSandboxProvider", () => {
         expect(e).toBeInstanceOf(SandboxProviderError);
         expect((e as SandboxProviderError).errorType).toBe("transient");
       }
+    });
+
+    it("uses the identity-bound snapshot operation for image builds", async () => {
+      const snapshotBuildSandbox = vi.fn(async () => ({
+        success: true,
+        imageId: "build-image-123",
+      }));
+      const provider = new ModalSandboxProvider(createMockModalClient({ snapshotBuildSandbox }));
+
+      await expect(
+        provider.snapshotImageBuildSandbox({
+          buildId: "imgb-1",
+          providerSessionId: "modal-session-1",
+        })
+      ).resolves.toEqual({ success: true, imageId: "build-image-123" });
+      expect(snapshotBuildSandbox).toHaveBeenCalledWith(
+        {
+          buildId: "imgb-1",
+          providerSessionId: "modal-session-1",
+        },
+        undefined
+      );
     });
 
     it("returns providerObjectId from restoreFromSnapshot", async () => {

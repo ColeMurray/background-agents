@@ -50,8 +50,15 @@ export interface TriggerModalImageBuildResult {
   status: string;
 }
 
+export interface SnapshotModalImageBuildConfig {
+  buildId: string;
+  providerSessionId: string;
+  correlation?: CorrelationContext;
+}
+
 export interface ModalImageBuildProvider {
   triggerImageBuild(config: TriggerModalImageBuildConfig): Promise<TriggerModalImageBuildResult>;
+  snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult>;
   deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
 }
 
@@ -226,6 +233,34 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         throw error;
       }
       throw this.classifyError("Failed to take snapshot", error);
+    }
+  }
+
+  async snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult> {
+    try {
+      const result = await this.client.snapshotBuildSandbox(
+        {
+          buildId: config.buildId,
+          providerSessionId: config.providerSessionId,
+        },
+        config.correlation
+      );
+      if (result.success && result.imageId) {
+        return { success: true, imageId: result.imageId };
+      }
+      return {
+        success: false,
+        error: result.error || "Unknown image build snapshot error",
+      };
+    } catch (error) {
+      if (error instanceof ModalApiError) {
+        throw this.classifyErrorWithStatus(
+          `Image build snapshot failed with HTTP ${error.status}`,
+          error.status
+        );
+      }
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to snapshot image build sandbox", error);
     }
   }
 

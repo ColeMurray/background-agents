@@ -10,14 +10,12 @@ Updated: 2026-01-15 to fix Sandbox.create API
 
 import asyncio
 import json
-import os
 import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import modal
-from modal.stream_type import StreamType
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
@@ -29,17 +27,11 @@ from sandbox_runtime.constants import (
     TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from sandbox_runtime.log_config import get_logger
-from sandbox_runtime.repo_image_callback import (
-    BUILD_ID_ENV,
-    CALLBACK_TOKEN_ENV,
-    CALLBACK_URL_ENV,
-    FAILURE_CALLBACK_URL_ENV,
-    PROVIDER_SESSION_ID_ENV,
-)
 from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
 
 from ..app import app, llm_secrets
 from ..images.base import base_image
+from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
 
@@ -323,55 +315,6 @@ class SandboxManager:
                 exc=e,
             )
 
-    @staticmethod
-    def _inject_vcs_env_vars(
-        env_vars: dict[str, str],
-        clone_token: str | None,
-        *,
-        include_github_cli_aliases: bool = False,
-    ) -> None:
-        """Inject SCM provider metadata into the sandbox environment.
-
-        For interactive sandboxes ``clone_token`` should be ``None``. Git
-        authenticates per-request via the system git credential helper, which
-        fetches a fresh token from the control plane — embedding a token in
-        env would silently fail once it expires (or immediately, for
-        providers with short-lived tokens like GitHub Apps).
-
-        For image-build sandboxes (one-shot, no control-plane access)
-        ``clone_token`` is required: the helper falls back to the env-var
-        token when ``CONTROL_PLANE_URL`` / ``SANDBOX_AUTH_TOKEN`` are unset.
-
-        ``include_github_cli_aliases`` adds fallback ``GITHUB_TOKEN`` /
-        ``GITHUB_APP_TOKEN`` for legacy snapshots that predate the
-        gh wrapper. These aliases are only injected when the user has not
-        provided a GitHub CLI token. Fallback injection is marked with
-        ``OI_GITHUB_TOKEN_IS_FALLBACK=1`` so helper-capable boots refresh past
-        the static restore token, while genuine user-provided tokens remain
-        authoritative.
-        """
-        scm_provider = os.environ.get("SCM_PROVIDER", "github")
-        if scm_provider == "bitbucket":
-            env_vars["VCS_HOST"] = "bitbucket.org"
-            env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
-        elif scm_provider == "gitlab":
-            env_vars["VCS_HOST"] = "gitlab.com"
-            env_vars["VCS_CLONE_USERNAME"] = "oauth2"
-        else:
-            env_vars["VCS_HOST"] = "github.com"
-            env_vars["VCS_CLONE_USERNAME"] = "x-access-token"
-
-        if clone_token:
-            env_vars["VCS_CLONE_TOKEN"] = clone_token
-            if include_github_cli_aliases and scm_provider == "github":
-                has_user_github_cli_token = any(
-                    env_vars.get(key) for key in ("GH_TOKEN", "GITHUB_TOKEN", "GITHUB_APP_TOKEN")
-                )
-                if not has_user_github_cli_token:
-                    env_vars["GITHUB_TOKEN"] = clone_token
-                    env_vars["GITHUB_APP_TOKEN"] = clone_token
-                    env_vars["OI_GITHUB_TOKEN_IS_FALLBACK"] = "1"
-
     async def create_sandbox(
         self,
         config: SandboxConfig,
@@ -421,7 +364,7 @@ class SandboxManager:
         # repository so GitLab/Bitbucket deployments don't fall back to github.com
         # credential-helper behavior; clone tokens stay repository-gated.
         fallback_clone_token = config.fallback_clone_token if has_repository else None
-        self._inject_vcs_env_vars(
+        inject_vcs_env_vars(
             env_vars,
             clone_token=fallback_clone_token,
             include_github_cli_aliases=bool(fallback_clone_token),
@@ -571,7 +514,7 @@ class SandboxManager:
             }
         )
 
-        self._inject_vcs_env_vars(env_vars, clone_token or None)
+        inject_vcs_env_vars(env_vars, clone_token or None)
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
@@ -604,157 +547,6 @@ class SandboxManager:
             created_at=time.time(),
             modal_object_id=modal_object_id,
         )
-
-    async def create_provider_session_build_sandbox(
-        self,
-        build_id: str,
-        scope_kind: str,
-        scope_id: str,
-        repositories: list[dict],
-        clone_token: str = "",
-        user_env_vars: dict[str, str] | None = None,
-        timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
-    ) -> SandboxHandle:
-        """Create a dormant, tagged sandbox for a later bound build start."""
-        start_time = time.time()
-        primary = repositories[0]
-        repo_owner = primary["repo_owner"]
-        repo_name = primary["repo_name"]
-        sandbox_id = f"build-{build_id}"
-        env_vars = dict(user_env_vars or {})
-        env_vars.update(
-            {
-                "PYTHONUNBUFFERED": "1",
-                "SANDBOX_ID": sandbox_id,
-                "REPO_OWNER": repo_owner,
-                "REPO_NAME": repo_name,
-                "IMAGE_BUILD_MODE": "true",
-                "SESSION_CONFIG": json.dumps(
-                    {
-                        "branch": primary["branch"],
-                        "repositories": repositories,
-                    }
-                ),
-                BUILD_ID_ENV: "",
-                CALLBACK_URL_ENV: "",
-                FAILURE_CALLBACK_URL_ENV: "",
-                CALLBACK_TOKEN_ENV: "",
-                PROVIDER_SESSION_ID_ENV: "",
-            }
-        )
-        self._inject_vcs_env_vars(env_vars, clone_token or None)
-
-        sandbox = await modal.Sandbox.create.aio(
-            "python",
-            "-c",
-            "import signal; signal.pause()",
-            image=base_image,
-            app=app,
-            secrets=[],
-            timeout=timeout_seconds,
-            workdir="/workspace",
-            env=env_vars,
-            tags={
-                "openinspect_kind": "image-build",
-                "openinspect_build_id": build_id,
-                "openinspect_scope_kind": scope_kind,
-                "openinspect_scope_id": scope_id,
-            },
-        )
-
-        modal_object_id = sandbox.object_id
-        log.info(
-            "sandbox.create_provider_session_build",
-            sandbox_id=sandbox_id,
-            modal_object_id=modal_object_id,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            build_id=build_id,
-            duration_ms=int((time.time() - start_time) * 1000),
-            outcome="success",
-        )
-        return SandboxHandle(
-            sandbox_id=sandbox_id,
-            modal_sandbox=sandbox,
-            status=SandboxStatus.WARMING,
-            created_at=time.time(),
-            modal_object_id=modal_object_id,
-        )
-
-    async def start_build_sandbox(
-        self,
-        build_id: str,
-        provider_session_id: str,
-        callback_url: str,
-        failure_callback_url: str,
-        callback_token: str,
-    ) -> None:
-        """Launch the runtime only after the control plane binds the exact sandbox."""
-        sandbox = await self._resolve_build_sandbox(build_id, provider_session_id)
-        await sandbox.exec.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",
-            env={
-                BUILD_ID_ENV: build_id,
-                CALLBACK_URL_ENV: callback_url,
-                FAILURE_CALLBACK_URL_ENV: failure_callback_url,
-                CALLBACK_TOKEN_ENV: callback_token,
-                PROVIDER_SESSION_ID_ENV: provider_session_id,
-            },
-            stdout=StreamType.DEVNULL,
-            stderr=StreamType.DEVNULL,
-        )
-
-    async def terminate_build_sandbox(
-        self,
-        build_id: str,
-        provider_session_id: str,
-        reason: str,
-    ) -> None:
-        """Terminate only a sandbox carrying the exact image-build tags."""
-        try:
-            sandbox = await self._resolve_build_sandbox(build_id, provider_session_id)
-            await sandbox.terminate.aio()
-        except modal.exception.NotFoundError:
-            log.info(
-                "sandbox.terminate_build_not_found",
-                build_id=build_id,
-                modal_object_id=provider_session_id,
-                reason=reason,
-            )
-            return
-        log.info(
-            "sandbox.terminate_build",
-            build_id=build_id,
-            modal_object_id=provider_session_id,
-            reason=reason,
-        )
-
-    async def get_build_sandbox_handle(
-        self,
-        build_id: str,
-        provider_session_id: str,
-    ) -> SandboxHandle:
-        """Resolve a build sandbox only after verifying its exact provider tags."""
-        sandbox = await self._resolve_build_sandbox(build_id, provider_session_id)
-        return SandboxHandle(
-            sandbox_id=f"build-{build_id}",
-            modal_sandbox=sandbox,
-            status=SandboxStatus.READY,
-            created_at=time.time(),
-            modal_object_id=provider_session_id,
-        )
-
-    async def _resolve_build_sandbox(self, build_id: str, provider_session_id: str):
-        sandbox = modal.Sandbox.from_id(provider_session_id)
-        tags = await sandbox.get_tags.aio()
-        if (
-            tags.get("openinspect_kind") != "image-build"
-            or tags.get("openinspect_build_id") != build_id
-        ):
-            raise ValueError("sandbox tags do not match the requested image build")
-        return sandbox
 
     def take_snapshot(
         self,
@@ -909,7 +701,7 @@ class SandboxManager:
         # Host scoping is injected even without a repository (matches
         # create_sandbox); clone tokens stay repository-gated.
         restore_clone_token = clone_token if has_repository else None
-        self._inject_vcs_env_vars(
+        inject_vcs_env_vars(
             env_vars, clone_token=restore_clone_token, include_github_cli_aliases=True
         )
 

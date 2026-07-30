@@ -191,6 +191,11 @@ export interface SnapshotSandboxResponse {
   error?: string;
 }
 
+export interface SnapshotBuildSandboxRequest {
+  buildId: string;
+  providerSessionId: string;
+}
+
 export interface BuildImageRequest {
   /** Scope kind ("repo" | "environment") — accepted by Modal for logging only. */
   scopeKind: ImageBuildScopeKind;
@@ -255,6 +260,7 @@ export class ModalApiError extends Error {
 export class ModalClient {
   private createSandboxUrl: string;
   private snapshotSandboxUrl: string;
+  private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
   private buildImageUrl: string;
   private deleteProviderImageUrl: string;
@@ -271,6 +277,7 @@ export class ModalClient {
     const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
+    this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
     this.buildImageUrl = `${baseUrl}-api-build-image.modal.run`;
     this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
@@ -500,6 +507,63 @@ export class ModalClient {
         endpoint,
         session_id: request.sessionId,
         sandbox_id: request.providerObjectId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  /**
+   * Snapshot an image-build sandbox after Modal verifies its bound build tags.
+   */
+  async snapshotBuildSandbox(
+    request: SnapshotBuildSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<SnapshotSandboxResponse> {
+    const startTime = Date.now();
+    const endpoint = "snapshotBuildSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const headers = await this.getPostHeaders(correlation);
+      const response = await fetch(this.snapshotBuildSandboxUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          build_id: request.buildId,
+          provider_session_id: request.providerSessionId,
+        }),
+      });
+
+      httpStatus = response.status;
+      if (!response.ok) {
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
+      }
+
+      const result = parseModalApiResponse(
+        snapshotSandboxModalResponseSchema,
+        await response.json()
+      );
+      if (!result.success) {
+        return { success: false, error: result.error || "Unknown snapshot error" };
+      }
+      if (!result.data?.image_id) {
+        return { success: false, error: "Snapshot response missing image_id" };
+      }
+
+      outcome = "success";
+      return { success: true, imageId: result.data.image_id };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        build_id: request.buildId,
+        sandbox_id: request.providerSessionId,
         trace_id: correlation?.trace_id,
         request_id: correlation?.request_id,
         http_status: httpStatus,

@@ -121,6 +121,12 @@ async def test_build_forwards_scope_and_repositories(monkeypatch):
         {"repositories": [{"repo_owner": "acme", "repo_name": "repo"}]},
         {"repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": ""}]},
         {"repositories": [REPOSITORIES[0], {"repo_owner": "acme", "repo_name": "api"}]},
+        {
+            "repositories": [
+                REPOSITORIES[0],
+                {"repo_owner": "other", "repo_name": "REPO", "branch": "main"},
+            ]
+        },
     ],
 )
 async def test_build_requires_core_fields(monkeypatch, overrides):

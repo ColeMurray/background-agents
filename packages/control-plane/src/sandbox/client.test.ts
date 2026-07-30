@@ -386,6 +386,34 @@ describe("ModalClient", () => {
     ).resolves.toEqual({ success: true, imageId: "img-1" });
   });
 
+  it("snapshots image builds through the identity-bound build endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { image_id: "img-build-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.snapshotBuildSandbox({
+        buildId: "imgb-1",
+        providerSessionId: "mo-build-1",
+      })
+    ).resolves.toEqual({ success: true, imageId: "img-build-1" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme-prod-web--open-inspect-api-snapshot-build-sandbox.modal.run",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          build_id: "imgb-1",
+          provider_session_id: "mo-build-1",
+        }),
+      })
+    );
+  });
+
   it("rejects malformed snapshot responses instead of trusting the payload", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { image_id: 123 } }), {
