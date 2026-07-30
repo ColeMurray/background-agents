@@ -6,7 +6,7 @@ import { getAvailableModels } from "../app-home/models";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSessionConfig } from "./integration-config";
+import { getSlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { getUserInfo, postMessage } from "@open-inspect/shared";
@@ -46,8 +46,8 @@ vi.mock("./control-plane-client", () => ({
   createSession: vi.fn(),
 }));
 
-vi.mock("./integration-config", () => ({
-  getSlackSessionConfig: vi.fn(),
+vi.mock("../slack-settings", () => ({
+  getSlackSettings: vi.fn(),
 }));
 
 vi.mock("./thread-session-store", () => ({
@@ -105,7 +105,7 @@ describe("startSessionAndSendPrompt", () => {
       { label: "GPT 5.4", value: "openai/gpt-5.4" },
       { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4-6" },
     ]);
-    vi.mocked(getSlackSessionConfig).mockResolvedValue({
+    vi.mocked(getSlackSettings).mockResolvedValue({
       defaultModel: "anthropic/claude-sonnet-4-6",
     });
     vi.mocked(getResolvedUserPreferences).mockResolvedValue({
@@ -209,7 +209,7 @@ describe("startSessionAndSendPrompt", () => {
 
   it("appends configured session instructions to the first prompt", async () => {
     const env = makeEnv();
-    vi.mocked(getSlackSessionConfig).mockResolvedValue({
+    vi.mocked(getSlackSettings).mockResolvedValue({
       defaultModel: "anthropic/claude-sonnet-4-6",
       sessionInstructions: "Always run tests before pushing changes.",
     });

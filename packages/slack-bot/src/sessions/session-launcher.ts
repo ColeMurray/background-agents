@@ -11,7 +11,7 @@ import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../t
 import type { Env } from "../types";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSessionConfig } from "./integration-config";
+import { getSlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 
@@ -69,7 +69,7 @@ export async function startSessionAndSendPrompt(
   }
   const [availableModels, slackConfig] = await Promise.all([
     getAvailableModels(env, traceId),
-    getSlackSessionConfig(env, traceId),
+    getSlackSettings(env, traceId),
   ]);
   const userPrefs = await getResolvedUserPreferences(env, userId, {
     defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,

@@ -9,6 +9,7 @@ import {
   type EnvironmentSettingsIntegrationId,
   type GitHubBotSettings,
   type IntegrationId,
+  type SlackGlobalDefaultsPatch,
   type LinearBotSettings,
   type SandboxSettings,
 } from "@open-inspect/shared";
@@ -123,6 +124,45 @@ async function handleSetIntegrationSettings(
       return error(e.message, 400);
     }
     logger.error("Failed to update integration settings", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Integration settings storage unavailable", 503);
+  }
+}
+
+async function handlePatchIntegrationSettings(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  const id = extractIntegrationId(match);
+  if (!id) return error(`Unknown integration: ${match.groups?.id}`, 404);
+  if (id !== "slack") return error("Atomic defaults patches are only supported for Slack", 400);
+
+  const body = await parseJsonBody<{ defaults?: SlackGlobalDefaultsPatch }>(request);
+  if (body instanceof Response) return body;
+  if (!body?.defaults || typeof body.defaults !== "object" || Array.isArray(body.defaults)) {
+    return error("Request body must include defaults patch object", 400);
+  }
+
+  const store = new IntegrationSettingsStore(ctx.db);
+  try {
+    const settings = await store.patchSlackGlobalDefaults(body.defaults);
+    logger.info("integration_settings.patched", {
+      event: "integration_settings.patched",
+      integration_id: id,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return json({ status: "updated", integrationId: id, settings });
+  } catch (e) {
+    if (e instanceof IntegrationSettingsValidationError) {
+      return error(e.message, 400);
+    }
+    logger.error("Failed to patch integration settings", {
       error: e instanceof Error ? e.message : String(e),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -482,6 +522,11 @@ export const integrationSettingsRoutes: Route[] = [
     method: "PUT",
     pattern: parsePattern("/integration-settings/:id"),
     handler: handleSetIntegrationSettings,
+  },
+  {
+    method: "PATCH",
+    pattern: parsePattern("/integration-settings/:id"),
+    handler: handlePatchIntegrationSettings,
   },
   {
     method: "DELETE",

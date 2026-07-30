@@ -13,7 +13,6 @@ import {
   type Environment,
   type ListEnvironmentsResponse,
   type SlackGlobalConfig,
-  type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRepoSettings,
   type SlackRoutingRule,
@@ -89,24 +88,6 @@ interface RepoListResponse {
 
 interface ReposResponse {
   repos: EnrichedRepository[];
-}
-
-/**
- * Merge a patch onto the current global defaults, dropping keys cleared to
- * `undefined`. The control plane replaces the whole settings blob on save, so
- * every section that writes it must preserve the others' fields; centralizing
- * the merge makes that a property of the data flow rather than per-section
- * discipline.
- */
-function mergedGlobalDefaults(
-  current: SlackGlobalConfig | null | undefined,
-  patch: Partial<SlackGlobalSettings>
-): SlackGlobalSettings {
-  const defaults: SlackGlobalSettings = { ...current?.defaults, ...patch };
-  for (const key of Object.keys(defaults) as (keyof SlackGlobalSettings)[]) {
-    if (defaults[key] === undefined) delete defaults[key];
-  }
-  return defaults;
 }
 
 export function SlackIntegrationSettings() {
@@ -203,24 +184,21 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const handleConfirmReset = async () => {
     setSaving(true);
     try {
-      // Reset only the notification/mention defaults. If routing rules exist,
-      // preserve them by writing a blob that keeps just the rules (rather than
-      // deleting the whole row); otherwise clear the row entirely.
-      const existingRules = settings?.defaults?.routingRules;
-      const resetBody: SlackGlobalConfig | null = existingRules?.length
-        ? { defaults: { routingRules: existingRules } }
-        : null;
-      const res = resetBody
-        ? await browserApiFetch(GLOBAL_SETTINGS_KEY, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ settings: resetBody }),
-          })
-        : await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          defaults: {
+            agentNotificationsEnabled: null,
+            model: null,
+            mentionsPolicy: null,
+            sessionInstructions: null,
+          },
+        }),
+      });
       if (res.ok) {
-        // Seed the cache with the post-reset blob before revalidation (see
-        // handleSave for why).
-        mutate(GLOBAL_SETTINGS_KEY, { settings: resetBody });
+        const data = (await res.json()) as GlobalResponse;
+        mutate(GLOBAL_SETTINGS_KEY, data);
         setAgentNotificationsEnabled(false);
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
@@ -240,26 +218,22 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
 
   const handleSave = async () => {
     setSaving(true);
-    const body: SlackGlobalConfig = {
-      defaults: mergedGlobalDefaults(settings, {
-        agentNotificationsEnabled,
-        model: model || undefined,
-        mentionsPolicy,
-        sessionInstructions: sessionInstructions || undefined,
-      }),
+    const defaults = {
+      agentNotificationsEnabled,
+      model: model || null,
+      mentionsPolicy,
+      sessionInstructions: sessionInstructions || null,
     };
 
     try {
       const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: body }),
+        body: JSON.stringify({ defaults }),
       });
       if (res.ok) {
-        // Seed the cache with the saved blob before revalidation: the other
-        // global sections merge against this snapshot, so a stale one would
-        // let a back-to-back save resurrect pre-save defaults.
-        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
+        const data = (await res.json()) as GlobalResponse;
+        mutate(GLOBAL_SETTINGS_KEY, data);
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -703,22 +677,17 @@ function RoutingRulesSection({
     // Send the validated draft as-is and let the control-plane validator be the
     // single canonical normalizer (lowercase/de-dupe) on write. The UI's job is
     // to validate and present, not to own the stored shape.
-    const body: SlackGlobalConfig = {
-      defaults: mergedGlobalDefaults(settings, {
-        routingRules: trimmed.length > 0 ? trimmed : undefined,
-      }),
-    };
+    const defaults = { routingRules: trimmed.length > 0 ? trimmed : null };
 
     try {
       const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
-        method: "PUT",
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: body }),
+        body: JSON.stringify({ defaults }),
       });
       if (res.ok) {
-        // Seed the cache with the saved blob before revalidation (see the
-        // Defaults section save for why).
-        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
+        const data = (await res.json()) as GlobalResponse;
+        mutate(GLOBAL_SETTINGS_KEY, data);
         toast.success("Routing rules saved.");
         setDirty(false);
       } else {

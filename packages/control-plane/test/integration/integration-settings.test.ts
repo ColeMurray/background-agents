@@ -90,6 +90,89 @@ describe("Integration settings API", () => {
     });
   });
 
+  describe("PATCH global defaults", () => {
+    it("atomically applies concurrent defaults patches without losing fields", async () => {
+      await serviceFetch("https://test.local/integration-settings/slack", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              agentNotificationsEnabled: true,
+              mentionsPolicy: "strip",
+            },
+          },
+        }),
+      });
+
+      const [instructionsResponse, routingResponse] = await Promise.all([
+        serviceFetch("https://test.local/integration-settings/slack", {
+          method: "PATCH",
+          body: JSON.stringify({
+            defaults: { sessionInstructions: "Prefer minimal diffs." },
+          }),
+        }),
+        serviceFetch("https://test.local/integration-settings/slack", {
+          method: "PATCH",
+          body: JSON.stringify({
+            defaults: { routingRules: [{ keyword: "Frontend", target: "ACME/Web" }] },
+          }),
+        }),
+      ]);
+      expect(instructionsResponse.status).toBe(200);
+      expect(routingResponse.status).toBe(200);
+      const getResponse = await serviceFetch("https://test.local/integration-settings/slack");
+      const body = await getResponse.json<{
+        settings: {
+          defaults: {
+            agentNotificationsEnabled: boolean;
+            mentionsPolicy: string;
+            sessionInstructions: string;
+            routingRules: Array<{ keyword: string; target: string }>;
+          };
+        };
+      }>();
+      expect(body.settings.defaults).toEqual({
+        agentNotificationsEnabled: true,
+        mentionsPolicy: "strip",
+        sessionInstructions: "Prefer minimal diffs.",
+        routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      });
+    });
+
+    it("deletes nullable defaults without replacing sibling settings", async () => {
+      await serviceFetch("https://test.local/integration-settings/slack", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              mentionsPolicy: "escape",
+              sessionInstructions: "Run tests.",
+            },
+          },
+        }),
+      });
+
+      const response = await serviceFetch("https://test.local/integration-settings/slack", {
+        method: "PATCH",
+        body: JSON.stringify({ defaults: { sessionInstructions: null } }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json<{ settings: { defaults: Record<string, unknown> } }>();
+      expect(body.settings.defaults).toEqual({ mentionsPolicy: "escape" });
+    });
+
+    it("rejects unknown nullable defaults", async () => {
+      const response = await serviceFetch("https://test.local/integration-settings/slack", {
+        method: "PATCH",
+        body: JSON.stringify({ defaults: { unknownSetting: null } }),
+      });
+
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("Unknown slack setting: unknownSetting");
+    });
+  });
+
   describe("DELETE /integration-settings/github", () => {
     it("deletes global settings and reverts to null", async () => {
       // Create settings first

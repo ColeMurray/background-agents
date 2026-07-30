@@ -35,6 +35,7 @@ import {
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
@@ -853,6 +854,8 @@ export class SchedulerDO extends DurableObject<Env> {
     // Surface at most one concurrency-skip ephemeral per event, even when
     // several automations watch the same thread and all skip.
     let concurrencySkipped = false;
+    let slackSessionInstructions: string | undefined;
+    let slackSettingsLoaded = false;
 
     for (const automation of candidates) {
       const now = Date.now();
@@ -888,6 +891,17 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
+      if (event.source === "slack" && !slackSettingsLoaded) {
+        const configuredInstructions = (
+          await new IntegrationSettingsStore(this.db).getGlobal("slack")
+        )?.defaults?.sessionInstructions;
+        slackSessionInstructions =
+          typeof configuredInstructions === "string" && configuredInstructions.trim()
+            ? configuredInstructions
+            : undefined;
+        slackSettingsLoaded = true;
+      }
+
       // Event firings are invocations of 1 (or 0 children when skipped): same
       // per-key concurrency, same trigger_key dedup — both now enforced on the
       // invocation, atomically. The overlap skip also covers the brief slack
@@ -900,7 +914,11 @@ export class SchedulerDO extends DurableObject<Env> {
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
-        instructionsOverride: `${event.contextBlock}\n---\n\n${automation.instructions}`,
+        instructionsOverride:
+          `${event.contextBlock}\n---\n\n${automation.instructions}` +
+          (slackSessionInstructions
+            ? `\n\n## Additional Instructions\n\n${slackSessionInstructions}`
+            : ""),
       });
 
       switch (result.outcome) {

@@ -315,6 +315,11 @@ export interface IntegrationSettingsMap {
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
 }
 
+/** Atomic patch for Slack's global defaults. `null` removes a setting. */
+export type SlackGlobalDefaultsPatch = {
+  [P in keyof SlackGlobalSettings]?: SlackGlobalSettings[P] | null;
+};
+
 /** Derived type for the GitHub bot global config. */
 export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];

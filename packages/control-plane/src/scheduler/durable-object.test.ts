@@ -174,7 +174,7 @@ function createEmptyDbMock(): D1Database {
   } as unknown as D1Database;
 }
 
-function createIntegrationSettingsDbMock(): D1Database {
+function createIntegrationSettingsDbMock(slackSessionInstructions?: string): D1Database {
   return {
     prepare: vi.fn((query: string) => ({
       bind: vi.fn((integrationId: string, repo?: string) => ({
@@ -190,6 +190,13 @@ function createIntegrationSettingsDbMock(): D1Database {
                 settings: JSON.stringify({
                   enabledRepos: null,
                   defaults: { tunnelPorts: [3000], terminalEnabled: true },
+                }),
+              };
+            }
+            if (integrationId === "slack" && slackSessionInstructions) {
+              return {
+                settings: JSON.stringify({
+                  defaults: { sessionInstructions: slackSessionInstructions },
                 }),
               };
             }
@@ -2413,6 +2420,40 @@ describe("SchedulerDO", () => {
         automation_id: "auto-slack",
         status: "starting",
       });
+    });
+
+    it("appends workspace session instructions to a new Slack automation session", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock("Always run tests.") });
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const scheduler = createSchedulerDO(env);
+
+      const response = await scheduler.fetch(slackEventRequest());
+
+      expect(response.status).toBe(200);
+      const prompt = await getPromptBody(vi.mocked(stub.fetch));
+      expect(prompt.content).toBe(
+        "A message was posted in #ops.\n---\n\nRun tests\n\n" +
+          "## Additional Instructions\n\nAlways run tests."
+      );
+    });
+
+    it("does not append whitespace-only workspace instructions", async () => {
+      mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+      mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+      mockStore.getActiveRunForKey.mockResolvedValue(null);
+
+      const env = createEnv({ DB: createIntegrationSettingsDbMock("   \n") });
+      const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+      const scheduler = createSchedulerDO(env);
+
+      await scheduler.fetch(slackEventRequest());
+
+      const prompt = await getPromptBody(vi.mocked(stub.fetch));
+      expect(prompt.content).toBe("A message was posted in #ops.\n---\n\nRun tests");
     });
 
     it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {
