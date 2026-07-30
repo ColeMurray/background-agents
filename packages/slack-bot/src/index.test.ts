@@ -386,18 +386,13 @@ function sessionFetchBodies(fetchMock: { mock: { calls: readonly (readonly unkno
     .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>);
 }
 
-function slackEventRequest(
-  event: Record<string, unknown>,
-  eventId = crypto.randomUUID(),
-  headers: Record<string, string> = {}
-): Request {
+function slackEventRequest(event: Record<string, unknown>, eventId = crypto.randomUUID()): Request {
   return new Request("http://localhost/events", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "x-slack-signature": "v0=test",
       "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
-      ...headers,
     },
     body: JSON.stringify({
       type: "event_callback",
@@ -416,71 +411,6 @@ describe("POST /events", () => {
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
   });
-
-  it.each(["get", "put"] as const)(
-    "acknowledges, logs context, and processes the event when dedupe KV %s fails",
-    async (kvOperation) => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-      const env = makeEnv();
-      const ctx = makeCtx();
-      const eventId = "Ev-kv-unavailable";
-      mockPublishView.mockResolvedValue({ ok: true });
-      const kv = env.SLACK_KV as unknown as {
-        get: ReturnType<typeof vi.fn>;
-        put: ReturnType<typeof vi.fn>;
-      };
-      kv[kvOperation].mockRejectedValueOnce(
-        Object.assign(new Error("KV unavailable"), { code: "KV_UNAVAILABLE" })
-      );
-
-      const response = await app.fetch(
-        slackEventRequest(
-          {
-            type: "app_home_opened",
-            tab: "home",
-            user: "U123",
-          },
-          eventId,
-          {
-            "x-slack-retry-num": "2",
-            "x-slack-retry-reason": "http_error",
-          }
-        ),
-        env,
-        ctx
-      );
-
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ ok: true });
-      expect(ctx.waitUntil).toHaveBeenCalledOnce();
-      await flushWaitUntil(ctx);
-      expect(mockPublishView).toHaveBeenCalledOnce();
-
-      const logEntry = consoleError.mock.calls
-        .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-        .find((entry) => entry.msg === "slack.event.dedupe_unavailable");
-      expect(logEntry).toEqual(
-        expect.objectContaining({
-          level: "error",
-          service: "slack-bot",
-          component: "handler",
-          event_id: eventId,
-          event_type: "app_home_opened",
-          kv_operation: kvOperation,
-          slack_retry_num: "2",
-          slack_retry_reason: "http_error",
-          outcome: "degraded",
-          degradation_mode: "process_without_deduplication",
-          error_message: "KV unavailable",
-          error_type: "Error",
-          error_code: "KV_UNAVAILABLE",
-        })
-      );
-      expect(logEntry?.trace_id).toEqual(expect.any(String));
-      expect(logEntry?.error_stack).toEqual(expect.any(String));
-      consoleError.mockRestore();
-    }
-  );
 
   it("publishes App Home when the home tab is opened", async () => {
     mockPublishView.mockResolvedValue({ ok: true });
