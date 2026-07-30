@@ -14,6 +14,7 @@ function createService() {
 
   const messageQueue = {
     enqueuePromptFromApi: vi.fn(),
+    lookupAutofix: vi.fn(),
   } as unknown as SessionMessageQueue;
 
   const stopExecution = vi.fn();
@@ -53,6 +54,23 @@ describe("MessageService", () => {
       authorId: "user-1",
       source: "web",
     });
+  });
+
+  it("delegates Autofix recovery lookup so pending work is re-driven", async () => {
+    const { service, messageQueue } = createService();
+    vi.mocked(messageQueue.lookupAutofix).mockResolvedValue({
+      kind: "found",
+      messageId: "msg-autofix",
+    });
+
+    await expect(
+      service.handleAutofix({
+        type: "lookup_feedback",
+        feedbackKey: "github:99:review:1234",
+      })
+    ).resolves.toEqual({ kind: "found", messageId: "msg-autofix" });
+
+    expect(messageQueue.lookupAutofix).toHaveBeenCalledWith("github:99:review:1234");
   });
 
   it("stops execution and returns stopping status", async () => {

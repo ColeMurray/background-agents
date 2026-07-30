@@ -262,15 +262,16 @@ export class PrAutofixFeedbackStore {
       .run();
   }
 
-  async markSkipped(feedbackKey: string, reason: string, decidedAt: number): Promise<void> {
-    await this.db
+  async markSkipped(feedbackKey: string, reason: string, decidedAt: number): Promise<boolean> {
+    const result = await this.db
       .prepare(
         `UPDATE pr_autofix_feedback
          SET decision = 'skipped', reason = ?, last_error = NULL, decided_at = ?
-         WHERE feedback_key = ?`
+         WHERE feedback_key = ? AND decision = 'received'`
       )
       .bind(reason, decidedAt, feedbackKey)
       .run();
+    return result.meta.changes === 1;
   }
 
   async markFailed(
@@ -278,15 +279,16 @@ export class PrAutofixFeedbackStore {
     reason: string,
     error: string,
     decidedAt: number
-  ): Promise<void> {
-    await this.db
+  ): Promise<boolean> {
+    const result = await this.db
       .prepare(
         `UPDATE pr_autofix_feedback
          SET decision = 'failed', reason = ?, last_error = ?, decided_at = ?
-         WHERE feedback_key = ?`
+         WHERE feedback_key = ? AND decision = 'received'`
       )
       .bind(reason, error, decidedAt, feedbackKey)
       .run();
+    return result.meta.changes === 1;
   }
 
   async recordError(feedbackKey: string, error: string): Promise<void> {

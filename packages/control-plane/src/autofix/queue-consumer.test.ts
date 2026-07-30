@@ -59,7 +59,7 @@ describe("AutofixQueueConsumer", () => {
     };
     const feedbackStore = {
       recordError: vi.fn(async () => undefined),
-      markFailed: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => true),
     };
     const consumer = new AutofixQueueConsumer({
       service,
@@ -88,7 +88,7 @@ describe("AutofixQueueConsumer", () => {
     };
     const feedbackStore = {
       recordError: vi.fn(async () => undefined),
-      markFailed: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => true),
     };
     const consumer = new AutofixQueueConsumer({
       service,
@@ -109,6 +109,30 @@ describe("AutofixQueueConsumer", () => {
     expect(input.retry).toHaveBeenCalledOnce();
   });
 
+  it("acknowledges an exhausted delivery when another worker already made it terminal", async () => {
+    const service = {
+      process: vi.fn(async () => {
+        throw new Error("GitHub unavailable");
+      }),
+    };
+    const feedbackStore = {
+      recordError: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => false),
+    };
+    const consumer = new AutofixQueueConsumer({
+      service,
+      feedbackStore,
+      now: () => 2_000,
+      maxDeliveryAttempts: 5,
+    });
+    const input = message(5);
+
+    await consumer.consume(input);
+
+    expect(input.ack).toHaveBeenCalledOnce();
+    expect(input.retry).not.toHaveBeenCalled();
+  });
+
   it("fails and acknowledges permanent provider errors without retrying", async () => {
     const service = {
       process: vi.fn(async () => {
@@ -117,7 +141,7 @@ describe("AutofixQueueConsumer", () => {
     };
     const feedbackStore = {
       recordError: vi.fn(async () => undefined),
-      markFailed: vi.fn(async () => undefined),
+      markFailed: vi.fn(async () => true),
     };
     const consumer = new AutofixQueueConsumer({
       service,

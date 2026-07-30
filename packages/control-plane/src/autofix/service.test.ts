@@ -4,6 +4,18 @@ import { AutofixService } from "./service";
 import type { GitHubPullRequestFeedback } from "../source-control/providers/github-provider";
 
 function buildService() {
+  const received: {
+    feedbackKey: string;
+    decision: "received" | "queued" | "skipped" | "failed";
+    dispatchAttemptedAt: number | null;
+    messageId: string | null;
+    reason?: string | null;
+  } = {
+    feedbackKey: "github:pr_comment:1234",
+    decision: "received",
+    dispatchAttemptedAt: null,
+    messageId: null,
+  };
   const feedbackStore = {
     receive: vi.fn(
       async (): Promise<{
@@ -11,18 +23,14 @@ function buildService() {
         decision: "received" | "queued" | "skipped" | "failed";
         dispatchAttemptedAt: number | null;
         messageId: string | null;
-      }> => ({
-        feedbackKey: "github:pr_comment:1234",
-        decision: "received",
-        dispatchAttemptedAt: null,
-        messageId: null,
-      })
+      }> => received
     ),
+    get: vi.fn(async () => received),
     attachContext: vi.fn(async () => undefined),
     markDispatchAttempted: vi.fn(async () => undefined),
     markQueued: vi.fn(async () => undefined),
-    markSkipped: vi.fn(async () => undefined),
-    markFailed: vi.fn(async () => undefined),
+    markSkipped: vi.fn(async () => true),
+    markFailed: vi.fn(async () => true),
     recordError: vi.fn(async () => undefined),
   };
   const pullRequests = {
@@ -114,6 +122,40 @@ describe("AutofixService", () => {
       "enqueued",
       2_000
     );
+  });
+
+  it("returns the winning queued decision when a concurrent skip loses its transition", async () => {
+    const h = buildService();
+    h.settings.resolve.mockResolvedValue({
+      enabledRepos: null,
+      autofix: { ...GITHUB_AUTOFIX_DEFAULTS, enabled: false },
+    });
+    h.feedbackStore.markSkipped.mockResolvedValue(false);
+    h.feedbackStore.get.mockResolvedValue({
+      feedbackKey: "github:pr_comment:1234",
+      decision: "queued",
+      dispatchAttemptedAt: 2_000,
+      messageId: "message-winner",
+      reason: "enqueued",
+    });
+
+    const result = await h.service.process({
+      version: 1,
+      eventType: "issue_comment",
+      action: "created",
+      deliveryId: "delivery-1",
+      providerObject: { kind: "pr_comment", id: "1234" },
+      repository: { id: "99", owner: "acme", name: "widgets" },
+      pullRequestNumber: 42,
+      receivedAt: "2026-07-30T05:00:00.000Z",
+    });
+
+    expect(result).toEqual({
+      kind: "completed",
+      decision: "queued",
+      reason: "enqueued",
+      messageId: "message-winner",
+    });
   });
 
   it("stops before provider reads when Autofix is disabled", async () => {

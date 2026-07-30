@@ -9,7 +9,12 @@ interface AutofixProcessor {
 
 interface FailureStore {
   recordError(feedbackKey: string, error: string): Promise<void>;
-  markFailed(feedbackKey: string, reason: string, error: string, decidedAt: number): Promise<void>;
+  markFailed(
+    feedbackKey: string,
+    reason: string,
+    error: string,
+    decidedAt: number
+  ): Promise<boolean>;
 }
 
 interface QueueMessage {
@@ -58,12 +63,16 @@ export class AutofixQueueConsumer {
       }
       await this.deps.feedbackStore.recordError(feedbackKey, detail);
       if (message.attempts >= this.deps.maxDeliveryAttempts) {
-        await this.deps.feedbackStore.markFailed(
+        const failed = await this.deps.feedbackStore.markFailed(
           feedbackKey,
           "delivery_attempts_exhausted",
           detail,
           this.deps.now()
         );
+        if (!failed) {
+          message.ack();
+          return;
+        }
       }
       message.retry();
     }

@@ -44,8 +44,7 @@ export class MessageService {
       return this.deps.messageQueue.enqueueAutofix(command);
     }
 
-    const messageId = this.deps.repository.getAutofixMessageId(command.feedbackKey);
-    return Promise.resolve(messageId ? { kind: "found", messageId } : { kind: "not_found" });
+    return this.deps.messageQueue.lookupAutofix(command.feedbackKey);
   }
 
   async stop(): Promise<{ status: "stopping" }> {

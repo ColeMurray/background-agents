@@ -127,6 +127,13 @@ describe("SessionRepository", () => {
         }),
         attemptLimit: 10,
         windowStart: 1_000,
+        event: {
+          id: "event-1",
+          type: "user_message",
+          data: '{"type":"user_message"}',
+          messageId: "msg-new",
+          createdAt: 2_000,
+        },
       });
 
       expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
@@ -150,6 +157,13 @@ describe("SessionRepository", () => {
         originContext: "{}",
         attemptLimit: 10,
         windowStart: 1_000,
+        event: {
+          id: "event-1",
+          type: "user_message",
+          data: '{"type":"user_message"}',
+          messageId: "msg-new",
+          createdAt: 2_000,
+        },
       });
 
       expect(result).toEqual({ kind: "rejected", reason: "session_closed" });
@@ -174,6 +188,13 @@ describe("SessionRepository", () => {
         originContext: "{}",
         attemptLimit: 10,
         windowStart: 1_000,
+        event: {
+          id: "event-1",
+          type: "user_message",
+          data: '{"type":"user_message"}',
+          messageId: "msg-new",
+          createdAt: 2_000,
+        },
       });
 
       expect(result).toEqual({ kind: "rejected", reason: "attempt_limit" });
@@ -203,6 +224,13 @@ describe("SessionRepository", () => {
         originContext,
         attemptLimit: 10,
         windowStart: 1_000,
+        event: {
+          id: "event-1",
+          type: "user_message",
+          data: '{"type":"user_message"}',
+          messageId: "msg-new",
+          createdAt: 2_000,
+        },
       });
 
       expect(result).toEqual({ kind: "enqueued", messageId: "msg-new" });
@@ -210,6 +238,12 @@ describe("SessionRepository", () => {
       expect(insert?.params).toContain("github:review:1234");
       expect(insert?.params).toContain("github:99:42");
       expect(insert?.params).toContain(originContext);
+      expect(mock.calls).toContainEqual(
+        expect.objectContaining({
+          query: expect.stringContaining("INSERT INTO events"),
+          params: expect.arrayContaining(["event-1", "msg-new"]),
+        })
+      );
     });
   });
 

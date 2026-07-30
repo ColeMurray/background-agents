@@ -170,6 +170,7 @@ export interface CreateMessageData {
 
 export interface AdmitAutofixMessageData {
   message: CreateMessageData;
+  event: CreateEventData;
   feedbackKey: string;
   pullRequestKey: string;
   originContext: string;
@@ -790,8 +791,16 @@ export class SessionRepository {
         autofixPrKey: data.pullRequestKey,
         originContext: data.originContext,
       });
+      this.createEvent(data.event);
       return { kind: "enqueued", messageId: data.message.id };
     });
+  }
+
+  getMessageStatus(messageId: string): MessageStatus | null {
+    const row = this.rows<{ status: MessageStatus }>(
+      this.sql.exec(`SELECT status FROM messages WHERE id = ? LIMIT 1`, messageId)
+    )[0];
+    return row?.status ?? null;
   }
 
   getActiveDurationMs(): number {

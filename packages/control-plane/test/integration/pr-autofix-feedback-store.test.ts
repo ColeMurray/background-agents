@@ -80,6 +80,24 @@ describe("PrAutofixFeedbackStore", () => {
     });
   });
 
+  it("does not let delayed skip or failure overwrite queued admission", async () => {
+    const store = new PrAutofixFeedbackStore(env.DB);
+    const receipt = await store.receive(COMMENT_ENVELOPE, 1_000);
+
+    await store.markQueued(receipt.feedbackKey, "message-1", "enqueued", 2_000);
+
+    await expect(store.markSkipped(receipt.feedbackKey, "disabled", 3_000)).resolves.toBe(false);
+    await expect(
+      store.markFailed(receipt.feedbackKey, "provider_error", "late failure", 4_000)
+    ).resolves.toBe(false);
+    expect(await store.get(receipt.feedbackKey)).toMatchObject({
+      decision: "queued",
+      reason: "enqueued",
+      messageId: "message-1",
+      decidedAt: 2_000,
+    });
+  });
+
   it("lists activity using a stable newest-first cursor", async () => {
     const store = new PrAutofixFeedbackStore(env.DB);
     await store.receive(COMMENT_ENVELOPE, 1_000);

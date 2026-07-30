@@ -20,6 +20,7 @@ interface FeedbackReceipt {
 
 interface FeedbackStore {
   receive(envelope: GitHubAutofixEnvelope, receivedAt: number): Promise<FeedbackReceipt>;
+  get(feedbackKey: string): Promise<FeedbackReceipt | null>;
   attachContext(
     feedbackKey: string,
     context: {
@@ -38,8 +39,13 @@ interface FeedbackStore {
     reason: string,
     decidedAt: number
   ): Promise<void>;
-  markSkipped(feedbackKey: string, reason: string, decidedAt: number): Promise<void>;
-  markFailed(feedbackKey: string, reason: string, error: string, decidedAt: number): Promise<void>;
+  markSkipped(feedbackKey: string, reason: string, decidedAt: number): Promise<boolean>;
+  markFailed(
+    feedbackKey: string,
+    reason: string,
+    error: string,
+    decidedAt: number
+  ): Promise<boolean>;
   recordError(feedbackKey: string, error: string): Promise<void>;
 }
 
@@ -398,7 +404,26 @@ export class AutofixService {
     reason: string,
     decidedAt: number
   ): Promise<AutofixProcessResult> {
-    await this.deps.feedbackStore.markSkipped(feedbackKey, reason, decidedAt);
-    return { kind: "completed", decision: "skipped", reason };
+    if (await this.deps.feedbackStore.markSkipped(feedbackKey, reason, decidedAt)) {
+      return { kind: "completed", decision: "skipped", reason };
+    }
+
+    const winner = await this.deps.feedbackStore.get(feedbackKey);
+    if (winner?.decision === "queued" && winner.messageId) {
+      return {
+        kind: "completed",
+        decision: "queued",
+        reason: winner.reason ?? "already_queued",
+        messageId: winner.messageId,
+      };
+    }
+    if (winner?.decision === "skipped" || winner?.decision === "failed") {
+      return {
+        kind: "completed",
+        decision: winner.decision,
+        reason: winner.reason ?? `already_${winner.decision}`,
+      };
+    }
+    throw new Error(`Autofix feedback lost its terminal transition: ${feedbackKey}`);
   }
 }
