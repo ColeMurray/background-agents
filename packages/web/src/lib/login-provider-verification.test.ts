@@ -13,15 +13,16 @@ describe("login provider post-deploy verification", () => {
   );
 
   it.each([
-    ["github", "<button>Sign in with GitHub</button>", ["github"]],
-    ["google", "<button>Sign in with Google</button>", ["google"]],
+    ["github", '<button data-sign-in-provider="github">Sign in with GitHub</button>', ["github"]],
+    ["google", '<button data-sign-in-provider="google">Sign in with Google</button>', ["google"]],
     [
       "github,google",
-      "<button>Sign in with GitHub</button><button>Sign in with Google</button>",
+      '<button data-sign-in-provider="github">Sign in with GitHub</button>' +
+        '<button data-sign-in-provider="google">Sign in with Google</button>',
       ["github", "google"],
     ],
   ] as const)(
-    "requests /login and accepts the exact %s provider labels",
+    "requests /login and accepts the exact %s provider markers",
     async (value, html, expected) => {
       const fetchImpl = vi.fn().mockResolvedValue(new Response(html));
 
@@ -36,27 +37,55 @@ describe("login provider post-deploy verification", () => {
     }
   );
 
-  it("fails when an expected provider label is missing", async () => {
+  it("fails when an expected provider marker is missing", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValue(new Response("<button>Sign in with GitHub</button>"));
+      .mockResolvedValue(
+        new Response('<button data-sign-in-provider="github">Sign in with GitHub</button>')
+      );
 
     await expect(
       verifyLoginProviders("https://inspect.example", "github,google", fetchImpl)
-    ).rejects.toThrow("Missing login provider: google");
+    ).rejects.toThrow("Rendered login providers do not match");
   });
 
-  it("fails when an unconfigured provider label is rendered", async () => {
+  it("fails when an unconfigured provider marker is rendered", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(`
-        <button>Sign in with GitHub</button>
-        <button>Sign in with Google</button>
+        <button data-sign-in-provider="github">Sign in with GitHub</button>
+        <button data-sign-in-provider="google">Sign in with Google</button>
       `)
     );
 
     await expect(
       verifyLoginProviders("https://inspect.example", "github", fetchImpl)
-    ).rejects.toThrow("Unexpected login provider: google");
+    ).rejects.toThrow("Rendered login providers do not match");
+  });
+
+  it("fails when an unknown provider marker is rendered", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(`
+        <button data-sign-in-provider="github">Sign in with GitHub</button>
+        <button data-sign-in-provider="saml">Sign in</button>
+      `)
+    );
+
+    await expect(
+      verifyLoginProviders("https://inspect.example", "github", fetchImpl)
+    ).rejects.toThrow("Rendered login providers do not match");
+  });
+
+  it("ignores provider presentation text outside a provider marker", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(`
+        <p>Sign in with GitHub</p>
+        <button data-sign-in-provider="google">Sign in with Google</button>
+      `)
+    );
+
+    await expect(
+      verifyLoginProviders("https://inspect.example", "google", fetchImpl)
+    ).resolves.toEqual(["google"]);
   });
 
   it("fails without including an upstream response body", async () => {

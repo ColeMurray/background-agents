@@ -1,30 +1,40 @@
 #!/usr/bin/env node
 
 import { pathToFileURL } from "node:url";
+import { parse } from "parse5";
 
-const PROVIDERS = [
-  ["github", "Sign in with GitHub"],
-  ["google", "Sign in with Google"],
-];
+const PROVIDERS = ["github", "google"];
+const PROVIDER_MARKER = "data-sign-in-provider";
 const LOGIN_REQUEST_TIMEOUT_MS = 10_000;
 
 export function parseExpectedProviders(value) {
   const providers = value.split(",");
-  const canonical = PROVIDERS.map(([provider]) => provider).filter((provider) =>
-    providers.includes(provider)
-  );
+  const canonical = PROVIDERS.filter((provider) => providers.includes(provider));
 
   if (
     providers.length === 0 ||
     providers.some((provider) => provider === "") ||
     new Set(providers).size !== providers.length ||
-    providers.some((provider) => !PROVIDERS.some(([known]) => known === provider)) ||
+    providers.some((provider) => !PROVIDERS.includes(provider)) ||
     canonical.join(",") !== value
   ) {
     throw new Error("Expected providers must be github, google, or github,google");
   }
 
   return providers;
+}
+
+function collectRenderedProviders(html) {
+  const rendered = [];
+
+  function visit(node) {
+    const marker = node.attrs?.find((attribute) => attribute.name === PROVIDER_MARKER);
+    if (marker) rendered.push(marker.value);
+    for (const child of node.childNodes ?? []) visit(child);
+  }
+
+  visit(parse(html));
+  return rendered;
 }
 
 export async function verifyLoginProviders(webUrl, expectedValue, fetchImpl = fetch) {
@@ -52,14 +62,12 @@ export async function verifyLoginProviders(webUrl, expectedValue, fetchImpl = fe
   }
 
   const html = await response.text();
-  for (const [provider, label] of PROVIDERS) {
-    const rendered = html.includes(label);
-    if (expected.includes(provider) && !rendered) {
-      throw new Error(`Missing login provider: ${provider}`);
-    }
-    if (!expected.includes(provider) && rendered) {
-      throw new Error(`Unexpected login provider: ${provider}`);
-    }
+  const rendered = collectRenderedProviders(html);
+  if (
+    rendered.length !== expected.length ||
+    rendered.some((provider, index) => provider !== expected[index])
+  ) {
+    throw new Error("Rendered login providers do not match expected providers");
   }
 
   return expected;

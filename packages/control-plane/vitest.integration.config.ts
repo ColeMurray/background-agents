@@ -83,7 +83,7 @@ export default defineConfig({
     include: ["test/integration/**/*.test.ts"],
     setupFiles: ["test/integration/apply-migrations.ts"],
     onUnhandledError(error) {
-      // Better Auth implements redirects and expected error responses as thrown
+      // Better Auth implements redirects and invalid-token responses as thrown
       // APIError values. Its handler catches and converts them to HTTP responses,
       // but the Workers pool reports the intermediate rejection as unhandled.
       const betterAuthStack =
@@ -103,8 +103,7 @@ export default defineConfig({
         "statusCode" in error &&
         typeof error.statusCode === "number" &&
         ((error.statusCode >= 300 && error.statusCode < 400) ||
-          (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN") ||
-          (error.statusCode === 404 && betterAuthErrorCode === "PROVIDER_NOT_FOUND")) &&
+          (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN")) &&
         betterAuthStack?.includes("/better-auth/dist/api/routes/")
       ) {
         return false;
