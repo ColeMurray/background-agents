@@ -6,7 +6,7 @@
  * matching `SERVICE_AUTH_SECRET_<SERVICE>` (see TEST_SERVICE_SECRETS).
  */
 
-import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
+import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 
 /** Per-service secrets for unit-test env fixtures, mirrored by signedServiceRequest. */
 export const TEST_SERVICE_SECRETS = {

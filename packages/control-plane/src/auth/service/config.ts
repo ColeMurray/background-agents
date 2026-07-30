@@ -1,4 +1,4 @@
-import type { ServiceName } from "@open-inspect/shared";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 
 /** The per-service verification keys held by the control plane. */
 export interface ServiceKeyEnv {

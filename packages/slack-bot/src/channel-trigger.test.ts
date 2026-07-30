@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Preserve unrelated root exports in this module mock.
 import type * as SharedModule from "@open-inspect/shared";
 import type { Env } from "./types";
 

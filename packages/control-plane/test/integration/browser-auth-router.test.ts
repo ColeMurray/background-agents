@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
+import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import { describe, expect, it } from "vitest";
 import { handleRequest } from "../../src/router";
 import type { Env } from "../../src/types";

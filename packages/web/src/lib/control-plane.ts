@@ -5,7 +5,7 @@
  * vs. URL-based fetch) to `control-plane-transport.ts`.
  */
 
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { cookies } from "next/headers";
 import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "@/lib/control-plane-transport";

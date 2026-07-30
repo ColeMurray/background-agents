@@ -1,4 +1,4 @@
-import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/headers", () => ({

@@ -6,7 +6,7 @@ import {
   SERVICE_HEADER,
   SERVICE_SIGNATURE_HEADER,
   type ServiceName,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/service-auth";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";

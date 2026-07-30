@@ -1,8 +1,5 @@
-import {
-  BROWSER_AUTH_CLIENT_IP_HEADER,
-  buildServiceAuthHeaders,
-  isBrowserAuthProxyRoute,
-} from "@open-inspect/shared";
+import { BROWSER_AUTH_CLIENT_IP_HEADER, isBrowserAuthProxyRoute } from "@open-inspect/shared";
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
 
 const REQUEST_HEADERS = [

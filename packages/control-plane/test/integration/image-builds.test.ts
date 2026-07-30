@@ -9,7 +9,7 @@
  * deployment, and the SCM-less harness split is the same as PR-4/PR-8.
  */
 
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { ImageBuildStore } from "../../src/db/image-builds";

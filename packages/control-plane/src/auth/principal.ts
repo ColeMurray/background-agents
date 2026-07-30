@@ -7,7 +7,7 @@
  * resolved identity.
  */
 
-import type { ServiceName } from "@open-inspect/shared";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 
 /** Actor namespaces bots may assert (`slack:U123` etc.). */
 export const ACTOR_NAMESPACES = ["slack", "github", "linear"] as const;

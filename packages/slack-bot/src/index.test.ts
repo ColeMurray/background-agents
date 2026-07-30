@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Env } from "./types";
+// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Preserve unrelated root exports in this module mock.
 import type * as SharedModule from "@open-inspect/shared";
 
 const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo } = vi.hoisted(

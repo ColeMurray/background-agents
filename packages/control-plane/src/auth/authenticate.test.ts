@@ -5,7 +5,7 @@ import {
   SERVICE_HEADER,
   SERVICE_SIGNATURE_HEADER,
   type ServiceName,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/service-auth";
 import { generateInternalToken } from "@open-inspect/shared/auth";
 
 import { authenticate, isAuthError, SERVICE_REQUEST_MAX_BODY_BYTES } from "./authenticate";

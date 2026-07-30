@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
-import { buildServiceAuthHeaders, isCanonicalUserId } from "@open-inspect/shared";
+import { isCanonicalUserId } from "@open-inspect/shared";
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserAuth } from "../../src/auth/user/runtime";
 import { resolveGitHubCredentialAuthority } from "../../src/source-control/github-credential-authority";

@@ -9,7 +9,8 @@
  * can run the steps out of order or skip one.
  */
 
-import type { AutomationEventSource, ServiceName, SpawnSource } from "@open-inspect/shared";
+import type { AutomationEventSource, SpawnSource } from "@open-inspect/shared";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 
 import { createLogger } from "./../logger";
 import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
