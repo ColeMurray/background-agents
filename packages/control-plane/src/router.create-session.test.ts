@@ -134,6 +134,27 @@ describe("handleCreateSession D1 ordering", () => {
     expect(resolveRepoOrError).not.toHaveBeenCalled();
   });
 
+  it("returns an existing session for a repeated idempotency key", async () => {
+    const get = vi.fn(async () => ({ id: "existing", status: "created" }));
+    const create = vi.fn();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { get, create } as never;
+    });
+    const initFetch = vi.fn();
+
+    const response = await createSessionRequestWithBody(createEnv(initFetch), {
+      repoOwner: "Acme",
+      repoName: "Web-App",
+      idempotencyKey: "linear:org-1:agent-session-1",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ status: "created" });
+    expect(get).toHaveBeenCalledOnce();
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
+  });
+
   it("rejects non-object create-session JSON before resolving the repo", async () => {
     const response = await invalidCreateSessionRequest("null");
 

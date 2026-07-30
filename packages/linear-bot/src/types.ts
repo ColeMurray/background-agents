@@ -12,6 +12,12 @@ export interface Env {
   // KV namespace for config, runtime-token cache, and issue-to-session mapping
   LINEAR_KV: KVNamespace;
 
+  // Strongly consistent delivery leases and completion records
+  DB: D1Database;
+
+  // Durable handoff for verified Linear webhook deliveries
+  LINEAR_WEBHOOK_QUEUE: Queue<LinearWebhookJob>;
+
   // Service binding to control plane
   CONTROL_PLANE: Fetcher;
 
@@ -35,6 +41,13 @@ export interface Env {
   ANTHROPIC_API_KEY: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
+}
+
+export interface LinearWebhookJob {
+  version: 1;
+  deliveryId: string;
+  traceId: string;
+  payload: AgentSessionWebhook;
 }
 
 // ─── Repo / Config Types ─────────────────────────────────────────────────────

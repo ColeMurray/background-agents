@@ -7,12 +7,14 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
+import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
+import type { Principal } from "../auth/principal";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -33,6 +35,20 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 
+function principalIdempotencyNamespace(principal: Principal): string {
+  if (principal.kind === "user") return `user:${principal.userId}`;
+  if (principal.kind === "sandbox") return `sandbox:${principal.sessionId}`;
+  return `service:${principal.service}:${principal.actor?.participantUserId ?? "service"}`;
+}
+
+async function idempotentSessionId(principal: Principal, idempotencyKey: string): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    `${principalIdempotencyNamespace(principal)}:${idempotencyKey}`
+  );
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function handleCreateSession(
   request: Request,
   env: Env,
@@ -49,6 +65,16 @@ async function handleCreateSession(
   const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  let sessionId = generateId();
+  if (body.idempotencyKey && ctx.principal) {
+    sessionId = await idempotentSessionId(ctx.principal, body.idempotencyKey);
+    const existing = await new SessionIndexStore(ctx.db).get(sessionId);
+    if (existing && existing.status !== "failed") {
+      const result: CreateSessionResponse = { sessionId, status: existing.status };
+      return json(result, 200);
+    }
+  }
 
   let repositoryContext: RepositoryPair | null;
   try {
@@ -180,8 +206,6 @@ async function handleCreateSession(
     scopeMembers,
     environmentId
   );
-
-  const sessionId = generateId();
 
   const input: SessionInitInput = {
     sessionId,

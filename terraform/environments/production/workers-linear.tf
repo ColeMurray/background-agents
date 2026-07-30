@@ -2,6 +2,13 @@
 # Linear Bot Worker
 # =============================================================================
 
+resource "cloudflare_queue" "linear_webhook_delivery" {
+  count = var.enable_linear_bot ? 1 : 0
+
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-linear-webhook-${local.name_suffix}"
+}
+
 # Build linear-bot worker bundle (only runs during apply, not plan)
 resource "null_resource" "linear_bot_build" {
   count = var.enable_linear_bot ? 1 : 0
@@ -32,6 +39,13 @@ module "linear_bot_worker" {
     }
   ]
 
+  d1_databases = [
+    {
+      binding_name = "DB"
+      database_id  = cloudflare_d1_database.main.id
+    }
+  ]
+
   service_bindings = [
     {
       binding_name = "CONTROL_PLANE"
@@ -40,6 +54,13 @@ module "linear_bot_worker" {
   ]
 
   enable_service_bindings = var.enable_service_bindings
+
+  queue_bindings = [
+    {
+      binding_name = "LINEAR_WEBHOOK_QUEUE"
+      queue_name   = cloudflare_queue.linear_webhook_delivery[0].queue_name
+    }
+  ]
 
   plain_text_bindings = [
     { name = "CONTROL_PLANE_URL", value = local.control_plane_url },
@@ -62,5 +83,27 @@ module "linear_bot_worker" {
   compatibility_date  = "2024-09-23"
   compatibility_flags = ["nodejs_compat"]
 
-  depends_on = [null_resource.linear_bot_build[0], module.linear_kv[0]]
+  depends_on = [
+    null_resource.linear_bot_build[0],
+    null_resource.d1_migrations,
+    module.linear_kv[0]
+  ]
+}
+
+resource "cloudflare_queue_consumer" "linear_webhook_delivery" {
+  count = var.enable_linear_bot ? 1 : 0
+
+  account_id  = var.cloudflare_account_id
+  queue_id    = cloudflare_queue.linear_webhook_delivery[0].queue_id
+  type        = "worker"
+  script_name = module.linear_bot_worker[0].worker_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 1
+    max_retries      = 3
+    retry_delay      = 15
+  }
+
+  depends_on = [module.linear_bot_worker]
 }

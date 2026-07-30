@@ -377,6 +377,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(body).toMatchObject({
       environmentId: "env_abc",
       title: "ENG-42: Wire the fullstack flow",
+      idempotencyKey: "linear:org-1:agent-session-1",
     });
     // Identity travels via the signed actor assertion, never the body.
     expect(body).not.toHaveProperty("spawnSource");
@@ -413,27 +414,31 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(tokenBody.has("refresh_token")).toBe(false);
   });
 
-  it("does not store or prompt when the create-session response is malformed", async () => {
-    const result = await runWithCreateSessionResponse(
-      Response.json({ id: "session-xyz" }),
-      "trace-malformed-session"
-    );
-
-    expect(result.issueSessionStored).toBe(false);
-    expect(result.requestedUrls).not.toContain("https://internal/sessions/session-xyz/prompt");
+  it("retries when the create-session response is malformed", async () => {
+    await expect(
+      runWithCreateSessionResponse(Response.json({ id: "session-xyz" }), "trace-malformed-session")
+    ).rejects.toThrow("Retryable control-plane session creation failure: 200");
   });
 
-  it("does not store or prompt when the create-session response is invalid JSON", async () => {
-    const result = await runWithCreateSessionResponse(
-      new Response("{not-json", {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      }),
-      "trace-invalid-json-session"
-    );
+  it("retries when the create-session response is invalid JSON", async () => {
+    await expect(
+      runWithCreateSessionResponse(
+        new Response("{not-json", {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        }),
+        "trace-invalid-json-session"
+      )
+    ).rejects.toThrow("Retryable control-plane session creation failure: 201");
+  });
 
-    expect(result.issueSessionStored).toBe(false);
-    expect(result.requestedUrls).not.toContain("https://internal/sessions/session-xyz/prompt");
+  it("throws retryable control-plane session creation failures", async () => {
+    await expect(
+      runWithCreateSessionResponse(
+        Response.json({ error: "unavailable" }, { status: 503 }),
+        "trace-retry-session"
+      )
+    ).rejects.toThrow("Retryable control-plane session creation failure: 503");
   });
 
   it("creates an environment session from a label-matched team mapping", async () => {

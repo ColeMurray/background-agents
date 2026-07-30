@@ -38,6 +38,10 @@ import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-
 
 const log = createLogger("handler");
 
+function isRetryableControlPlaneStatus(status: number): boolean {
+  return status === 429 || status >= 500 || status < 400;
+}
+
 const sessionEventsSummaryResponseSchema = z.object({
   events: z.array(
     z.object({
@@ -145,6 +149,7 @@ async function createSession(
     actorUserId?: string;
     actorDisplayName?: string;
     actorEmail?: string;
+    idempotencyKey: string;
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
@@ -154,6 +159,7 @@ async function createSession(
     title: params.title,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
+    idempotencyKey: params.idempotencyKey,
     actorDisplayName: params.actorDisplayName,
     actorEmail: params.actorEmail,
   });
@@ -338,7 +344,8 @@ async function handleFollowUp(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
   env: Env,
-  traceId: string
+  traceId: string,
+  deliveryId?: string
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
@@ -412,6 +419,7 @@ async function handleFollowUp(
     }),
     source: "linear",
     callbackContext,
+    idempotencyKey: deliveryId ? `linear-webhook:${deliveryId}` : undefined,
   });
   const promptRes = await signedControlPlaneFetch(env, {
     method: "POST",
@@ -431,6 +439,9 @@ async function handleFollowUp(
       type: "error",
       body: "Failed to send follow-up to the existing session.",
     });
+    if (isRetryableControlPlaneStatus(promptRes.status)) {
+      throw new Error(`Retryable control-plane follow-up failure: ${promptRes.status}`);
+    }
   }
 
   log.info("agent_session.followup", {
@@ -446,7 +457,8 @@ async function handleNewSession(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
   env: Env,
-  traceId: string
+  traceId: string,
+  deliveryId?: string
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
@@ -568,6 +580,7 @@ async function handleNewSession(
       actorUserId: sessionActorUserId,
       actorDisplayName,
       actorEmail,
+      idempotencyKey: `linear:${webhook.organizationId}:${agentSessionId}`,
     },
     traceId
   );
@@ -585,6 +598,9 @@ async function handleNewSession(
       response_body: sessionResult.body.slice(0, 500),
       duration_ms: Date.now() - startTime,
     });
+    if (isRetryableControlPlaneStatus(sessionResult.status)) {
+      throw new Error(`Retryable control-plane session creation failure: ${sessionResult.status}`);
+    }
     return;
   }
 
@@ -632,6 +648,7 @@ async function handleNewSession(
     content: prompt,
     source: "linear",
     callbackContext,
+    idempotencyKey: deliveryId ? `linear-webhook:${deliveryId}` : undefined,
   });
   const promptRes = await signedControlPlaneFetch(env, {
     method: "POST",
@@ -660,6 +677,9 @@ async function handleNewSession(
       response_body: promptErrBody.slice(0, 500),
       duration_ms: Date.now() - startTime,
     });
+    if (isRetryableControlPlaneStatus(promptRes.status)) {
+      throw new Error(`Retryable control-plane prompt failure: ${promptRes.status}`);
+    }
     return;
   }
 
@@ -685,7 +705,8 @@ async function handleNewSession(
 export async function handleAgentSessionEvent(
   webhook: AgentSessionWebhook,
   env: Env,
-  traceId: string
+  traceId: string,
+  deliveryId?: string
 ): Promise<void> {
   const agentSessionId = webhook.agentSession.id;
   const issue = webhook.agentSession.issue;
@@ -717,11 +738,11 @@ export async function handleAgentSessionEvent(
   // Follow-up handling (action: "prompted" with existing session)
   const existingSession = await lookupIssueSession(env, issue.id);
   if (existingSession && webhook.action === "prompted") {
-    return handleFollowUp(webhook, issue, env, traceId);
+    return handleFollowUp(webhook, issue, env, traceId, deliveryId);
   }
 
   // New session
-  return handleNewSession(webhook, issue, env, traceId);
+  return handleNewSession(webhook, issue, env, traceId, deliveryId);
 }
 
 // ─── Prompt Builder ──────────────────────────────────────────────────────────

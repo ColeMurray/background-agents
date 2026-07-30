@@ -23,7 +23,7 @@ vi.mock("./webhook-handler", async (importOriginal) => {
   };
 });
 
-const { default: app } = await import("./index");
+const { default: worker } = await import("./index");
 
 function makeAgentSessionPayload(webhookId = "webhook-config-1") {
   return {
@@ -54,6 +54,17 @@ async function makeWebhookRequest(payload: unknown, deliveryId?: string): Promis
   });
 }
 
+async function makeRawWebhookRequest(body: string): Promise<Request> {
+  return new Request("http://localhost/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "linear-signature": await signLinearWebhookRequest(body),
+    },
+    body,
+  });
+}
+
 describe("POST /webhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,7 +74,7 @@ describe("POST /webhook", () => {
     const { kv } = createFakeKV();
     const ctx = makeExecutionContext();
 
-    const res = await app.fetch(
+    const res = await worker.fetch(
       await makeWebhookRequest(makeAgentSessionPayload()),
       makeLinearBotEnv(kv),
       ctx
@@ -77,24 +88,27 @@ describe("POST /webhook", () => {
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
 
-  it("deduplicates AgentSessionEvent deliveries by Linear-Delivery header", async () => {
+  it("durably enqueues AgentSessionEvent deliveries before acknowledging", async () => {
     const { kv, putCalls } = createFakeKV();
     const env = makeLinearBotEnv(kv);
     const ctx = makeExecutionContext();
     const payload = makeAgentSessionPayload();
 
-    const firstRes = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
-    const duplicateRes = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
+    const firstRes = await worker.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
+    const duplicateRes = await worker.fetch(
+      await makeWebhookRequest(payload, "delivery-1"),
+      env,
+      ctx
+    );
 
     expect(firstRes.status).toBe(200);
     expect(await firstRes.json()).toEqual({ ok: true });
     expect(duplicateRes.status).toBe(200);
-    expect(await duplicateRes.json()).toEqual({ ok: true, skipped: true, reason: "duplicate" });
-    expect(ctx.waitUntil).toHaveBeenCalledOnce();
-    expect(mocks.handleAgentSessionEvent).toHaveBeenCalledOnce();
-    expect(putCalls).toEqual([
-      { key: "event:delivery-1", value: "1", options: { expirationTtl: 3600 } },
-    ]);
+    expect(await duplicateRes.json()).toEqual({ ok: true });
+    expect(env.LINEAR_WEBHOOK_QUEUE.send).toHaveBeenCalledTimes(2);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+    expect(putCalls).toEqual([]);
   });
 
   it("does not treat distinct Linear-Delivery headers with the same webhookId as duplicates", async () => {
@@ -103,16 +117,17 @@ describe("POST /webhook", () => {
     const ctx = makeExecutionContext();
     const payload = makeAgentSessionPayload("stable-webhook-config-id");
 
-    const firstRes = await app.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
-    const secondRes = await app.fetch(await makeWebhookRequest(payload, "delivery-2"), env, ctx);
+    const firstRes = await worker.fetch(await makeWebhookRequest(payload, "delivery-1"), env, ctx);
+    const secondRes = await worker.fetch(await makeWebhookRequest(payload, "delivery-2"), env, ctx);
 
     expect(firstRes.status).toBe(200);
     expect(await firstRes.json()).toEqual({ ok: true });
     expect(secondRes.status).toBe(200);
     expect(await secondRes.json()).toEqual({ ok: true });
-    expect(ctx.waitUntil).toHaveBeenCalledTimes(2);
-    expect(mocks.handleAgentSessionEvent).toHaveBeenCalledTimes(2);
-    expect(putCalls.map((call) => call.key)).toEqual(["event:delivery-1", "event:delivery-2"]);
+    expect(env.LINEAR_WEBHOOK_QUEUE.send).toHaveBeenCalledTimes(2);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+    expect(putCalls).toEqual([]);
   });
 
   it("rejects malformed AgentSessionEvent payloads before dedupe", async () => {
@@ -126,7 +141,7 @@ describe("POST /webhook", () => {
       agentSession: {},
     };
 
-    const res = await app.fetch(
+    const res = await worker.fetch(
       await makeWebhookRequest(payload, "delivery-1"),
       makeLinearBotEnv(kv),
       ctx
@@ -137,6 +152,42 @@ describe("POST /webhook", () => {
     expect(kv.get).not.toHaveBeenCalled();
     expect(kv.put).not.toHaveBeenCalled();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects signed invalid JSON without throwing", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv);
+
+    const res = await worker.fetch(
+      await makeRawWebhookRequest("{not-json"),
+      env,
+      makeExecutionContext()
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "Invalid JSON" });
+    expect(env.LINEAR_WEBHOOK_QUEUE.send).not.toHaveBeenCalled();
+  });
+
+  it("returns 503 without acknowledging when durable enqueue fails", async () => {
+    const { kv } = createFakeKV();
+    const env = makeLinearBotEnv(kv, {
+      LINEAR_WEBHOOK_QUEUE: {
+        send: vi.fn(async () => {
+          throw new Error("queue unavailable");
+        }),
+      } as unknown as Queue,
+    });
+
+    const res = await worker.fetch(
+      await makeWebhookRequest(makeAgentSessionPayload(), "delivery-1"),
+      env,
+      makeExecutionContext()
+    );
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({ error: "Webhook enqueue failed" });
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
   });
 });
@@ -162,7 +213,7 @@ describe("GET /oauth/callback", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const response = await app.fetch(
+    const response = await worker.fetch(
       new Request("http://localhost/oauth/callback?code=authorization-code"),
       env,
       makeExecutionContext()
@@ -199,7 +250,7 @@ describe("GET /oauth/callback", () => {
       })
     );
 
-    const response = await app.fetch(
+    const response = await worker.fetch(
       new Request("http://localhost/oauth/callback?code=authorization-code"),
       makeLinearBotEnv(kv),
       makeExecutionContext()
@@ -225,7 +276,7 @@ describe("GET /oauth/callback", () => {
       })
     );
 
-    const response = await app.fetch(
+    const response = await worker.fetch(
       new Request("http://localhost/oauth/callback?code=authorization-code"),
       makeLinearBotEnv(kv),
       makeExecutionContext()

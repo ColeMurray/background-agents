@@ -53,6 +53,7 @@ interface EnqueuePromptCoreData {
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
+  messageId?: string;
 }
 
 interface EnqueuedPrompt {
@@ -357,6 +358,13 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
+    const idempotentMessageId = data.idempotencyKey
+      ? `idempotent:${data.idempotencyKey}`
+      : undefined;
+    if (idempotentMessageId && this.repository.hasMessage(idempotentMessageId)) {
+      return { messageId: idempotentMessageId, status: "queued" };
+    }
+
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;
@@ -398,6 +406,7 @@ export class SessionMessageQueue {
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
+      messageId: idempotentMessageId,
     });
 
     await this.processMessageQueue();
@@ -411,7 +420,7 @@ export class SessionMessageQueue {
       this.attachmentRepository
     );
     const attachments = resolvedAttachments?.attachments;
-    const messageId = generateId();
+    const messageId = data.messageId ?? generateId();
     const now = Date.now();
 
     let messageModel: string | null = null;

@@ -11,6 +11,20 @@ compatibility_flags = ["nodejs_compat"]
 binding = "LINEAR_KV"
 id = ""  # Fill in after creating: wrangler kv namespace create LINEAR_KV
 
+[[d1_databases]]
+binding = "DB"
+database_name = "open-inspect-dev"
+database_id = "" # Fill in with the control-plane D1 database id
+
+[[queues.producers]]
+binding = "LINEAR_WEBHOOK_QUEUE"
+queue = "open-inspect-linear-webhook-dev"
+
+[[queues.consumers]]
+queue = "open-inspect-linear-webhook-dev"
+max_batch_size = 1
+max_retries = 3
+
 # Service binding to control plane (for local dev, use fetch URL instead)
 # [[services]]
 # binding = "CONTROL_PLANE"

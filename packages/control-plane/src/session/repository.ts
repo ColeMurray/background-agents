@@ -789,6 +789,11 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
+  hasMessage(messageId: string): boolean {
+    const result = this.sql.exec("SELECT 1 FROM messages WHERE id = ? LIMIT 1", messageId);
+    return result.toArray().length > 0;
+  }
+
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
       `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
