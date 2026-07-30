@@ -621,9 +621,9 @@ a linked GitHub identity).
 3. On the OAuth consent screen, request only the `openid`, `email`, and `profile` scopes — these are
    non-sensitive, so Google requires no app-verification review.
 4. Set `google_client_id` and `google_client_secret` (both required together), and add at least one
-   allowed user to `allowed_emails` (exact addresses) or `allowed_email_domains`. Terraform derives
-   `NEXT_PUBLIC_GOOGLE_ENABLED` automatically when both credentials are present, which reveals the
-   "Sign in with Google" button.
+   allowed user to `allowed_emails` (exact addresses) or `allowed_email_domains`. The next request
+   to `/login` shows Google after both credentials are deployed; the web does not need a separate
+   provider flag or rebuild.
 
 > **Security note**: Google sign-in is admitted only for **verified** emails that match an
 > allowlist. Because addresses on shared domains like `gmail.com` are generic, prefer

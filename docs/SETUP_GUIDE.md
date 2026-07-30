@@ -75,10 +75,6 @@ cp packages/web/.env.example packages/web/.env.local
 Edit `packages/web/.env.local`:
 
 ```bash
-# Match the providers configured on the development control plane. This value
-# is inlined at build time, so restart the dev server after changing it.
-NEXT_PUBLIC_GOOGLE_ENABLED=
-
 # Development control-plane endpoints
 CONTROL_PLANE_URL=https://open-inspect-control-plane-<name>.<subdomain>.workers.dev
 NEXT_PUBLIC_WS_URL=wss://open-inspect-control-plane-<name>.<subdomain>.workers.dev
@@ -104,8 +100,7 @@ so configure `github_client_id` and `github_client_secret`—and, when enabled, 
 `google_client_secret`—on the development control plane through Terraform. See
 [Create GitHub App](GETTING_STARTED.md#step-3-create-github-app) and
 [Enable Google Login](GETTING_STARTED.md#enable-google-login-optional) for the complete provider
-setup. `NEXT_PUBLIC_GOOGLE_ENABLED` only controls whether the web UI offers Google sign-in and must
-match the providers configured on the control plane.
+setup. The `/login` page reads the enabled provider set from the control plane at request time.
 
 If you are using someone else's deployed backend, do not generate your own `SERVICE_AUTH_SECRET`.
 Use the web service secret configured in that backend deployment (the control plane only accepts

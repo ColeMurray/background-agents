@@ -77,14 +77,12 @@ Create `.env.local`:
 CONTROL_PLANE_URL=http://localhost:8787
 NEXT_PUBLIC_WS_URL=ws://localhost:8787
 SERVICE_AUTH_SECRET=your_web_service_sig1_secret
-
-# Match the control plane's enabled providers
-NEXT_PUBLIC_GOOGLE_ENABLED=false
 ```
 
 The web app is a framework-free BFF. It signs requests with `SERVICE_AUTH_SECRET`, forwards only
 Better Auth's opaque session cookie, and does not hold OAuth provider credentials or admission
-policy. Configure those on the control plane through Terraform.
+policy. Configure those on the control plane through Terraform; `/login` resolves the enabled
+provider set from that authority at request time.
 
 ### Development
 

@@ -167,9 +167,9 @@ Then in `terraform.tfvars`:
 - Add at least one entry to `allowed_emails` (exact addresses, e.g. `pm@gmail.com`) or
   `allowed_email_domains`. Prefer `allowed_emails` for shared domains like gmail.com.
 
-Terraform derives `NEXT_PUBLIC_GOOGLE_ENABLED` automatically when both Google credentials are set,
-which reveals the "Sign in with Google" button. Google users get the same flat access; their PRs
-fall back to the App bot unless the same verified email is also a linked GitHub identity.
+The next request to `/login` shows Google after both credentials are deployed; no separate web flag
+or rebuild is required. Google users get the same flat access; their PRs fall back to the App bot
+unless the same verified email is also a linked GitHub identity.
 
 ## Phase 5: Slack App Setup (If Enabled)
 
