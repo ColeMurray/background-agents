@@ -639,6 +639,26 @@ describe("ModalSandboxProvider", () => {
       );
     });
 
+    it("preserves Modal API errors from image-build snapshots as the provider cause", async () => {
+      const modalError = new ModalApiError("Modal API error: 429 Too Many Requests", 429);
+      const provider = new ModalSandboxProvider(
+        createMockModalClient({
+          snapshotBuildSandbox: vi.fn(async () => {
+            throw modalError;
+          }),
+        })
+      );
+
+      await expect(
+        provider.snapshotImageBuildSandbox({
+          buildId: "imgb-1",
+          providerSessionId: "modal-session-1",
+        })
+      ).rejects.toMatchObject({
+        cause: modalError,
+      });
+    });
+
     it("returns providerObjectId from restoreFromSnapshot", async () => {
       const client = createMockModalClient({
         restoreSandbox: vi.fn(async () => ({
