@@ -97,9 +97,11 @@ export class AdmissionPolicy {
     const hasConfiguredAllowlist = hasProviderNeutralAdmission || hasGitHubAdmission;
 
     if (!hasConfiguredAllowlist && this.config.unsafeAllowAllUsers) return true;
-    return provider === "github"
-      ? hasProviderNeutralAdmission || hasGitHubAdmission
-      : hasProviderNeutralAdmission;
+    const providerSupport: Readonly<Record<SignInProvider, boolean>> = {
+      github: hasProviderNeutralAdmission || hasGitHubAdmission,
+      google: hasProviderNeutralAdmission,
+    };
+    return providerSupport[provider];
   }
 
   async requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision> {

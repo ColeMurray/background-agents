@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   dispatchControlPlaneFetch: vi.fn(),
+  getControlPlaneUrl: vi.fn(),
 }));
 
 vi.mock("./control-plane-transport", () => ({
   dispatchControlPlaneFetch: mocks.dispatchControlPlaneFetch,
-  getControlPlaneUrl: () => "https://control-plane.example",
+  getControlPlaneUrl: mocks.getControlPlaneUrl,
 }));
 
 import { dispatchWebServiceRequest } from "./control-plane-service";
@@ -22,6 +23,7 @@ describe("dispatchWebServiceRequest", () => {
       SERVICE_AUTH_SECRET: "web-service-secret",
     };
     mocks.dispatchControlPlaneFetch.mockResolvedValue(Response.json({ ok: true }));
+    mocks.getControlPlaneUrl.mockReturnValue("https://control-plane.example");
   });
 
   afterEach(() => {
@@ -36,6 +38,7 @@ describe("dispatchWebServiceRequest", () => {
       path: "/internal/example?mode=test",
       headers: {
         Authorization: "Bearer caller-controlled",
+        "X-OpenInspect-Actor": "caller-controlled",
         "X-OpenInspect-Service": "modal",
         "X-OpenInspect-Service-Signature": "caller-controlled",
       },
@@ -58,6 +61,7 @@ describe("dispatchWebServiceRequest", () => {
 
     const sentHeaders = new Headers(init?.headers);
     expect(sentHeaders.get("Authorization")).toBeNull();
+    expect(sentHeaders.get("X-OpenInspect-Actor")).toBeNull();
     expect(sentHeaders.get("X-OpenInspect-Service")).toBe("web");
     expect(sentHeaders.get("X-OpenInspect-Service-Signature")).toMatch(/^sig1\./);
     expect(sentHeaders.get("X-Trace-Id")).toBe("trace-1");
@@ -82,6 +86,80 @@ describe("dispatchWebServiceRequest", () => {
         body: new URLSearchParams({ provider: "github" }),
       })
     ).rejects.toThrow("Unsupported control-plane request body");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request target that is not an absolute path", async () => {
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "@attacker.example/",
+      })
+    ).rejects.toThrow("Control-plane request path must be an absolute path");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a protocol-relative request target", async () => {
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "//control-plane.example/internal/example",
+      })
+    ).rejects.toThrow("Control-plane request path must start with exactly one slash");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects credentials in the configured control-plane URL", async () => {
+    mocks.getControlPlaneUrl.mockReturnValue(
+      "https://caller-controlled:secret@control-plane.example"
+    );
+
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "/internal/example",
+      })
+    ).rejects.toThrow("Control-plane URL must not include credentials");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a backslash-based request target", async () => {
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "/\\attacker.example/",
+      })
+    ).rejects.toThrow("Control-plane request path must not include backslashes");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a request target with a fragment", async () => {
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "/internal/example#unsigned-fragment",
+      })
+    ).rejects.toThrow("Control-plane request path must not include a fragment");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty fragment delimiter", async () => {
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "/internal/example#",
+      })
+    ).rejects.toThrow("Control-plane request path must not include a fragment");
+    expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an encoded backslash in a request target", async () => {
+    await expect(
+      dispatchWebServiceRequest({
+        method: "GET",
+        path: "/%5c%5cattacker.example/",
+      })
+    ).rejects.toThrow("Control-plane request path must not include encoded backslashes");
     expect(mocks.dispatchControlPlaneFetch).not.toHaveBeenCalled();
   });
 });

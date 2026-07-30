@@ -59,25 +59,26 @@ export function parsePublicWebOrigin(value: string | undefined): string {
   return url.origin;
 }
 
-interface ProviderCredentials {
-  readonly id: SignInProvider;
+interface OAuthCredentials {
   readonly clientId: string;
   readonly clientSecret: string;
 }
+
+type ProviderCredentials = Readonly<Record<SignInProvider, OAuthCredentials | null>>;
 
 interface NormalizedUserAuthConfig {
   readonly publicWebOrigin: string;
   readonly secret: string;
   readonly appName: string;
   readonly admission: AdmissionPolicyConfig;
-  readonly providers: readonly ProviderCredentials[];
+  readonly providers: ProviderCredentials;
 }
 
 function normalizeProviderCredentials(
   id: SignInProvider,
   clientIdValue: string | undefined,
   clientSecretValue: string | undefined
-): ProviderCredentials | null {
+): OAuthCredentials | null {
   const clientId = clientIdValue?.trim();
   const clientSecret = clientSecretValue?.trim();
   if (Boolean(clientId) !== Boolean(clientSecret)) {
@@ -86,7 +87,7 @@ function normalizeProviderCredentials(
       `${prefix}_CLIENT_ID and ${prefix}_CLIENT_SECRET must be configured together`
     );
   }
-  return clientId && clientSecret ? { id, clientId, clientSecret } : null;
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
 }
 
 function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
@@ -97,15 +98,11 @@ function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
     );
   }
 
-  const credentials: Record<SignInProvider, ProviderCredentials | null> = {
+  const providers: ProviderCredentials = Object.freeze({
     github: normalizeProviderCredentials("github", env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET),
     google: normalizeProviderCredentials("google", env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET),
-  };
-  const providers = SIGN_IN_PROVIDERS.flatMap((id) => {
-    const provider = credentials[id];
-    return provider ? [provider] : [];
   });
-  if (providers.length === 0) {
+  if (!SIGN_IN_PROVIDERS.some((provider) => providers[provider] !== null)) {
     throw new UserAuthConfigurationError(
       "At least one sign-in provider must be configured: set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET"
     );
@@ -122,7 +119,63 @@ function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
       allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
       unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
     },
-    providers: Object.freeze(providers),
+    providers,
+  };
+}
+
+const UNSUPPORTED_ADMISSION_MESSAGE: Readonly<Record<SignInProvider, string>> = {
+  github:
+    "GitHub sign-in has no compatible admission policy; configure a GitHub-specific or provider-neutral admission rule, or UNSAFE_ALLOW_ALL_USERS",
+  google:
+    "Google sign-in requires provider-neutral admission through ALLOWED_EMAILS, ALLOWED_EMAIL_DOMAINS, or UNSAFE_ALLOW_ALL_USERS",
+};
+
+function requireProviderAdmission(
+  admissionPolicy: AdmissionPolicy,
+  provider: SignInProvider
+): void {
+  if (!admissionPolicy.supportsSignInProvider(provider)) {
+    throw new UserAuthConfigurationError(UNSUPPORTED_ADMISSION_MESSAGE[provider]);
+  }
+}
+
+function createGitHubAuthConfig(
+  credentials: OAuthCredentials | null,
+  appName: string,
+  admissionPolicy: AdmissionPolicy
+): UserAuthConfig["github"] {
+  if (!credentials) return undefined;
+  requireProviderAdmission(admissionPolicy, "github");
+
+  const profile = new GitHubSignInProfileResolver({
+    identityResolver: new GitHubProviderIdentityResolver({
+      issuer: GITHUB_ISSUER,
+      userAgent: `${appName} Control Plane`,
+    }),
+    admissionPolicy,
+  });
+  return {
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+    getUserInfo: profile.getUserInfo,
+  };
+}
+
+function createGoogleAuthConfig(
+  credentials: OAuthCredentials | null,
+  admissionPolicy: AdmissionPolicy
+): UserAuthConfig["google"] {
+  if (!credentials) return undefined;
+  requireProviderAdmission(admissionPolicy, "google");
+
+  const profile = new GoogleSignInProfileResolver({
+    clientId: credentials.clientId,
+    admissionPolicy,
+  });
+  return {
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+    getUserInfo: profile.getUserInfo,
   };
 }
 
@@ -131,46 +184,8 @@ function createUserAuthRuntime(
   database: D1Database
 ): UserAuthRuntime {
   const admissionPolicy = new AdmissionPolicy(config.admission);
-  let github: UserAuthConfig["github"];
-  let google: UserAuthConfig["google"];
-
-  for (const provider of config.providers) {
-    if (!admissionPolicy.supportsSignInProvider(provider.id)) {
-      if (provider.id === "google") {
-        throw new UserAuthConfigurationError(
-          "Google sign-in requires provider-neutral admission through ALLOWED_EMAILS, ALLOWED_EMAIL_DOMAINS, or UNSAFE_ALLOW_ALL_USERS"
-        );
-      }
-      throw new UserAuthConfigurationError(
-        "GitHub sign-in has no compatible admission policy; configure a GitHub-specific or provider-neutral admission rule, or UNSAFE_ALLOW_ALL_USERS"
-      );
-    }
-
-    if (provider.id === "github") {
-      const profile = new GitHubSignInProfileResolver({
-        identityResolver: new GitHubProviderIdentityResolver({
-          issuer: GITHUB_ISSUER,
-          userAgent: `${config.appName} Control Plane`,
-        }),
-        admissionPolicy,
-      });
-      github = {
-        clientId: provider.clientId,
-        clientSecret: provider.clientSecret,
-        getUserInfo: profile.getUserInfo,
-      };
-    } else {
-      const profile = new GoogleSignInProfileResolver({
-        clientId: provider.clientId,
-        admissionPolicy,
-      });
-      google = {
-        clientId: provider.clientId,
-        clientSecret: provider.clientSecret,
-        getUserInfo: profile.getUserInfo,
-      };
-    }
-  }
+  const github = createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy);
+  const google = createGoogleAuthConfig(config.providers.google, admissionPolicy);
 
   const auth = createUserAuth({
     database,
@@ -182,7 +197,9 @@ function createUserAuthRuntime(
   });
   return {
     auth,
-    enabledProviders: Object.freeze(config.providers.map((provider) => provider.id)),
+    enabledProviders: Object.freeze(
+      SIGN_IN_PROVIDERS.filter((provider) => config.providers[provider] !== null)
+    ),
   };
 }
 
