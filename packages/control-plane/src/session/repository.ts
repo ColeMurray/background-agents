@@ -13,6 +13,7 @@ import type {
   EventRow,
   ArtifactRow,
   SandboxRow,
+  SessionRepositoryRow,
 } from "./types";
 import type {
   SessionStatus,
@@ -30,7 +31,6 @@ import {
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
-import type { SessionRepositoryRow } from "./repository-row";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";

@@ -57,6 +57,20 @@ export type RepositorySessionRow = SessionRow & {
   repo_name: string;
 };
 
+/**
+ * One member repository row, in position order (position 0 = primary).
+ */
+export interface SessionRepositoryRow {
+  position: number;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string;
+  branch_name: string | null;
+  base_sha: string | null;
+  current_sha: string | null;
+}
+
 export function sessionHasRepository(session: SessionRow): session is RepositorySessionRow {
   return Boolean(session.repo_owner && session.repo_name);
 }

@@ -2,7 +2,7 @@ import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
 } from "@open-inspect/shared";
-import type { SessionRepositoryRow } from "./repository-row";
+import type { SessionRepositoryRow } from "./types";
 
 /** A repository identified by owner and name (canonical casing unless noted). */
 export interface RepoIdentity {
