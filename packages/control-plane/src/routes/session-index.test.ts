@@ -3,6 +3,7 @@ import { sessionIndexRoutes } from "./session-index";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
+import type { Principal } from "../auth/principal";
 
 const mockSessionIndexStore = {
   list: vi.fn(),
@@ -15,7 +16,7 @@ vi.mock("../db/session-index", () => ({
   }),
 }));
 
-function createCtx(): RequestContext {
+function createCtx(principal?: Principal): RequestContext {
   return {
     trace_id: "trace-1",
     request_id: "req-1",
@@ -26,6 +27,7 @@ function createCtx(): RequestContext {
       time: async <T>(_name: string, fn: () => Promise<T>) => fn(),
       summarize: () => ({}),
     },
+    principal,
   };
 }
 
@@ -44,13 +46,13 @@ function getHandler(method: string, path: string) {
   throw new Error(`No route found for ${method} ${path}`);
 }
 
-async function listSessions(query = ""): Promise<Response> {
+async function listSessions(query = "", principal?: Principal): Promise<Response> {
   const { handler, match } = getHandler("GET", "/sessions");
   return handler(
     new Request(`https://test.local/sessions${query}`),
     createEnv(),
     match,
-    createCtx()
+    createCtx(principal)
   );
 }
 
@@ -104,8 +106,77 @@ describe("session index routes", () => {
     });
   });
 
+  it("resolves createdBy=me from the authenticated user principal", async () => {
+    const response = await listSessions("?createdBy=me", {
+      kind: "user",
+      userId: "0123456789abcdef0123456789abcdef",
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
+      status: undefined,
+      excludeStatus: undefined,
+      createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it("preserves mixed creator filters as OR inputs", async () => {
+    const response = await listSessions(
+      "?createdBy=ffffffffffffffffffffffffffffffff&createdBy=me",
+      { kind: "user", userId: "0123456789abcdef0123456789abcdef" }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdByUserIds: ["ffffffffffffffffffffffffffffffff", "0123456789abcdef0123456789abcdef"],
+      })
+    );
+  });
+
+  it("deduplicates creator filters after resolving createdBy=me", async () => {
+    const response = await listSessions(
+      "?createdBy=0123456789abcdef0123456789abcdef&createdBy=me&createdBy=me",
+      { kind: "user", userId: "0123456789abcdef0123456789abcdef" }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        createdByUserIds: ["0123456789abcdef0123456789abcdef"],
+      })
+    );
+  });
+
   it("rejects invalid creator filters before querying the store", async () => {
-    const response = await listSessions("?createdBy=me");
+    const response = await listSessions("?createdBy=not-a-user-id", {
+      kind: "user",
+      userId: "0123456789abcdef0123456789abcdef",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it.each<Principal>([
+    { kind: "service", service: "modal", actor: null },
+    { kind: "sandbox", sessionId: "session-1" },
+  ])("rejects createdBy=me for a $kind principal", async (principal) => {
+    const response = await listSessions("?createdBy=me", principal);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
+  it("rejects createdBy=me for a non-canonical user principal", async () => {
+    const response = await listSessions("?createdBy=me", {
+      kind: "user",
+      userId: "not-canonical",
+    });
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });
