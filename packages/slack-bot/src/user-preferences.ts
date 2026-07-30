@@ -5,7 +5,7 @@ import {
   isValidReasoningEffort,
   normalizeModelId,
   resolveEnabledModel,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { Env, UserPreferences } from "./types";
 import {

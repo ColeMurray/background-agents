@@ -18,6 +18,10 @@
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
     },
+    "./models": {
+      "import": "./dist/models.js",
+      "types": "./dist/models.d.ts"
+    },
     "./logger": {
       "import": "./dist/logger.js",
       "types": "./dist/logger.d.ts"

@@ -1,10 +1,10 @@
+import type { SlackGlobalConfig } from "@open-inspect/shared";
 import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
   isValidModel,
   normalizeValidModels,
-  type SlackGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { ModelOption } from "./slack-types";
