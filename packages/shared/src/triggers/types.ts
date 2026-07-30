@@ -1,10 +1,59 @@
 /**
- * Core types for the trigger-based automation event system.
+ * Core types for trigger-based automation configuration and events.
  */
 
-import type { AutomationTriggerType } from "../types/automations";
-import type { ConditionType } from "./conditions";
 import { z } from "zod";
+
+// ─── Trigger Configuration ───────────────────────────────────────────────────
+
+export type AutomationTriggerType =
+  | "schedule"
+  | "github_event"
+  | "linear_event"
+  | "sentry"
+  | "webhook"
+  | "slack_event";
+
+export interface ConditionConfigMap {
+  branch: { operator: "glob_match" | "exact"; value: string[] };
+  target_branch: { operator: "glob_match" | "exact"; value: string[] };
+  label: { operator: "any_of" | "none_of"; value: string[] };
+  path_glob: { operator: "any_match"; value: string[] };
+  actor: { operator: "include" | "exclude"; value: string[] };
+  check_conclusion: { operator: "eq"; value: string };
+  linear_status: { operator: "any_of"; value: string[] };
+  sentry_project: { operator: "any_of"; value: string[] };
+  sentry_level: { operator: "any_of"; value: string[] };
+  jsonpath: { operator: "all_match"; value: JsonPathFilter[] };
+  text_match: { operator: "contains" | "exact" | "regex"; value: TextMatchValue };
+  slack_channel: { operator: "any_of"; value: string[] };
+  slack_actor: { operator: "include" | "exclude"; value: string[] };
+}
+
+export interface JsonPathFilter {
+  path: string;
+  comparison: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
+  value?: string | number | boolean;
+}
+
+/** Value shape for the `text_match` condition (keyword / substring / regex). */
+export interface TextMatchValue {
+  /** Keyword/substring (contains/exact) or regular-expression source (regex). */
+  pattern: string;
+  /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
+  flags?: string;
+}
+
+export type TriggerCondition = {
+  [K in keyof ConditionConfigMap]: { type: K } & ConditionConfigMap[K];
+}[keyof ConditionConfigMap];
+
+export type ConditionType = keyof ConditionConfigMap;
+
+/** Trigger settings stored as JSON in D1. */
+export interface TriggerConfig {
+  conditions: TriggerCondition[];
+}
 
 // ─── Event Sources ────────────────────────────────────────────────────────────
 

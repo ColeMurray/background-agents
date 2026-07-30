@@ -95,7 +95,7 @@ function relativePath(filePath: string): string {
   return path.relative(SOURCE_ROOT, filePath).split(path.sep).join("/");
 }
 
-function findRuntimeCycle(graph: ReadonlyMap<string, readonly string[]>): string[] | undefined {
+function findDependencyCycle(graph: ReadonlyMap<string, readonly string[]>): string[] | undefined {
   const visited = new Set<string>();
   const active = new Set<string>();
   const stack: string[] = [];
@@ -171,7 +171,28 @@ describe("shared module boundaries", () => {
         ].sort(),
       ])
     );
-    const cycle = findRuntimeCycle(runtimeGraph)?.map(relativePath);
+    const cycle = findDependencyCycle(runtimeGraph)?.map(relativePath);
+
+    expect(cycle?.join(" -> ")).toBeUndefined();
+  });
+
+  it("has no compile-time dependency cycles", () => {
+    const compileTimeGraph = new Map(
+      modules.map((modulePath) => [
+        modulePath,
+        [
+          ...new Set(
+            (dependencies.get(modulePath) ?? [])
+              .filter(
+                (dependency): dependency is Dependency & { target: string } =>
+                  dependency.target !== undefined
+              )
+              .map(({ target }) => target)
+          ),
+        ].sort(),
+      ])
+    );
+    const cycle = findDependencyCycle(compileTimeGraph)?.map(relativePath);
 
     expect(cycle?.join(" -> ")).toBeUndefined();
   });
