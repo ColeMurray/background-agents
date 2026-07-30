@@ -33,4 +33,14 @@ describe("enqueuePromptRequestSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("rejects unsupported prompt sources", () => {
+    const result = enqueuePromptRequestSchema.safeParse({
+      content: "hello",
+      authorId: "user-1",
+      source: "unknown",
+    });
+
+    expect(result.success).toBe(false);
+  });
 });

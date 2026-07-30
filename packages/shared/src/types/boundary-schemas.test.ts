@@ -155,6 +155,9 @@ describe("boundary schemas", () => {
       expect(sendPromptRequestSchema.safeParse({ content: 123 }).success).toBe(false);
       expect(sendPromptRequestSchema.safeParse({ source: "web" }).success).toBe(false);
       expect(sendPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+      expect(
+        sendPromptRequestSchema.safeParse({ content: "hello", source: "unknown" }).success
+      ).toBe(false);
     });
   });
 

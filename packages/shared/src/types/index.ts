@@ -25,7 +25,7 @@ export type {
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
-export { sessionStatusSchema } from "./statuses";
+export { messageSourceSchema, sessionStatusSchema } from "./statuses";
 export type {
   SessionStatus,
   SandboxStatus,

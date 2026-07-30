@@ -1,11 +1,11 @@
-import { sessionAttachmentReferencesSchema } from "@open-inspect/shared";
+import { messageSourceSchema, sessionAttachmentReferencesSchema } from "@open-inspect/shared";
 import { z } from "zod";
 
 export const enqueuePromptRequestSchema = z.object({
   content: z.string(),
   authorId: z.string(),
   canonicalUserId: z.string().nullable().optional(),
-  source: z.string(),
+  source: messageSourceSchema,
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   attachments: sessionAttachmentReferencesSchema.optional(),

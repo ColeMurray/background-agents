@@ -3,7 +3,12 @@ import { recordSchema, type AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import type { Session } from "./sessions";
-import { sessionStatusSchema, type SandboxStatus, type SessionStatus } from "./statuses";
+import {
+  messageSourceSchema,
+  sessionStatusSchema,
+  type SandboxStatus,
+  type SessionStatus,
+} from "./statuses";
 
 export interface UserPreferences {
   userId: string;
@@ -85,7 +90,7 @@ export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
 export const sendPromptRequestSchema = z.object({
   content: z.string().min(1),
-  source: z.string().optional(),
+  source: messageSourceSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   attachments: z.unknown().optional(),

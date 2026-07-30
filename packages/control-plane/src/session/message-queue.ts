@@ -394,7 +394,7 @@ export class SessionMessageQueue {
       participant,
       userId: data.authorId,
       content: data.content,
-      source: data.source as MessageSource,
+      source: data.source,
       model: data.model,
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
