@@ -59,6 +59,9 @@ locals {
     ? "https://${local.web_cloudflare_host}"
     : "https://open-inspect-${local.name_suffix}.vercel.app"
   )
+  effective_web_app_url = (
+    var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
+  )
 
   # Worker script paths (deterministic output locations)
   control_plane_script_path = "${var.project_root}/packages/control-plane/dist/index.js"

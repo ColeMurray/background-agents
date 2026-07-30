@@ -459,8 +459,8 @@ curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/sessions
 ```
 
 Printing `verification_commands` does not execute it. Copy and run the emitted step 3
-`verify-login-providers.mjs` command; it requests `/login` and fails unless the rendered labels
-exactly match the Terraform provider configuration.
+`verify-login-providers.mjs` command; it requests `/login` and fails unless the rendered
+`data-sign-in-provider` markers exactly match the Terraform provider configuration.
 
 ## Troubleshooting
 

@@ -66,7 +66,28 @@ run "github_only" {
       strcontains(nonsensitive(output.verification_commands), "verify-login-providers.mjs") &&
       strcontains(nonsensitive(output.verification_commands), "\"${local.web_app_url}\" \"github\"")
     )
-    error_message = "Deployment verification must expect only the GitHub login label."
+    error_message = "Deployment verification must expect only the GitHub login marker."
+  }
+}
+
+run "vercel_github_only" {
+  command = plan
+
+  variables {
+    web_platform     = "vercel"
+    vercel_api_token = "test-vercel-token"
+    vercel_team_id   = "test-vercel-team"
+  }
+
+  assert {
+    condition = (
+      output.web_app_url == module.web_app[0].production_url &&
+      strcontains(
+        nonsensitive(output.verification_commands),
+        "\"${module.web_app[0].production_url}\" \"github\""
+      )
+    )
+    error_message = "Vercel verification must probe the effective production URL."
   }
 }
 
@@ -103,7 +124,7 @@ run "google_only" {
       strcontains(nonsensitive(output.verification_commands), "verify-login-providers.mjs") &&
       strcontains(nonsensitive(output.verification_commands), "\"${local.web_app_url}\" \"google\"")
     )
-    error_message = "Deployment verification must expect only the Google login label."
+    error_message = "Deployment verification must expect only the Google login marker."
   }
 }
 
@@ -137,7 +158,7 @@ run "github_and_google" {
       strcontains(nonsensitive(output.verification_commands), "verify-login-providers.mjs") &&
       strcontains(nonsensitive(output.verification_commands), "\"${local.web_app_url}\" \"github,google\"")
     )
-    error_message = "Deployment verification must expect both login labels in canonical order."
+    error_message = "Deployment verification must expect both login markers in canonical order."
   }
 }
 

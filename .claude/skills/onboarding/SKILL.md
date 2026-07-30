@@ -126,11 +126,14 @@ user selected GitHub:
 
 1. Go to https://github.com/settings/apps → "New GitHub App"
 2. **Name**: `Open-Inspect-{YourName}` (globally unique)
-3. **Homepage URL**: `https://open-inspect-{deployment_name}.vercel.app`
+3. **Homepage URL**: The deployed web app URL for the selected platform:
+   - Vercel: `https://open-inspect-{deployment_name}.vercel.app`
+   - Cloudflare workers.dev: `https://open-inspect-web-{deployment_name}.{subdomain}.workers.dev`
+   - Cloudflare custom domain: `https://{your-custom-domain}`
 4. **Webhook**: Uncheck "Active"
 5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
-   users"): `https://open-inspect-{deployment_name}.vercel.app/api/auth/callback/github`
-   - **CRITICAL**: Must match deployed Vercel URL exactly!
+   users"): `{deployed-web-app-url}/api/auth/callback/github`
+   - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
 6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
    Write), Metadata (Read-only)
 7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
@@ -327,8 +330,9 @@ terraform output -raw verification_commands
 ```
 
 Run the provider-verification command printed in step 3; it requests `/login` and checks the exact
-expected labels without credentials. Present a deployment summary table. Instruct the user to test:
-visit the web app, sign in with each configured provider, create a session, and send a prompt.
+expected `data-sign-in-provider` markers without credentials. Present a deployment summary table.
+Instruct the user to test: visit the web app, sign in with each configured provider, create a
+session, and send a prompt.
 
 ## Phase 13: CI/CD Setup (Optional)
 
@@ -351,5 +355,5 @@ Ask if user wants GitHub Actions CI/CD. If yes, use `gh secret set` for all requ
 
 - Track all collected credentials securely throughout the process
 - Never log sensitive values
-- The callback URL MUST match the actual deployed Vercel URL
+- The callback URL MUST match the actual deployed web app URL
 - Two-phase Terraform deployment is required due to Cloudflare Durable Object constraints
