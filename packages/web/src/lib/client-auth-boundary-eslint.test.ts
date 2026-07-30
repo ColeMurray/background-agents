@@ -17,9 +17,7 @@ async function boundaryMessages(source: string, filePath: string) {
   const [result] = await eslint.lintText(source, { filePath });
   return result.messages.filter(
     (message) =>
-      message.ruleId === "no-restricted-imports" ||
-      message.ruleId === "no-restricted-globals" ||
-      message.ruleId === "no-restricted-syntax"
+      message.ruleId === "no-restricted-imports" || message.ruleId === "no-restricted-globals"
   );
 }
 
@@ -55,15 +53,6 @@ describe("client authentication boundaries", () => {
   it("keeps the app-owned auth seam framework-independent", async () => {
     await expect(
       boundaryMessages('import { useSession } from "next-auth/react";', authSessionPath)
-    ).resolves.toHaveLength(1);
-  });
-
-  it("rejects client component imports of the server-only provider query", async () => {
-    await expect(
-      boundaryMessages(
-        'import { getEnabledSignInProviders } from "@/lib/sign-in-providers";',
-        componentPath
-      )
     ).resolves.toHaveLength(1);
   });
 

@@ -1,8 +1,6 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import Link from "next/link";
-import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
@@ -12,9 +10,7 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { ErrorBanner } from "@/components/ui/error-banner";
 import { SidebarIcon } from "@/components/ui/icons";
-import { APP_NAME } from "@/lib/site-config";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 
@@ -77,7 +73,6 @@ export function CollapsedSidebarControls() {
 }
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
-  const { data: session, status } = useAuthSession();
   const router = useRouter();
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
@@ -95,9 +90,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   });
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
-    status === "authenticated" && Boolean(session) && isCommandMenuOpen
-      ? COMMAND_MENU_SESSIONS_KEY
-      : null
+    isCommandMenuOpen ? COMMAND_MENU_SESSIONS_KEY : null
   );
 
   const handleNewSession = useCallback(() => {
@@ -131,50 +124,11 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   );
 
   useGlobalShortcuts({
-    enabled: status === "authenticated" && Boolean(session),
+    enabled: true,
     onOpenCommandMenu: handleOpenCommandMenu,
     onNewSession: handleNewSession,
     onToggleSidebar: sidebar.toggle,
   });
-
-  // Show loading state
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-foreground" />
-      </div>
-    );
-  }
-
-  if (status === "unavailable") {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-8 px-6">
-        <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
-        <ErrorBanner role="alert" className="max-w-md px-6 py-4 text-center">
-          Authentication is temporarily unavailable.
-        </ErrorBanner>
-      </div>
-    );
-  }
-
-  if (status === "unauthenticated") {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-8">
-        <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
-        <p className="text-muted-foreground max-w-md text-center">
-          Background coding agent for your team. Ship faster with AI-powered code changes.
-        </p>
-        <Button asChild className="px-6 py-3">
-          <Link href="/login">Sign in</Link>
-        </Button>
-      </div>
-    );
-  }
-
-  if (status !== "authenticated") {
-    status satisfies never;
-    throw new Error("Unhandled authentication state");
-  }
 
   return (
     <SidebarContext.Provider value={sidebar}>

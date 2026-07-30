@@ -39,8 +39,8 @@ resource "terraform_data" "access_control_gate" {
 resource "terraform_data" "sign_in_provider_gate" {
   lifecycle {
     precondition {
-      condition     = local.github_oauth_enabled
-      error_message = "GitHub OAuth must remain configured until the web runtime consumes the control-plane provider authority."
+      condition     = local.github_oauth_enabled || local.google_enabled
+      error_message = "At least one complete OAuth sign-in provider pair must be configured."
     }
 
     precondition {

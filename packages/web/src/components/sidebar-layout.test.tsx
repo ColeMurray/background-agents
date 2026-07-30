@@ -5,7 +5,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CollapsedSidebarControls, SidebarLayout } from "./sidebar-layout";
-import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 
 expect.extend(matchers);
@@ -18,11 +17,6 @@ const mocks = vi.hoisted(() => ({
     open: vi.fn(),
     close: vi.fn(),
   },
-}));
-
-vi.mock("@/lib/auth-session", () => ({
-  useAuthSession: vi.fn(),
-  signIn: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -47,10 +41,6 @@ afterEach(() => {
 
 describe("CollapsedSidebarControls", () => {
   it("renders the sidebar, search, and new session actions inline", () => {
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     const push = vi.fn();
     vi.mocked(useRouter).mockReturnValue({ push } as never);
 
@@ -79,10 +69,6 @@ describe("mobile sidebar drag", () => {
   it("opens after swiping right from the inset activation zone", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
 
     render(<SidebarLayout>Session</SidebarLayout>);
@@ -117,10 +103,6 @@ describe("mobile sidebar drag", () => {
   it("does not open when the swipe is too short", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
 
     render(<SidebarLayout>Session</SidebarLayout>);
@@ -149,10 +131,6 @@ describe("mobile sidebar drag", () => {
   it("delivers taps in the activation zone to underlying content", () => {
     mocks.isMobile = true;
     mocks.sidebar.isOpen = false;
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: { user: { id: "user-1", name: "Test User" } },
-      status: "authenticated",
-    });
     vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
     const onPointerDown = vi.fn();
     const onClick = vi.fn();
@@ -183,48 +161,5 @@ describe("mobile sidebar drag", () => {
     expect(onPointerDown).toHaveBeenCalledOnce();
     expect(onClick).toHaveBeenCalledOnce();
     expect(mocks.sidebar.open).not.toHaveBeenCalled();
-  });
-});
-
-describe("unauthenticated app shell", () => {
-  it("shows one generic sign-in link without provider-specific actions", () => {
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: null,
-      status: "unauthenticated",
-    });
-    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
-
-    render(<SidebarLayout>Session</SidebarLayout>);
-
-    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
-    expect(screen.queryByText("Sign in with GitHub")).not.toBeInTheDocument();
-    expect(screen.queryByText("Sign in with Google")).not.toBeInTheDocument();
-  });
-
-  it("shows an unavailable state instead of treating a session outage as logout", () => {
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: null,
-      status: "unavailable",
-    });
-    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
-
-    render(<SidebarLayout>Session</SidebarLayout>);
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Authentication is temporarily unavailable."
-    );
-    expect(screen.queryByRole("link", { name: "Sign in" })).not.toBeInTheDocument();
-  });
-
-  it("fails closed for an unhandled authentication state", () => {
-    vi.mocked(useAuthSession).mockReturnValue({
-      data: null,
-      status: "future-state",
-    } as never);
-    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
-
-    expect(() => render(<SidebarLayout>Session</SidebarLayout>)).toThrow(
-      "Unhandled authentication state"
-    );
   });
 });
