@@ -9,6 +9,7 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixQueue } from "./autofix/handler";
+import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 
@@ -52,6 +53,8 @@ export default {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
+    await checkAutofixQueueHealth(env, logger);
+
     if (!env.SCHEDULER) {
       logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
       return;

@@ -50,6 +50,10 @@ export interface Env {
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
   LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
+  // GitHub Autofix queue bindings (producers also expose read-only metrics).
+  AUTOFIX_QUEUE?: Queue;
+  AUTOFIX_DLQ?: Queue;
+
   // Durable Objects
   SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine
 

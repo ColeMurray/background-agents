@@ -129,7 +129,15 @@ export class SessionMessageQueue {
       participant,
       command.prompt,
       messageId,
-      now
+      now,
+      undefined,
+      {
+        feedbackKind: command.origin.kind === "pr_comment" ? "pr_comment" : "review",
+        authorType:
+          command.origin.kind === "open_inspect_review" ? "bot" : command.origin.authorType,
+        pullRequestNumber: command.pullRequest.number,
+        feedbackUrl: command.origin.feedbackUrl,
+      }
     );
     const admission = this.repository.admitAutofixMessage({
       message: {
@@ -451,14 +459,16 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedSessionAttachment[]
+    attachments?: ResolvedSessionAttachment[],
+    autofix?: Extract<SandboxEvent, { type: "user_message" }>["autofix"]
   ): void {
     const userMessageEvent = this.buildUserMessageEvent(
       participant,
       content,
       messageId,
       now,
-      attachments
+      attachments,
+      autofix
     );
     this.repository.createEvent({
       id: generateId(),
@@ -475,7 +485,8 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedSessionAttachment[]
+    attachments?: ResolvedSessionAttachment[],
+    autofix?: Extract<SandboxEvent, { type: "user_message" }>["autofix"]
   ): Extract<SandboxEvent, { type: "user_message" }> {
     // Metadata only — base64 payloads would bloat the events table and every
     // broadcast, and DO SQLite rows cap at 2 MB.
@@ -491,6 +502,7 @@ export class SessionMessageQueue {
         avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(autofix ? { autofix } : {}),
     };
   }
 

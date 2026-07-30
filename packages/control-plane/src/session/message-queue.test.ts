@@ -244,6 +244,12 @@ describe("SessionMessageQueue", () => {
     const event = JSON.parse(String(admission.event.data)) as { messageId?: unknown };
     expect(event.messageId).toBe(admission.message.id);
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "sandbox_event",
+        event: expect.objectContaining({ autofix: expect.any(Object) }),
+      })
+    );
   });
 
   it("re-drives a duplicate pending Autofix message", async () => {

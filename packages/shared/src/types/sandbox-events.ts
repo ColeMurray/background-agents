@@ -173,6 +173,14 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
         avatar: z.string().optional(),
       })
       .optional(),
+    autofix: z
+      .object({
+        feedbackKind: z.enum(["pr_comment", "review"]),
+        authorType: z.enum(["human", "bot"]),
+        pullRequestNumber: z.number().int().positive(),
+        feedbackUrl: z.url(),
+      })
+      .optional(),
     // Attachment metadata only — never inline content, which would bloat the
     // events table and every broadcast. attachmentId lets clients stream attachments.
     attachments: resolvedSessionAttachmentsSchema.optional(),

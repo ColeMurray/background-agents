@@ -139,6 +139,48 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("renders the default-off Autofix block and persists one complete global policy", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: { defaults: { autoReviewOnOpen: true } } });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    expect(screen.getByRole("switch", { name: "Enable Autofix" })).toHaveAttribute(
+      "aria-checked",
+      "false"
+    );
+    expect(screen.getByRole("switch", { name: "Submitted reviews" })).toHaveAttribute(
+      "aria-checked",
+      "true"
+    );
+
+    await user.click(screen.getByRole("switch", { name: "Enable Autofix" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: true,
+              autofix: {
+                enabled: true,
+                reviewsEnabled: true,
+                prCommentsEnabled: true,
+                openInspectReviewsEnabled: true,
+                allowedReviewBots: [],
+                maxAttemptsPerPrPer24Hours: 10,
+              },
+            },
+          },
+        }),
+      })
+    );
+  });
+
   it("renders and preserves global model and reasoning defaults", async () => {
     const user = userEvent.setup();
     setupSWR({

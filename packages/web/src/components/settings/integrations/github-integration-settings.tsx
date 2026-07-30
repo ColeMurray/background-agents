@@ -8,9 +8,11 @@ import {
   parseRepositoryFullName,
 } from "@open-inspect/shared/types/repositories";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
-import type {
-  GitHubBotSettings,
-  GitHubGlobalConfig,
+import {
+  GITHUB_AUTOFIX_DEFAULTS,
+  type GitHubBotSettings,
+  type GitHubGlobalConfig,
+  type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared/types/integrations";
 import {
   MODEL_REASONING_CONFIG,
@@ -85,6 +87,10 @@ export function GitHubIntegrationSettings() {
   const repoOverrides = repoSettingsData?.repos ?? [];
   const availableRepos = reposData?.repos ?? [];
   const defaultAutoReviewOnOpen = settings?.defaults?.autoReviewOnOpen ?? true;
+  const defaultAutofix = {
+    ...GITHUB_AUTOFIX_DEFAULTS,
+    ...settings?.defaults?.autofix,
+  };
 
   return (
     <div>
@@ -126,6 +132,7 @@ export function GitHubIntegrationSettings() {
           availableRepos={availableRepos}
           enabledModelOptions={enabledModelOptions}
           defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
+          defaultAutofix={defaultAutofix}
         />
       </Section>
     </div>
@@ -162,6 +169,11 @@ function GlobalSettingsSection({
   const [commentActionInstructions, setCommentActionInstructions] = useState(
     settings?.defaults?.commentActionInstructions ?? ""
   );
+  const [autofix, setAutofix] = useState<ResolvedGitHubAutofixSettings>({
+    ...GITHUB_AUTOFIX_DEFAULTS,
+    ...settings?.defaults?.autofix,
+  });
+  const [autofixTouched, setAutofixTouched] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -183,6 +195,10 @@ function GlobalSettingsSection({
         );
         setCodeReviewInstructions(settings.defaults?.codeReviewInstructions ?? "");
         setCommentActionInstructions(settings.defaults?.commentActionInstructions ?? "");
+        setAutofix({
+          ...GITHUB_AUTOFIX_DEFAULTS,
+          ...settings.defaults?.autofix,
+        });
       }
       setInitialized(true);
     }
@@ -211,6 +227,8 @@ function GlobalSettingsSection({
         setTriggerUserMode("write_access");
         setCodeReviewInstructions("");
         setCommentActionInstructions("");
+        setAutofix({ ...GITHUB_AUTOFIX_DEFAULTS });
+        setAutofixTouched(false);
         setNewUsername("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
@@ -237,6 +255,7 @@ function GlobalSettingsSection({
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
         ...(commentActionInstructions ? { commentActionInstructions } : {}),
+        ...(settings?.defaults?.autofix !== undefined || autofixTouched ? { autofix } : {}),
       },
     };
 
@@ -384,6 +403,24 @@ function GlobalSettingsSection({
             )}
           </>
         )}
+      </div>
+
+      <div className="mb-4 border-t border-border pt-4">
+        <p className="text-sm font-medium text-foreground mb-1">PR Feedback Autofix</p>
+        <p className="text-xs text-muted-foreground mb-3">
+          Continue the pull request&apos;s owning session when eligible feedback arrives. Bot
+          mentions keep the existing fresh-session behavior; one submitted review creates one
+          attempt even when it contains several inline comments.
+        </p>
+        <AutofixSettingsFields
+          value={autofix}
+          onChange={(value) => {
+            setAutofix(value);
+            setAutofixTouched(true);
+            setDirty(true);
+            setError("");
+          }}
+        />
       </div>
 
       <div className="mb-4">
@@ -554,11 +591,13 @@ function RepoOverridesSection({
   availableRepos,
   enabledModelOptions,
   defaultAutoReviewOnOpen,
+  defaultAutofix,
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
+  defaultAutofix: ResolvedGitHubAutofixSettings;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
 
@@ -605,6 +644,7 @@ function RepoOverridesSection({
               entry={entry}
               enabledModelOptions={enabledModelOptions}
               defaultAutoReviewOnOpen={defaultAutoReviewOnOpen}
+              defaultAutofix={defaultAutofix}
             />
           ))}
         </div>
@@ -639,10 +679,12 @@ function RepoOverrideRow({
   entry,
   enabledModelOptions,
   defaultAutoReviewOnOpen,
+  defaultAutofix,
 }: {
   entry: RepoSettingsEntry;
   enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
+  defaultAutofix: ResolvedGitHubAutofixSettings;
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");
   const [effort, setEffort] = useState(entry.settings.reasoningEffort ?? "");
@@ -670,6 +712,13 @@ function RepoOverrideRow({
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     entry.settings.autoReviewOnOpen ?? defaultAutoReviewOnOpen
   );
+  const [autofixMode, setAutofixMode] = useState<"global" | "override">(
+    entry.settings.autofix === undefined ? "global" : "override"
+  );
+  const [autofix, setAutofix] = useState<ResolvedGitHubAutofixSettings>({
+    ...defaultAutofix,
+    ...entry.settings.autofix,
+  });
   const [newUsername, setNewUsername] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -705,6 +754,7 @@ function RepoOverrideRow({
     if (commentActionMode === "override")
       settings.commentActionInstructions = commentActionInstructions;
     if (autoReviewMode === "override") settings.autoReviewOnOpen = autoReviewOnOpen;
+    if (autofixMode === "override") settings.autofix = autofix;
 
     try {
       const res = await browserApiFetch(
@@ -847,6 +897,40 @@ function RepoOverrideRow({
       </div>
 
       <div>
+        <p className="text-xs font-medium text-muted-foreground mb-1">PR Feedback Autofix</p>
+        <div className="flex items-center gap-2 mb-2">
+          <Select
+            value={autofixMode}
+            onValueChange={(value: "global" | "override") => {
+              setAutofixMode(value);
+              if (value === "override" && entry.settings.autofix === undefined) {
+                setAutofix({ ...defaultAutofix });
+              }
+              setDirty(true);
+            }}
+          >
+            <SelectTrigger density="compact" className="w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="global">Use global default</SelectItem>
+              <SelectItem value="override">Override for this repo</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {autofixMode === "override" && (
+          <AutofixSettingsFields
+            value={autofix}
+            compact
+            onChange={(value) => {
+              setAutofix(value);
+              setDirty(true);
+            }}
+          />
+        )}
+      </div>
+
+      <div>
         <p className="text-xs font-medium text-muted-foreground mb-1">Allowed Trigger Users</p>
         <div className="flex items-center gap-2 mb-1">
           <Select
@@ -986,6 +1070,113 @@ function RepoOverrideRow({
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function AutofixSettingsFields({
+  value,
+  onChange,
+  compact = false,
+}: {
+  value: ResolvedGitHubAutofixSettings;
+  onChange: (value: ResolvedGitHubAutofixSettings) => void;
+  compact?: boolean;
+}) {
+  const update = <K extends keyof ResolvedGitHubAutofixSettings>(
+    key: K,
+    next: ResolvedGitHubAutofixSettings[K]
+  ) => onChange({ ...value, [key]: next });
+  const rowClass = compact
+    ? "flex items-center justify-between gap-3 py-1"
+    : "flex items-center justify-between gap-3 px-3 py-2 border border-border rounded-sm";
+
+  return (
+    <div className="space-y-2">
+      {[
+        {
+          key: "enabled" as const,
+          label: "Enable Autofix",
+          description: "Admit new eligible feedback into the owning session.",
+        },
+        {
+          key: "reviewsEnabled" as const,
+          label: "Submitted reviews",
+          description: "One complete submitted review creates one attempt.",
+        },
+        {
+          key: "prCommentsEnabled" as const,
+          label: "Plain human PR comments",
+          description: "Mentions continue to use the fresh-session flow.",
+        },
+        {
+          key: "openInspectReviewsEnabled" as const,
+          label: "Open Inspect Review",
+          description: "Allow trusted findings from a different review session.",
+        },
+      ].map((field) => (
+        <label key={field.key} className={rowClass}>
+          <span>
+            <span className="block text-sm text-foreground">{field.label}</span>
+            {!compact && (
+              <span className="block text-xs text-muted-foreground">{field.description}</span>
+            )}
+          </span>
+          <Switch
+            aria-label={field.label}
+            checked={value[field.key]}
+            onCheckedChange={(checked) => update(field.key, checked)}
+          />
+        </label>
+      ))}
+
+      <label className="block">
+        <span className="block text-xs font-medium text-muted-foreground mb-1">
+          Exact third-party review bots
+        </span>
+        <Input
+          aria-label="Exact third-party review bots"
+          value={value.allowedReviewBots.join(", ")}
+          onChange={(event) =>
+            update(
+              "allowedReviewBots",
+              Array.from(
+                new Set(
+                  event.target.value
+                    .split(",")
+                    .map((entry) => entry.trim().toLowerCase())
+                    .filter(Boolean)
+                )
+              )
+            )
+          }
+          placeholder="coderabbitai[bot]"
+          className={compact ? "h-8 text-xs" : undefined}
+        />
+        <span className="block text-xs text-muted-foreground mt-1">
+          Comma-separated exact usernames. Bot-authored top-level comments are not eligible.
+        </span>
+      </label>
+
+      <label className="block">
+        <span className="block text-xs font-medium text-muted-foreground mb-1">
+          Attempts per PR per 24 hours
+        </span>
+        <Input
+          aria-label="Attempts per PR per 24 hours"
+          type="number"
+          min={1}
+          max={50}
+          value={value.maxAttemptsPerPrPer24Hours}
+          onChange={(event) => {
+            const parsed = Number(event.target.value);
+            if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 50) {
+              update("maxAttemptsPerPrPer24Hours", parsed);
+            }
+          }}
+          className={compact ? "h-8 text-xs" : "max-w-32"}
+        />
+      </label>
     </div>
   );
 }
