@@ -125,20 +125,10 @@ export class SessionMessageQueue {
 
     const now = Date.now();
     const messageId = generateId();
-    const userMessageEvent = this.buildUserMessageEvent(
-      participant,
-      command.prompt,
-      messageId,
-      now,
-      undefined,
-      {
-        feedbackKind: command.origin.kind === "pr_comment" ? "pr_comment" : "review",
-        authorType:
-          command.origin.kind === "open_inspect_review" ? "bot" : command.origin.authorType,
-        pullRequestNumber: command.pullRequest.number,
-        feedbackUrl: command.origin.feedbackUrl,
-      }
-    );
+    const userMessageEvent = {
+      ...this.buildUserMessageEvent(participant, command.prompt, messageId, now),
+      origin: command.origin,
+    };
     const admission = this.repository.admitAutofixMessage({
       message: {
         id: messageId,
@@ -459,16 +449,14 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedSessionAttachment[],
-    autofix?: Extract<SandboxEvent, { type: "user_message" }>["autofix"]
+    attachments?: ResolvedSessionAttachment[]
   ): void {
     const userMessageEvent = this.buildUserMessageEvent(
       participant,
       content,
       messageId,
       now,
-      attachments,
-      autofix
+      attachments
     );
     this.repository.createEvent({
       id: generateId(),
@@ -485,8 +473,7 @@ export class SessionMessageQueue {
     content: string,
     messageId: string,
     now: number,
-    attachments?: ResolvedSessionAttachment[],
-    autofix?: Extract<SandboxEvent, { type: "user_message" }>["autofix"]
+    attachments?: ResolvedSessionAttachment[]
   ): Extract<SandboxEvent, { type: "user_message" }> {
     // Metadata only — base64 payloads would bloat the events table and every
     // broadcast, and DO SQLite rows cap at 2 MB.
@@ -502,7 +489,6 @@ export class SessionMessageQueue {
         avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
-      ...(autofix ? { autofix } : {}),
     };
   }
 

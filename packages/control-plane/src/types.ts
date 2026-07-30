@@ -51,8 +51,8 @@ export interface Env {
   LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
 
   // GitHub Autofix queue bindings (producers also expose read-only metrics).
-  AUTOFIX_QUEUE?: Queue;
-  AUTOFIX_DLQ?: Queue;
+  AUTOFIX_QUEUE?: Queue<GitHubAutofixEnvelope>;
+  AUTOFIX_DLQ?: Queue<unknown>;
 
   // Durable Objects
   SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine

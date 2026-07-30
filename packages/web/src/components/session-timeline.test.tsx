@@ -72,10 +72,9 @@ describe("user message authors", () => {
       <EventItem
         event={{
           ...event("user-2"),
-          autofix: {
-            feedbackKind: "review",
+          origin: {
+            kind: "review",
             authorType: "bot",
-            pullRequestNumber: 42,
             feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
           },
         }}
@@ -87,7 +86,7 @@ describe("user message authors", () => {
     );
 
     expect(screen.getByText("Resumed by PR feedback")).toBeInTheDocument();
-    expect(screen.getByText("Review · Bot · PR #42")).toBeInTheDocument();
+    expect(screen.getByText("Review · Bot")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open feedback" })).toHaveAttribute(
       "href",
       "https://github.com/acme/widgets/pull/42#pullrequestreview-5678"
