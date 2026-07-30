@@ -1059,6 +1059,33 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("round-trips global session instructions", async () => {
+      await store.setGlobal("slack", {
+        defaults: { sessionInstructions: "Always run tests before pushing changes." },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.sessionInstructions).toBe(
+        "Always run tests before pushing changes."
+      );
+    });
+
+    it("rejects non-string sessionInstructions", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { sessionInstructions: 42 as unknown as string },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects sessionInstructions over 10000 characters", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { sessionInstructions: "x".repeat(10001) },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("round-trips per-repo slack settings", async () => {
       await store.setRepoSettings("slack", "acme/widgets", {
         agentNotificationsEnabled: false,
@@ -1080,6 +1107,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setRepoSettings("slack", "acme/widgets", {
           model: "anthropic/claude-sonnet-4-6",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects sessionInstructions at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          sessionInstructions: "Prefer minimal diffs.",
         } as unknown as { agentNotificationsEnabled?: boolean })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

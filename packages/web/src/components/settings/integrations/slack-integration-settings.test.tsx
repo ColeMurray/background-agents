@@ -250,6 +250,61 @@ describe("SlackIntegrationSettings", () => {
     });
   });
 
+  it("typing session instructions and saving sends them merged into the defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.type(screen.getByLabelText(/session instructions/i), "Prefer minimal diffs.");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults).toEqual({
+      agentNotificationsEnabled: true,
+      mentionsPolicy: "strip",
+      routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      sessionInstructions: "Prefer minimal diffs.",
+    });
+  });
+
+  it("clearing session instructions omits the key on save", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          sessionInstructions: "Prefer minimal diffs.",
+        },
+      },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.clear(screen.getByLabelText(/session instructions/i));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults).toEqual({
+      agentNotificationsEnabled: true,
+      mentionsPolicy: "strip",
+    });
+  });
+
   it("renders populated settings with master switch on and policy 'strip'", () => {
     setupSWR({
       global: {

@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -176,6 +177,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
+  const [sessionInstructions, setSessionInstructions] = useState(
+    settings?.defaults?.sessionInstructions ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -185,6 +189,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
     setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
+    setSessionInstructions(settings?.defaults?.sessionInstructions ?? "");
   }, [settings, dirty, saving]);
 
   const selectedModelEnabled = model ? enabledModels.includes(model) : true;
@@ -213,6 +218,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         setAgentNotificationsEnabled(false);
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
+        setSessionInstructions("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -233,6 +239,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         agentNotificationsEnabled,
         model: model || undefined,
         mentionsPolicy,
+        sessionInstructions: sessionInstructions || undefined,
       }),
     };
 
@@ -353,6 +360,31 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         </div>
       </div>
 
+      <div className="mb-4">
+        <label
+          htmlFor="slack-session-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
+          Session Instructions
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Custom instructions appended to agent prompts for all Slack-initiated sessions. Use this
+          to guide how the agent approaches requests (e.g., coding standards, preferred tools, PR
+          conventions).
+        </p>
+        <Textarea
+          id="slack-session-instructions"
+          value={sessionInstructions}
+          onChange={(e) => {
+            setSessionInstructions(e.target.value);
+            setDirty(true);
+          }}
+          rows={3}
+          placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
+          className="resize-y"
+        />
+      </div>
+
       <div className="flex items-center gap-2">
         <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
@@ -371,8 +403,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
               Reset Slack defaults? The master switch will turn off, the default model will use the
-              system default, and mentions policy will return to <strong>allow</strong>.
-              Per-repository overrides and routing rules are not affected.
+              system default, mentions policy will return to <strong>allow</strong>, and session
+              instructions will be cleared. Per-repository overrides and routing rules are not
+              affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

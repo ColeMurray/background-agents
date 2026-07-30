@@ -11,6 +11,7 @@ import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../t
 import type { Env } from "../types";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
+import { getSlackSessionInstructions } from "./integration-config";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 
@@ -66,9 +67,10 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const [availableModels, slackDefaultModel] = await Promise.all([
+  const [availableModels, slackDefaultModel, sessionInstructions] = await Promise.all([
     getAvailableModels(env, traceId),
     getSlackDefaultModel(env, traceId),
+    getSlackSessionInstructions(env, traceId),
   ]);
   const userPrefs = await getResolvedUserPreferences(env, userId, {
     defaultModel: slackDefaultModel ?? env.DEFAULT_MODEL,
@@ -129,9 +131,13 @@ export async function startSessionAndSendPrompt(
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+  let content = channelContext + threadContext + messageText;
+  if (sessionInstructions) {
+    content += `\n\n## Additional Instructions\n\n${sessionInstructions}`;
+  }
   const delivery = await deliverPrompt(env, {
     sessionId: session.sessionId,
-    content: channelContext + threadContext + messageText,
+    content,
     authorId: `slack:${userId}`,
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),

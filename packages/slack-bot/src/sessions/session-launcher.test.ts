@@ -6,6 +6,7 @@ import { getAvailableModels, getSlackDefaultModel } from "../app-home/models";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
+import { getSlackSessionInstructions } from "./integration-config";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { getUserInfo, postMessage } from "@open-inspect/shared";
@@ -44,6 +45,10 @@ vi.mock("../user-preferences", () => ({
 
 vi.mock("./control-plane-client", () => ({
   createSession: vi.fn(),
+}));
+
+vi.mock("./integration-config", () => ({
+  getSlackSessionInstructions: vi.fn(),
 }));
 
 vi.mock("./thread-session-store", () => ({
@@ -102,6 +107,7 @@ describe("startSessionAndSendPrompt", () => {
       { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4-6" },
     ]);
     vi.mocked(getSlackDefaultModel).mockResolvedValue("anthropic/claude-sonnet-4-6");
+    vi.mocked(getSlackSessionInstructions).mockResolvedValue(undefined);
     vi.mocked(getResolvedUserPreferences).mockResolvedValue({
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
@@ -199,6 +205,31 @@ describe("startSessionAndSendPrompt", () => {
       reasoningEffort: "high",
       createdAt: 123,
     });
+  });
+
+  it("appends configured session instructions to the first prompt", async () => {
+    const env = makeEnv();
+    vi.mocked(getSlackSessionInstructions).mockResolvedValue(
+      "Always run tests before pushing changes."
+    );
+
+    await startSessionAndSendPrompt(env, {
+      target: repositoryTarget,
+      channel: "C123",
+      threadTs: "111.222",
+      messageText: "Fix the failing deploy",
+      userId: "U123",
+      traceId: "trace-1",
+    });
+
+    expect(deliverPrompt).toHaveBeenCalledWith(
+      env,
+      expect.objectContaining({
+        content:
+          "Fix the failing deploy\n\n## Additional Instructions\n\n" +
+          "Always run tests before pushing changes.",
+      })
+    );
   });
 
   it("does not apply repository branch overrides to environment sessions", async () => {

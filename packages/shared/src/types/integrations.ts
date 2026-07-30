@@ -224,6 +224,11 @@ export interface SlackGlobalSettings extends SlackRepoSettings {
   mentionsPolicy?: SlackMentionsPolicy;
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
   routingRules?: SlackRoutingRule[];
+  /**
+   * Custom instructions appended to the first prompt of every Slack-initiated
+   * session (global-only, like mentionsPolicy).
+   */
+  sessionInstructions?: string;
 }
 
 /**

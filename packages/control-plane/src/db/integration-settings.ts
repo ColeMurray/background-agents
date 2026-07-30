@@ -424,7 +424,13 @@ export class IntegrationSettingsStore {
   ): SlackGlobalSettings {
     const allowedKeys =
       level === "global"
-        ? new Set(["agentNotificationsEnabled", "model", "mentionsPolicy", "routingRules"])
+        ? new Set([
+            "agentNotificationsEnabled",
+            "model",
+            "mentionsPolicy",
+            "routingRules",
+            "sessionInstructions",
+          ])
         : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
@@ -448,6 +454,22 @@ export class IntegrationSettingsStore {
     ) {
       throw new IntegrationSettingsValidationError(
         `mentionsPolicy must be one of: ${SLACK_MENTIONS_POLICIES.join(", ")}`
+      );
+    }
+
+    if (
+      settings.sessionInstructions !== undefined &&
+      typeof settings.sessionInstructions !== "string"
+    ) {
+      throw new IntegrationSettingsValidationError("sessionInstructions must be a string");
+    }
+
+    if (
+      typeof settings.sessionInstructions === "string" &&
+      settings.sessionInstructions.length > 10000
+    ) {
+      throw new IntegrationSettingsValidationError(
+        "sessionInstructions must be 10000 characters or fewer"
       );
     }
 
