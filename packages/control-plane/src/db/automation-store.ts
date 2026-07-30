@@ -16,6 +16,11 @@ import type {
 } from "@open-inspect/shared/types/automations";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
+import { automationListCursorFromRow, type AutomationListCursor } from "./automation-list-cursor";
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
 
 // ─── Internal row types ──────────────────────────────────────────────────────
 
@@ -40,6 +45,11 @@ export interface AutomationRow {
   trigger_config: string | null; // JSON-serialized TriggerConfig
   trigger_auth_data: string | null;
 }
+
+export type AutomationListPage = { automations: AutomationRow[] } & (
+  | { hasMore: false; nextCursor: null }
+  | { hasMore: true; nextCursor: AutomationListCursor }
+);
 
 export interface AutomationRunRow {
   id: string;
@@ -340,15 +350,69 @@ export class AutomationStore {
       params.push(options.repoName.toLowerCase());
     }
 
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM automations WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC`
+      )
+      .bind(...params)
+      .all<AutomationRow>();
+    const automations = result.results || [];
+    return { automations, total: automations.length };
+  }
+
+  async listPage(options: {
+    limit: number;
+    cursor?: AutomationListCursor | null;
+    nameSearch?: string;
+    repoOwner?: string;
+    repoName?: string;
+  }): Promise<AutomationListPage> {
+    const conditions: string[] = ["deleted_at IS NULL"];
+    const params: unknown[] = [];
+
+    if (options.nameSearch) {
+      conditions.push("name LIKE ? ESCAPE '\\' COLLATE NOCASE");
+      params.push(`%${escapeLikePattern(options.nameSearch)}%`);
+    }
+
+    if (options.repoOwner) {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM automation_repositories ar
+                 WHERE ar.automation_id = automations.id AND ar.repo_owner = ?${
+                   options.repoName ? " AND ar.repo_name = ?" : ""
+                 })`
+      );
+      params.push(options.repoOwner.toLowerCase());
+      if (options.repoName) params.push(options.repoName.toLowerCase());
+    } else if (options.repoName) {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM automation_repositories ar
+                 WHERE ar.automation_id = automations.id AND ar.repo_name = ?)`
+      );
+      params.push(options.repoName.toLowerCase());
+    }
+
+    if (options.cursor) {
+      conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");
+      params.push(options.cursor.createdAt, options.cursor.createdAt, options.cursor.id);
+    }
+
     const where = `WHERE ${conditions.join(" AND ")}`;
 
     const result = await this.db
-      .prepare(`SELECT * FROM automations ${where} ORDER BY created_at DESC`)
-      .bind(...params)
+      .prepare(`SELECT * FROM automations ${where} ORDER BY created_at DESC, id DESC LIMIT ?`)
+      .bind(...params, options.limit + 1)
       .all<AutomationRow>();
 
-    const automations = result.results || [];
-    return { automations, total: automations.length };
+    const rows = result.results || [];
+    const hasMore = rows.length > options.limit;
+    const automations = hasMore ? rows.slice(0, options.limit) : rows;
+    if (!hasMore) return { automations, hasMore: false, nextCursor: null };
+    return {
+      automations,
+      hasMore: true,
+      nextCursor: automationListCursorFromRow(automations[automations.length - 1]),
+    };
   }
 
   /**

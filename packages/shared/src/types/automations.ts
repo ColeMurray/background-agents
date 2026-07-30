@@ -155,6 +155,11 @@ export interface ListAutomationsResponse {
   total: number;
 }
 
+export type ListAutomationsPageResponse = { automations: Automation[] } & (
+  | { hasMore: false; nextCursor: null }
+  | { hasMore: true; nextCursor: string }
+);
+
 /**
  * One firing of an automation: 0 runs when skipped, else one run per target —
  * repository or environment — with repo-less automations getting a single run.

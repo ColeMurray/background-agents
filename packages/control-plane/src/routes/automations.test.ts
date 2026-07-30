@@ -17,6 +17,7 @@ import type { Env } from "../types";
 
 const mockStore = {
   list: vi.fn(),
+  listPage: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
   softDelete: vi.fn(),
@@ -228,9 +229,26 @@ describe("automation route handlers", () => {
       const body = await res.json<{ automations: unknown[]; total: number }>();
       expect(body.automations).toHaveLength(1);
       expect(body.total).toBe(1);
+      expect(mockStore.list).toHaveBeenCalledWith({});
+      expect(mockStore.listPage).not.toHaveBeenCalled();
     });
 
-    it("passes filter params to store", async () => {
+    it("passes name search and pagination params to the store", async () => {
+      mockStore.listPage.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
+
+      await callRoute("GET", "/automations", {
+        query: { search: "  Daily sync  ", limit: "10", cursor: "123:auto-9" },
+      });
+
+      expect(mockStore.listPage).toHaveBeenCalledWith({
+        nameSearch: "Daily sync",
+        limit: 10,
+        cursor: { createdAt: 123, id: "auto-9" },
+      });
+      expect(mockStore.list).not.toHaveBeenCalled();
+    });
+
+    it("preserves explicit repository filters", async () => {
       mockStore.list.mockResolvedValue({ automations: [], total: 0 });
 
       await callRoute("GET", "/automations", {
@@ -241,6 +259,21 @@ describe("automation route handlers", () => {
         repoOwner: "acme",
         repoName: "web-app",
       });
+    });
+
+    it.each([
+      [{ limit: "0" }, "limit"],
+      [{ limit: "101" }, "limit"],
+      [{ limit: "ten" }, "limit"],
+      [{ cursor: "not-a-cursor" }, "cursor"],
+    ])("rejects invalid pagination params", async (query, expectedField) => {
+      const response = await callRoute("GET", "/automations", { query });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: expect.stringContaining(expectedField),
+      });
+      expect(mockStore.list).not.toHaveBeenCalled();
     });
   });
 

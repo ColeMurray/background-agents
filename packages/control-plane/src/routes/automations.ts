@@ -26,6 +26,11 @@ import {
   type AutomationRow,
   type AutomationRepositoryInsert,
 } from "../db/automation-store";
+import {
+  encodeAutomationListCursor,
+  parseAutomationListCursor,
+  type AutomationListCursor,
+} from "../db/automation-list-cursor";
 import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
@@ -266,33 +271,114 @@ function validateSlackTriggerConfig(
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
+const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
+const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
+const MAX_AUTOMATION_NAME_SEARCH_LENGTH = 200;
+
+type ParseAutomationListParamsResult =
+  | {
+      ok: true;
+      request:
+        | {
+            kind: "complete";
+            filters: { repoOwner?: string; repoName?: string };
+          }
+        | {
+            kind: "page";
+            options: {
+              limit: number;
+              cursor: AutomationListCursor | null;
+              nameSearch?: string;
+              repoOwner?: string;
+              repoName?: string;
+            };
+          };
+    }
+  | { ok: false; error: string };
+
+function parseAutomationListParams(request: Request): ParseAutomationListParamsResult {
+  const url = new URL(request.url);
+  const rawLimit = url.searchParams.get("limit");
+  const usesPagination =
+    rawLimit !== null || url.searchParams.has("cursor") || url.searchParams.has("search");
+  const repoOwner = url.searchParams.get("repoOwner") ?? undefined;
+  const repoName = url.searchParams.get("repoName") ?? undefined;
+  if (!usesPagination) {
+    return {
+      ok: true,
+      request: {
+        kind: "complete",
+        filters: {
+          ...(repoOwner ? { repoOwner } : {}),
+          ...(repoName ? { repoName } : {}),
+        },
+      },
+    };
+  }
+
+  const limit = rawLimit === null ? DEFAULT_AUTOMATION_LIST_PAGE_SIZE : Number(rawLimit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_AUTOMATION_LIST_PAGE_SIZE) {
+    return { ok: false, error: "Invalid limit" };
+  }
+
+  const parsedCursor = parseAutomationListCursor(url.searchParams.get("cursor"));
+  if (!parsedCursor.ok) return parsedCursor;
+
+  const nameSearch = url.searchParams.get("search")?.trim();
+  if (nameSearch && nameSearch.length > MAX_AUTOMATION_NAME_SEARCH_LENGTH) {
+    return { ok: false, error: "Search is too long" };
+  }
+
+  return {
+    ok: true,
+    request: {
+      kind: "page",
+      options: {
+        limit,
+        cursor: parsedCursor.cursor,
+        ...(nameSearch ? { nameSearch } : {}),
+        ...(repoOwner ? { repoOwner } : {}),
+        ...(repoName ? { repoName } : {}),
+      },
+    },
+  };
+}
+
 async function handleListAutomations(
   request: Request,
   env: Env,
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const repoOwner = url.searchParams.get("repoOwner") ?? undefined;
-  const repoName = url.searchParams.get("repoName") ?? undefined;
+  const parsed = parseAutomationListParams(request);
+  if (!parsed.ok) return error(parsed.error, 400);
 
   const store = new AutomationStore(ctx.db);
-  const result = await store.list({ repoOwner, repoName });
+  const result =
+    parsed.request.kind === "complete"
+      ? await store.list(parsed.request.filters)
+      : await store.listPage(parsed.request.options);
   const automationIds = result.automations.map((row) => row.id);
   const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
     store.getRepositoriesForAutomationIds(automationIds),
     store.getEnvironmentsForAutomationIds(automationIds),
   ]);
 
+  const automations = result.automations.map((row) =>
+    toAutomation(
+      row,
+      repositoriesByAutomation.get(row.id) ?? [],
+      environmentsByAutomation.get(row.id) ?? []
+    )
+  );
+  if ("total" in result) {
+    return json({ automations, total: result.total });
+  }
+
   return json({
-    automations: result.automations.map((row) =>
-      toAutomation(
-        row,
-        repositoriesByAutomation.get(row.id) ?? [],
-        environmentsByAutomation.get(row.id) ?? []
-      )
-    ),
-    total: result.total,
+    automations,
+    hasMore: result.hasMore,
+    nextCursor: result.nextCursor ? encodeAutomationListCursor(result.nextCursor) : null,
   });
 }
 

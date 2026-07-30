@@ -247,6 +247,7 @@ export type {
   UpdateAutomationRequest,
   AutomationRun,
   ListAutomationsResponse,
+  ListAutomationsPageResponse,
   AutomationInvocation,
   ListAutomationInvocationsResponse,
 } from "./automations";
