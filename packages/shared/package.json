@@ -29,6 +29,10 @@
     "./app-name": {
       "import": "./dist/app-name.js",
       "types": "./dist/app-name.d.ts"
+    },
+    "./types/commit-signing": {
+      "import": "./dist/types/commit-signing.js",
+      "types": "./dist/types/commit-signing.d.ts"
     }
   },
   "scripts": {
