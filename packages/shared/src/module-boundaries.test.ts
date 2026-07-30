@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 const SOURCE_ROOT = path.resolve(import.meta.dirname);
 const ROOT_BARREL = path.join(SOURCE_ROOT, "index.ts");
 const TYPES_BARREL = path.join(SOURCE_ROOT, "types", "index.ts");
+const SUBPATH_ROOT = path.join(SOURCE_ROOT, "subpaths");
 const BARRELS = new Set([ROOT_BARREL, TYPES_BARREL]);
 
 interface Dependency {
@@ -108,6 +109,10 @@ function relativePath(filePath: string): string {
   return path.relative(SOURCE_ROOT, filePath).split(path.sep).join("/");
 }
 
+function isAggregationEntryPoint(filePath: string): boolean {
+  return BARRELS.has(filePath) || filePath.startsWith(`${SUBPATH_ROOT}${path.sep}`);
+}
+
 function findDependencyCycle(graph: ReadonlyMap<string, readonly string[]>): string[] | undefined {
   const visited = new Set<string>();
   const active = new Set<string>();
@@ -148,13 +153,13 @@ describe("shared module boundaries", () => {
     modules.map((modulePath) => [modulePath, collectDependencies(modulePath, moduleSet)])
   );
 
-  it("does not import the package-root or shared-types barrels from implementation modules", () => {
+  it("does not import root or aggregation entry points from implementation modules", () => {
     const violations = modules.flatMap((modulePath) => {
-      if (BARRELS.has(modulePath)) return [];
+      if (isAggregationEntryPoint(modulePath)) return [];
       return (dependencies.get(modulePath) ?? [])
         .filter(
           ({ specifier, target }) =>
-            (target !== undefined && BARRELS.has(target)) ||
+            (target !== undefined && isAggregationEntryPoint(target)) ||
             specifier === "@open-inspect/shared" ||
             specifier.startsWith("@open-inspect/shared/")
         )
