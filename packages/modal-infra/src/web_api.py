@@ -290,8 +290,13 @@ async def api_snapshot_sandbox(
 
         manager = SandboxManager()
 
-        # Get the sandbox handle by ID
-        handle = await manager.get_sandbox_by_id(sandbox_id)
+        # Provider-session image finalization must verify the exact build tags.
+        if reason == "environment_image_build":
+            if not session_id:
+                raise HTTPException(status_code=400, detail="session_id is required")
+            handle = await manager.get_build_sandbox_handle(session_id, sandbox_id)
+        else:
+            handle = await manager.get_sandbox_by_id(sandbox_id)
         if not handle:
             raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
 
@@ -466,6 +471,117 @@ async def api_restore_sandbox(
             session_id=x_session_id,
             sandbox_id=x_sandbox_id,
         )
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_create_build_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    """Create a dormant provider-session build sandbox."""
+    require_auth(authorization)
+
+    from .sandbox.manager import DEFAULT_BUILD_TIMEOUT_SECONDS, SandboxManager
+
+    build_id = _required_string(request, "build_id")
+    scope_kind = _required_string(request, "scope_kind")
+    scope_id = _required_string(request, "scope_id")
+    if scope_kind not in {"repo", "environment"}:
+        raise HTTPException(status_code=400, detail="scope_kind must be repo or environment")
+    repositories = _validated_build_repositories(request.get("repositories"))
+    timeout_seconds = int(request.get("build_timeout_seconds") or DEFAULT_BUILD_TIMEOUT_SECONDS)
+
+    handle = await SandboxManager().create_provider_session_build_sandbox(
+        build_id=build_id,
+        scope_kind=scope_kind,
+        scope_id=scope_id,
+        repositories=repositories,
+        clone_token=request.get("clone_token") or "",
+        user_env_vars=request.get("user_env_vars") or None,
+        timeout_seconds=timeout_seconds,
+    )
+    return {
+        "success": True,
+        "data": {"provider_session_id": handle.modal_object_id},
+    }
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_start_build_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    """Start a build only after its provider session is bound in D1."""
+    require_auth(authorization)
+
+    from .sandbox.manager import SandboxManager
+
+    callback_url = _required_string(request, "callback_url")
+    failure_callback_url = _required_string(request, "failure_callback_url")
+    if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
+        failure_callback_url
+    ):
+        raise HTTPException(status_code=400, detail="callback URLs must target the control plane")
+
+    await SandboxManager().start_build_sandbox(
+        build_id=_required_string(request, "build_id"),
+        provider_session_id=_required_string(request, "provider_session_id"),
+        callback_url=callback_url,
+        failure_callback_url=failure_callback_url,
+        callback_token=_required_string(request, "callback_token"),
+    )
+    return {"success": True, "data": {"started": True}}
+
+
+@app.function(image=function_image, secrets=[internal_api_secret])
+@fastapi_endpoint(method="POST")
+async def api_terminate_build_sandbox(
+    request: dict,
+    authorization: str | None = Header(None),
+    x_trace_id: str | None = Header(None),
+    x_request_id: str | None = Header(None),
+) -> dict:
+    """Terminate the exactly tagged provider-session build sandbox."""
+    require_auth(authorization)
+
+    from .sandbox.manager import SandboxManager
+
+    await SandboxManager().terminate_build_sandbox(
+        build_id=_required_string(request, "build_id"),
+        provider_session_id=_required_string(request, "provider_session_id"),
+        reason=_required_string(request, "reason"),
+    )
+    return {"success": True, "data": {"terminated": True}}
+
+
+def _required_string(request: dict, field: str) -> str:
+    value = request.get(field)
+    if not isinstance(value, str) or not value:
+        raise HTTPException(status_code=400, detail=f"{field} is required")
+    return value
+
+
+def _validated_build_repositories(value: object) -> list[dict]:
+    if not isinstance(value, list) or not value:
+        raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
+    for entry in value:
+        if (
+            not isinstance(entry, dict)
+            or not entry.get("repo_owner")
+            or not entry.get("repo_name")
+            or not entry.get("branch")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="repositories entries require repo_owner, repo_name, and branch",
+            )
+    return value
 
 
 @app.function(

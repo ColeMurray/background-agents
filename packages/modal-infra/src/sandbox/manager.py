@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import modal
+from modal.stream_type import StreamType
 
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
@@ -28,6 +29,13 @@ from sandbox_runtime.constants import (
     TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from sandbox_runtime.log_config import get_logger
+from sandbox_runtime.repo_image_callback import (
+    BUILD_ID_ENV,
+    CALLBACK_TOKEN_ENV,
+    CALLBACK_URL_ENV,
+    FAILURE_CALLBACK_URL_ENV,
+    PROVIDER_SESSION_ID_ENV,
+)
 from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
 
 from ..app import app, llm_secrets
@@ -596,6 +604,157 @@ class SandboxManager:
             created_at=time.time(),
             modal_object_id=modal_object_id,
         )
+
+    async def create_provider_session_build_sandbox(
+        self,
+        build_id: str,
+        scope_kind: str,
+        scope_id: str,
+        repositories: list[dict],
+        clone_token: str = "",
+        user_env_vars: dict[str, str] | None = None,
+        timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
+    ) -> SandboxHandle:
+        """Create a dormant, tagged sandbox for a later bound build start."""
+        start_time = time.time()
+        primary = repositories[0]
+        repo_owner = primary["repo_owner"]
+        repo_name = primary["repo_name"]
+        sandbox_id = f"build-{build_id}"
+        env_vars = dict(user_env_vars or {})
+        env_vars.update(
+            {
+                "PYTHONUNBUFFERED": "1",
+                "SANDBOX_ID": sandbox_id,
+                "REPO_OWNER": repo_owner,
+                "REPO_NAME": repo_name,
+                "IMAGE_BUILD_MODE": "true",
+                "SESSION_CONFIG": json.dumps(
+                    {
+                        "branch": primary["branch"],
+                        "repositories": repositories,
+                    }
+                ),
+                BUILD_ID_ENV: "",
+                CALLBACK_URL_ENV: "",
+                FAILURE_CALLBACK_URL_ENV: "",
+                CALLBACK_TOKEN_ENV: "",
+                PROVIDER_SESSION_ID_ENV: "",
+            }
+        )
+        self._inject_vcs_env_vars(env_vars, clone_token or None)
+
+        sandbox = await modal.Sandbox.create.aio(
+            "python",
+            "-c",
+            "import signal; signal.pause()",
+            image=base_image,
+            app=app,
+            secrets=[],
+            timeout=timeout_seconds,
+            workdir="/workspace",
+            env=env_vars,
+            tags={
+                "openinspect_kind": "image-build",
+                "openinspect_build_id": build_id,
+                "openinspect_scope_kind": scope_kind,
+                "openinspect_scope_id": scope_id,
+            },
+        )
+
+        modal_object_id = sandbox.object_id
+        log.info(
+            "sandbox.create_provider_session_build",
+            sandbox_id=sandbox_id,
+            modal_object_id=modal_object_id,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            build_id=build_id,
+            duration_ms=int((time.time() - start_time) * 1000),
+            outcome="success",
+        )
+        return SandboxHandle(
+            sandbox_id=sandbox_id,
+            modal_sandbox=sandbox,
+            status=SandboxStatus.WARMING,
+            created_at=time.time(),
+            modal_object_id=modal_object_id,
+        )
+
+    async def start_build_sandbox(
+        self,
+        build_id: str,
+        provider_session_id: str,
+        callback_url: str,
+        failure_callback_url: str,
+        callback_token: str,
+    ) -> None:
+        """Launch the runtime only after the control plane binds the exact sandbox."""
+        sandbox = await self._resolve_build_sandbox(build_id, provider_session_id)
+        await sandbox.exec.aio(
+            "python",
+            "-m",
+            "sandbox_runtime.entrypoint",
+            env={
+                BUILD_ID_ENV: build_id,
+                CALLBACK_URL_ENV: callback_url,
+                FAILURE_CALLBACK_URL_ENV: failure_callback_url,
+                CALLBACK_TOKEN_ENV: callback_token,
+                PROVIDER_SESSION_ID_ENV: provider_session_id,
+            },
+            stdout=StreamType.DEVNULL,
+            stderr=StreamType.DEVNULL,
+        )
+
+    async def terminate_build_sandbox(
+        self,
+        build_id: str,
+        provider_session_id: str,
+        reason: str,
+    ) -> None:
+        """Terminate only a sandbox carrying the exact image-build tags."""
+        try:
+            sandbox = await self._resolve_build_sandbox(build_id, provider_session_id)
+            await sandbox.terminate.aio()
+        except modal.exception.NotFoundError:
+            log.info(
+                "sandbox.terminate_build_not_found",
+                build_id=build_id,
+                modal_object_id=provider_session_id,
+                reason=reason,
+            )
+            return
+        log.info(
+            "sandbox.terminate_build",
+            build_id=build_id,
+            modal_object_id=provider_session_id,
+            reason=reason,
+        )
+
+    async def get_build_sandbox_handle(
+        self,
+        build_id: str,
+        provider_session_id: str,
+    ) -> SandboxHandle:
+        """Resolve a build sandbox only after verifying its exact provider tags."""
+        sandbox = await self._resolve_build_sandbox(build_id, provider_session_id)
+        return SandboxHandle(
+            sandbox_id=f"build-{build_id}",
+            modal_sandbox=sandbox,
+            status=SandboxStatus.READY,
+            created_at=time.time(),
+            modal_object_id=provider_session_id,
+        )
+
+    async def _resolve_build_sandbox(self, build_id: str, provider_session_id: str):
+        sandbox = modal.Sandbox.from_id(provider_session_id)
+        tags = await sandbox.get_tags.aio()
+        if (
+            tags.get("openinspect_kind") != "image-build"
+            or tags.get("openinspect_build_id") != build_id
+        ):
+            raise ValueError("sandbox tags do not match the requested image build")
+        return sandbox
 
     def take_snapshot(
         self,
