@@ -31,8 +31,9 @@ export function useAutomations(nameSearch: string) {
       { revalidateFirstPage: true }
     );
 
-  const automations = data?.flatMap((page) => page.automations) ?? [];
-  const lastPage = data?.[data.length - 1];
+  const loadedPages = data?.filter((page) => page !== undefined) ?? [];
+  const automations = loadedPages.flatMap((page) => page.automations);
+  const lastPage = loadedPages[loadedPages.length - 1];
   const loading = authStatus === "loading" || (!!session && !data && !error);
   const loadingMore = !!data && isValidating && data[size - 1] === undefined;
 

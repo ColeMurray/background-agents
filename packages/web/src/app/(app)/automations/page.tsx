@@ -152,7 +152,7 @@ export default function AutomationsPage() {
             />
           ) : null}
 
-          {hasMore && !loading && (
+          {(hasMore || loadingMore) && !loading && (
             <div className="flex justify-center pt-4">
               <Button
                 variant="outline"
