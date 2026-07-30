@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { commitSigningMetadataSchema } from "@open-inspect/shared";
+import { commitSigningMetadataSchema } from "@open-inspect/shared/types/commit-signing";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
