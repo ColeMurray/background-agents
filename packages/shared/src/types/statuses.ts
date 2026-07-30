@@ -76,6 +76,23 @@ export const sandboxStatusSchema = z.enum([
 ]);
 export const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 export const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
+export const eventTypeSchema = z.enum([
+  "heartbeat",
+  "ready",
+  "token",
+  "tool_call",
+  "step_start",
+  "step_finish",
+  "tool_result",
+  "git_sync",
+  "error",
+  "execution_complete",
+  "artifact",
+  "push_complete",
+  "push_error",
+  "warning",
+  "user_message",
+]);
 export const spawnSourceSchema = z.enum([
   "user",
   "agent",

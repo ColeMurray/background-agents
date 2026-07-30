@@ -6,6 +6,8 @@ import {
   createSessionResponseSchema,
   createSessionRequestSchema,
   callbackContextSchema,
+  listArtifactsResponseSchema,
+  listEventsResponseSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -127,6 +129,83 @@ describe("boundary schemas", () => {
         createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
       ).toBe(false);
       expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("completion response schemas", () => {
+    it("parses valid event and artifact list responses", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [
+            {
+              id: "event-1",
+              type: "token",
+              data: { content: "hello" },
+              messageId: "msg-1",
+              createdAt: 123,
+            },
+          ],
+          cursor: "next-page",
+          hasMore: true,
+        }).success
+      ).toBe(true);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [
+            {
+              id: "artifact-1",
+              type: "branch",
+              url: "https://example.com/tree/main",
+              metadata: { head: "main" },
+              createdAt: 123,
+            },
+          ],
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects malformed or partial completion responses", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [{ id: "event-1", type: "token", data: {}, messageId: "msg-1" }],
+          hasMore: false,
+        }).success
+      ).toBe(false);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [{ id: "artifact-1", type: "branch", url: null }],
+        }).success
+      ).toBe(false);
+    });
+
+    it("accepts nullable boundary fields returned by the control plane", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [
+            {
+              id: "event-1",
+              type: "execution_complete",
+              data: { success: true },
+              messageId: null,
+              createdAt: 123,
+            },
+          ],
+          hasMore: false,
+        }).success
+      ).toBe(true);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [
+            {
+              id: "artifact-1",
+              type: "branch",
+              url: null,
+              metadata: null,
+              createdAt: 123,
+            },
+          ],
+        }).success
+      ).toBe(true);
     });
   });
 

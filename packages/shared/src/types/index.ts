@@ -25,7 +25,7 @@ export type {
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
-export { messageSourceSchema, sessionStatusSchema } from "./statuses";
+export { eventTypeSchema, messageSourceSchema, sessionStatusSchema } from "./statuses";
 export type {
   SessionStatus,
   SandboxStatus,
@@ -79,7 +79,7 @@ export type {
   ClassificationResult,
 } from "./repository-catalog";
 
-export { toDisplayStatus } from "./artifacts";
+export { artifactResponseSchema, listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
 export type {
   SessionArtifact,
   ManualPullRequestArtifactMetadata,
@@ -98,7 +98,11 @@ export type {
   AgentResponse,
 } from "./artifacts";
 
-export { sandboxEventSchema } from "./sandbox-events";
+export {
+  eventResponseSchema,
+  listEventsResponseSchema,
+  sandboxEventSchema,
+} from "./sandbox-events";
 export type { AgentEvent, SandboxEvent, EventResponse, ListEventsResponse } from "./sandbox-events";
 
 export type {

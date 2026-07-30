@@ -288,8 +288,10 @@ async function uploadToSession(
       });
       return { sessionMissing: response.status === 404 };
     }
-    const body = (await response.json()) as { attachmentId?: unknown };
-    if (typeof body.attachmentId !== "string" || !body.attachmentId) {
+    const body: unknown = await response.json();
+    const attachmentId =
+      body && typeof body === "object" && "attachmentId" in body ? body.attachmentId : undefined;
+    if (typeof attachmentId !== "string" || !attachmentId) {
       log.warn("slack.attachment.upload_failed", {
         trace_id: traceId,
         session_id: sessionId,
@@ -298,7 +300,7 @@ async function uploadToSession(
       });
       return { sessionMissing: false };
     }
-    return { reference: { attachmentId: body.attachmentId, name: attachment.name } };
+    return { reference: { attachmentId, name: attachment.name } };
   } catch (e) {
     log.warn("slack.attachment.upload_error", {
       trace_id: traceId,
