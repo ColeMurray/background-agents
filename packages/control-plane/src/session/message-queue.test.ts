@@ -201,7 +201,7 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {
       type: "enqueue_feedback",
-      feedbackKey: "github:review:1234",
+      feedbackKey: "github:99:review:1234",
       pullRequest: {
         repositoryId: "99",
         number: 42,
@@ -262,7 +262,7 @@ describe("SessionMessageQueue", () => {
 
     const result = await h.queue.enqueueAutofix({
       type: "enqueue_feedback",
-      feedbackKey: "github:review:1234",
+      feedbackKey: "github:99:review:1234",
       pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
       prompt: "Address the submitted review feedback.",
       author: { id: "7", login: "alice" },
@@ -276,6 +276,9 @@ describe("SessionMessageQueue", () => {
 
     expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_event" })
+    );
   });
 
   it("does not re-drive a duplicate pending Autofix message into an archived session", async () => {

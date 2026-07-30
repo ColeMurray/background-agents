@@ -49,6 +49,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CommitSigningSettings } from "./commit-signing-settings";
+import { GitHubAutofixSettingsFields } from "./github-autofix-settings-fields";
 import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
@@ -412,8 +413,12 @@ function GlobalSettingsSection({
           mentions keep the existing fresh-session behavior; one submitted review creates one
           attempt even when it contains several inline comments.
         </p>
-        <AutofixSettingsFields
+        <GitHubAutofixSettingsFields
           value={autofix}
+          onDirty={() => {
+            setAutofixTouched(true);
+            setDirty(true);
+          }}
           onChange={(value) => {
             setAutofix(value);
             setAutofixTouched(true);
@@ -919,9 +924,10 @@ function RepoOverrideRow({
           </Select>
         </div>
         {autofixMode === "override" && (
-          <AutofixSettingsFields
+          <GitHubAutofixSettingsFields
             value={autofix}
             compact
+            onDirty={() => setDirty(true)}
             onChange={(value) => {
               setAutofix(value);
               setDirty(true);
@@ -1070,113 +1076,6 @@ function RepoOverrideRow({
           />
         )}
       </div>
-    </div>
-  );
-}
-
-function AutofixSettingsFields({
-  value,
-  onChange,
-  compact = false,
-}: {
-  value: ResolvedGitHubAutofixSettings;
-  onChange: (value: ResolvedGitHubAutofixSettings) => void;
-  compact?: boolean;
-}) {
-  const update = <K extends keyof ResolvedGitHubAutofixSettings>(
-    key: K,
-    next: ResolvedGitHubAutofixSettings[K]
-  ) => onChange({ ...value, [key]: next });
-  const rowClass = compact
-    ? "flex items-center justify-between gap-3 py-1"
-    : "flex items-center justify-between gap-3 px-3 py-2 border border-border rounded-sm";
-
-  return (
-    <div className="space-y-2">
-      {[
-        {
-          key: "enabled" as const,
-          label: "Enable Autofix",
-          description: "Admit new eligible feedback into the owning session.",
-        },
-        {
-          key: "reviewsEnabled" as const,
-          label: "Submitted reviews",
-          description: "One complete submitted review creates one attempt.",
-        },
-        {
-          key: "prCommentsEnabled" as const,
-          label: "Plain human PR comments",
-          description: "Mentions continue to use the fresh-session flow.",
-        },
-        {
-          key: "openInspectReviewsEnabled" as const,
-          label: "Open Inspect Review",
-          description: "Allow trusted findings from a different review session.",
-        },
-      ].map((field) => (
-        <label key={field.key} className={rowClass}>
-          <span>
-            <span className="block text-sm text-foreground">{field.label}</span>
-            {!compact && (
-              <span className="block text-xs text-muted-foreground">{field.description}</span>
-            )}
-          </span>
-          <Switch
-            aria-label={field.label}
-            checked={value[field.key]}
-            onCheckedChange={(checked) => update(field.key, checked)}
-          />
-        </label>
-      ))}
-
-      <label className="block">
-        <span className="block text-xs font-medium text-muted-foreground mb-1">
-          Exact third-party review bots
-        </span>
-        <Input
-          aria-label="Exact third-party review bots"
-          value={value.allowedReviewBots.join(", ")}
-          onChange={(event) =>
-            update(
-              "allowedReviewBots",
-              Array.from(
-                new Set(
-                  event.target.value
-                    .split(",")
-                    .map((entry) => entry.trim().toLowerCase())
-                    .filter(Boolean)
-                )
-              )
-            )
-          }
-          placeholder="coderabbitai[bot]"
-          className={compact ? "h-8 text-xs" : undefined}
-        />
-        <span className="block text-xs text-muted-foreground mt-1">
-          Comma-separated exact usernames. Bot-authored top-level comments are not eligible.
-        </span>
-      </label>
-
-      <label className="block">
-        <span className="block text-xs font-medium text-muted-foreground mb-1">
-          Attempts per PR per 24 hours
-        </span>
-        <Input
-          aria-label="Attempts per PR per 24 hours"
-          type="number"
-          min={1}
-          max={50}
-          value={value.maxAttemptsPerPrPer24Hours}
-          onChange={(event) => {
-            const parsed = Number(event.target.value);
-            if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 50) {
-              update("maxAttemptsPerPrPer24Hours", parsed);
-            }
-          }}
-          className={compact ? "h-8 text-xs" : "max-w-32"}
-        />
-      </label>
     </div>
   );
 }
