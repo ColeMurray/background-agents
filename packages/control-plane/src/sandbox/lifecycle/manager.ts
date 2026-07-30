@@ -10,11 +10,8 @@
  * spawn attempts within the same request.
  */
 
-import {
-  extractProviderAndModel,
-  type McpServerConfig,
-  type SandboxSettings,
-} from "@open-inspect/shared";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared";
+import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { SandboxStatus } from "../../types";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import {

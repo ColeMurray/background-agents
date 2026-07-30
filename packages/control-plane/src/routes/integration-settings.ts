@@ -5,7 +5,6 @@
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-  isValidReasoningEffort,
   type CodeServerSettings,
   type EnvironmentSettingsIntegrationId,
   type GitHubBotSettings,
@@ -13,6 +12,7 @@ import {
   type LinearBotSettings,
   type SandboxSettings,
 } from "@open-inspect/shared";
+import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,

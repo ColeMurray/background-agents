@@ -1,8 +1,5 @@
-import {
-  getValidModelOrDefault,
-  isValidReasoningEffort,
-  type RepositoryRef,
-} from "@open-inspect/shared";
+import type { RepositoryRef } from "@open-inspect/shared";
+import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";

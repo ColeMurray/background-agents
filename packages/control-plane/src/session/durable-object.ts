@@ -10,13 +10,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import {
-  DEFAULT_MODEL,
   clientMessageSchema,
   sandboxEventSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";

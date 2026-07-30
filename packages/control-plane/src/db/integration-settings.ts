@@ -1,7 +1,5 @@
 import {
   isEnvironmentId,
-  isValidModel,
-  isValidReasoningEffort,
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
   DEFAULT_MENTIONS_POLICY,
@@ -19,6 +17,7 @@ import {
   type SlackMentionsPolicy,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";
 

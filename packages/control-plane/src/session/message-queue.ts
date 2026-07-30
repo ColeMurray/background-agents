@@ -1,14 +1,13 @@
 import { generateId } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
+import type { SessionAttachmentReference, ResolvedSessionAttachment } from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  type SessionAttachmentReference,
-  type ResolvedSessionAttachment,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";

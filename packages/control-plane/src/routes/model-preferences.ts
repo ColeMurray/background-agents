@@ -2,7 +2,7 @@
  * Model-preferences routes and handlers.
  */
 
-import { DEFAULT_ENABLED_MODELS, normalizeValidModels } from "@open-inspect/shared";
+import { DEFAULT_ENABLED_MODELS, normalizeValidModels } from "@open-inspect/shared/models";
 import { ModelPreferencesStore, ModelPreferencesValidationError } from "../db/model-preferences";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
