@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import { buildAuthDisplay } from "@/lib/build-auth-identity";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   buildControlPlanePath,
@@ -46,8 +45,6 @@ export async function POST(request: NextRequest) {
 
     // Explicitly pick allowed fields from the client body. Identity and SCM
     // provenance derive from authenticated control-plane state.
-    const user = session.user;
-
     const sessionBody = {
       repoOwner: body.repoOwner,
       repoName: body.repoName,
@@ -60,7 +57,6 @@ export async function POST(request: NextRequest) {
       // side): a named environment or an ad-hoc repository list.
       environmentId: body.environmentId,
       repositories: body.repositories,
-      ...buildAuthDisplay(user),
     };
 
     const response = await controlPlaneUserFetch("/sessions", {
