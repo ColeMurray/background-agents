@@ -60,12 +60,19 @@ describe("repository metadata routes", () => {
   });
 
   it("returns success when cache invalidation fails after the metadata update commits", async () => {
+    let resolveUpsert!: () => void;
+    mockUpsert.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUpsert = resolve;
+        })
+    );
     const cacheError = new Error("KV unavailable");
     mockCacheDelete.mockRejectedValue(cacheError);
     const path = "/repos/Acme/Widget/metadata";
     const { handler, match } = getUpdateHandler(path);
 
-    const response = await handler(
+    const responsePromise = handler(
       new Request(`https://test.local${path}`, {
         method: "PUT",
         body: JSON.stringify({ description: "Updated description" }),
@@ -74,6 +81,11 @@ describe("repository metadata routes", () => {
       match,
       createContext()
     );
+
+    await vi.waitFor(() => expect(mockUpsert).toHaveBeenCalledOnce());
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+    resolveUpsert();
+    const response = await responsePromise;
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
@@ -84,9 +96,7 @@ describe("repository metadata routes", () => {
     expect(mockUpsert).toHaveBeenCalledWith("Acme", "Widget", {
       description: "Updated description",
     });
-    expect(mockUpsert.mock.invocationCallOrder[0]).toBeLessThan(
-      mockCacheDelete.mock.invocationCallOrder[0]
-    );
+    expect(mockCacheDelete).toHaveBeenCalledOnce();
     expect(mockLogger.warn).toHaveBeenCalledWith("Failed to invalidate repos cache", {
       trace_id: "trace-1",
       error: cacheError,
