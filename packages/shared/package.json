@@ -17,6 +17,18 @@
     "./service-auth": {
       "import": "./dist/service-auth.js",
       "types": "./dist/service-auth.d.ts"
+    },
+    "./logger": {
+      "import": "./dist/logger.js",
+      "types": "./dist/logger.d.ts"
+    },
+    "./cache-store": {
+      "import": "./dist/cache-store.js",
+      "types": "./dist/cache-store.d.ts"
+    },
+    "./app-name": {
+      "import": "./dist/app-name.js",
+      "types": "./dist/app-name.d.ts"
     }
   },
   "scripts": {
