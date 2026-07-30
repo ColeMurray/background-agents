@@ -1,15 +1,17 @@
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  spawnChildSessionRequestSchema,
+  spawnContextSchema,
+} from "@open-inspect/shared";
+import {
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
   resolveEnabledModel,
-  spawnChildSessionRequestSchema,
-  spawnContextSchema,
   type ValidModel,
   VALID_MODELS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import { generateId } from "../auth/crypto";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";

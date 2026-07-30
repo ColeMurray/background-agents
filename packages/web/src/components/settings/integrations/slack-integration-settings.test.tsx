@@ -250,6 +250,89 @@ describe("SlackIntegrationSettings", () => {
     });
   });
 
+  it("typing session instructions and saving sends them merged into the defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+      availableRepos: [repo("acme/web")],
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.type(screen.getByLabelText(/session instructions/i), "Prefer minimal diffs.");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults).toEqual({
+      agentNotificationsEnabled: true,
+      mentionsPolicy: "strip",
+      routingRules: [{ keyword: "frontend", target: "acme/web" }],
+      sessionInstructions: "Prefer minimal diffs.",
+    });
+  });
+
+  it("bounds the session instructions textarea to the shared maximum length", () => {
+    setupSWR({ global: null });
+
+    render(<SlackIntegrationSettings />);
+
+    expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
+  });
+
+  // Regression: a save must seed the SWR cache with the saved blob. The other
+  // global section merges against this snapshot, so leaving the pre-save data
+  // in place would let a back-to-back save silently drop the new values.
+  it("seeds the SWR cache with the saved defaults on save", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", {
+      settings: {
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+      },
+    });
+  });
+
+  it("clearing session instructions omits the key on save", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          agentNotificationsEnabled: true,
+          mentionsPolicy: "strip",
+          sessionInstructions: "Prefer minimal diffs.",
+        },
+      },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.clear(screen.getByLabelText(/session instructions/i));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init.body as string) as { settings: SlackGlobalConfig };
+    expect(body.settings.defaults).toEqual({
+      agentNotificationsEnabled: true,
+      mentionsPolicy: "strip",
+    });
+  });
+
   it("renders populated settings with master switch on and policy 'strip'", () => {
     setupSWR({
       global: {
@@ -350,7 +433,13 @@ describe("SlackIntegrationSettings", () => {
 
     act(() => {
       setupSWR({
-        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" } },
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "strip",
+            sessionInstructions: "Prefer minimal diffs.",
+          },
+        },
       });
     });
     rerender(<SlackIntegrationSettings />);
@@ -360,6 +449,7 @@ describe("SlackIntegrationSettings", () => {
       "true"
     );
     expect((screen.getByRole("radio", { name: /strip/i }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByLabelText(/session instructions/i)).toHaveValue("Prefer minimal diffs.");
   });
 
   // Regression: dirty edits must not be clobbered by SWR revalidation.

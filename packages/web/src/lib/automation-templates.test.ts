@@ -3,14 +3,12 @@ import {
   triggerSources,
   isValidCron,
   cronIntervalMinutes,
-  isValidModel,
-  isValidReasoningEffort,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
-  DEFAULT_MODEL,
   type AutomationTriggerType,
 } from "@open-inspect/shared";
+import { DEFAULT_MODEL, isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   automationTemplates,
   TEMPLATE_CATEGORIES,

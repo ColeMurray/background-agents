@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { SignInProvider } from "@open-inspect/shared";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./providers/constants";
 import type { VerifiedProviderIdentity } from "./providers/types";
 
@@ -85,6 +86,22 @@ export class AdmissionPolicy {
       unsafeAllowAllUsers: config.unsafeAllowAllUsers,
     };
     this.fetcher = dependencies.fetcher ?? globalThis.fetch.bind(globalThis);
+  }
+
+  supportsSignInProvider(provider: SignInProvider): boolean {
+    const hasProviderNeutralAdmission =
+      this.config.allowedEmails.length > 0 || this.config.allowedEmailDomains.length > 0;
+    const hasGitHubAdmission =
+      this.config.allowedGitHubUsers.length > 0 ||
+      this.config.allowedGitHubOrganizations.length > 0;
+    const hasConfiguredAllowlist = hasProviderNeutralAdmission || hasGitHubAdmission;
+
+    if (!hasConfiguredAllowlist && this.config.unsafeAllowAllUsers) return true;
+    const providerSupport: Readonly<Record<SignInProvider, boolean>> = {
+      github: hasProviderNeutralAdmission || hasGitHubAdmission,
+      google: hasProviderNeutralAdmission,
+    };
+    return providerSupport[provider];
   }
 
   async requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision> {

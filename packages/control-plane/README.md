@@ -333,6 +333,13 @@ Terraform configures `WEB_APP_URL`, provider credentials, admission allowlists, 
 `BROWSER_AUTH_SECRET` on this worker. `WEB_APP_URL` must be the exact browser-visible HTTPS origin,
 except that an HTTP loopback origin is accepted for local development.
 
+A complete GitHub or Google OAuth credential pair enables that sign-in provider; partial pairs and
+an empty provider set fail closed. Google requires verified-email/domain admission (or explicit
+unsafe allow-all), while GitHub may also use username or organization admission. The normalized
+runtime constructs Better Auth and the immutable provider list from the same configuration.
+`GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
+requests so the React `/login` route can render them server-side.
+
 ## Token Encryption
 
 GitHub OAuth tokens are encrypted at rest using AES-256-GCM:

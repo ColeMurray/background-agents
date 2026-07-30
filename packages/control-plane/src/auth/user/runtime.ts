@@ -2,8 +2,10 @@ import {
   AdmissionPolicy,
   parseAdmissionAllowlist,
   parseAdmissionBoolean,
+  type AdmissionPolicyConfig,
 } from "./admission-policy";
-import { createUserAuth } from "./better-auth";
+import { SIGN_IN_PROVIDERS, type SignInProvider } from "@open-inspect/shared";
+import { createUserAuth, type UserAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
@@ -57,18 +59,38 @@ export function parsePublicWebOrigin(value: string | undefined): string {
   return url.origin;
 }
 
-function createAdmissionPolicy(env: Env): AdmissionPolicy {
-  return new AdmissionPolicy({
-    allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
-    allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
-    allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
-    allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
-    unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
-  });
+interface OAuthCredentials {
+  readonly clientId: string;
+  readonly clientSecret: string;
 }
 
-export function createUserAuthFromEnv(env: Env, database: D1Database) {
-  const publicWebOrigin = parsePublicWebOrigin(env.WEB_APP_URL);
+type ProviderCredentials = Readonly<Record<SignInProvider, OAuthCredentials | null>>;
+
+interface NormalizedUserAuthConfig {
+  readonly publicWebOrigin: string;
+  readonly secret: string;
+  readonly appName: string;
+  readonly admission: AdmissionPolicyConfig;
+  readonly providers: ProviderCredentials;
+}
+
+function normalizeProviderCredentials(
+  id: SignInProvider,
+  clientIdValue: string | undefined,
+  clientSecretValue: string | undefined
+): OAuthCredentials | null {
+  const clientId = clientIdValue?.trim();
+  const clientSecret = clientSecretValue?.trim();
+  if (Boolean(clientId) !== Boolean(clientSecret)) {
+    const prefix = id.toUpperCase();
+    throw new UserAuthConfigurationError(
+      `${prefix}_CLIENT_ID and ${prefix}_CLIENT_SECRET must be configured together`
+    );
+  }
+  return clientId && clientSecret ? { clientId, clientSecret } : null;
+}
+
+function normalizeUserAuthConfig(env: Env): NormalizedUserAuthConfig {
   const secret = requireConfig(env.BROWSER_AUTH_SECRET, "BROWSER_AUTH_SECRET");
   if (secret.length < MINIMUM_SECRET_LENGTH) {
     throw new UserAuthConfigurationError(
@@ -76,112 +98,151 @@ export function createUserAuthFromEnv(env: Env, database: D1Database) {
     );
   }
 
-  const admissionPolicy = createAdmissionPolicy(env);
-
-  const githubClientId = env.GITHUB_CLIENT_ID?.trim();
-  const githubClientSecret = env.GITHUB_CLIENT_SECRET?.trim();
-  if (Boolean(githubClientId) !== Boolean(githubClientSecret)) {
-    throw new UserAuthConfigurationError(
-      "GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured together"
-    );
-  }
-
-  const githubProfile =
-    githubClientId && githubClientSecret
-      ? new GitHubSignInProfileResolver({
-          identityResolver: new GitHubProviderIdentityResolver({
-            issuer: GITHUB_ISSUER,
-            userAgent: `${env.APP_NAME?.trim() || "Open-Inspect"} Control Plane`,
-          }),
-          admissionPolicy,
-        })
-      : null;
-
-  const googleClientId = env.GOOGLE_CLIENT_ID?.trim();
-  const googleClientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
-  if (Boolean(googleClientId) !== Boolean(googleClientSecret)) {
-    throw new UserAuthConfigurationError(
-      "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together"
-    );
-  }
-
-  const googleProfile =
-    googleClientId && googleClientSecret
-      ? new GoogleSignInProfileResolver({
-          clientId: googleClientId,
-          admissionPolicy,
-        })
-      : null;
-
-  // Each provider is opt-in, but browser sign-in is unreachable with none of
-  // them configured — fail at construction rather than serving a sign-in page
-  // that cannot complete.
-  if (!githubProfile && !googleProfile) {
+  const providers: ProviderCredentials = Object.freeze({
+    github: normalizeProviderCredentials("github", env.GITHUB_CLIENT_ID, env.GITHUB_CLIENT_SECRET),
+    google: normalizeProviderCredentials("google", env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET),
+  });
+  if (!SIGN_IN_PROVIDERS.some((provider) => providers[provider] !== null)) {
     throw new UserAuthConfigurationError(
       "At least one sign-in provider must be configured: set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET, or GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET"
     );
   }
 
-  return createUserAuth({
-    database,
-    publicWebOrigin,
+  return {
+    publicWebOrigin: parsePublicWebOrigin(env.WEB_APP_URL),
     secret,
-    userProjection: new D1CanonicalUserProjection(database),
-    ...(githubProfile && githubClientId && githubClientSecret
-      ? {
-          github: {
-            clientId: githubClientId,
-            clientSecret: githubClientSecret,
-            getUserInfo: githubProfile.getUserInfo,
-          },
-        }
-      : {}),
-    ...(googleProfile && googleClientId && googleClientSecret
-      ? {
-          google: {
-            clientId: googleClientId,
-            clientSecret: googleClientSecret,
-            getUserInfo: googleProfile.getUserInfo,
-          },
-        }
-      : {}),
-  });
+    appName: env.APP_NAME?.trim() || "Open-Inspect",
+    admission: {
+      allowedGitHubUsers: parseAdmissionAllowlist(env.ALLOWED_USERS),
+      allowedEmails: parseAdmissionAllowlist(env.ALLOWED_EMAILS),
+      allowedEmailDomains: parseAdmissionAllowlist(env.ALLOWED_EMAIL_DOMAINS),
+      allowedGitHubOrganizations: parseAdmissionAllowlist(env.ALLOWED_GITHUB_ORGS),
+      unsafeAllowAllUsers: parseAdmissionBoolean(env.UNSAFE_ALLOW_ALL_USERS),
+    },
+    providers,
+  };
 }
 
-type BetterAuthInstance = ReturnType<typeof createUserAuthFromEnv>;
+const UNSUPPORTED_ADMISSION_MESSAGE: Readonly<Record<SignInProvider, string>> = {
+  github:
+    "GitHub sign-in has no compatible admission policy; configure a GitHub-specific or provider-neutral admission rule, or UNSAFE_ALLOW_ALL_USERS",
+  google:
+    "Google sign-in requires provider-neutral admission through ALLOWED_EMAILS, ALLOWED_EMAIL_DOMAINS, or UNSAFE_ALLOW_ALL_USERS",
+};
+
+function requireProviderAdmission(
+  admissionPolicy: AdmissionPolicy,
+  provider: SignInProvider
+): void {
+  if (!admissionPolicy.supportsSignInProvider(provider)) {
+    throw new UserAuthConfigurationError(UNSUPPORTED_ADMISSION_MESSAGE[provider]);
+  }
+}
+
+function createGitHubAuthConfig(
+  credentials: OAuthCredentials | null,
+  appName: string,
+  admissionPolicy: AdmissionPolicy
+): UserAuthConfig["github"] {
+  if (!credentials) return undefined;
+  requireProviderAdmission(admissionPolicy, "github");
+
+  const profile = new GitHubSignInProfileResolver({
+    identityResolver: new GitHubProviderIdentityResolver({
+      issuer: GITHUB_ISSUER,
+      userAgent: `${appName} Control Plane`,
+    }),
+    admissionPolicy,
+  });
+  return {
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+    getUserInfo: profile.getUserInfo,
+  };
+}
+
+function createGoogleAuthConfig(
+  credentials: OAuthCredentials | null,
+  admissionPolicy: AdmissionPolicy
+): UserAuthConfig["google"] {
+  if (!credentials) return undefined;
+  requireProviderAdmission(admissionPolicy, "google");
+
+  const profile = new GoogleSignInProfileResolver({
+    clientId: credentials.clientId,
+    admissionPolicy,
+  });
+  return {
+    clientId: credentials.clientId,
+    clientSecret: credentials.clientSecret,
+    getUserInfo: profile.getUserInfo,
+  };
+}
+
+function createUserAuthRuntime(
+  config: NormalizedUserAuthConfig,
+  database: D1Database
+): UserAuthRuntime {
+  const admissionPolicy = new AdmissionPolicy(config.admission);
+  const github = createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy);
+  const google = createGoogleAuthConfig(config.providers.google, admissionPolicy);
+
+  const auth = createUserAuth({
+    database,
+    publicWebOrigin: config.publicWebOrigin,
+    secret: config.secret,
+    userProjection: new D1CanonicalUserProjection(database),
+    ...(github ? { github } : {}),
+    ...(google ? { google } : {}),
+  });
+  return {
+    auth,
+    enabledProviders: Object.freeze(
+      SIGN_IN_PROVIDERS.filter((provider) => config.providers[provider] !== null)
+    ),
+  };
+}
+
+export function createUserAuthRuntimeFromEnv(env: Env, database: D1Database): UserAuthRuntime {
+  return createUserAuthRuntime(normalizeUserAuthConfig(env), database);
+}
+
+type BetterAuthInstance = ReturnType<typeof createUserAuth>;
+
+export interface UserAuthRuntime {
+  readonly auth: BetterAuthInstance;
+  readonly enabledProviders: readonly SignInProvider[];
+}
+
+export function createUserAuthFromEnv(env: Env, database: D1Database): BetterAuthInstance {
+  return createUserAuthRuntimeFromEnv(env, database).auth;
+}
 
 interface CachedUserAuth {
   readonly fingerprint: string;
-  readonly auth: BetterAuthInstance;
+  readonly runtime: UserAuthRuntime;
 }
 
 const userAuthByDatabase = new WeakMap<D1Database, CachedUserAuth>();
 
-function configurationFingerprint(env: Env): string {
-  return [
-    env.WEB_APP_URL,
-    env.BROWSER_AUTH_SECRET,
-    env.GITHUB_CLIENT_ID,
-    env.GITHUB_CLIENT_SECRET,
-    env.GOOGLE_CLIENT_ID,
-    env.GOOGLE_CLIENT_SECRET,
-    env.ALLOWED_USERS,
-    env.ALLOWED_EMAILS,
-    env.ALLOWED_EMAIL_DOMAINS,
-    env.ALLOWED_GITHUB_ORGS,
-    env.UNSAFE_ALLOW_ALL_USERS,
-  ].join("\u0000");
+function configurationFingerprint(config: NormalizedUserAuthConfig): string {
+  return JSON.stringify(config);
+}
+
+export function getUserAuthRuntime(env: Env, database: D1Database): UserAuthRuntime {
+  const config = normalizeUserAuthConfig(env);
+  const fingerprint = configurationFingerprint(config);
+  const cached = userAuthByDatabase.get(database);
+  if (cached?.fingerprint === fingerprint) {
+    return cached.runtime;
+  }
+  const runtime = createUserAuthRuntime(config, database);
+  userAuthByDatabase.set(database, { fingerprint, runtime });
+  return runtime;
 }
 
 export function getUserAuth(env: Env, database: D1Database): BetterAuthInstance {
-  const fingerprint = configurationFingerprint(env);
-  const cached = userAuthByDatabase.get(database);
-  if (cached?.fingerprint === fingerprint) {
-    return cached.auth;
-  }
-  const auth = createUserAuthFromEnv(env, database);
-  userAuthByDatabase.set(database, { fingerprint, auth });
-  return auth;
+  return getUserAuthRuntime(env, database).auth;
 }
 
 export type BetterAuthRuntime = BetterAuthInstance;

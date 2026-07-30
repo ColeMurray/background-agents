@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
-import { DEFAULT_MODEL } from "@open-inspect/shared";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import NewAutomationPage from "./page";
 
 expect.extend(matchers);

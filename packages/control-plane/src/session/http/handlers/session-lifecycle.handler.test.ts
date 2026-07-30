@@ -3,7 +3,7 @@ import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionStatusService } from "../../session-status-service";
-import { getValidModelOrDefault } from "@open-inspect/shared";
+import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {

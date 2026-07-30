@@ -322,6 +322,44 @@ describe("evaluateSpawnDecision", () => {
     }
   });
 
+  it("skips restore when a spawn is already in progress in-memory", () => {
+    // A restore sets the in-memory flag synchronously but persists the
+    // "spawning" status only after its first await; a concurrent evaluation in
+    // that window still sees "stopped" and must not start a second restore.
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, true);
+
+    expect(decision.action).toBe("skip");
+    if (decision.action === "skip") {
+      expect(decision.reason).toContain("in-memory flag");
+    }
+  });
+
+  it("skips resume when a spawn is already in progress in-memory", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: null,
+      providerObjectId: "sb-123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, true, true);
+
+    expect(decision.action).toBe("skip");
+    if (decision.action === "skip") {
+      expect(decision.reason).toContain("in-memory flag");
+    }
+  });
+
   it('returns "spawn" when all conditions pass', () => {
     const now = Date.now();
     const state: SandboxState = {

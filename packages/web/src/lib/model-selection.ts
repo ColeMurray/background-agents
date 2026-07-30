@@ -4,7 +4,7 @@ import {
   getValidModelOrDefault,
   isValidReasoningEffort,
   resolveEnabledModel as resolveSharedEnabledModel,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 
 export interface ModelPreference {
   model: string;

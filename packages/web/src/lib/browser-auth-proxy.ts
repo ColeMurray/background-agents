@@ -1,6 +1,8 @@
-import { BROWSER_AUTH_CLIENT_IP_HEADER, isBrowserAuthProxyRoute } from "@open-inspect/shared";
-import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
-import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
+import {
+  BROWSER_AUTH_CLIENT_IP_HEADER,
+  isBrowserAuthProxyRoute,
+} from "@open-inspect/shared/browser-auth-routes";
+import { dispatchWebServiceRequest } from "./control-plane-service";
 
 const REQUEST_HEADERS = [
   "Accept",
@@ -90,37 +92,19 @@ async function dispatchAllowedBrowserAuthRequest(
   request: BrowserAuthDispatchRequest
 ): Promise<Response> {
   const method = request.method;
-  const secret = process.env.SERVICE_AUTH_SECRET;
-  if (!secret) {
-    throw new Error("SERVICE_AUTH_SECRET not configured");
-  }
-
-  const upstreamUrl = `${getControlPlaneUrl()}${request.pathname}${request.search ?? ""}`;
   const sourceHeaders = new Headers(request.headers);
   const headers = copyRequestHeaders(sourceHeaders, request.clientIp);
-  const serviceHeaders = await buildServiceAuthHeaders({
-    service: "web",
-    secret,
+  const upstream = await dispatchWebServiceRequest({
     method,
-    url: upstreamUrl,
+    path: `${request.pathname}${request.search ?? ""}`,
+    headers,
     body: request.body,
     traceId: sourceHeaders.get("x-trace-id") ?? undefined,
-  });
-  for (const [name, value] of Object.entries(serviceHeaders)) {
-    headers.set(name, value);
-  }
-
-  const upstream = await dispatchControlPlaneFetch(
-    upstreamUrl,
-    {
-      method,
-      headers,
-      body: request.body,
+    transportOptions: {
       redirect: "manual",
       cache: "no-store",
     },
-    {}
-  );
+  });
 
   return new Response(upstream.body, {
     status: upstream.status,

@@ -3,7 +3,7 @@ import {
   isValidModel,
   normalizeValidModels,
   type ValidModel,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { SqlDatabase } from "./sql-database";
 
 export class ModelPreferencesValidationError extends Error {

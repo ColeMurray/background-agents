@@ -2,11 +2,11 @@
  * API router for Open-Inspect Control Plane.
  */
 
+import { isBrowserAuthProxyRoute } from "@open-inspect/shared/browser-auth-routes";
 import type { Env } from "./types";
-import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
-import { getUserAuth } from "./auth/user/runtime";
+import { getUserAuth, getUserAuthRuntime } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
@@ -26,6 +26,7 @@ import {
   HttpError,
 } from "./routes/shared";
 import { browserAuthRoutes } from "./routes/browser-auth";
+import { signInProviderRoutes } from "./routes/sign-in-providers";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -158,9 +159,16 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isScmAgnosticRoute(method: string, path: string): boolean {
+function isWebServiceAuthRoute(method: string, path: string): boolean {
   return (
     isBrowserAuthProxyRoute(method, path) ||
+    (method === "GET" && path === "/internal/auth/sign-in-providers")
+  );
+}
+
+function isScmAgnosticRoute(method: string, path: string): boolean {
+  return (
+    isWebServiceAuthRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
@@ -312,6 +320,7 @@ const routes: Route[] = [
   },
 
   ...browserAuthRoutes,
+  ...signInProviderRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -395,6 +404,8 @@ export async function handleRequest(
     db: instrumentD1(env.DB, metrics),
     // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
     getUserAuth: () => getUserAuth(env, env.DB),
+    // eslint-disable-next-line no-restricted-syntax -- composition root owns normalized auth runtime construction
+    getUserAuthRuntime: () => getUserAuthRuntime(env, env.DB),
     executionCtx,
   };
 
@@ -437,7 +448,7 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: isBrowserAuthProxyRoute(method, path) ? "service" : "user",
+        webService: isWebServiceAuthRoute(method, path) ? "service" : "user",
       });
 
       if (isAuthError(authResult)) {

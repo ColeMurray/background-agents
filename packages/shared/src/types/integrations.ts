@@ -36,6 +36,13 @@ export interface LinearBotSettings {
   issueSessionInstructions?: string;
 }
 
+/**
+ * Maximum length of a custom session-instructions value (Linear
+ * `issueSessionInstructions`, Slack `sessionInstructions`). Bounds the
+ * settings blob and the prompt section built from it.
+ */
+export const MAX_SESSION_INSTRUCTIONS_LENGTH = 10000;
+
 /** Overridable behavior settings for the code-server integration. */
 export interface CodeServerSettings {
   enabled?: boolean;
@@ -224,6 +231,11 @@ export interface SlackGlobalSettings extends SlackRepoSettings {
   mentionsPolicy?: SlackMentionsPolicy;
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
   routingRules?: SlackRoutingRule[];
+  /**
+   * Custom instructions appended to the first prompt of every Slack-initiated
+   * session (global-only, like mentionsPolicy).
+   */
+  sessionInstructions?: string;
 }
 
 /**

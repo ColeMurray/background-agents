@@ -1,4 +1,5 @@
-import { isCanonicalUserId, type SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import type { Env } from "../types";

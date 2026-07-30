@@ -1,14 +1,13 @@
 import { generateId } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
+import type { SessionAttachmentReference, ResolvedSessionAttachment } from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  type SessionAttachmentReference,
-  type ResolvedSessionAttachment,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
@@ -174,7 +173,26 @@ export class SessionMessageQueue {
         reason: "no_sandbox",
       });
       this.messenger.broadcast({ type: "sandbox_spawning" });
-      await this.sandboxLifecycle.spawnSandbox();
+      // Spawn in the background: a snapshot restore can take tens of seconds,
+      // and awaiting it here holds the prompt HTTP response open past bot
+      // callers' request timeouts. The message is already persisted as
+      // pending and dispatches when the sandbox WebSocket connects.
+      this.ctx.waitUntil(
+        this.sandboxLifecycle.spawnSandbox().catch((error) => {
+          // Expected provider failures broadcast sandbox_error inside the
+          // lifecycle manager; this catch only sees throws from before those
+          // handlers. Surface them the same way so clients aren't left
+          // watching a silent "sandbox_spawning" forever.
+          this.log.error("prompt.spawn.background_error", {
+            message_id: message.id,
+            error: error instanceof Error ? error : String(error),
+          });
+          this.messenger.broadcast({
+            type: "sandbox_error",
+            error: error instanceof Error ? error.message : "Failed to spawn sandbox",
+          });
+        })
+      );
       return;
     }
 

@@ -3,7 +3,8 @@
 import { useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { describeCron, getReasoningConfig } from "@open-inspect/shared";
+import { describeCron } from "@open-inspect/shared";
+import { getReasoningConfig } from "@open-inspect/shared/models";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation, useAutomationInvocations } from "@/hooks/use-automations";
 import { useEnvironments } from "@/hooks/use-environments";

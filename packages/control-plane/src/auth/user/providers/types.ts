@@ -1,4 +1,4 @@
-import type { SignInProvider } from "../sign-in-provider";
+import type { SignInProvider } from "@open-inspect/shared";
 
 export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvider> {
   readonly provider: P;

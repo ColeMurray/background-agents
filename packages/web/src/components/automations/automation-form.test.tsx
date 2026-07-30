@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
-import { DEFAULT_MODEL, MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { AutomationForm, type AutomationFormValues } from "./automation-form";
 import { CronPicker } from "./cron-picker";
 

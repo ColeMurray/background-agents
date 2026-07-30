@@ -64,8 +64,6 @@ module "control_plane_worker" {
 
   plain_text_bindings = concat(
     [
-      { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
-      { name = "GOOGLE_CLIENT_ID", value = var.google_client_id },
       { name = "WEB_APP_URL", value = local.web_app_url },
       { name = "ALLOWED_USERS", value = var.allowed_users },
       { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
@@ -78,6 +76,12 @@ module "control_plane_worker" {
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
       { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],
+    local.github_oauth_enabled ? [
+      { name = "GITHUB_CLIENT_ID", value = trimspace(var.github_client_id) },
+    ] : [],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_ID", value = trimspace(var.google_client_id) },
+    ] : [],
     local.use_modal_backend ? [
       { name = "MODAL_WORKSPACE", value = var.modal_workspace },
       { name = "MODAL_ENVIRONMENT", value = var.modal_environment },
@@ -129,7 +133,6 @@ module "control_plane_worker" {
       # and cookies in the control plane. Keeping the Terraform input stable
       # avoids coupling secret rotation to the browser-auth cutover.
       { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
-      { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
       # Pepper for image-build callback token hashes (see service-auth.tf)
@@ -145,8 +148,11 @@ module "control_plane_worker" {
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
+    local.github_oauth_enabled ? [
+      { name = "GITHUB_CLIENT_SECRET", value = trimspace(var.github_client_secret) },
+    ] : [],
     local.google_enabled ? [
-      { name = "GOOGLE_CLIENT_SECRET", value = var.google_client_secret },
+      { name = "GOOGLE_CLIENT_SECRET", value = trimspace(var.google_client_secret) },
     ] : [],
     local.use_modal_backend ? [
       { name = "MODAL_TOKEN_ID", value = var.modal_token_id },

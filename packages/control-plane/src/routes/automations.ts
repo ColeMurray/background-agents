@@ -6,9 +6,6 @@ import {
   isValidCron,
   nextCronOccurrence,
   cronIntervalMinutes,
-  isValidModel,
-  isValidReasoningEffort,
-  getValidModelOrDefault,
   validateConditions,
   conditionRegistry,
   listChannels,
@@ -18,6 +15,11 @@ import {
   type AutomationTriggerType,
   type TriggerConfig,
 } from "@open-inspect/shared";
+import {
+  getValidModelOrDefault,
+  isValidModel,
+  isValidReasoningEffort,
+} from "@open-inspect/shared/models";
 import {
   AutomationStore,
   toAutomation,
