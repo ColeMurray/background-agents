@@ -9,7 +9,7 @@ import type { RequestMetrics } from "../db/instrumented-d1";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
-import type { BetterAuthRuntime } from "../auth/user/runtime";
+import type { BetterAuthRuntime, UserAuthRuntime } from "../auth/user/runtime";
 import {
   createSourceControlProviderFromEnv,
   SourceControlProviderError,
@@ -33,6 +33,8 @@ export type RequestContext = CorrelationContext & {
   executionCtx?: ExecutionContext;
   /** Lazy runtime dependency used by user-session authentication and credential access. */
   getUserAuth?: () => BetterAuthRuntime;
+  /** Lazy normalized auth runtime used by server-only authentication composition routes. */
+  getUserAuthRuntime?: () => UserAuthRuntime;
   /**
    * The request's verified principal. Absent only on public routes and CORS
    * preflights — every authenticated request carries one.
@@ -48,6 +50,10 @@ export type RequestContext = CorrelationContext & {
 export interface Route {
   method: string;
   pattern: RegExp;
+  /** Whether a verified web signature represents the service or an end user. */
+  webServiceAuth?: "service" | "user";
+  /** Whether this route is independent of the deployment SCM provider. */
+  scmAgnostic?: boolean;
   handler: (
     request: Request,
     env: Env,

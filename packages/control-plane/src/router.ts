@@ -3,10 +3,9 @@
  */
 
 import type { Env } from "./types";
-import { isBrowserAuthProxyRoute } from "@open-inspect/shared";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
-import { getUserAuth } from "./auth/user/runtime";
+import { getUserAuth, getUserAuthRuntime } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
@@ -26,6 +25,7 @@ import {
   HttpError,
 } from "./routes/shared";
 import { browserAuthRoutes } from "./routes/browser-auth";
+import { signInProviderRoutes } from "./routes/sign-in-providers";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
@@ -158,9 +158,9 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isScmAgnosticRoute(method: string, path: string): boolean {
+function isScmAgnosticRoute(path: string, route: Route): boolean {
   return (
-    isBrowserAuthProxyRoute(method, path) ||
+    route.scmAgnostic === true ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
@@ -173,8 +173,8 @@ function isProviderImplementedRoute(provider: SourceControlProviderName, path: s
 }
 
 function enforceImplementedScmProvider(
-  method: string,
   path: string,
+  route: Route,
   env: Env,
   ctx: RequestContext
 ): Response | null {
@@ -183,7 +183,7 @@ function enforceImplementedScmProvider(
     if (
       !isProviderImplementedRoute(provider, path) &&
       !isPublicRoute(path) &&
-      !isScmAgnosticRoute(method, path)
+      !isScmAgnosticRoute(path, route)
     ) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
@@ -312,6 +312,7 @@ const routes: Route[] = [
   },
 
   ...browserAuthRoutes,
+  ...signInProviderRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -395,6 +396,8 @@ export async function handleRequest(
     db: instrumentD1(env.DB, metrics),
     // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
     getUserAuth: () => getUserAuth(env, env.DB),
+    // eslint-disable-next-line no-restricted-syntax -- composition root owns normalized auth runtime construction
+    getUserAuthRuntime: () => getUserAuthRuntime(env, env.DB),
     executionCtx,
   };
 
@@ -437,7 +440,7 @@ export async function handleRequest(
         : error("Unauthorized: Invalid session path", 401);
     } else {
       const authResult = await authenticate(request, env, ctx, {
-        webService: isBrowserAuthProxyRoute(method, path) ? "service" : "user",
+        webService: matchedRoute.route.webServiceAuth ?? "user",
       });
 
       if (isAuthError(authResult)) {
@@ -470,7 +473,7 @@ export async function handleRequest(
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(method, path, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(path, matchedRoute.route, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }

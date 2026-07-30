@@ -114,14 +114,21 @@ variable "modal_environment_web_suffix" {
 # =============================================================================
 
 variable "github_client_id" {
-  description = "GitHub OAuth App client ID"
+  description = "GitHub OAuth App client ID. Set together with github_client_secret to enable GitHub sign-in."
   type        = string
+  default     = ""
+
+  validation {
+    condition     = (trimspace(var.github_client_id) == "") == (trimspace(var.github_client_secret) == "")
+    error_message = "github_client_id and github_client_secret must be set together with non-whitespace values, or both left empty."
+  }
 }
 
 variable "github_client_secret" {
-  description = "GitHub OAuth App client secret"
+  description = "GitHub OAuth App client secret. Set together with github_client_id to enable GitHub sign-in."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # =============================================================================
@@ -139,8 +146,8 @@ variable "google_client_id" {
   default     = ""
 
   validation {
-    condition     = (var.google_client_id == "") == (var.google_client_secret == "")
-    error_message = "google_client_id and google_client_secret must be set together (both non-empty) or both left empty. Setting only one silently disables Google login."
+    condition     = (trimspace(var.google_client_id) == "") == (trimspace(var.google_client_secret) == "")
+    error_message = "google_client_id and google_client_secret must be set together with non-whitespace values, or both left empty."
   }
 }
 
