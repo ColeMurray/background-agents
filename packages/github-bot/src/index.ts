@@ -29,7 +29,7 @@ import {
   isReviewRequestedForBot,
   type HandlerResult,
 } from "./handlers";
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;

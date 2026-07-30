@@ -10,12 +10,12 @@ import type { Env, RepoConfig } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
   controlPlaneReposResponseSchema,
-  createKvCacheStore,
   normalizeRoutingRules,
   repoConfigSchema,
   type SlackGlobalConfig,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createCachedResource } from "./cached-resource";
 import {
   controlPlaneFetch,
