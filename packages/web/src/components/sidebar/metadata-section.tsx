@@ -25,7 +25,8 @@ import {
   ErrorIcon,
   RefreshIcon,
 } from "@/components/ui/icons";
-import { Badge, prBadgeVariant } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
+import { prBadgeVariant } from "@/components/ui/badge-variants";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 
