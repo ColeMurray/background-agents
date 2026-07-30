@@ -3,7 +3,7 @@ import {
   SERVICE_HEADER,
   SERVICE_SIGNATURE_HEADER,
   buildServiceAuthHeaders,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/service-auth";
 import { dispatchControlPlaneFetch, getControlPlaneUrl } from "./control-plane-transport";
 
 export interface WebServiceRequest {
