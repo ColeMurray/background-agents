@@ -23,7 +23,7 @@ import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
-import type { EnqueuePromptRequest } from "./services/message.service";
+import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
