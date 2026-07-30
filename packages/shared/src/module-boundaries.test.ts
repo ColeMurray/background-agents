@@ -63,10 +63,14 @@ function exportHasRuntimeEdge(declaration: ts.ExportDeclaration): boolean {
   return elements.length === 0 || elements.some((element) => !element.isTypeOnly);
 }
 
-function collectDependencies(sourcePath: string, modules: ReadonlySet<string>): Dependency[] {
+function collectDependencies(
+  sourcePath: string,
+  modules: ReadonlySet<string>,
+  sourceText = readFileSync(sourcePath, "utf8")
+): Dependency[] {
   const sourceFile = ts.createSourceFile(
     sourcePath,
-    readFileSync(sourcePath, "utf8"),
+    sourceText,
     ts.ScriptTarget.Latest,
     true,
     ts.ScriptKind.TS
@@ -88,6 +92,15 @@ function collectDependencies(sourcePath: string, modules: ReadonlySet<string>): 
       addDependency(statement.moduleSpecifier, exportHasRuntimeEdge(statement));
     }
   }
+
+  function collectImportTypes(node: ts.Node): void {
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      addDependency(node.argument.literal, false);
+    }
+    ts.forEachChild(node, collectImportTypes);
+  }
+  ts.forEachChild(sourceFile, collectImportTypes);
+
   return dependencies;
 }
 
@@ -195,5 +208,21 @@ describe("shared module boundaries", () => {
     const cycle = findDependencyCycle(compileTimeGraph)?.map(relativePath);
 
     expect(cycle?.join(" -> ")).toBeUndefined();
+  });
+});
+
+describe("dependency collection", () => {
+  it("collects import-type expressions as compile-time-only dependencies", () => {
+    const fixtureRoot = path.join(SOURCE_ROOT, "__dependency_fixture__");
+    const sourcePath = path.join(fixtureRoot, "source.ts");
+    const targetPath = path.join(fixtureRoot, "target.ts");
+
+    expect(
+      collectDependencies(
+        sourcePath,
+        new Set([sourcePath, targetPath]),
+        'type Target = import("./target").Target;'
+      )
+    ).toEqual([{ specifier: "./target", target: targetPath, runtime: false }]);
   });
 });
