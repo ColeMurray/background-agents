@@ -15,6 +15,7 @@ import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import {
   resolveCodeServerEnabled,
@@ -210,15 +211,17 @@ async function handleSpawnChild(
 
   let promptResponse: Response;
   try {
+    const promptRequest = {
+      content: body.prompt,
+      authorId: spawnContext.owner.userId,
+      canonicalUserId: spawnContext.owner.canonicalUserId ?? parentUserId ?? undefined,
+      source: "agent",
+    } satisfies EnqueuePromptRequest;
+
     promptResponse = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.prompt, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: body.prompt,
-        authorId: spawnContext.owner.userId,
-        canonicalUserId: spawnContext.owner.canonicalUserId ?? parentUserId ?? undefined,
-        source: "agent",
-      }),
+      body: JSON.stringify(promptRequest),
     });
   } catch (enqueueError) {
     logger.error("Failed to enqueue initial prompt for child session", {

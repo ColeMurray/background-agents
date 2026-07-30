@@ -51,6 +51,7 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import type { RequestContext } from "../routes/shared";
@@ -158,6 +159,13 @@ type StartInvocationResult =
   | { outcome: "blocked" }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
   | { outcome: "deduplicated" };
+
+type SchedulerPromptRequest = Pick<
+  EnqueuePromptRequest,
+  "content" | "authorId" | "canonicalUserId" | "source"
+> & {
+  callbackContext: AutomationCallbackContext | SlackCallbackContext;
+};
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -1361,13 +1369,7 @@ export class SchedulerDO extends DurableObject<Env> {
   /** Enqueue a prompt onto a session's queue via its DO `/internal/prompt` route. */
   private async enqueueSessionPrompt(
     sessionId: string,
-    body: {
-      content: string;
-      authorId: string;
-      canonicalUserId?: string | null;
-      source: string;
-      callbackContext: AutomationCallbackContext | SlackCallbackContext;
-    }
+    body: SchedulerPromptRequest
   ): Promise<void> {
     const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {
