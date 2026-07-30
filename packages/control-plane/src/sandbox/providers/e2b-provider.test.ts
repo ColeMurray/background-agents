@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { E2BSandboxProvider, type E2BProviderConfig } from "./e2b-provider";
 import { SandboxProviderError } from "../provider";
 import {

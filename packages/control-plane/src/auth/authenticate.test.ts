@@ -2,11 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ACTOR_HEADER,
   buildServiceAuthHeaders,
-  generateInternalToken,
   SERVICE_HEADER,
   SERVICE_SIGNATURE_HEADER,
   type ServiceName,
 } from "@open-inspect/shared";
+import { generateInternalToken } from "@open-inspect/shared/auth";
 
 import { authenticate, isAuthError, SERVICE_REQUEST_MAX_BODY_BYTES } from "./authenticate";
 import type { RequestContext } from "../routes/shared";

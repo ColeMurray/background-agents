@@ -11,7 +11,8 @@
  * (the workflow) log and map to the route-facing error taxonomy.
  */
 
-import { computeHmacHex, type RepositoryShaEntry } from "@open-inspect/shared";
+import type { RepositoryShaEntry } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { Env } from "../types";
 import type { ImageBuildProvider, MarkImageBuildReadyResult } from "./model";

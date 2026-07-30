@@ -1,10 +1,10 @@
 import {
-  timingSafeEqual,
   type ImageBuildRecordView,
   type ImageBuildScopeKind,
   type ImageBuildStatus,
   type RepositoryShaEntry,
 } from "@open-inspect/shared";
+import { timingSafeEqual } from "@open-inspect/shared/auth";
 import type {
   ImageBuildCallbackBuild,
   ImageBuildProvider,

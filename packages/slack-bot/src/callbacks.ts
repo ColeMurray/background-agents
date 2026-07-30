@@ -2,7 +2,8 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { postEphemeral, verifyCallbackFromControlPlane } from "@open-inspect/shared";
+import { postEphemeral } from "@open-inspect/shared";
+import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { Env } from "./types";

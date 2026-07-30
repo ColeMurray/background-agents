@@ -14,13 +14,13 @@ import {
   nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
-  computeHmacHex,
   type AutomationCallbackContext,
   type AutomationInvocationSource,
   type SlackAutomationEvent,
   type SlackCallbackContext,
   type TriggerConfig,
 } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {

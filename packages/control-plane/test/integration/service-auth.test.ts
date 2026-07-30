@@ -3,11 +3,11 @@ import { SELF, env } from "cloudflare:test";
 import {
   ACTOR_HEADER,
   buildServiceAuthHeaders,
-  generateInternalToken,
   SERVICE_HEADER,
   SERVICE_SIGNATURE_HEADER,
   type ServiceName,
 } from "@open-inspect/shared";
+import { generateInternalToken } from "@open-inspect/shared/auth";
 import { GlobalSecretsStore } from "../../src/db/global-secrets";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";

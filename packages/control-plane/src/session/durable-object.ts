@@ -14,9 +14,9 @@ import {
   clientMessageSchema,
   resolveAppName,
   sandboxEventSchema,
-  timingSafeEqual,
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
+import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { Env } from "../types";
 import {
   consumeImageBuildCallbackTokenOrThrow,
