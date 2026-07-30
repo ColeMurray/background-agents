@@ -4,7 +4,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import AutomationsPage from "./page";
+import AutomationsPage, { SEARCH_DEBOUNCE_MS } from "./page";
 
 expect.extend(matchers);
 
@@ -74,7 +74,7 @@ describe("AutomationsPage", () => {
     });
 
     expect(mockUseAutomations).toHaveBeenLastCalledWith("");
-    act(() => vi.advanceTimersByTime(300));
+    act(() => vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS));
 
     expect(mockUseAutomations).toHaveBeenLastCalledWith("release");
     expect(mockReplace).toHaveBeenCalledWith("/automations?search=release", { scroll: false });

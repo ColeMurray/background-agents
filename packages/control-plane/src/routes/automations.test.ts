@@ -266,6 +266,7 @@ describe("automation route handlers", () => {
       [{ limit: "101" }, "limit"],
       [{ limit: "ten" }, "limit"],
       [{ cursor: "not-a-cursor" }, "cursor"],
+      [{ search: "a".repeat(201) }, "Search"],
     ])("rejects invalid pagination params", async (query, expectedField) => {
       const response = await callRoute("GET", "/automations", { query });
 

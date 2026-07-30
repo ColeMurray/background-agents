@@ -22,6 +22,29 @@ function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
 }
 
+function appendRepositoryFilter(
+  conditions: string[],
+  params: unknown[],
+  options: { repoOwner?: string; repoName?: string }
+): void {
+  if (options.repoOwner) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM automation_repositories ar
+               WHERE ar.automation_id = automations.id AND ar.repo_owner = ?${
+                 options.repoName ? " AND ar.repo_name = ?" : ""
+               })`
+    );
+    params.push(options.repoOwner.toLowerCase());
+    if (options.repoName) params.push(options.repoName.toLowerCase());
+  } else if (options.repoName) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM automation_repositories ar
+               WHERE ar.automation_id = automations.id AND ar.repo_name = ?)`
+    );
+    params.push(options.repoName.toLowerCase());
+  }
+}
+
 // ─── Internal row types ──────────────────────────────────────────────────────
 
 export interface AutomationRow {
@@ -333,22 +356,7 @@ export class AutomationStore {
     const conditions: string[] = ["deleted_at IS NULL"];
     const params: unknown[] = [];
 
-    if (options.repoOwner) {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM automation_repositories ar
-                 WHERE ar.automation_id = automations.id AND ar.repo_owner = ?${
-                   options.repoName ? " AND ar.repo_name = ?" : ""
-                 })`
-      );
-      params.push(options.repoOwner.toLowerCase());
-      if (options.repoName) params.push(options.repoName.toLowerCase());
-    } else if (options.repoName) {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM automation_repositories ar
-                 WHERE ar.automation_id = automations.id AND ar.repo_name = ?)`
-      );
-      params.push(options.repoName.toLowerCase());
-    }
+    appendRepositoryFilter(conditions, params, options);
 
     const result = await this.db
       .prepare(
@@ -375,22 +383,7 @@ export class AutomationStore {
       params.push(`%${escapeLikePattern(options.nameSearch)}%`);
     }
 
-    if (options.repoOwner) {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM automation_repositories ar
-                 WHERE ar.automation_id = automations.id AND ar.repo_owner = ?${
-                   options.repoName ? " AND ar.repo_name = ?" : ""
-                 })`
-      );
-      params.push(options.repoOwner.toLowerCase());
-      if (options.repoName) params.push(options.repoName.toLowerCase());
-    } else if (options.repoName) {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM automation_repositories ar
-                 WHERE ar.automation_id = automations.id AND ar.repo_name = ?)`
-      );
-      params.push(options.repoName.toLowerCase());
-    }
+    appendRepositoryFilter(conditions, params, options);
 
     if (options.cursor) {
       conditions.push("(created_at < ? OR (created_at = ? AND id < ?))");

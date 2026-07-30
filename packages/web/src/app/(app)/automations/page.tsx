@@ -12,6 +12,8 @@ import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "@/components/ui/icons";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
+export const SEARCH_DEBOUNCE_MS = 300;
+
 export default function AutomationsPage() {
   const { isOpen } = useSidebarContext();
   const pathname = usePathname();
@@ -32,7 +34,7 @@ export default function AutomationsPage() {
   }, [searchParams]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => {
+    const debounceTimeoutId = window.setTimeout(() => {
       const normalizedNameSearch = nameSearch.trim();
       setDebouncedNameSearch(normalizedNameSearch);
 
@@ -47,9 +49,9 @@ export default function AutomationsPage() {
         const queryString = nextSearchParams.toString();
         router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
       }
-    }, 300);
+    }, SEARCH_DEBOUNCE_MS);
 
-    return () => window.clearTimeout(timeout);
+    return () => window.clearTimeout(debounceTimeoutId);
   }, [nameSearch, pathname, router, searchParams]);
 
   const handleAction = async (id: string, action: "pause" | "resume" | "trigger" | "delete") => {
