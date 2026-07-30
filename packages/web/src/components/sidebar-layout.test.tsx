@@ -185,3 +185,46 @@ describe("mobile sidebar drag", () => {
     expect(mocks.sidebar.open).not.toHaveBeenCalled();
   });
 });
+
+describe("unauthenticated app shell", () => {
+  it("shows one generic sign-in link without provider-specific actions", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: null,
+      status: "unauthenticated",
+    });
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    render(<SidebarLayout>Session</SidebarLayout>);
+
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
+    expect(screen.queryByText("Sign in with GitHub")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sign in with Google")).not.toBeInTheDocument();
+  });
+
+  it("shows an unavailable state instead of treating a session outage as logout", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: null,
+      status: "unavailable",
+    });
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    render(<SidebarLayout>Session</SidebarLayout>);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Authentication is temporarily unavailable."
+    );
+    expect(screen.queryByRole("link", { name: "Sign in" })).not.toBeInTheDocument();
+  });
+
+  it("fails closed for an unhandled authentication state", () => {
+    vi.mocked(useAuthSession).mockReturnValue({
+      data: null,
+      status: "future-state",
+    } as never);
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    expect(() => render(<SidebarLayout>Session</SidebarLayout>)).toThrow(
+      "Unhandled authentication state"
+    );
+  });
+});

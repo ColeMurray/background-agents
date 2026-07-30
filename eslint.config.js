@@ -212,6 +212,21 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    files: [
+      "packages/web/src/components/**/*.{ts,tsx}",
+      "packages/web/src/hooks/**/*.{ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "ImportDeclaration[source.value='@/lib/sign-in-providers']",
+          message: "Provider discovery is server-only; render its result into client components.",
+        },
+      ],
+    },
+  },
 
   // Cloudflare Workers specific config
   {

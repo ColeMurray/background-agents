@@ -24,7 +24,7 @@ export type AuthSessionState =
     }
   | {
       data: null;
-      status: "loading" | "unauthenticated";
+      status: "loading" | "unauthenticated" | "unavailable";
     };
 
 export async function signIn(provider: SignInProvider): Promise<void> {
@@ -81,7 +81,7 @@ export function useAuthSession(): AuthSessionState {
 
   if (data) return { data, status: "authenticated" };
   if (error) {
-    return { data: null, status: "unauthenticated" };
+    return { data: null, status: "unavailable" };
   }
   if (isLoading || data === undefined) {
     return { data: null, status: "loading" };

@@ -1,7 +1,8 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { signIn, useAuthSession } from "@/lib/auth-session";
+import Link from "next/link";
+import { useAuthSession } from "@/lib/auth-session";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
@@ -11,8 +12,9 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon, GoogleIcon, SidebarIcon } from "@/components/ui/icons";
-import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { SidebarIcon } from "@/components/ui/icons";
+import { APP_NAME } from "@/lib/site-config";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 
@@ -144,28 +146,34 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     );
   }
 
-  // Show sign-in page if not authenticated
-  if (!session) {
+  if (status === "unavailable") {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-8 px-6">
+        <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
+        <ErrorBanner role="alert" className="max-w-md px-6 py-4 text-center">
+          Authentication is temporarily unavailable.
+        </ErrorBanner>
+      </div>
+    );
+  }
+
+  if (status === "unauthenticated") {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-8">
         <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
         <p className="text-muted-foreground max-w-md text-center">
           Background coding agent for your team. Ship faster with AI-powered code changes.
         </p>
-        <div className="flex flex-col items-stretch gap-3">
-          <Button onClick={() => signIn("github")} className="gap-2 px-6 py-3">
-            <GitHubIcon className="w-5 h-5" />
-            Sign in with GitHub
-          </Button>
-          {GOOGLE_LOGIN_ENABLED && (
-            <Button onClick={() => signIn("google")} variant="outline" className="gap-2 px-6 py-3">
-              <GoogleIcon className="w-5 h-5" />
-              Sign in with Google
-            </Button>
-          )}
-        </div>
+        <Button asChild className="px-6 py-3">
+          <Link href="/login">Sign in</Link>
+        </Button>
       </div>
     );
+  }
+
+  if (status !== "authenticated") {
+    status satisfies never;
+    throw new Error("Unhandled authentication state");
   }
 
   return (
