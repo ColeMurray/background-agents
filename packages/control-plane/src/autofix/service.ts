@@ -4,11 +4,15 @@ import {
   type GitHubAutofixSessionCommand,
   type ResolvedGitHubAutofixSettings,
 } from "@open-inspect/shared";
-import type {
-  GitHubPullRequestFeedback,
-  GetGitHubPullRequestFeedbackConfig,
+import {
+  MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS,
+  type GitHubPullRequestFeedback,
+  type GetGitHubPullRequestFeedbackConfig,
 } from "../source-control/providers/github-provider";
+import { SourceControlProviderError } from "../source-control/errors";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
+
+const MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS = 4_000;
 
 interface FeedbackReceipt {
   feedbackKey: string;
@@ -140,6 +144,12 @@ function hasReviewContent(
 }
 
 function buildPrompt(feedback: GitHubPullRequestFeedback): string {
+  if (feedback.kind === "review" && feedback.comments.length > MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS) {
+    throw new SourceControlProviderError(
+      `Pull request review exceeds the Autofix limit of ${MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS} comments`,
+      "permanent"
+    );
+  }
   const payload =
     feedback.kind === "pr_comment"
       ? { url: feedback.url, body: feedback.body }
@@ -152,7 +162,7 @@ function buildPrompt(feedback: GitHubPullRequestFeedback): string {
             line: comment.line,
             startLine: comment.startLine,
             body: comment.body,
-            diffHunk: comment.diffHunk,
+            diffHunk: comment.diffHunk.slice(0, MAX_GITHUB_AUTOFIX_DIFF_HUNK_CHARS),
           })),
         };
   return [

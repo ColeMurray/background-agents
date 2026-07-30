@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GITHUB_AUTOFIX_DEFAULTS } from "@open-inspect/shared";
 import { AutofixService } from "./service";
 import type { GitHubPullRequestFeedback } from "../source-control/providers/github-provider";
+import { SourceControlProviderError } from "../source-control/errors";
 
 function buildService() {
   const received: {
@@ -246,6 +247,92 @@ describe("AutofixService", () => {
         body: expect.stringContaining('"authorType":"bot"'),
       })
     );
+  });
+
+  it("truncates diff context while preserving complete review comments", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce({
+      kind: "review",
+      id: "5678",
+      body: "Please address this.",
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+      state: "CHANGES_REQUESTED",
+      author: { id: "8", login: "alice", type: "User" },
+      comments: [
+        {
+          id: "9001",
+          body: "Preserve this complete comment.",
+          url: "https://github.com/acme/widgets/pull/42#discussion_r9001",
+          path: "src/input.ts",
+          line: 12,
+          startLine: null,
+          side: "RIGHT",
+          startSide: null,
+          diffHunk: "x".repeat(5_000),
+        },
+      ],
+    });
+
+    await h.service.process({
+      version: 1,
+      eventType: "pull_request_review",
+      action: "submitted",
+      deliveryId: "delivery-2",
+      providerObject: { kind: "review", id: "5678" },
+      repository: { id: "99", owner: "acme", name: "widgets" },
+      pullRequestNumber: 42,
+      receivedAt: "2026-07-30T05:00:00.000Z",
+    });
+
+    const [, , request] = h.sessions.fetch.mock.calls[0] as unknown as [
+      string,
+      string,
+      RequestInit,
+    ];
+    const command = JSON.parse(String(request.body)) as { prompt: string };
+    expect(command.prompt).toContain("Preserve this complete comment.");
+    expect(command.prompt).toContain("x".repeat(4_000));
+    expect(command.prompt).not.toContain("x".repeat(4_001));
+  });
+
+  it("rejects oversized review feedback before session dispatch", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce({
+      kind: "review",
+      id: "5678",
+      body: "Please address this.",
+      url: "https://github.com/acme/widgets/pull/42#pullrequestreview-5678",
+      state: "CHANGES_REQUESTED",
+      author: { id: "8", login: "alice", type: "User" },
+      comments: Array.from({ length: 101 }, (_, index) => ({
+        id: String(index),
+        body: `Comment ${index}`,
+        url: `https://github.com/acme/widgets/pull/42#discussion_r${index}`,
+        path: "src/input.ts",
+        line: index + 1,
+        startLine: null,
+        side: "RIGHT",
+        startSide: null,
+        diffHunk: "@@ -1 +1 @@",
+      })),
+    });
+
+    const error = await h.service
+      .process({
+        version: 1,
+        eventType: "pull_request_review",
+        action: "submitted",
+        deliveryId: "delivery-2",
+        providerObject: { kind: "review", id: "5678" },
+        repository: { id: "99", owner: "acme", name: "widgets" },
+        pullRequestNumber: 42,
+        receivedAt: "2026-07-30T05:00:00.000Z",
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as SourceControlProviderError).errorType).toBe("permanent");
+    expect(h.sessions.fetch).not.toHaveBeenCalled();
   });
 
   it("fails closed on unattributed reviews from the Open Inspect App", async () => {

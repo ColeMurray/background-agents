@@ -203,6 +203,9 @@ export interface GitHubReviewComment {
   diffHunk: string;
 }
 
+export const MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS = 100;
+const GITHUB_REVIEW_COMMENTS_PER_PAGE = 100;
+
 /** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -337,7 +340,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     const comments: GitHubReviewComment[] = [];
     for (let page = 1; ; page += 1) {
       const commentsResponse = await fetchWithTimeout(
-        `${reviewUrl}/comments?per_page=100&page=${page}`,
+        `${reviewUrl}/comments?per_page=${GITHUB_REVIEW_COMMENTS_PER_PAGE}&page=${page}`,
         { headers: this.appHeaders(token) }
       );
       if (!commentsResponse.ok) {
@@ -353,6 +356,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
         z.array(githubReviewCommentSchema),
         "Failed to get pull request review comments"
       );
+      if (comments.length + pageComments.length > MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS) {
+        throw new SourceControlProviderError(
+          `Pull request review exceeds the Autofix limit of ${MAX_GITHUB_AUTOFIX_REVIEW_COMMENTS} comments`,
+          "permanent"
+        );
+      }
       comments.push(
         ...pageComments.map((comment) => ({
           id: String(comment.id),
@@ -366,7 +375,7 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           diffHunk: comment.diff_hunk,
         }))
       );
-      if (pageComments.length < 100) break;
+      if (pageComments.length < GITHUB_REVIEW_COMMENTS_PER_PAGE) break;
     }
 
     return {
