@@ -41,11 +41,28 @@ eventRoutes.post("/events", async (c) => {
   if (eventId) {
     const cacheStore = createKvCacheStore(c.env.SLACK_KV);
     const dedupeKey = `event:${eventId}`;
-    if (await cacheStore.get(dedupeKey)) {
-      log.debug("slack.event.duplicate", { trace_id: traceId, event_id: eventId });
-      return c.json({ ok: true });
+    let kvOperation: "get" | "put" = "get";
+    try {
+      if (await cacheStore.get(dedupeKey)) {
+        log.debug("slack.event.duplicate", { trace_id: traceId, event_id: eventId });
+        return c.json({ ok: true });
+      }
+      kvOperation = "put";
+      await cacheStore.put(dedupeKey, "1", { expirationTtl: EVENT_DEDUPE_TTL_MS / 1000 });
+    } catch (error) {
+      // This cache is best-effort. Returning 500 would drop the original work and guarantee retries.
+      log.error("slack.event.dedupe_unavailable", {
+        trace_id: traceId,
+        event_id: eventId,
+        event_type: payload.event?.type,
+        kv_operation: kvOperation,
+        slack_retry_num: c.req.header("x-slack-retry-num"),
+        slack_retry_reason: c.req.header("x-slack-retry-reason"),
+        outcome: "degraded",
+        degradation_mode: "process_without_deduplication",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
     }
-    await cacheStore.put(dedupeKey, "1", { expirationTtl: EVENT_DEDUPE_TTL_MS / 1000 });
   }
   const scheduleBackground = (promise: Promise<void>) => c.executionCtx.waitUntil(promise);
   const eventTask = Promise.resolve().then(() =>
