@@ -165,6 +165,16 @@ How matching works:
 Routing rules do not override an active thread: a keyword in a thread reply does not move that
 conversation to a different repository.
 
+### Session instructions
+
+Administrators can define workspace-wide instructions for Slack-started sessions under **Settings →
+Integrations → Slack → Session Instructions** in the web app. When set, the instructions are
+appended to the first prompt of every new Slack-initiated session as an `## Additional Instructions`
+section — use them for standing guidance such as coding standards, preferred tools, or PR
+conventions. They apply to new sessions only (thread follow-ups continue with the session's existing
+context), are limited to 10,000 characters, and mirror the Linear integration's **Issue Session
+Instructions**.
+
 ---
 
 ## Threaded Conversations

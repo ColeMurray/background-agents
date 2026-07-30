@@ -279,6 +279,34 @@ describe("SlackIntegrationSettings", () => {
     });
   });
 
+  it("bounds the session instructions textarea to the shared maximum length", () => {
+    setupSWR({ global: null });
+
+    render(<SlackIntegrationSettings />);
+
+    expect(screen.getByLabelText(/session instructions/i)).toHaveAttribute("maxlength", "10000");
+  });
+
+  // Regression: a save must seed the SWR cache with the saved blob. The other
+  // global section merges against this snapshot, so leaving the pre-save data
+  // in place would let a back-to-back save silently drop the new values.
+  it("seeds the SWR cache with the saved defaults on save", async () => {
+    const user = userEvent.setup();
+    setupSWR({ global: null });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<SlackIntegrationSettings />);
+
+    await user.click(screen.getByRole("switch", { name: /enable agent notifications/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(mutateMock).toHaveBeenCalledWith("/api/integration-settings/slack", {
+      settings: {
+        defaults: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
+      },
+    });
+  });
+
   it("clearing session instructions omits the key on save", async () => {
     const user = userEvent.setup();
     setupSWR({

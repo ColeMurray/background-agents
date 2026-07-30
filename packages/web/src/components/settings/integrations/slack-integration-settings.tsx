@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   DEFAULT_MENTIONS_POLICY,
   encodeRepositoryPathSegments,
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   parseRepositoryFullName,
   type EnrichedRepository,
@@ -206,15 +207,20 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       // preserve them by writing a blob that keeps just the rules (rather than
       // deleting the whole row); otherwise clear the row entirely.
       const existingRules = settings?.defaults?.routingRules;
-      const res = existingRules?.length
+      const resetBody: SlackGlobalConfig | null = existingRules?.length
+        ? { defaults: { routingRules: existingRules } }
+        : null;
+      const res = resetBody
         ? await browserApiFetch(GLOBAL_SETTINGS_KEY, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ settings: { defaults: { routingRules: existingRules } } }),
+            body: JSON.stringify({ settings: resetBody }),
           })
         : await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the post-reset blob before revalidation (see
+        // handleSave for why).
+        mutate(GLOBAL_SETTINGS_KEY, { settings: resetBody });
         setAgentNotificationsEnabled(false);
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
@@ -250,7 +256,10 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         body: JSON.stringify({ settings: body }),
       });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the saved blob before revalidation: the other
+        // global sections merge against this snapshot, so a stale one would
+        // let a back-to-back save resurrect pre-save defaults.
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -380,6 +389,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
             setDirty(true);
           }}
           rows={3}
+          maxLength={MAX_SESSION_INSTRUCTIONS_LENGTH}
           placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
           className="resize-y"
         />
@@ -706,7 +716,9 @@ function RoutingRulesSection({
         body: JSON.stringify({ settings: body }),
       });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the saved blob before revalidation (see the
+        // Defaults section save for why).
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Routing rules saved.");
         setDirty(false);
       } else {
