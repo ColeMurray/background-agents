@@ -11,6 +11,7 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { hostileIdentityFields } from "../hostile-identity.test-fixture";
 import { POST } from "./route";
 
 function postRequest(body: unknown) {
@@ -22,34 +23,6 @@ function postRequest(body: unknown) {
 function controlPlaneBody(callIndex = 0): Record<string, unknown> {
   const options = vi.mocked(controlPlaneUserFetch).mock.calls[callIndex]?.[1];
   return JSON.parse(String(options?.body)) as Record<string, unknown>;
-}
-
-const forbiddenIdentityFields = [
-  "actorDisplayName",
-  "actorEmail",
-  "actorAvatarUrl",
-  "authName",
-  "authEmail",
-  "authAvatarUrl",
-  "userId",
-  "spawnSource",
-  "authProvider",
-  "authUserId",
-  "actorUserId",
-  "scmUserId",
-  "scmToken",
-  "scmRefreshToken",
-  "scmTokenExpiresAt",
-  "scmLogin",
-  "scmName",
-  "scmEmail",
-  "scmAvatarUrl",
-] as const;
-
-function expectNoIdentityAssertions(body: Record<string, unknown>) {
-  for (const field of forbiddenIdentityFields) {
-    expect(body[field], `${field} must not be forwarded`).toBeUndefined();
-  }
 }
 
 const validBody = {
@@ -108,7 +81,6 @@ describe("automations API route (POST)", () => {
     );
     const sent = controlPlaneBody();
     expect(sent).toEqual(validBody);
-    expectNoIdentityAssertions(sent);
   });
 
   it("drops non-allowlisted fields (including client-asserted identity) from the forwarded body", async () => {
@@ -122,30 +94,12 @@ describe("automations API route (POST)", () => {
     const response = await POST(
       postRequest({
         ...validBody,
-        userId: "attacker",
-        spawnSource: "user",
-        authProvider: "github",
-        authUserId: "someone-else",
-        actorUserId: "someone-else",
-        scmUserId: "someone-else",
-        scmToken: "gho_forged",
-        scmRefreshToken: "ghr_forged",
-        actorDisplayName: "Forged Name",
-        actorEmail: "forged@example.com",
-        actorAvatarUrl: "https://example.com/forged.png",
-        authName: "Legacy Name",
-        authEmail: "legacy@example.com",
-        authAvatarUrl: "https://example.com/legacy.png",
-        scmLogin: "forged-login",
-        scmName: "Forged SCM Name",
-        scmEmail: "forged-scm@example.com",
-        scmAvatarUrl: "https://example.com/forged-scm.png",
+        ...hostileIdentityFields,
       })
     );
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
-    expect(sent.name).toBe("Daily sync");
-    expectNoIdentityAssertions(sent);
+    expect(sent).toEqual(validBody);
   });
 });

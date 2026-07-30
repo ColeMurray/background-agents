@@ -11,6 +11,7 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { hostileIdentityFields } from "../hostile-identity.test-fixture";
 import { GET, POST } from "./route";
 
 function request(path: string) {
@@ -28,34 +29,6 @@ function postRequest(body: unknown) {
 function controlPlaneBody(callIndex = 0): Record<string, unknown> {
   const options = vi.mocked(controlPlaneUserFetch).mock.calls[callIndex]?.[1];
   return JSON.parse(String(options?.body)) as Record<string, unknown>;
-}
-
-const forbiddenIdentityFields = [
-  "actorDisplayName",
-  "actorEmail",
-  "actorAvatarUrl",
-  "authName",
-  "authEmail",
-  "authAvatarUrl",
-  "userId",
-  "spawnSource",
-  "authProvider",
-  "authUserId",
-  "actorUserId",
-  "scmUserId",
-  "scmToken",
-  "scmRefreshToken",
-  "scmTokenExpiresAt",
-  "scmLogin",
-  "scmName",
-  "scmEmail",
-  "scmAvatarUrl",
-] as const;
-
-function expectNoIdentityAssertions(body: Record<string, unknown>) {
-  for (const field of forbiddenIdentityFields) {
-    expect(body[field], `${field} must not be forwarded`).toBeUndefined();
-  }
 }
 
 describe("sessions API route", () => {
@@ -183,7 +156,6 @@ describe("sessions API route (POST)", () => {
     );
     const sent = controlPlaneBody();
     expect(sent).toEqual({ repoOwner: "o", repoName: "r", model: "m" });
-    expectNoIdentityAssertions(sent);
   });
 
   it("forwards environmentId for environment launches", async () => {
@@ -235,27 +207,12 @@ describe("sessions API route (POST)", () => {
     const response = await POST(
       postRequest({
         environmentId: "env-1",
-        userId: "attacker",
-        spawnSource: "automation",
-        scmToken: "gho_forged",
-        authUserId: "someone-else",
-        actorDisplayName: "Forged Name",
-        actorEmail: "forged@example.com",
-        actorAvatarUrl: "https://example.com/forged.png",
-        authName: "Legacy Name",
-        authEmail: "legacy@example.com",
-        authAvatarUrl: "https://example.com/legacy.png",
-        authProvider: "github",
-        scmLogin: "forged-login",
-        scmName: "Forged SCM Name",
-        scmEmail: "forged-scm@example.com",
-        scmAvatarUrl: "https://example.com/forged-scm.png",
+        ...hostileIdentityFields,
       })
     );
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
-    expect(sent.environmentId).toBe("env-1");
-    expectNoIdentityAssertions(sent);
+    expect(sent).toEqual({ environmentId: "env-1" });
   });
 });
