@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { MAX_SLACK_ROUTING_KEYWORD_LENGTH, MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
+import {
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
+  MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  MAX_SLACK_ROUTING_RULES,
+} from "@open-inspect/shared";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -1078,10 +1082,10 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
-    it("rejects sessionInstructions over 10000 characters", async () => {
+    it("rejects sessionInstructions over the maximum length", async () => {
       await expect(
         store.setGlobal("slack", {
-          defaults: { sessionInstructions: "x".repeat(10001) },
+          defaults: { sessionInstructions: "x".repeat(MAX_SESSION_INSTRUCTIONS_LENGTH + 1) },
         })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

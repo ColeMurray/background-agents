@@ -3,6 +3,7 @@ import {
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
   DEFAULT_MENTIONS_POLICY,
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
   normalizeRoutingRules,
@@ -404,10 +405,10 @@ export class IntegrationSettingsStore {
 
     if (
       typeof settings.issueSessionInstructions === "string" &&
-      settings.issueSessionInstructions.length > 10000
+      settings.issueSessionInstructions.length > MAX_SESSION_INSTRUCTIONS_LENGTH
     ) {
       throw new IntegrationSettingsValidationError(
-        "issueSessionInstructions must be 10000 characters or fewer"
+        `issueSessionInstructions must be ${MAX_SESSION_INSTRUCTIONS_LENGTH} characters or fewer`
       );
     }
   }
@@ -466,10 +467,10 @@ export class IntegrationSettingsStore {
 
     if (
       typeof settings.sessionInstructions === "string" &&
-      settings.sessionInstructions.length > 10000
+      settings.sessionInstructions.length > MAX_SESSION_INSTRUCTIONS_LENGTH
     ) {
       throw new IntegrationSettingsValidationError(
-        "sessionInstructions must be 10000 characters or fewer"
+        `sessionInstructions must be ${MAX_SESSION_INSTRUCTIONS_LENGTH} characters or fewer`
       );
     }
 

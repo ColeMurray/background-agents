@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
-import { getSlackSessionInstructions } from "./integration-config";
+import { getSlackSessionConfig } from "./integration-config";
 
 function makeEnv(fetch: ReturnType<typeof vi.fn>): Env {
   return {
@@ -9,50 +9,56 @@ function makeEnv(fetch: ReturnType<typeof vi.fn>): Env {
   } as unknown as Env;
 }
 
-describe("getSlackSessionInstructions", () => {
-  it("returns configured instructions", async () => {
+function settingsResponse(defaults: Record<string, unknown>) {
+  return new Response(JSON.stringify({ settings: { defaults } }));
+}
+
+describe("getSlackSessionConfig", () => {
+  it("returns the default model and session instructions from one fetch", async () => {
     const fetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          settings: { defaults: { sessionInstructions: "Prefer minimal diffs." } },
-        })
-      )
+      settingsResponse({
+        model: "anthropic/claude-sonnet-4-6",
+        sessionInstructions: "Prefer minimal diffs.",
+      })
     );
 
-    await expect(getSlackSessionInstructions(makeEnv(fetch))).resolves.toBe(
-      "Prefer minimal diffs."
-    );
+    await expect(getSlackSessionConfig(makeEnv(fetch))).resolves.toEqual({
+      defaultModel: "anthropic/claude-sonnet-4-6",
+      sessionInstructions: "Prefer minimal diffs.",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("returns undefined when instructions are unset", async () => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValue(new Response(JSON.stringify({ settings: { defaults: {} } })));
+  it("drops an invalid default model", async () => {
+    const fetch = vi.fn().mockResolvedValue(settingsResponse({ model: "not-a-model" }));
 
-    await expect(getSlackSessionInstructions(makeEnv(fetch))).resolves.toBeUndefined();
+    const config = await getSlackSessionConfig(makeEnv(fetch));
+    expect(config.defaultModel).toBeUndefined();
   });
 
-  it("returns undefined for whitespace-only instructions", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          settings: { defaults: { sessionInstructions: "   \n" } },
-        })
-      )
-    );
+  it("returns no instructions when unset", async () => {
+    const fetch = vi.fn().mockResolvedValue(settingsResponse({}));
 
-    await expect(getSlackSessionInstructions(makeEnv(fetch))).resolves.toBeUndefined();
+    const config = await getSlackSessionConfig(makeEnv(fetch));
+    expect(config.sessionInstructions).toBeUndefined();
   });
 
-  it("returns undefined on a non-OK response", async () => {
+  it("returns no instructions when whitespace-only", async () => {
+    const fetch = vi.fn().mockResolvedValue(settingsResponse({ sessionInstructions: "   \n" }));
+
+    const config = await getSlackSessionConfig(makeEnv(fetch));
+    expect(config.sessionInstructions).toBeUndefined();
+  });
+
+  it("returns an empty config on a non-OK response", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response("nope", { status: 500 }));
 
-    await expect(getSlackSessionInstructions(makeEnv(fetch))).resolves.toBeUndefined();
+    await expect(getSlackSessionConfig(makeEnv(fetch))).resolves.toEqual({});
   });
 
-  it("returns undefined when the fetch throws", async () => {
+  it("returns an empty config when the fetch throws", async () => {
     const fetch = vi.fn().mockRejectedValue(new Error("network down"));
 
-    await expect(getSlackSessionInstructions(makeEnv(fetch))).resolves.toBeUndefined();
+    await expect(getSlackSessionConfig(makeEnv(fetch))).resolves.toEqual({});
   });
 });

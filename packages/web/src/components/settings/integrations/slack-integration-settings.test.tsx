@@ -405,7 +405,13 @@ describe("SlackIntegrationSettings", () => {
 
     act(() => {
       setupSWR({
-        global: { defaults: { agentNotificationsEnabled: true, mentionsPolicy: "strip" } },
+        global: {
+          defaults: {
+            agentNotificationsEnabled: true,
+            mentionsPolicy: "strip",
+            sessionInstructions: "Prefer minimal diffs.",
+          },
+        },
       });
     });
     rerender(<SlackIntegrationSettings />);
@@ -415,6 +421,7 @@ describe("SlackIntegrationSettings", () => {
       "true"
     );
     expect((screen.getByRole("radio", { name: /strip/i }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByLabelText(/session instructions/i)).toHaveValue("Prefer minimal diffs.");
   });
 
   // Regression: dirty edits must not be clobbered by SWR revalidation.

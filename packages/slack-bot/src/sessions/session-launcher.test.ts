@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
 import type { SlackSessionTarget } from "../targets";
 import { startSessionAndSendPrompt } from "./session-launcher";
-import { getAvailableModels, getSlackDefaultModel } from "../app-home/models";
+import { getAvailableModels } from "../app-home/models";
 import { getUserRepoBranchPreference } from "../branch-preferences";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
-import { getSlackSessionInstructions } from "./integration-config";
+import { getSlackSessionConfig } from "./integration-config";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 import { getUserInfo, postMessage } from "@open-inspect/shared";
@@ -32,7 +32,6 @@ vi.mock("./prompt-delivery", () => ({
 
 vi.mock("../app-home/models", () => ({
   getAvailableModels: vi.fn(),
-  getSlackDefaultModel: vi.fn(),
 }));
 
 vi.mock("../branch-preferences", () => ({
@@ -48,7 +47,7 @@ vi.mock("./control-plane-client", () => ({
 }));
 
 vi.mock("./integration-config", () => ({
-  getSlackSessionInstructions: vi.fn(),
+  getSlackSessionConfig: vi.fn(),
 }));
 
 vi.mock("./thread-session-store", () => ({
@@ -106,8 +105,9 @@ describe("startSessionAndSendPrompt", () => {
       { label: "GPT 5.4", value: "openai/gpt-5.4" },
       { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4-6" },
     ]);
-    vi.mocked(getSlackDefaultModel).mockResolvedValue("anthropic/claude-sonnet-4-6");
-    vi.mocked(getSlackSessionInstructions).mockResolvedValue(undefined);
+    vi.mocked(getSlackSessionConfig).mockResolvedValue({
+      defaultModel: "anthropic/claude-sonnet-4-6",
+    });
     vi.mocked(getResolvedUserPreferences).mockResolvedValue({
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
@@ -209,9 +209,10 @@ describe("startSessionAndSendPrompt", () => {
 
   it("appends configured session instructions to the first prompt", async () => {
     const env = makeEnv();
-    vi.mocked(getSlackSessionInstructions).mockResolvedValue(
-      "Always run tests before pushing changes."
-    );
+    vi.mocked(getSlackSessionConfig).mockResolvedValue({
+      defaultModel: "anthropic/claude-sonnet-4-6",
+      sessionInstructions: "Always run tests before pushing changes.",
+    });
 
     await startSessionAndSendPrompt(env, {
       target: repositoryTarget,
