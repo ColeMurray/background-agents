@@ -5,10 +5,12 @@ import type {
   SessionAttachmentReference,
   ResolvedSessionAttachment,
 } from "@open-inspect/shared/types/session-attachments";
+import type {
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
-  type GitHubAutofixSessionCommand,
-  type GitHubAutofixSessionResponse,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
