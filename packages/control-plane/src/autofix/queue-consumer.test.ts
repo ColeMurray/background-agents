@@ -24,6 +24,33 @@ function message(attempts = 1) {
 }
 
 describe("AutofixQueueConsumer", () => {
+  it("retries a malformed envelope without creating a ledger decision", async () => {
+    const service = {
+      process: vi.fn(),
+    };
+    const feedbackStore = {
+      recordError: vi.fn(),
+      markFailed: vi.fn(),
+      markSkipped: vi.fn(),
+    };
+    const consumer = new AutofixQueueConsumer({
+      service,
+      feedbackStore,
+      now: () => 2_000,
+      maxDeliveryAttempts: 5,
+    });
+    const input = { ...message(), body: { version: 1 } };
+
+    await consumer.consume(input);
+
+    expect(input.retry).toHaveBeenCalledOnce();
+    expect(input.ack).not.toHaveBeenCalled();
+    expect(service.process).not.toHaveBeenCalled();
+    expect(feedbackStore.recordError).not.toHaveBeenCalled();
+    expect(feedbackStore.markFailed).not.toHaveBeenCalled();
+    expect(feedbackStore.markSkipped).not.toHaveBeenCalled();
+  });
+
   it("acknowledges a completed Autofix decision", async () => {
     const service = {
       process: vi.fn(async () => ({
