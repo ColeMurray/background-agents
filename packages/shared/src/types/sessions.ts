@@ -38,6 +38,10 @@ export interface PullRequestSummary {
   closed: number;
 }
 
+export interface SessionNavigationState {
+  unread: boolean;
+}
+
 export interface Session {
   id: string;
   title: string | null;
@@ -72,6 +76,8 @@ export interface Session {
    * overlap or when the session has no tracked PRs.
    */
   pullRequestSummary?: PullRequestSummary;
+  /** Viewer-specific navigation state; absent for non-user service callers. */
+  navigation?: SessionNavigationState;
 }
 
 export interface SessionMessage {

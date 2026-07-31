@@ -51,7 +51,12 @@ export class SessionSandboxEventProcessor {
     private readonly statusService: SessionStatusService,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
-    private readonly processMessageQueue: () => Promise<void>
+    private readonly processMessageQueue: () => Promise<void>,
+    private readonly recordTerminalOutcome: (
+      messageId: string,
+      messageCreatedAt: number,
+      acceptedAt: number
+    ) => Promise<void>
   ) {}
 
   private get log(): Logger {
@@ -203,6 +208,9 @@ export class SessionSandboxEventProcessor {
         this.repository.updateMessageCompletion(completionMessageId, status, now);
 
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
+        if (timestamps) {
+          await this.recordTerminalOutcome(completionMessageId, timestamps.created_at, now);
+        }
         const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
         const processingDurationMs =
           timestamps?.started_at != null ? now - timestamps.started_at : undefined;

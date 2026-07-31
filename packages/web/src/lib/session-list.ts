@@ -92,6 +92,20 @@ export function applyTitleUpdate(
   };
 }
 
+export function applySessionUnread(
+  data: SessionListResponse | undefined,
+  sessionId: string,
+  unread: boolean
+): SessionListResponse | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    sessions: data.sessions.map((session) =>
+      session.id === sessionId ? { ...session, navigation: { unread } } : session
+    ),
+  };
+}
+
 export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
   const seen = new Set(existing.map((session) => session.id));
   const merged = [...existing];

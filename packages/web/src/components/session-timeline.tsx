@@ -109,6 +109,8 @@ export function SessionTimeline({
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
+  canAcknowledgeTerminalOutcome = false,
+  onTerminalOutcomeVisible,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -119,8 +121,17 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
+  canAcknowledgeTerminalOutcome?: boolean;
+  onTerminalOutcomeVisible?: (messageId: string) => Promise<boolean>;
 }) {
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const latestTerminalMessageId = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type === "execution_complete" && event.messageId) return event.messageId;
+    }
+    return null;
+  }, [events]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -192,6 +203,23 @@ export function SessionTimeline({
           groupedEvents.map((group) =>
             group.type === "tool_group" ? (
               <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+            ) : group.event.type === "execution_complete" &&
+              group.event.messageId === latestTerminalMessageId &&
+              onTerminalOutcomeVisible ? (
+              <TerminalOutcomeVisibilityBoundary
+                key={group.id}
+                messageId={group.event.messageId}
+                enabled={canAcknowledgeTerminalOutcome}
+                onVisible={onTerminalOutcomeVisible}
+              >
+                <EventItem
+                  event={group.event}
+                  sessionId={sessionId}
+                  currentParticipantId={currentParticipantId}
+                  participantProfiles={participantProfiles}
+                  onOpenMedia={onOpenMedia}
+                />
+              </TerminalOutcomeVisibilityBoundary>
             ) : (
               <EventItem
                 key={group.id}
@@ -208,6 +236,87 @@ export function SessionTimeline({
 
         <div ref={messagesEndRef} />
       </div>
+    </div>
+  );
+}
+
+const TERMINAL_ACK_RETRY_MS = 2_000;
+
+function TerminalOutcomeVisibilityBoundary({
+  messageId,
+  enabled,
+  onVisible,
+  children,
+}: {
+  messageId: string;
+  enabled: boolean;
+  onVisible: (messageId: string) => Promise<boolean>;
+  children: ReactNode;
+}) {
+  const elementRef = useRef<HTMLDivElement>(null);
+  const intersectingRef = useRef(false);
+  const acknowledgedRef = useRef(false);
+  const requestInFlightRef = useRef(false);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const attemptAcknowledgement = useCallback(async () => {
+    if (
+      !enabled ||
+      acknowledgedRef.current ||
+      requestInFlightRef.current ||
+      !intersectingRef.current ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
+    ) {
+      return;
+    }
+
+    requestInFlightRef.current = true;
+    try {
+      acknowledgedRef.current = await onVisible(messageId);
+    } catch (error) {
+      console.error("Failed to acknowledge visible terminal outcome", error);
+      acknowledgedRef.current = false;
+    } finally {
+      requestInFlightRef.current = false;
+    }
+
+    if (!acknowledgedRef.current && intersectingRef.current) {
+      retryTimerRef.current = setTimeout(() => {
+        retryTimerRef.current = null;
+        void attemptAcknowledgement();
+      }, TERMINAL_ACK_RETRY_MS);
+    }
+  }, [enabled, messageId, onVisible]);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        intersectingRef.current = entry.isIntersecting;
+        if (entry.isIntersecting) void attemptAcknowledgement();
+      },
+      { threshold: 0.5 }
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [attemptAcknowledgement]);
+
+  useEffect(() => {
+    const attempt = () => void attemptAcknowledgement();
+    document.addEventListener("visibilitychange", attempt);
+    window.addEventListener("focus", attempt);
+    return () => {
+      document.removeEventListener("visibilitychange", attempt);
+      window.removeEventListener("focus", attempt);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, [attemptAcknowledgement]);
+
+  return (
+    <div ref={elementRef} data-terminal-message-id={messageId}>
+      {children}
     </div>
   );
 }

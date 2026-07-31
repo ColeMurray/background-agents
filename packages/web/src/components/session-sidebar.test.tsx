@@ -157,6 +157,67 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Session 2").closest("a")).not.toHaveTextContent("3 PRs · 2 open");
   });
 
+  it("renders unread sessions distinctly with an accessible label", async () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: {
+              sessions: [
+                createSession(1, { navigation: { unread: true } }),
+                createSession(2, { navigation: { unread: false } }),
+              ],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByLabelText("Unread")).toBeInTheDocument();
+    expect(screen.getByText("Session 1")).toHaveClass("font-semibold");
+    expect(screen.getByText("Session 2")).not.toHaveClass("font-semibold");
+  });
+
+  it("marks an unread session read from its action menu", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.method).toBe("PATCH");
+      expect(init?.body).toBe(JSON.stringify({ action: "mark_read" }));
+      return jsonResponse({ sessionId: "session-1", accepted: true, unread: false });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: {
+              sessions: [createSession(1, { navigation: { unread: true } })],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Mark as read" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByLabelText("Unread")).not.toBeInTheDocument());
+  });
+
   it("renders nested child sessions under their immediate parent", async () => {
     const parent = createSession(1, { updatedAt: 4000 });
     const child = createSession(2, {

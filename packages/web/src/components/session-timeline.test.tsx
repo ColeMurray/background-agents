@@ -1,14 +1,19 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { SandboxEvent } from "@/types/session";
-import { EventItem } from "./session-timeline";
+import { EventItem, SessionTimeline } from "./session-timeline";
 
 expect.extend(matchers);
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+});
 
 function event(userId?: string): SandboxEvent {
   return {
@@ -86,5 +91,153 @@ describe("user message authors", () => {
       "src",
       "https://historical.example/avatar"
     );
+  });
+});
+
+describe("terminal outcome visibility", () => {
+  it("acknowledges only after the latest completion is visible in the active tab", async () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const observations: Array<{
+      callback: IntersectionObserverCallback;
+      target?: Element;
+    }> = [];
+    class TestIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+      constructor(callback: IntersectionObserverCallback) {
+        observations.push({ callback });
+      }
+      observe(target: Element) {
+        observations.at(-1)!.target = target;
+      }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+    const onTerminalOutcomeVisible = vi.fn(async () => true);
+    const events: SandboxEvent[] = [
+      {
+        type: "execution_complete",
+        messageId: "message-1",
+        success: true,
+        sandboxId: "sandbox-1",
+        timestamp: 1,
+      },
+      {
+        type: "execution_complete",
+        messageId: "message-2",
+        success: true,
+        sandboxId: "sandbox-1",
+        timestamp: 2,
+      },
+    ];
+
+    render(
+      <SessionTimeline
+        events={events}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+        canAcknowledgeTerminalOutcome
+        onTerminalOutcomeVisible={onTerminalOutcomeVisible}
+      />
+    );
+
+    const observation = observations.find(
+      ({ target }) => target?.getAttribute("data-terminal-message-id") === "message-2"
+    );
+    expect(observation).toBeDefined();
+    await act(async () => {
+      observation!.callback(
+        [{ isIntersecting: true, target: observation!.target } as IntersectionObserverEntry],
+        {} as IntersectionObserver
+      );
+    });
+    expect(onTerminalOutcomeVisible).not.toHaveBeenCalled();
+
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(onTerminalOutcomeVisible).toHaveBeenCalledOnce();
+    expect(onTerminalOutcomeVisible).toHaveBeenCalledWith("message-2");
+  });
+
+  it("retries a rejected acknowledgement while the same outcome remains visible", async () => {
+    vi.useFakeTimers();
+    Element.prototype.scrollIntoView = vi.fn();
+    const observations: Array<{
+      callback: IntersectionObserverCallback;
+      target?: Element;
+    }> = [];
+    class TestIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = "0px";
+      readonly thresholds = [0];
+      constructor(nextCallback: IntersectionObserverCallback) {
+        observations.push({ callback: nextCallback });
+      }
+      observe(target: Element) {
+        observations.at(-1)!.target = target;
+      }
+      disconnect() {}
+      unobserve() {}
+      takeRecords() {
+        return [];
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+    const onTerminalOutcomeVisible = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    const { container } = render(
+      <SessionTimeline
+        events={[
+          {
+            type: "execution_complete",
+            messageId: "message-1",
+            success: true,
+            sandboxId: "sandbox-1",
+            timestamp: 1,
+          },
+        ]}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+        canAcknowledgeTerminalOutcome
+        onTerminalOutcomeVisible={onTerminalOutcomeVisible}
+      />
+    );
+    const target = container.querySelector('[data-terminal-message-id="message-1"]')!;
+    const observation = observations.find(({ target: observed }) => observed === target);
+
+    await act(async () => {
+      observation?.callback(
+        [{ isIntersecting: true, target } as IntersectionObserverEntry],
+        {} as IntersectionObserver
+      );
+    });
+    expect(onTerminalOutcomeVisible).toHaveBeenCalledTimes(1);
+
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(onTerminalOutcomeVisible).toHaveBeenCalledTimes(2);
   });
 });

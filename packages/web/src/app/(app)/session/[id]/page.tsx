@@ -22,6 +22,7 @@ import { archiveSession } from "@/lib/archive-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   isArchivedSessionListKey,
+  isSessionListKey,
   isUnarchivedSessionListKey,
   removeSessionFromList,
   type SessionListResponse,
@@ -48,6 +49,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+import { acknowledgeSessionAttention, reconcileSessionUnread } from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -209,6 +211,17 @@ function SessionPageContent() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
+  const acknowledgeVisibleOutcome = useCallback(
+    async (messageId: string) => {
+      const result = await acknowledgeSessionAttention(sessionId, messageId);
+      await reconcileSessionUnread(result);
+      if (!result.accepted) {
+        await mutate(isSessionListKey);
+      }
+      return result.accepted;
+    },
+    [sessionId]
+  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -245,6 +258,8 @@ function SessionPageContent() {
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
+            canAcknowledgeTerminalOutcome={!replaying && !loadingHistory}
+            onTerminalOutcomeVisible={acknowledgeVisibleOutcome}
           />
         </Panel>
         {showTerminal && (

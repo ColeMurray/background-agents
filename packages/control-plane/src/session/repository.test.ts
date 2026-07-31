@@ -681,11 +681,11 @@ describe("SessionRepository", () => {
       const message = { id: "msg-1", created_at: 1000 };
       // The query is dynamic, so we match by result
       mock.setData(
-        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`,
         [message]
       );
       expect(repo.getNextPendingMessage()).toEqual(message);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
     });
   });
 

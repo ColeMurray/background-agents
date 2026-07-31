@@ -1,5 +1,6 @@
 import type {
   PullRequestSummary,
+  SessionNavigationState,
   SessionListRepository,
   SessionStatus,
   SpawnSource,
@@ -67,6 +68,7 @@ export interface SessionEntry {
    * has no tracked PRs. Attached by list() for the global sidebar.
    */
   pullRequestSummary?: PullRequestSummary;
+  navigation?: SessionNavigationState;
 }
 
 interface SessionRepositoryRow {
@@ -111,11 +113,31 @@ export interface ListSessionsOptions {
   createdByUserIds?: readonly string[];
   limit?: number;
   offset?: number;
+  viewerUserId?: string;
 }
 
 export interface ListSessionsResult {
   sessions: SessionEntry[];
   hasMore: boolean;
+}
+
+export type SessionReadAction =
+  | { kind: "acknowledge"; observedAttentionId: string }
+  | { kind: "mark_read" };
+
+export interface SessionReadStateResult {
+  sessionId: string;
+  accepted: boolean;
+  unread: boolean;
+}
+
+interface SessionNavigationRow {
+  session_id: string;
+  unread: number;
+}
+
+interface LatestAttentionRow {
+  latest_attention_message_id: string | null;
 }
 
 function toEntry(row: SessionRow): SessionEntry {
@@ -281,6 +303,7 @@ export class SessionIndexStore {
       createdByUserIds,
       limit = 50,
       offset = 0,
+      viewerUserId,
     } = options;
 
     const conditions: string[] = [];
@@ -335,7 +358,7 @@ export class SessionIndexStore {
       .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.decorateEntries(rows.slice(0, limit).map(toEntry));
+    const sessions = await this.decorateEntries(rows.slice(0, limit).map(toEntry), viewerUserId);
 
     return {
       sessions,
@@ -351,24 +374,161 @@ export class SessionIndexStore {
    * the field: consumers fall back to the scalar repo columns, and PR state
    * never influences session ordering (this only decorates paged rows).
    */
-  private async decorateEntries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+  private async decorateEntries(
+    sessions: SessionEntry[],
+    viewerUserId?: string
+  ): Promise<SessionEntry[]> {
     if (sessions.length === 0) return sessions;
     const sessionIds = sessions.map((session) => session.id);
 
-    const [repositoriesBySession, summariesBySession] = await Promise.all([
+    const [repositoriesBySession, summariesBySession, navigationBySession] = await Promise.all([
       this.repositoriesForSessions(sessionIds),
       new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
+      viewerUserId
+        ? this.navigationForSessions(viewerUserId, sessionIds)
+        : Promise.resolve(new Map<string, SessionNavigationState>()),
     ]);
 
     return sessions.map((session) => {
       const repositories = repositoriesBySession.get(session.id);
       const pullRequestSummary = summariesBySession.get(session.id);
+      const navigation = navigationBySession.get(session.id);
       return {
         ...session,
         ...(repositories ? { repositories } : {}),
         ...(pullRequestSummary ? { pullRequestSummary } : {}),
+        ...(navigation ? { navigation } : {}),
       };
     });
+  }
+
+  private async navigationForSessions(
+    userId: string,
+    sessionIds: readonly string[]
+  ): Promise<Map<string, SessionNavigationState>> {
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT s.id AS session_id,
+                CASE
+                  WHEN s.latest_attention_message_id IS NOT NULL
+                    AND s.latest_attention_at >= u.created_at
+                    AND (
+                      r.acknowledged_attention_message_id IS NULL
+                      OR r.acknowledged_attention_message_id != s.latest_attention_message_id
+                    )
+                  THEN 1 ELSE 0
+                END AS unread
+         FROM sessions s
+         LEFT JOIN users u ON u.id = ?
+         LEFT JOIN session_read_states r
+           ON r.session_id = s.id AND r.user_id = u.id
+         WHERE s.id IN (${placeholders})`
+      )
+      .bind(userId, ...sessionIds)
+      .all<SessionNavigationRow>();
+
+    return new Map(
+      (result.results ?? []).map((row) => [row.session_id, { unread: row.unread === 1 }])
+    );
+  }
+
+  async recordLatestAttention(input: {
+    sessionId: string;
+    messageId: string;
+    messageCreatedAt: number;
+    acceptedAt: number;
+  }): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE sessions
+         SET latest_attention_message_id = ?,
+             latest_attention_message_created_at = ?,
+             latest_attention_at = ?
+         WHERE id = ?
+           AND (
+             latest_attention_message_created_at IS NULL
+             OR latest_attention_message_created_at < ?
+             OR (
+               latest_attention_message_created_at = ?
+               AND latest_attention_message_id < ?
+             )
+           )`
+      )
+      .bind(
+        input.messageId,
+        input.messageCreatedAt,
+        input.acceptedAt,
+        input.sessionId,
+        input.messageCreatedAt,
+        input.messageCreatedAt,
+        input.messageId
+      )
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  /** Current single-tenant visibility boundary; future grants belong here. */
+  async getVisibleForUser(sessionId: string, _userId: string): Promise<SessionEntry | null> {
+    return this.get(sessionId);
+  }
+
+  async updateReadState(
+    userId: string,
+    sessionId: string,
+    action: SessionReadAction
+  ): Promise<SessionReadStateResult | null> {
+    const current = await this.db
+      .prepare(
+        `SELECT latest_attention_message_id
+         FROM sessions
+         WHERE id = ?`
+      )
+      .bind(sessionId)
+      .first<LatestAttentionRow>();
+    if (!current) return null;
+
+    let accepted: boolean;
+    if (action.kind === "acknowledge") {
+      const result = await this.db
+        .prepare(
+          `INSERT INTO session_read_states
+             (user_id, session_id, acknowledged_attention_message_id, updated_at)
+           SELECT ?, id, latest_attention_message_id, ?
+           FROM sessions
+           WHERE id = ? AND latest_attention_message_id = ?
+           ON CONFLICT(user_id, session_id) DO UPDATE SET
+             acknowledged_attention_message_id = excluded.acknowledged_attention_message_id,
+             updated_at = excluded.updated_at`
+        )
+        .bind(userId, Date.now(), sessionId, action.observedAttentionId)
+        .run();
+      accepted = (result.meta.changes ?? 0) > 0;
+    } else if (current.latest_attention_message_id === null) {
+      accepted = true;
+    } else {
+      const result = await this.db
+        .prepare(
+          `INSERT INTO session_read_states
+             (user_id, session_id, acknowledged_attention_message_id, updated_at)
+           SELECT ?, id, latest_attention_message_id, ?
+           FROM sessions
+           WHERE id = ? AND latest_attention_message_id IS NOT NULL
+           ON CONFLICT(user_id, session_id) DO UPDATE SET
+             acknowledged_attention_message_id = excluded.acknowledged_attention_message_id,
+             updated_at = excluded.updated_at`
+        )
+        .bind(userId, Date.now(), sessionId)
+        .run();
+      accepted = (result.meta.changes ?? 0) > 0;
+    }
+
+    const navigation = await this.navigationForSessions(userId, [sessionId]);
+    return {
+      sessionId,
+      accepted,
+      unread: navigation.get(sessionId)?.unread ?? false,
+    };
   }
 
   /** Repository lists for the given sessions, in one query. */

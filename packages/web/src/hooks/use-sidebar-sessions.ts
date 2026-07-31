@@ -8,6 +8,7 @@ import useSWR, { mutate } from "swr";
 import { isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
+  applySessionUnread,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isUnarchivedSessionListKey,
@@ -16,6 +17,9 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import type { Session } from "@open-inspect/shared";
+import { markSessionRead, reconcileSessionUnread } from "@/lib/session-read-state";
+
+const VISIBLE_SESSION_LIST_POLL_MS = 30_000;
 
 export type SessionItem = Session;
 
@@ -50,7 +54,14 @@ export function useSidebarSessions(currentSessionId: string | null) {
     data,
     error: sessionsError,
     isLoading: sessionsLoading,
-  } = useSWR<SessionListResponse>(sidebarSessionsKey);
+    mutate: mutateSidebarSessions,
+  } = useSWR<SessionListResponse>(sidebarSessionsKey, {
+    refreshInterval: () =>
+      typeof document !== "undefined" && document.visibilityState === "visible"
+        ? VISIBLE_SESSION_LIST_POLL_MS
+        : 0,
+    refreshWhenHidden: false,
+  });
   const loading = sessionsLoading;
   const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
 
@@ -246,6 +257,25 @@ export function useSidebarSessions(currentSessionId: string | null) {
     [sidebarSessionsKey]
   );
 
+  const handleSessionMarkedRead = useCallback(
+    async (sessionId: string) => {
+      const result = await markSessionRead(sessionId);
+      await mutateSidebarSessions(
+        (current) => applySessionUnread(current, result.sessionId, result.unread),
+        { revalidate: false }
+      );
+      await reconcileSessionUnread(result);
+      setExtraSessionsState((previous) => ({
+        ...previous,
+        sessions: previous.sessions.map((session) =>
+          session.id === sessionId ? { ...session, navigation: { unread: result.unread } } : session
+        ),
+      }));
+      return result.unread;
+    },
+    [mutateSidebarSessions]
+  );
+
   return {
     sessions,
     activeSessions,
@@ -260,5 +290,6 @@ export function useSidebarSessions(currentSessionId: string | null) {
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
+    handleSessionMarkedRead,
   };
 }

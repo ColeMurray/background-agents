@@ -45,6 +45,7 @@ export function SessionListItem({
   onArchive,
   onSessionSelect,
   onSessionRenamed,
+  onMarkRead,
 }: {
   session: SessionItem;
   environmentName?: string;
@@ -53,6 +54,7 @@ export function SessionListItem({
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onSessionRenamed: (sessionId: string, title: string) => void;
+  onMarkRead: (sessionId: string) => Promise<boolean>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
@@ -69,6 +71,8 @@ export function SessionListItem({
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
+  const [isUnread, setIsUnread] = useState(session.navigation?.unread ?? false);
   const [title, setTitle] = useState(displayTitle);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const isStartingRenameRef = useRef(false);
@@ -81,6 +85,10 @@ export function SessionListItem({
       setTitle(displayTitle);
     }
   }, [displayTitle, isRenaming]);
+
+  useEffect(() => {
+    setIsUnread(session.navigation?.unread ?? false);
+  }, [session.navigation?.unread]);
 
   const handleStartRename = () => {
     isStartingRenameRef.current = true;
@@ -108,6 +116,16 @@ export function SessionListItem({
   const handleStartArchive = () => {
     setIsActionsOpen(false);
     setShowArchiveDialog(true);
+  };
+
+  const handleMarkRead = async () => {
+    setIsActionsOpen(false);
+    setIsMarkingRead(true);
+    try {
+      setIsUnread(await onMarkRead(session.id));
+    } finally {
+      setIsMarkingRead(false);
+    }
   };
 
   const handleConfirmArchive = async () => {
@@ -261,11 +279,20 @@ export function SessionListItem({
             onTouchCancel={handleTouchEnd}
             className="block pr-8"
           >
-            <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+            <div className="flex items-center gap-1.5 text-sm text-foreground">
+              {isUnread && (
+                <span
+                  role="status"
+                  aria-label="Unread"
+                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                />
+              )}
               {prDisplay && (
                 <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />
               )}
-              <span className="truncate">{displayTitle}</span>
+              <span className={`truncate ${isUnread ? "font-semibold" : "font-medium"}`}>
+                {displayTitle}
+              </span>
             </div>
             <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
               <span>{relativeTime}</span>
@@ -322,6 +349,11 @@ export function SessionListItem({
               }}
             >
               <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
+              {isUnread && (
+                <DropdownMenuItem onSelect={handleMarkRead} disabled={isMarkingRead}>
+                  Mark as read
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={handleStartArchive} disabled={isArchiving}>
                 <ArchiveIcon className="w-4 h-4" />
                 Archive
@@ -346,36 +378,75 @@ export function ChildSessionListItem({
   isMobile,
   onSessionSelect,
   depth,
+  onMarkRead,
 }: {
   session: SessionItem;
   isActive: boolean;
   isMobile: boolean;
   onSessionSelect?: () => void;
   depth: number;
+  onMarkRead: (sessionId: string) => Promise<boolean>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
   const displayTitle = session.title || "Sub-task";
   const paddingLeftRem = 1.75 + Math.max(depth - 1, 0) * 1;
+  const [isUnread, setIsUnread] = useState(session.navigation?.unread ?? false);
+  useEffect(() => {
+    setIsUnread(session.navigation?.unread ?? false);
+  }, [session.navigation?.unread]);
   return (
-    <Link
-      href={buildSessionHref(session)}
-      onClick={() => {
-        if (isMobile) {
-          onSessionSelect?.();
-        }
-      }}
-      className={`block pr-4 py-1.5 border-l-2 transition ${
-        isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
-      }`}
-      style={{ paddingLeft: `${paddingLeftRem}rem` }}
-    >
-      <div className="flex items-center gap-1.5 text-xs">
-        <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
-        {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
-        <span className="truncate font-medium text-foreground">{displayTitle}</span>
-      </div>
-    </Link>
+    <div className="group relative">
+      <Link
+        href={buildSessionHref(session)}
+        onClick={() => {
+          if (isMobile) onSessionSelect?.();
+        }}
+        className={`block pr-9 py-1.5 border-l-2 transition ${
+          isActive ? "border-l-accent bg-accent-muted" : "border-l-transparent hover:bg-muted"
+        }`}
+        style={{ paddingLeft: `${paddingLeftRem}rem` }}
+      >
+        <div className="flex items-center gap-1.5 text-xs">
+          {isUnread && (
+            <span
+              role="status"
+              aria-label="Unread"
+              className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+            />
+          )}
+          <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
+          {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
+          <span
+            className={`truncate text-foreground ${isUnread ? "font-semibold" : "font-medium"}`}
+          >
+            {displayTitle}
+          </span>
+        </div>
+      </Link>
+      {isUnread && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Session actions"
+              className={`absolute right-2 top-1 h-6 w-6 items-center justify-center text-muted-foreground ${
+                isMobile
+                  ? "flex"
+                  : "hidden opacity-0 group-hover:flex group-hover:opacity-100 group-focus-within:flex group-focus-within:opacity-100"
+              }`}
+            >
+              <MoreIcon className="h-4 w-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={async () => setIsUnread(await onMarkRead(session.id))}>
+              Mark as read
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
   );
 }

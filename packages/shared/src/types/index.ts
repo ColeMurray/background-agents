@@ -108,6 +108,7 @@ export type {
   SessionState,
   ParticipantPresence,
   PullRequestSummary,
+  SessionNavigationState,
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
 } from "./sessions";

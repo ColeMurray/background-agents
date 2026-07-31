@@ -88,6 +88,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SessionAttentionProjection } from "./attention-projection";
 import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
@@ -205,6 +206,7 @@ export class SessionDO extends DurableObject<Env> {
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
+  private _attentionProjection: SessionAttentionProjection | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -383,11 +385,27 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager,
         this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
-        this.executionTimeoutMs
+        this.executionTimeoutMs,
+        (messageId, messageCreatedAt, acceptedAt) =>
+          this.attentionProjection.recordTerminalOutcome(messageId, messageCreatedAt, acceptedAt)
       );
     }
 
     return this._messageQueue;
+  }
+
+  private get attentionProjection(): SessionAttentionProjection {
+    if (!this._attentionProjection) {
+      this._attentionProjection = new SessionAttentionProjection(
+        this.db ? new SessionIndexStore(this.db) : null,
+        () => {
+          const session = this.getSession();
+          return session ? this.getPublicSessionId(session) : null;
+        },
+        this.log
+      );
+    }
+    return this._attentionProjection;
   }
 
   private get messageService(): MessageService {
@@ -626,7 +644,9 @@ export class SessionDO extends DurableObject<Env> {
         this.statusService,
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
-        () => this.messageQueue.processMessageQueue()
+        () => this.messageQueue.processMessageQueue(),
+        (messageId, messageCreatedAt, acceptedAt) =>
+          this.attentionProjection.recordTerminalOutcome(messageId, messageCreatedAt, acceptedAt)
       );
     }
 

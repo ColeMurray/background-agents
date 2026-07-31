@@ -94,7 +94,12 @@ export class SessionMessageQueue {
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
-    private readonly executionTimeoutMs: number
+    private readonly executionTimeoutMs: number,
+    private readonly recordTerminalOutcome: (
+      messageId: string,
+      messageCreatedAt: number,
+      acceptedAt: number
+    ) => Promise<void>
   ) {}
 
   async handlePromptMessage(
@@ -263,7 +268,7 @@ export class SessionMessageQueue {
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
 
     if (processingMessage) {
       this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
@@ -286,6 +291,7 @@ export class SessionMessageQueue {
         syntheticExecutionComplete,
         now
       );
+      await this.recordTerminalOutcome(processingMessage.id, processingMessage.created_at, now);
 
       this.messenger.broadcast({
         type: "sandbox_event",
@@ -318,7 +324,7 @@ export class SessionMessageQueue {
    */
   async failStuckProcessingMessage(): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
     this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
@@ -333,6 +339,7 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
     };
     this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
+    await this.recordTerminalOutcome(processingMessage.id, processingMessage.created_at, now);
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.ctx.waitUntil(
