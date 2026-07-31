@@ -178,28 +178,35 @@ describe("SessionSidebar", () => {
       </SWRConfig>
     );
 
-    expect(await screen.findByLabelText("Unread")).toBeInTheDocument();
+    expect(await screen.findByText("Unread")).toBeInTheDocument();
     expect(screen.getByText("Session 1")).toHaveClass("font-semibold");
     expect(screen.getByText("Session 2")).not.toHaveClass("font-semibold");
   });
 
   it("marks an unread session read from its action menu", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === SIDEBAR_SESSIONS_KEY) {
+        return jsonResponse({
+          sessions: [createSession(1, { navigation: { unread: true, attentionId: "message-1" } })],
+          hasMore: false,
+        });
+      }
       expect(init?.method).toBe("PATCH");
       expect(init?.body).toBe(JSON.stringify({ action: "mark_read" }));
-      return jsonResponse({ sessionId: "session-1", accepted: true, unread: false });
+      return jsonResponse({
+        sessionId: "session-1",
+        accepted: true,
+        unread: false,
+        attentionId: "message-1",
+      });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(
       <SWRConfig
         value={{
-          fallback: {
-            [SIDEBAR_SESSIONS_KEY]: {
-              sessions: [createSession(1, { navigation: { unread: true } })],
-              hasMore: false,
-            },
-          },
+          provider: () => new Map(),
+          fetcher: async (url: string) => (await fetch(url)).json(),
           dedupingInterval: 0,
           revalidateOnFocus: false,
         }}
@@ -214,8 +221,13 @@ describe("SessionSidebar", () => {
     });
     fireEvent.click(await screen.findByRole("menuitem", { name: "Mark as read" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.queryByLabelText("Unread")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/sessions/session-1/read-state",
+        expect.objectContaining({ method: "PATCH" })
+      )
+    );
+    await waitFor(() => expect(screen.queryByText("Unread")).not.toBeInTheDocument());
   });
 
   it("renders nested child sessions under their immediate parent", async () => {
@@ -317,6 +329,9 @@ describe("SessionSidebar", () => {
     );
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
+    );
 
     const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
     let scrollTop = 0;
@@ -343,11 +358,7 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("Session 55")).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 }),
-        {
-          mode: "same-origin",
-          credentials: "same-origin",
-        }
+        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
       );
     });
   });
@@ -560,10 +571,7 @@ describe("SessionSidebar", () => {
 
     fireEvent.scroll(scrollContainer);
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey, {
-        mode: "same-origin",
-        credentials: "same-origin",
-      });
+      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey);
     });
 
     fireEvent.click(screen.getByText("Mine"));

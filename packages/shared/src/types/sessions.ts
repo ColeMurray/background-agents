@@ -40,6 +40,8 @@ export interface PullRequestSummary {
 
 export interface SessionNavigationState {
   unread: boolean;
+  /** Latest terminal outcome represented by this state; absent during mixed deployments. */
+  attentionId?: string | null;
 }
 
 export interface Session {

@@ -276,11 +276,13 @@ export function SessionListItem({
           >
             <div className="flex items-center gap-1.5 text-sm text-foreground">
               {session.navigation?.unread && (
-                <span
-                  role="status"
-                  aria-label="Unread"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-                />
+                <>
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
+                  />
+                  <span className="sr-only">Unread</span>
+                </>
               )}
               {prDisplay && (
                 <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />
@@ -319,18 +321,20 @@ export function SessionListItem({
           </Link>
         )}
 
-        <div className="absolute inset-y-0 right-2 flex items-start pt-2">
+        <div className="absolute inset-y-0 right-2 flex items-center">
           <DropdownMenu open={isActionsOpen} onOpenChange={setIsActionsOpen}>
             <DropdownMenuTrigger asChild>
               <button
                 type="button"
                 aria-label="Session actions"
-                aria-hidden={isMobile ? "true" : undefined}
-                tabIndex={isMobile ? -1 : undefined}
-                className={`h-6 w-6 items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
+                aria-hidden={isMobile && !session.navigation?.unread ? "true" : undefined}
+                tabIndex={isMobile && !session.navigation?.unread ? -1 : undefined}
+                className={`items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                   isMobile
-                    ? "pointer-events-none flex opacity-0"
-                    : "flex opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                    ? session.navigation?.unread
+                      ? "flex h-10 w-10"
+                      : "pointer-events-none flex h-6 w-6 opacity-0"
+                    : "flex h-6 w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
                 }`}
               >
                 <MoreIcon className="w-4 h-4" />
@@ -403,11 +407,10 @@ export function ChildSessionListItem({
       >
         <div className="flex items-center gap-1.5 text-xs">
           {session.navigation?.unread && (
-            <span
-              role="status"
-              aria-label="Unread"
-              className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
-            />
+            <>
+              <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+              <span className="sr-only">Unread</span>
+            </>
           )}
           <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
           {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
@@ -424,7 +427,7 @@ export function ChildSessionListItem({
             <button
               type="button"
               aria-label="Session actions"
-              className={`absolute right-2 top-1 h-6 w-6 items-center justify-center text-muted-foreground ${
+              className={`absolute right-0 top-0 h-10 w-10 items-center justify-center text-muted-foreground ${
                 isMobile
                   ? "flex"
                   : "hidden opacity-0 group-hover:flex group-hover:opacity-100 group-focus-within:flex group-focus-within:opacity-100"

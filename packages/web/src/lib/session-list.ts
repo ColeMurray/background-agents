@@ -95,14 +95,30 @@ export function applyTitleUpdate(
 export function applySessionUnread(
   data: SessionListResponse | undefined,
   sessionId: string,
-  unread: boolean
+  unread: boolean,
+  attentionId?: string | null
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
-    sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, navigation: { unread } } : session
-    ),
+    sessions: data.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      const currentAttentionId = session.navigation?.attentionId;
+      if (
+        currentAttentionId !== undefined &&
+        attentionId !== undefined &&
+        currentAttentionId !== attentionId
+      ) {
+        return session;
+      }
+      return {
+        ...session,
+        navigation: {
+          unread,
+          ...(attentionId !== undefined ? { attentionId } : {}),
+        },
+      };
+    }),
   };
 }
 

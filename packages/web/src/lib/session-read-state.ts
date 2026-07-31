@@ -6,6 +6,7 @@ export interface SessionReadStateResult {
   sessionId: string;
   accepted: boolean;
   unread: boolean;
+  attentionId: string | null;
 }
 
 export class SessionReadStateRequestError extends Error {
@@ -46,7 +47,7 @@ export function markSessionRead(sessionId: string): Promise<SessionReadStateResu
 export function reconcileSessionUnread(result: SessionReadStateResult): Promise<unknown> {
   return mutate<SessionListResponse>(
     isSessionListKey,
-    (current) => applySessionUnread(current, result.sessionId, result.unread),
+    (current) => applySessionUnread(current, result.sessionId, result.unread, result.attentionId),
     { populateCache: true, revalidate: false }
   );
 }

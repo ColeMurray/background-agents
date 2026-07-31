@@ -134,12 +134,26 @@ export function SessionTimeline({
     }
     return null;
   }, [events]);
-  const latestTerminalMessageHasOutput = useMemo(
-    () =>
-      latestTerminalMessageId !== null &&
-      events.some((event) => event.type === "token" && event.messageId === latestTerminalMessageId),
-    [events, latestTerminalMessageId]
-  );
+  const attentionRange = useMemo(() => {
+    if (!latestTerminalMessageId) return null;
+    const completionIndex = groupedEvents.findIndex(
+      (group) =>
+        group.type === "single" &&
+        group.event.type === "execution_complete" &&
+        group.event.messageId === latestTerminalMessageId
+    );
+    if (completionIndex < 0) return null;
+    const outputIndex = groupedEvents.findIndex(
+      (group) =>
+        group.type === "single" &&
+        group.event.type === "token" &&
+        group.event.messageId === latestTerminalMessageId
+    );
+    return {
+      start: outputIndex >= 0 ? Math.min(outputIndex, completionIndex) : completionIndex,
+      end: Math.max(outputIndex, completionIndex),
+    };
+  }, [groupedEvents, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -188,6 +202,20 @@ export function SessionTimeline({
     }
   }, [events]);
 
+  const renderGroup = (group: EventGroup) =>
+    group.type === "tool_group" ? (
+      <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+    ) : (
+      <EventItem
+        key={group.id}
+        event={group.event}
+        sessionId={sessionId}
+        currentParticipantId={currentParticipantId}
+        participantProfiles={participantProfiles}
+        onOpenMedia={onOpenMedia}
+      />
+    );
+
   useEffect(() => {
     if (isNearBottomRef.current && !isPrependingRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
@@ -208,39 +236,26 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          groupedEvents.map((group) =>
-            group.type === "tool_group" ? (
-              <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-            ) : "messageId" in group.event &&
-              group.event.messageId === latestTerminalMessageId &&
-              (group.event.type === "token" ||
-                (!latestTerminalMessageHasOutput && group.event.type === "execution_complete")) &&
-              onTerminalOutcomeVisible ? (
-              <TerminalOutcomeVisibilityBoundary
-                key={group.id}
-                messageId={group.event.messageId}
-                enabled={canAcknowledgeTerminalOutcome}
-                onVisible={onTerminalOutcomeVisible}
-              >
-                <EventItem
-                  event={group.event}
-                  sessionId={sessionId}
-                  currentParticipantId={currentParticipantId}
-                  participantProfiles={participantProfiles}
-                  onOpenMedia={onOpenMedia}
-                />
-              </TerminalOutcomeVisibilityBoundary>
-            ) : (
-              <EventItem
-                key={group.id}
-                event={group.event}
-                sessionId={sessionId}
-                currentParticipantId={currentParticipantId}
-                participantProfiles={participantProfiles}
-                onOpenMedia={onOpenMedia}
-              />
-            )
-          )
+          groupedEvents.map((group, index) => {
+            if (attentionRange && onTerminalOutcomeVisible && index === attentionRange.start) {
+              return (
+                <TerminalOutcomeVisibilityBoundary
+                  key={`attention-${latestTerminalMessageId}`}
+                  messageId={latestTerminalMessageId!}
+                  enabled={canAcknowledgeTerminalOutcome}
+                  onVisible={onTerminalOutcomeVisible}
+                >
+                  {groupedEvents
+                    .slice(attentionRange.start, attentionRange.end + 1)
+                    .map(renderGroup)}
+                </TerminalOutcomeVisibilityBoundary>
+              );
+            }
+            if (attentionRange && index > attentionRange.start && index <= attentionRange.end) {
+              return null;
+            }
+            return renderGroup(group);
+          })
         )}
         {isProcessing && <ThinkingIndicator />}
 
@@ -277,6 +292,7 @@ function TerminalOutcomeVisibilityBoundary({
       !enabled ||
       acknowledgedRef.current ||
       requestInFlightRef.current ||
+      attemptCountRef.current >= TERMINAL_ACK_MAX_ATTEMPTS ||
       !intersectingRef.current ||
       document.visibilityState !== "visible" ||
       !document.hasFocus()
@@ -318,8 +334,17 @@ function TerminalOutcomeVisibilityBoundary({
     if (!element) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        intersectingRef.current = entry.isIntersecting;
-        if (entry.isIntersecting) void attemptAcknowledgement();
+        const visibleHeight = entry.intersectionRect?.height ?? 48;
+        const requiredHeight = Math.min(entry.boundingClientRect?.height ?? 48, 48);
+        const meaningfullyVisible = entry.isIntersecting && visibleHeight >= requiredHeight;
+        intersectingRef.current = meaningfullyVisible;
+        if (meaningfullyVisible) {
+          void attemptAcknowledgement();
+        } else {
+          attemptCountRef.current = 0;
+          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
       },
       { threshold: 0 }
     );
@@ -329,7 +354,12 @@ function TerminalOutcomeVisibilityBoundary({
 
   useEffect(() => {
     cancelledRef.current = false;
-    const attempt = () => void attemptAcknowledgement();
+    const attempt = () => {
+      if (attemptCountRef.current >= TERMINAL_ACK_MAX_ATTEMPTS) {
+        attemptCountRef.current = 0;
+      }
+      void attemptAcknowledgement();
+    };
     document.addEventListener("visibilitychange", attempt);
     window.addEventListener("focus", attempt);
     return () => {

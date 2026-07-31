@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
+  applySessionUnread,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -48,6 +49,22 @@ describe("buildSessionsPageKey", () => {
     ).toBe(
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
+  });
+});
+
+describe("applySessionUnread", () => {
+  it("does not let an older mutation response overwrite a newer attention cursor", () => {
+    const data: SessionListResponse = {
+      sessions: [session("session-1", { navigation: { unread: true, attentionId: "message-b" } })],
+      hasMore: false,
+    };
+
+    expect(
+      applySessionUnread(data, "session-1", false, "message-a")?.sessions[0].navigation
+    ).toEqual({ unread: true, attentionId: "message-b" });
+    expect(
+      applySessionUnread(data, "session-1", false, "message-b")?.sessions[0].navigation
+    ).toEqual({ unread: false, attentionId: "message-b" });
   });
 });
 

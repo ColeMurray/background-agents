@@ -271,7 +271,13 @@ function SessionPageContent() {
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
-            canAcknowledgeTerminalOutcome={!replaying && !loadingHistory}
+            canAcknowledgeTerminalOutcome={
+              !replaying &&
+              !loadingHistory &&
+              !isDetailsOpen &&
+              selectedMediaArtifactId === null &&
+              resolvedDiff === null
+            }
             onTerminalOutcomeVisible={acknowledgeVisibleOutcome}
           />
         </Panel>

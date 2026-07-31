@@ -295,7 +295,7 @@ describe("terminal outcome visibility", () => {
       (target) => target.getAttribute("data-terminal-message-id") === "message-1"
     );
     expect(outcomeTarget).toHaveTextContent("The complete agent result");
-    expect(outcomeTarget).not.toHaveTextContent("Execution complete");
+    expect(outcomeTarget).toHaveTextContent("Execution complete");
   });
 
   it("does not retry after the visible outcome unmounts during acknowledgement", async () => {

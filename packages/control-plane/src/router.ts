@@ -166,10 +166,11 @@ function isWebServiceAuthRoute(method: string, path: string): boolean {
   );
 }
 
-function isScmAgnosticRoute(method: string, path: string): boolean {
+export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
+    (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );

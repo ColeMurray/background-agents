@@ -106,9 +106,11 @@ describe("session read state", () => {
 
     expect((await store.list({ viewerUserId: "user-a" })).sessions[0].navigation).toEqual({
       unread: true,
+      attentionId: "message-a",
     });
     expect((await store.list({ viewerUserId: "user-b" })).sessions[0].navigation).toEqual({
       unread: true,
+      attentionId: "message-a",
     });
 
     expect(
@@ -116,12 +118,19 @@ describe("session read state", () => {
         kind: "acknowledge",
         observedAttentionId: "message-a",
       })
-    ).toEqual({ sessionId: "shared-session", accepted: true, unread: false });
+    ).toEqual({
+      sessionId: "shared-session",
+      accepted: true,
+      unread: false,
+      attentionId: "message-a",
+    });
     expect((await store.list({ viewerUserId: "user-a" })).sessions[0].navigation).toEqual({
       unread: false,
+      attentionId: "message-a",
     });
     expect((await store.list({ viewerUserId: "user-b" })).sessions[0].navigation).toEqual({
       unread: true,
+      attentionId: "message-a",
     });
   });
 
@@ -141,11 +150,17 @@ describe("session read state", () => {
         kind: "acknowledge",
         observedAttentionId: "message-a",
       })
-    ).toEqual({ sessionId: "racing-session", accepted: false, unread: true });
+    ).toEqual({
+      sessionId: "racing-session",
+      accepted: false,
+      unread: true,
+      attentionId: "message-b",
+    });
     expect(await store.updateReadState("user-a", "racing-session", { kind: "mark_read" })).toEqual({
       sessionId: "racing-session",
       accepted: true,
       unread: false,
+      attentionId: "message-b",
     });
   });
 
@@ -162,6 +177,7 @@ describe("session read state", () => {
 
     expect((await store.list({ viewerUserId: "new-user" })).sessions[0].navigation).toEqual({
       unread: false,
+      attentionId: "historical-message",
     });
   });
 
@@ -172,10 +188,16 @@ describe("session read state", () => {
 
     expect((await store.list({ viewerUserId: "viewer" })).sessions[0].navigation).toEqual({
       unread: false,
+      attentionId: null,
     });
     expect(
       await store.updateReadState("viewer", "lifecycle-session", { kind: "mark_read" })
-    ).toEqual({ sessionId: "lifecycle-session", accepted: true, unread: false });
+    ).toEqual({
+      sessionId: "lifecycle-session",
+      accepted: true,
+      unread: false,
+      attentionId: null,
+    });
 
     await store.recordLatestAttention({
       sessionId: "lifecycle-session",
@@ -189,6 +211,7 @@ describe("session read state", () => {
 
     expect((await store.list({ viewerUserId: "viewer" })).sessions[0].navigation).toEqual({
       unread: false,
+      attentionId: "message-1",
     });
   });
 
@@ -230,7 +253,10 @@ describe("session read state", () => {
 
     const listResponse = await serviceFetch("https://example.com/sessions");
     expect(listResponse.headers.get("Cache-Control")).toBe("private, no-store");
-    expect((await listResponse.json()).sessions[0].navigation).toEqual({ unread: true });
+    expect((await listResponse.json()).sessions[0].navigation).toEqual({
+      unread: true,
+      attentionId: "message-a",
+    });
 
     const staleResponse = await serviceFetch(
       "https://example.com/sessions/api-session/read-state",
@@ -245,6 +271,7 @@ describe("session read state", () => {
       sessionId: "api-session",
       accepted: false,
       unread: true,
+      attentionId: "message-a",
     });
 
     const acceptedResponse = await serviceFetch(
@@ -258,6 +285,7 @@ describe("session read state", () => {
       sessionId: "api-session",
       accepted: true,
       unread: false,
+      attentionId: "message-a",
     });
 
     const serviceResponse = await serviceFetch(
@@ -315,5 +343,18 @@ describe("session read state", () => {
     expect(queryPlan.results.map(({ detail }) => detail).join("\n")).toMatch(
       /INDEX .*session_read_states/i
     );
+  });
+
+  it("chunks navigation decoration for a 100-row page within D1 binding limits", async () => {
+    const store = new SessionIndexStore(env.DB);
+    await createUser("viewer", 1_000);
+    for (let index = 0; index < 100; index += 1) {
+      await createSession(store, `large-page-${index.toString().padStart(3, "0")}`, 10_000 - index);
+    }
+
+    const result = await store.list({ viewerUserId: "viewer", limit: 100 });
+
+    expect(result.sessions).toHaveLength(100);
+    expect(result.sessions.every((session) => session.navigation?.unread === false)).toBe(true);
   });
 });

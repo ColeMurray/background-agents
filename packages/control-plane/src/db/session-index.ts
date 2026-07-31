@@ -21,6 +21,7 @@ const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).joi
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
+const MAX_NAVIGATION_SESSION_IDS_PER_QUERY = 99;
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -129,11 +130,13 @@ export interface SessionReadStateResult {
   sessionId: string;
   accepted: boolean;
   unread: boolean;
+  attentionId: string | null;
 }
 
 interface SessionNavigationRow {
   session_id: string;
   unread: number;
+  attention_message_id: string | null;
 }
 
 interface LatestAttentionRow {
@@ -143,6 +146,7 @@ interface LatestAttentionRow {
 export function sessionNavigationQuery(sessionCount: number): string {
   const placeholders = Array.from({ length: sessionCount }, () => "?").join(", ");
   return `SELECT s.id AS session_id,
+                 s.latest_attention_message_id AS attention_message_id,
                  CASE
                    WHEN s.latest_attention_message_id IS NOT NULL
                      AND s.latest_attention_at >= u.created_at
@@ -425,13 +429,26 @@ export class SessionIndexStore {
     userId: string,
     sessionIds: readonly string[]
   ): Promise<Map<string, SessionNavigationState>> {
-    const result = await this.db
-      .prepare(sessionNavigationQuery(sessionIds.length))
-      .bind(userId, ...sessionIds)
-      .all<SessionNavigationRow>();
+    const chunks: (readonly string[])[] = [];
+    for (let index = 0; index < sessionIds.length; index += MAX_NAVIGATION_SESSION_IDS_PER_QUERY) {
+      chunks.push(sessionIds.slice(index, index + MAX_NAVIGATION_SESSION_IDS_PER_QUERY));
+    }
+    const results = await Promise.all(
+      chunks.map((chunk) =>
+        this.db
+          .prepare(sessionNavigationQuery(chunk.length))
+          .bind(userId, ...chunk)
+          .all<SessionNavigationRow>()
+      )
+    );
 
     return new Map(
-      (result.results ?? []).map((row) => [row.session_id, { unread: row.unread === 1 }])
+      results.flatMap((result) =>
+        (result.results ?? []).map((row) => [
+          row.session_id,
+          { unread: row.unread === 1, attentionId: row.attention_message_id },
+        ])
+      )
     );
   }
 
@@ -532,6 +549,7 @@ export class SessionIndexStore {
       sessionId,
       accepted,
       unread: currentNavigation.unread,
+      attentionId: currentNavigation.attentionId ?? null,
     };
   }
 
