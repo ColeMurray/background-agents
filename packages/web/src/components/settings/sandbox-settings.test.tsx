@@ -109,7 +109,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
       </SWRConfig>
     );
 
-    const input = screen.getByLabelText("Session Timeout");
+    const input = screen.getByLabelText("Session Timeout (minutes)");
     expect(input).toHaveValue(120);
     await user.clear(input);
     await user.type(input, "240");
@@ -1097,7 +1097,7 @@ describe("SandboxSettingsEditor — environment scope", () => {
     await user.type(screen.getByLabelText("Image Build Timeout"), "2400");
     await user.click(screen.getByText("Save Settings"));
 
-    expect(screen.getByLabelText("Session Timeout")).toHaveValue(120);
+    expect(screen.getByLabelText("Session Timeout (minutes)")).toHaveValue(120);
 
     // Only the edited field is pinned — inherited cpu and the inherited
     // build-timeout base stay inherited.

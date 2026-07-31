@@ -768,7 +768,7 @@ export function SandboxSettingsEditor({
           htmlFor="sandbox-session-timeout"
           className="block text-sm font-medium text-foreground mb-1.5"
         >
-          Session Timeout
+          Session Timeout (minutes)
         </label>
         <p className="text-xs text-muted-foreground mb-2">
           Requested lifetime for each sandbox session, in minutes. Leave blank to inherit a parent
