@@ -130,7 +130,7 @@ describe("lazy trigger-time stale recovery over real D1", () => {
     expect((await getRow("accepted-finalization"))?.status).toBe("building");
   });
 
-  it("terminalizes an accepted callback after Queue recovery is exhausted", async () => {
+  it("leaves an old accepted callback recoverable instead of stale-failing it", async () => {
     const environmentId = await seedEnvironment();
     await seedImageRow({
       id: "exhausted-finalization",
@@ -148,10 +148,10 @@ describe("lazy trigger-time stale recovery over real D1", () => {
 
     expect(
       await new ImageBuildStore(env.DB).markStaleBuildsAsFailed(DEFAULT_STALE_BUILD_MAX_AGE_MS)
-    ).toBe(1);
+    ).toBe(0);
     expect(await getRow("exhausted-finalization")).toMatchObject({
-      status: "failed",
-      error_message: "image build finalization expired before completion",
+      status: "building",
+      completion_hash: "accepted-hash",
     });
   });
 

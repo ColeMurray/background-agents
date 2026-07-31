@@ -1,5 +1,10 @@
 import type { ImageBuildScopeKind, ImageBuildStatus } from "@open-inspect/shared";
-import type { ImageBuildProvider, ImageBuildScope } from "../image-builds/model";
+import {
+  parseRepoScopeId,
+  repoImageBuildScope,
+  type ImageBuildProvider,
+  type ImageBuildScope,
+} from "../image-builds/model";
 import type { SqlDatabase } from "./sql-database";
 
 export interface ImageBuildSessionCleanupRow {
@@ -16,13 +21,19 @@ export interface ImageBuildSessionCleanupRow {
 export interface RecoverableImageBuildFinalizationRow {
   id: string;
   completion_hash: string;
+  callback_token_used_at: number;
 }
 
-export interface ImageBuildSchedulerCursor {
-  scopeKind: ImageBuildScopeKind | null;
-  scopeId: string | null;
-  createdAt: number | null;
-  rowId: string | null;
+export type ImageBuildScopeCursorName = "scope-reconciliation";
+export type ImageBuildRowCursorName =
+  | "finalization-recovery"
+  | "session-cleanup"
+  | "failed-image-artifact-cleanup"
+  | "superseded-image-artifact-cleanup";
+
+export interface ImageBuildRowCursor {
+  sortValue: number;
+  rowId: string;
 }
 
 export const ENABLED_ENVIRONMENT_FIRST_PAGE_SQL = `SELECT id AS scope_id
@@ -37,17 +48,25 @@ export const ENABLED_ENVIRONMENT_NEXT_PAGE_SQL = `SELECT id AS scope_id
  ORDER BY id
  LIMIT ?`;
 
-export const ENABLED_REPOSITORY_FIRST_PAGE_SQL = `SELECT lower(repo_owner) || '/' || lower(repo_name) AS scope_id
+// repo_metadata has no surrogate id: its canonical key is
+// (repo_owner, repo_name). Page over that normalized compound identity rather
+// than treating the display name or a concatenated owner/name string as an
+// ordering key. Separate start/after statements preserve an indexed seek for
+// the after case without an optional-cursor OR predicate.
+export const ENABLED_REPOSITORY_FIRST_PAGE_SQL = `SELECT lower(repo_owner) AS repo_owner,
+        lower(repo_name) AS repo_name
  FROM repo_metadata
  WHERE image_build_enabled = 1
- ORDER BY lower(repo_owner) || '/' || lower(repo_name)
+ ORDER BY lower(repo_owner), lower(repo_name)
  LIMIT ?`;
 
-export const ENABLED_REPOSITORY_NEXT_PAGE_SQL = `SELECT lower(repo_owner) || '/' || lower(repo_name) AS scope_id
+export const ENABLED_REPOSITORY_NEXT_PAGE_SQL = `SELECT lower(repo_owner) AS repo_owner,
+        lower(repo_name) AS repo_name
  FROM repo_metadata
  WHERE image_build_enabled = 1
-   AND lower(repo_owner) || '/' || lower(repo_name) > ?
- ORDER BY lower(repo_owner) || '/' || lower(repo_name)
+   AND lower(repo_owner) >= ?
+   AND (lower(repo_owner) > ? OR lower(repo_name) > ?)
+ ORDER BY lower(repo_owner), lower(repo_name)
  LIMIT ?`;
 
 export const PROVIDER_SESSION_CLEANUP_FIRST_PAGE_SQL = `SELECT id, provider, status,
@@ -71,7 +90,8 @@ export const PROVIDER_SESSION_CLEANUP_NEXT_PAGE_SQL = `SELECT id, provider, stat
  ORDER BY created_at, id
  LIMIT ?`;
 
-export const RECOVERABLE_IMAGE_FINALIZATIONS_SQL = `SELECT id, completion_hash
+export const RECOVERABLE_IMAGE_FINALIZATIONS_FIRST_PAGE_SQL = `SELECT id, completion_hash,
+        callback_token_used_at
  FROM image_builds
  WHERE status = 'building'
    AND callback_token_used_at IS NOT NULL
@@ -81,6 +101,21 @@ export const RECOVERABLE_IMAGE_FINALIZATIONS_SQL = `SELECT id, completion_hash
      OR finalization_lease_expires_at IS NULL
      OR finalization_lease_expires_at <= ?
    )
+ ORDER BY callback_token_used_at, id
+ LIMIT ?`;
+
+export const RECOVERABLE_IMAGE_FINALIZATIONS_NEXT_PAGE_SQL = `SELECT id, completion_hash,
+        callback_token_used_at
+ FROM image_builds
+ WHERE status = 'building'
+   AND callback_token_used_at IS NOT NULL
+   AND completion_hash IS NOT NULL
+   AND (
+     finalization_lease_token IS NULL
+     OR finalization_lease_expires_at IS NULL
+     OR finalization_lease_expires_at <= ?
+   )
+   AND (callback_token_used_at, id) > (?, ?)
  ORDER BY callback_token_used_at, id
  LIMIT ?`;
 
@@ -114,16 +149,27 @@ export class ImageBuildMaintenanceStore {
     }
 
     if (rows.length < fetchLimit) {
-      const afterRepositoryId = params.after?.scopeKind === "repo" ? params.after.scopeId : null;
+      const afterRepository =
+        params.after?.scopeKind === "repo" ? parseRepoScopeId(params.after.scopeId) : null;
+      if (params.after?.scopeKind === "repo" && !afterRepository) {
+        throw new Error(`Invalid repository scope cursor: ${params.after.scopeId}`);
+      }
       const remaining = fetchLimit - rows.length;
-      const statement = afterRepositoryId
-        ? this.db.prepare(ENABLED_REPOSITORY_NEXT_PAGE_SQL).bind(afterRepositoryId, remaining)
+      const statement = afterRepository
+        ? this.db
+            .prepare(ENABLED_REPOSITORY_NEXT_PAGE_SQL)
+            .bind(
+              afterRepository.repoOwner,
+              afterRepository.repoOwner,
+              afterRepository.repoName,
+              remaining
+            )
         : this.db.prepare(ENABLED_REPOSITORY_FIRST_PAGE_SQL).bind(remaining);
-      const result = await statement.all<{ scope_id: string }>();
+      const result = await statement.all<{ repo_owner: string; repo_name: string }>();
       rows.push(
         ...(result.results ?? []).map((row) => ({
           scope_kind: "repo" as const,
-          scope_id: row.scope_id,
+          scope_id: repoImageBuildScope(row.repo_owner, row.repo_name).id,
         }))
       );
     }
@@ -139,43 +185,93 @@ export class ImageBuildMaintenanceStore {
     };
   }
 
-  async getCursor(name: string): Promise<ImageBuildSchedulerCursor | null> {
+  async getScopeCursor(name: ImageBuildScopeCursorName): Promise<ImageBuildScope | null> {
     const row = await this.db
       .prepare(
-        `SELECT cursor_scope_kind, cursor_scope_id, cursor_created_at, cursor_row_id
+        `SELECT cursor_scope_kind, cursor_scope_id
          FROM image_build_scheduler_state WHERE name = ?`
       )
       .bind(name)
       .first<{
         cursor_scope_kind: ImageBuildScopeKind | null;
         cursor_scope_id: string | null;
-        cursor_created_at: number | null;
-        cursor_row_id: string | null;
       }>();
-    return row
-      ? {
-          scopeKind: row.cursor_scope_kind,
-          scopeId: row.cursor_scope_id,
-          createdAt: row.cursor_created_at,
-          rowId: row.cursor_row_id,
-        }
-      : null;
+    if (!row?.cursor_scope_kind || !row.cursor_scope_id) return null;
+    return { kind: row.cursor_scope_kind, id: row.cursor_scope_id };
   }
 
-  async setCursor(name: string, cursor: ImageBuildSchedulerCursor): Promise<void> {
+  async setScopeCursor(
+    name: ImageBuildScopeCursorName,
+    cursor: ImageBuildScope | null
+  ): Promise<void> {
+    if (!cursor) return this.deleteCursor(name);
+    await this.upsertCursor(name, {
+      scopeKind: cursor.kind,
+      scopeId: cursor.id,
+      sortValue: null,
+      rowId: null,
+    });
+  }
+
+  async getRowCursor(name: ImageBuildRowCursorName): Promise<ImageBuildRowCursor | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT cursor_sort_value, cursor_row_id
+         FROM image_build_scheduler_state WHERE name = ?`
+      )
+      .bind(name)
+      .first<{
+        cursor_sort_value: number | null;
+        cursor_row_id: string | null;
+      }>();
+    if (
+      row?.cursor_sort_value === null ||
+      row?.cursor_sort_value === undefined ||
+      !row.cursor_row_id
+    )
+      return null;
+    return { sortValue: row.cursor_sort_value, rowId: row.cursor_row_id };
+  }
+
+  async setRowCursor(name: ImageBuildRowCursorName, cursor: ImageBuildRowCursor | null) {
+    if (!cursor) return this.deleteCursor(name);
+    await this.upsertCursor(name, {
+      scopeKind: null,
+      scopeId: null,
+      sortValue: cursor.sortValue,
+      rowId: cursor.rowId,
+    });
+  }
+
+  private async deleteCursor(name: ImageBuildScopeCursorName | ImageBuildRowCursorName) {
+    await this.db
+      .prepare("DELETE FROM image_build_scheduler_state WHERE name = ?")
+      .bind(name)
+      .run();
+  }
+
+  private async upsertCursor(
+    name: ImageBuildScopeCursorName | ImageBuildRowCursorName,
+    cursor: {
+      scopeKind: ImageBuildScopeKind | null;
+      scopeId: string | null;
+      sortValue: number | null;
+      rowId: string | null;
+    }
+  ): Promise<void> {
     await this.db
       .prepare(
         `INSERT INTO image_build_scheduler_state
-           (name, cursor_scope_kind, cursor_scope_id, cursor_created_at, cursor_row_id, updated_at)
+           (name, cursor_scope_kind, cursor_scope_id, cursor_sort_value, cursor_row_id, updated_at)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            cursor_scope_kind = excluded.cursor_scope_kind,
            cursor_scope_id = excluded.cursor_scope_id,
-           cursor_created_at = excluded.cursor_created_at,
+           cursor_sort_value = excluded.cursor_sort_value,
            cursor_row_id = excluded.cursor_row_id,
            updated_at = excluded.updated_at`
       )
-      .bind(name, cursor.scopeKind, cursor.scopeId, cursor.createdAt, cursor.rowId, Date.now())
+      .bind(name, cursor.scopeKind, cursor.scopeId, cursor.sortValue, cursor.rowId, Date.now())
       .run();
   }
 
@@ -192,14 +288,19 @@ export class ImageBuildMaintenanceStore {
     return result.results ?? [];
   }
 
-  async listRecoverableFinalizations(
-    now: number,
-    limit: number
-  ): Promise<RecoverableImageBuildFinalizationRow[]> {
-    const result = await this.db
-      .prepare(RECOVERABLE_IMAGE_FINALIZATIONS_SQL)
-      .bind(now, limit)
-      .all<RecoverableImageBuildFinalizationRow>();
+  async listRecoverableFinalizations(params: {
+    now: number;
+    after: { callbackTokenUsedAt: number; rowId: string } | null;
+    limit: number;
+  }): Promise<RecoverableImageBuildFinalizationRow[]> {
+    const statement = params.after
+      ? this.db
+          .prepare(RECOVERABLE_IMAGE_FINALIZATIONS_NEXT_PAGE_SQL)
+          .bind(params.now, params.after.callbackTokenUsedAt, params.after.rowId, params.limit)
+      : this.db
+          .prepare(RECOVERABLE_IMAGE_FINALIZATIONS_FIRST_PAGE_SQL)
+          .bind(params.now, params.limit);
+    const result = await statement.all<RecoverableImageBuildFinalizationRow>();
     return result.results ?? [];
   }
 }

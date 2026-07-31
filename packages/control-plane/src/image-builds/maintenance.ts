@@ -3,6 +3,9 @@ import {
   MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS,
 } from "./timeouts";
 
+/** Failed build history retained before artifact-free rows are deleted. */
+export const DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 /**
  * Age past which a `building` row is presumed dead and safe to fail: sized at
  * the longest provider-session lifetime plus registration/dispatch grace, so

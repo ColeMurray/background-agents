@@ -2,16 +2,30 @@ CREATE TABLE image_build_scheduler_state (
   name TEXT PRIMARY KEY,
   cursor_scope_kind TEXT,
   cursor_scope_id TEXT,
-  cursor_created_at INTEGER,
+  cursor_sort_value INTEGER,
   cursor_row_id TEXT,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  CHECK (
+    (
+      cursor_scope_kind IS NOT NULL
+      AND cursor_scope_id IS NOT NULL
+      AND cursor_sort_value IS NULL
+      AND cursor_row_id IS NULL
+    )
+    OR (
+      cursor_scope_kind IS NULL
+      AND cursor_scope_id IS NULL
+      AND cursor_sort_value IS NOT NULL
+      AND cursor_row_id IS NOT NULL
+    )
+  )
 );
 
 CREATE INDEX idx_environments_prebuild_scope
   ON environments(prebuild_enabled, id);
 
 CREATE INDEX idx_repo_metadata_image_build_scope
-  ON repo_metadata(image_build_enabled, (lower(repo_owner) || '/' || lower(repo_name)));
+  ON repo_metadata(image_build_enabled, lower(repo_owner), lower(repo_name));
 
 CREATE INDEX idx_image_builds_session_cleanup
   ON image_builds(created_at, id)

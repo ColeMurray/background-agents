@@ -64,8 +64,10 @@ function createStore() {
     getStatus: vi.fn().mockResolvedValue([]),
     getStatusForEnabledScopes: vi.fn().mockResolvedValue([]),
     maintenance: {
-      getCursor: vi.fn().mockResolvedValue(null),
-      setCursor: vi.fn().mockResolvedValue(undefined),
+      getScopeCursor: vi.fn().mockResolvedValue(null),
+      setScopeCursor: vi.fn().mockResolvedValue(undefined),
+      getRowCursor: vi.fn().mockResolvedValue(null),
+      setRowCursor: vi.fn().mockResolvedValue(undefined),
     },
   };
 }
@@ -200,6 +202,20 @@ describe("ImageBuildWorkflow", () => {
         callbackTokenExpiresAt: 9_999_999_999_999,
       });
       expect(adapter.startBuild).toHaveBeenCalledTimes(1);
+    });
+
+    it("reuses a caller-resolved target for one reconciliation snapshot", async () => {
+      const { workflow, resolveTarget, planBuild } = createWorkflow({});
+      const target = {
+        kind: "environment" as const,
+        repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+        repositoriesFingerprint: "fp-reconciled",
+      };
+
+      await workflow.triggerBuildWithTarget(ENV_SCOPE, target, ctx);
+
+      expect(resolveTarget).not.toHaveBeenCalled();
+      expect(planBuild).toHaveBeenCalledWith(expect.objectContaining({ target }));
     });
 
     it("reports the in-flight build instead of stacking another", async () => {
@@ -913,10 +929,10 @@ describe("ImageBuildWorkflow", () => {
       const { workflow } = createWorkflow({ store, adapter });
 
       await workflow.cleanupImages(86_400_000, ctx);
-      const persisted = store.maintenance.setCursor.mock.calls.find(
+      const persisted = store.maintenance.setRowCursor.mock.calls.find(
         ([name]) => name === "failed-image-artifact-cleanup"
       )?.[1];
-      store.maintenance.getCursor.mockImplementation(async (name) =>
+      store.maintenance.getRowCursor.mockImplementation(async (name) =>
         name === "failed-image-artifact-cleanup" ? persisted : null
       );
       adapter.deleteImage.mockResolvedValue(undefined);

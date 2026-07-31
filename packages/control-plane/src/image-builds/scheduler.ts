@@ -1,25 +1,27 @@
-import { MAX_TARGET_REPOSITORIES } from "@open-inspect/shared";
 import { ImageBuildStore } from "../db/image-builds";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import type { ImageBuildProvider } from "./model";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
-import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
+import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
 import { resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
 import { resolveImageBuildProvider } from "./provider-policy";
+import { repositoryIdentityKey } from "./provenance";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("image-builds:scheduler");
 const SCOPE_CURSOR = "scope-reconciliation";
+const FINALIZATION_CURSOR = "finalization-recovery";
 const CLEANUP_CURSOR = "session-cleanup";
 const SCOPE_PAGE_SIZE = 20;
 const CLEANUP_PAGE_SIZE = 20;
 const FINALIZATION_RECOVERY_LIMIT = 20;
 const TRIGGER_CAP = 8;
+const BRANCH_LOOKUP_BUDGET = 40;
 
 export const IMAGE_BUILD_SCHEDULER_CRON = "7,37 * * * *";
 
@@ -109,7 +111,10 @@ export class ImageBuildScheduler {
     }
 
     try {
-      const cleanup = await this.workflow.cleanupImages(24 * 60 * 60 * 1000, correlation);
+      const cleanup = await this.workflow.cleanupImages(
+        DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS,
+        correlation
+      );
       stats.rowsAged = cleanup.deletedFailed;
       stats.artifactsReaped = cleanup.reapedFailed + cleanup.reapedSuperseded;
     } catch (error) {
@@ -134,18 +139,44 @@ export class ImageBuildScheduler {
   private async republishRecoverableFinalizations(): Promise<number> {
     const queue = this.env.IMAGE_BUILD_FINALIZATION_QUEUE;
     if (!queue) return 0;
-    const rows = await this.store.maintenance.listRecoverableFinalizations(
-      Date.now(),
-      FINALIZATION_RECOVERY_LIMIT
+    const cursor = await this.store.maintenance.getRowCursor(FINALIZATION_CURSOR);
+    const now = Date.now();
+    let rows = await this.store.maintenance.listRecoverableFinalizations({
+      now,
+      after: cursor ? { callbackTokenUsedAt: cursor.sortValue, rowId: cursor.rowId } : null,
+      limit: FINALIZATION_RECOVERY_LIMIT,
+    });
+    if (rows.length === 0 && cursor) {
+      rows = await this.store.maintenance.listRecoverableFinalizations({
+        now,
+        after: null,
+        limit: FINALIZATION_RECOVERY_LIMIT,
+      });
+    }
+
+    const last = rows.at(-1);
+    await this.store.maintenance.setRowCursor(
+      FINALIZATION_CURSOR,
+      rows.length === FINALIZATION_RECOVERY_LIMIT && last
+        ? { sortValue: last.callback_token_used_at, rowId: last.id }
+        : null
     );
+
     let published = 0;
     for (const row of rows) {
-      await queue.send({
-        version: 1,
-        buildId: row.id,
-        completionHash: row.completion_hash,
-      });
-      published += 1;
+      try {
+        await queue.send({
+          version: 1,
+          buildId: row.id,
+          completionHash: row.completion_hash,
+        });
+        published += 1;
+      } catch (error) {
+        logger.warn("image_build.scheduler_finalization_republish_row_failed", {
+          build_id: row.id,
+          error: errorMessage(error),
+        });
+      }
     }
     return published;
   }
@@ -154,26 +185,18 @@ export class ImageBuildScheduler {
     stats: ImageBuildSchedulerStats,
     correlation: CorrelationContext
   ): Promise<void> {
-    const cursor = await this.store.maintenance.getCursor(CLEANUP_CURSOR);
+    const cursor = await this.store.maintenance.getRowCursor(CLEANUP_CURSOR);
     const rows = await this.store.maintenance.listSessionCleanupPage({
-      after:
-        cursor?.createdAt !== null && cursor?.createdAt !== undefined && cursor.rowId
-          ? { createdAt: cursor.createdAt, rowId: cursor.rowId }
-          : null,
+      after: cursor ? { createdAt: cursor.sortValue, rowId: cursor.rowId } : null,
       limit: CLEANUP_PAGE_SIZE,
     });
 
     const last = rows.at(-1);
-    await this.store.maintenance.setCursor(
+    await this.store.maintenance.setRowCursor(
       CLEANUP_CURSOR,
       rows.length === CLEANUP_PAGE_SIZE && last
-        ? {
-            scopeKind: null,
-            scopeId: null,
-            createdAt: last.created_at,
-            rowId: last.id,
-          }
-        : emptyCursor()
+        ? { sortValue: last.created_at, rowId: last.id }
+        : null
     );
 
     await Promise.all(
@@ -202,15 +225,12 @@ export class ImageBuildScheduler {
     if (!this.provider || !this.sourceControl) return;
     const provider = this.provider;
     const sourceControl = this.sourceControl;
-    const cursor = await this.store.maintenance.getCursor(SCOPE_CURSOR);
+    const cursor = await this.store.maintenance.getScopeCursor(SCOPE_CURSOR);
     const page = await this.store.maintenance.listEnabledScopeRefsPage({
-      after:
-        cursor?.scopeKind && cursor.scopeId
-          ? { scopeKind: cursor.scopeKind, scopeId: cursor.scopeId }
-          : null,
+      after: cursor ? { scopeKind: cursor.kind, scopeId: cursor.id } : null,
       limit: SCOPE_PAGE_SIZE,
     });
-    let branchBudget = MAX_TARGET_REPOSITORIES;
+    let branchBudget = BRANCH_LOOKUP_BUDGET;
 
     for (const scope of page.scopes) {
       try {
@@ -242,11 +262,7 @@ export class ImageBuildScheduler {
               heads.push(head);
               if (head === null) {
                 stats.branchMissing += 1;
-              } else if (
-                decision.recordedShas.get(
-                  `${repository.repoOwner.toLowerCase()}/${repository.repoName.toLowerCase()}`
-                ) === head
-              ) {
+              } else if (decision.recordedShas.get(repositoryIdentityKey(repository)) === head) {
                 stats.branchMatched += 1;
               } else {
                 stats.branchDrifted += 1;
@@ -259,30 +275,21 @@ export class ImageBuildScheduler {
           rebuild = heads.some(
             (head, index) =>
               head !== null &&
-              decision.recordedShas.get(
-                `${target.repositories[index].repoOwner.toLowerCase()}/${target.repositories[
-                  index
-                ].repoName.toLowerCase()}`
-              ) !== head
+              decision.recordedShas.get(repositoryIdentityKey(target.repositories[index])) !== head
           );
         }
 
         if (rebuild) {
           if (stats.triggered >= TRIGGER_CAP) break;
           try {
-            const result = await this.workflow.triggerBuild(scope, correlation);
+            const result = await this.workflow.triggerBuildWithTarget(scope, target, correlation);
             if (result.type === "triggered") stats.triggered += 1;
           } catch {
             stats.triggerFailed += 1;
           }
         }
         stats.scopesScanned += 1;
-        await this.store.maintenance.setCursor(SCOPE_CURSOR, {
-          scopeKind: scope.kind,
-          scopeId: scope.id,
-          createdAt: null,
-          rowId: null,
-        });
+        await this.store.maintenance.setScopeCursor(SCOPE_CURSOR, scope);
       } catch (error) {
         stats.scopesScanned += 1;
         logger.warn("image_build.scheduler_scope_failed", {
@@ -290,17 +297,12 @@ export class ImageBuildScheduler {
           scope_id: scope.id,
           error: errorMessage(error),
         });
-        await this.store.maintenance.setCursor(SCOPE_CURSOR, {
-          scopeKind: scope.kind,
-          scopeId: scope.id,
-          createdAt: null,
-          rowId: null,
-        });
+        await this.store.maintenance.setScopeCursor(SCOPE_CURSOR, scope);
       }
     }
 
     if (!page.nextCursor && stats.scopesScanned === page.scopes.length) {
-      await this.store.maintenance.setCursor(SCOPE_CURSOR, emptyCursor());
+      await this.store.maintenance.setScopeCursor(SCOPE_CURSOR, null);
     }
   }
 }
@@ -331,10 +333,6 @@ export async function runImageBuildScheduler(
     createImageBuildAdapterFactory(env),
     sourceControl
   ).run(correlation);
-}
-
-function emptyCursor() {
-  return { scopeKind: null, scopeId: null, createdAt: null, rowId: null };
 }
 
 function errorMessage(error: unknown): string {

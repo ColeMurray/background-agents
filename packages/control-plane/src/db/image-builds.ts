@@ -141,10 +141,7 @@ export const DELETE_OLD_FAILED_BUILDS_SQL = `DELETE FROM image_builds WHERE id I
 
 export const MARK_STALE_IMAGE_BUILDS_SQL = `UPDATE image_builds
 SET status = 'failed',
-    error_message = CASE
-      WHEN callback_token_used_at IS NULL THEN ?
-      ELSE 'image build finalization expired before completion'
-    END,
+    error_message = ?,
     finalization_lease_token = NULL,
     finalization_lease_expires_at = NULL
 WHERE id IN (
@@ -152,19 +149,9 @@ WHERE id IN (
   WHERE status = 'building'
     AND created_at < ?
     AND provider_image_id IS NULL
-    AND (
-      (
-        finalization_lease_token IS NULL
-        AND (
-          (callback_token_used_at IS NULL AND completion_hash IS NULL)
-          OR (callback_token_used_at < ? AND completion_hash IS NOT NULL)
-        )
-      )
-      OR (
-        finalization_lease_token IS NOT NULL
-        AND finalization_lease_expires_at <= ?
-      )
-    )
+    AND callback_token_used_at IS NULL
+    AND completion_hash IS NULL
+    AND finalization_lease_token IS NULL
   ORDER BY created_at, id
   LIMIT ?
 )`;
@@ -733,7 +720,7 @@ export class ImageBuildStore {
     const cutoff = now - maxAgeMs;
     const result = await this.db
       .prepare(MARK_STALE_IMAGE_BUILDS_SQL)
-      .bind(STALE_BUILD_TIMEOUT_MESSAGE, cutoff, cutoff, now, limit)
+      .bind(STALE_BUILD_TIMEOUT_MESSAGE, cutoff, limit)
       .run();
 
     return result.meta?.changes ?? 0;
@@ -755,32 +742,19 @@ export class ImageBuildStore {
       .prepare(
         `UPDATE image_builds
          SET status = 'failed',
-             error_message = CASE
-               WHEN callback_token_used_at IS NULL THEN ?
-               ELSE 'image build finalization expired before completion'
-             END,
+             error_message = ?,
              finalization_lease_token = NULL,
              finalization_lease_expires_at = NULL
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
            AND created_at < ?
            AND provider_image_id IS NULL
-           AND (
-             (
-               finalization_lease_token IS NULL
-               AND (
-                 (callback_token_used_at IS NULL AND completion_hash IS NULL)
-                 OR (callback_token_used_at < ? AND completion_hash IS NOT NULL)
-               )
-             )
-             OR (
-               finalization_lease_token IS NOT NULL
-               AND finalization_lease_expires_at <= ?
-             )
-           )
+           AND callback_token_used_at IS NULL
+           AND completion_hash IS NULL
+           AND finalization_lease_token IS NULL
          ORDER BY created_at, id
          LIMIT 1`
       )
-      .bind(STALE_BUILD_TIMEOUT_MESSAGE, scope.kind, scope.id, provider, cutoff, cutoff, now)
+      .bind(STALE_BUILD_TIMEOUT_MESSAGE, scope.kind, scope.id, provider, cutoff)
       .run();
 
     return result.meta?.changes ?? 0;

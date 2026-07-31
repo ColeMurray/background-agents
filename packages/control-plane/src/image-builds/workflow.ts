@@ -22,7 +22,11 @@ import {
 } from "./errors";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { parseRuntimeVersionNumber, type ImageBuildProvider, type ImageBuildScope } from "./model";
-import { ImageBuildPlanner, type PlannedCallbackAuth } from "./planner";
+import {
+  ImageBuildPlanner,
+  type PlannedCallbackAuth,
+  type ResolvedImageBuildTarget,
+} from "./planner";
 import { ImageBuildReaper } from "./reaper";
 import { resolveImageBuildProvider } from "./provider-policy";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
@@ -114,6 +118,21 @@ export class ImageBuildWorkflow {
   }
 
   /**
+   * Reconciliation variant that carries the already-resolved repository
+   * snapshot through registration and planning instead of resolving it twice.
+   */
+  async triggerBuildWithTarget(
+    scope: ImageBuildScope,
+    target: ResolvedImageBuildTarget,
+    ctx: ImageBuildWorkflowContext
+  ): Promise<TriggerImageBuildResult> {
+    if (target.kind !== scope.kind) {
+      throw new ImageBuildPlanningError("Resolved image-build target does not match its scope");
+    }
+    return await this.trigger(scope, ctx, { onlyIfStale: false, target });
+  }
+
+  /**
    * Save-hook variant (saving the owning entity triggers an immediate build):
    * skips the build when a ready image already matches the current repository
    * set — that is the cron's trigger-1 check evaluated eagerly. Unconditional
@@ -161,7 +180,7 @@ export class ImageBuildWorkflow {
   private async trigger(
     scope: ImageBuildScope,
     ctx: ImageBuildWorkflowContext,
-    options: { onlyIfStale: boolean }
+    options: { onlyIfStale: boolean; target?: ResolvedImageBuildTarget }
   ): Promise<TriggerImageBuildResult> {
     if (!this.providerDeps) {
       throw new ImageBuildWorkflowUnavailableError("Image build provider is not configured");
@@ -193,10 +212,10 @@ export class ImageBuildWorkflow {
     // Everything before registerBuild must stay cheap and secret-free: the
     // secret-change supersede can only see builds that have a row, so the
     // row is registered BEFORE secrets are decrypted (planBuild below).
-    let target;
+    let target: ResolvedImageBuildTarget;
     let callbackAuth;
     try {
-      target = await planner.resolveTarget(scope);
+      target = options.target ?? (await planner.resolveTarget(scope));
 
       if (
         options.onlyIfStale &&

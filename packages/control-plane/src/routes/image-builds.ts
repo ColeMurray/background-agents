@@ -22,6 +22,7 @@ import {
   type ImageBuildScope,
 } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
+import { decodeRepositoryShas } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
@@ -164,26 +165,10 @@ function optionalStringField(value: unknown, fallback: string): string {
 function parseRepositoryShas(value: unknown): RepositoryShaEntry[] | undefined | Response {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return error("repository_shas must be an array", 400);
-
-  const shas: RepositoryShaEntry[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      return error("repository_shas entries must be objects", 400);
-    }
-    const { repoOwner, repoName, baseSha } = entry as Record<string, unknown>;
-    if (
-      typeof repoOwner !== "string" ||
-      repoOwner.length === 0 ||
-      typeof repoName !== "string" ||
-      repoName.length === 0 ||
-      typeof baseSha !== "string" ||
-      baseSha.length === 0
-    ) {
-      return error("repository_shas entries require repoOwner, repoName, and baseSha", 400);
-    }
-    shas.push({ repoOwner, repoName, baseSha });
-  }
-  return shas;
+  return (
+    decodeRepositoryShas(value) ??
+    error("repository_shas entries require repoOwner, repoName, and baseSha", 400)
+  );
 }
 
 function buildCompleteCommand(body: ImageBuildCompleteBody): CompleteImageBuildCallback | Response {

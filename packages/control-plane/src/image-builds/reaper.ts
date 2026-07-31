@@ -1,4 +1,5 @@
 import type { ImageBuildStore, ReapableImageBuildRow } from "../db/image-builds";
+import type { ImageBuildRowCursorName } from "../db/image-build-maintenance";
 import { createLogger } from "../logger";
 import type { ImageBuildProvider, SupersededImageBuild } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
@@ -77,17 +78,11 @@ export class ImageBuildReaper {
    * later artifact behind the oldest rows forever.
    */
   private async getRotatingPage(
-    cursorName: string,
+    cursorName: ImageBuildRowCursorName,
     select: (after: { createdAt: number; rowId: string } | null) => Promise<ReapableImageBuildRow[]>
   ): Promise<ReapableImageBuildRow[]> {
-    const stored = await this.store.maintenance.getCursor(cursorName);
-    let after =
-      stored?.createdAt !== null &&
-      stored?.createdAt !== undefined &&
-      stored.rowId !== null &&
-      stored.rowId !== undefined
-        ? { createdAt: stored.createdAt, rowId: stored.rowId }
-        : null;
+    const stored = await this.store.maintenance.getRowCursor(cursorName);
+    let after = stored ? { createdAt: stored.sortValue, rowId: stored.rowId } : null;
     let rows = await select(after);
     if (rows.length === 0 && after) {
       after = null;
@@ -95,12 +90,12 @@ export class ImageBuildReaper {
     }
 
     const last = rows.at(-1);
-    await this.store.maintenance.setCursor(cursorName, {
-      scopeKind: null,
-      scopeId: null,
-      createdAt: rows.length === REAP_BATCH_LIMIT && last ? last.created_at : null,
-      rowId: rows.length === REAP_BATCH_LIMIT && last ? last.id : null,
-    });
+    await this.store.maintenance.setRowCursor(
+      cursorName,
+      rows.length === REAP_BATCH_LIMIT && last
+        ? { sortValue: last.created_at, rowId: last.id }
+        : null
+    );
     return rows;
   }
 
