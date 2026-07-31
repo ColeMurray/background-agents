@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChildSessionsHandler } from "./child-sessions.handler";
+import { ChildFollowUpService } from "../../services/child-follow-up.service";
 import { SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
@@ -154,6 +155,13 @@ function createHandler() {
   }));
   const messageService = { enqueuePrompt };
   const countActiveSiblingSessions = vi.fn(async () => 0);
+  const childFollowUpService = new ChildFollowUpService({
+    repository,
+    getSession,
+    getPublicSessionId,
+    messageService,
+    countActiveSiblingSessions,
+  });
 
   const handler = createChildSessionsHandler({
     repository,
@@ -162,8 +170,7 @@ function createHandler() {
     getPublicSessionId,
     parseArtifactMetadata,
     messenger,
-    messageService,
-    countActiveSiblingSessions,
+    childFollowUpService,
   });
 
   return {

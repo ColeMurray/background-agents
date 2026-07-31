@@ -230,6 +230,34 @@ describe("SessionStatusService.transition", () => {
   });
 });
 
+describe("SessionStatusService.cancel", () => {
+  it("closes local status and unfinished messages before publishing projections", async () => {
+    const h = harness({ session: createSession({ status: "active" }) });
+    let releaseIndex!: () => void;
+    h.sessionIndex!.updateStatus.mockImplementation(
+      () => new Promise<boolean>((resolve) => (releaseIndex = () => resolve(true)))
+    );
+    const terminalize = vi.fn();
+
+    const cancellation = h.service.cancel(terminalize);
+
+    expect(h.repository.updateSessionStatus).toHaveBeenCalledWith(
+      "session-1",
+      "cancelled",
+      expect.any(Number)
+    );
+    expect(terminalize).toHaveBeenCalledOnce();
+    expect(h.repository.updateSessionStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      terminalize.mock.invocationCallOrder[0]
+    );
+    expect(h.broadcast).not.toHaveBeenCalled();
+
+    releaseIndex();
+    await cancellation;
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "cancelled" });
+  });
+});
+
 describe("SessionStatusService.reconcileAfterExecution", () => {
   it("returns to active when more prompts are pending", async () => {
     const h = harness({ session: createSession({ status: "created" }) });

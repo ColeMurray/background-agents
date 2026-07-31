@@ -42,7 +42,6 @@ interface PromptMessageData {
 
 interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
-  failPending?: boolean;
 }
 
 interface EnqueuePromptCoreData {
@@ -64,7 +63,7 @@ interface EnqueuedPrompt {
 export class SessionNotPromptableError extends Error {
   readonly status = 409;
 
-  constructor(readonly sessionStatus: "archived" | "cancelled") {
+  constructor(readonly sessionStatus: SessionRow["status"]) {
     super(`Cannot prompt a ${sessionStatus} session`);
     this.name = "SessionNotPromptableError";
   }
@@ -301,60 +300,14 @@ export class SessionMessageQueue {
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
-    if (options.failPending) {
-      const cancelledMessages = this.repository.failPendingMessages(now);
-      const cancellationError = "Execution was cancelled before it started";
-      for (const message of cancelledMessages) {
-        const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
-          type: "execution_complete",
-          messageId: message.id,
-          success: false,
-          error: cancellationError,
-          sandboxId: "",
-          timestamp: now / 1000,
-        };
-        this.repository.upsertExecutionCompleteEvent(message.id, syntheticExecutionComplete, now);
-        this.messenger.broadcast({
-          type: "sandbox_event",
-          event: syntheticExecutionComplete,
-        });
-        this.ctx.waitUntil(
-          this.callbackService.notifyComplete(message.id, false, cancellationError)
-        );
-      }
-    }
     const processingMessage = this.repository.getProcessingMessage();
 
     if (processingMessage) {
-      this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
+      this.failMessage(processingMessage.id, "Execution was stopped", now);
       this.log.info("prompt.stopped", {
         event: "prompt.stopped",
         message_id: processingMessage.id,
       });
-
-      const stopError = "Execution was stopped";
-      const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
-        type: "execution_complete",
-        messageId: processingMessage.id,
-        success: false,
-        error: stopError,
-        sandboxId: "",
-        timestamp: now / 1000,
-      };
-      this.repository.upsertExecutionCompleteEvent(
-        processingMessage.id,
-        syntheticExecutionComplete,
-        now
-      );
-
-      this.messenger.broadcast({
-        type: "sandbox_event",
-        event: syntheticExecutionComplete,
-      });
-
-      this.ctx.waitUntil(
-        this.callbackService.notifyComplete(processingMessage.id, false, stopError)
-      );
 
       if (!options.suppressStatusReconcile) {
         await this.sessionStatus.reconcileAfterExecution(false);
@@ -369,6 +322,24 @@ export class SessionMessageQueue {
     }
   }
 
+  /** Close every unfinished message synchronously; status projection happens afterwards. */
+  cancelExecution(): void {
+    const now = Date.now();
+    const pendingMessages = this.repository.listPendingMessageIds();
+    for (const message of pendingMessages) {
+      this.failMessage(message.id, "Execution was cancelled before it started", now);
+    }
+
+    const processingMessage = this.repository.getProcessingMessage();
+    if (processingMessage) {
+      this.failMessage(processingMessage.id, "Execution was cancelled", now);
+    }
+
+    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
+  }
+
   /**
    * Fail a stuck processing message (defense-in-depth for execution timeout).
    *
@@ -381,24 +352,25 @@ export class SessionMessageQueue {
     const processingMessage = this.repository.getProcessingMessage();
     if (!processingMessage) return;
 
-    this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
-
     const stuckError = "Execution timed out (stuck processing)";
-    const syntheticEvent: Extract<SandboxEvent, { type: "execution_complete" }> = {
-      type: "execution_complete",
-      messageId: processingMessage.id,
-      success: false,
-      error: stuckError,
-      sandboxId: "",
-      timestamp: now / 1000,
-    };
-    this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
-    this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
+    this.failMessage(processingMessage.id, stuckError, now);
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-    this.ctx.waitUntil(
-      this.callbackService.notifyComplete(processingMessage.id, false, stuckError)
-    );
     await this.sessionStatus.reconcileAfterExecution(false);
+  }
+
+  private failMessage(messageId: string, error: string, completedAt: number): void {
+    this.repository.updateMessageCompletion(messageId, "failed", completedAt);
+    const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
+      type: "execution_complete",
+      messageId,
+      success: false,
+      error,
+      sandboxId: "",
+      timestamp: completedAt / 1000,
+    };
+    this.repository.upsertExecutionCompleteEvent(messageId, event, completedAt);
+    this.messenger.broadcast({ type: "sandbox_event", event });
+    this.ctx.waitUntil(this.callbackService.notifyComplete(messageId, false, error));
   }
 
   writeUserMessageEvent(
@@ -560,7 +532,7 @@ export class SessionMessageQueue {
 
   private assertPromptableSession(): void {
     const session = this.repository.getSession();
-    if (session && (session.status === "archived" || session.status === "cancelled")) {
+    if (session && !isPromptableSessionStatus(session.status)) {
       throw new SessionNotPromptableError(session.status);
     }
   }

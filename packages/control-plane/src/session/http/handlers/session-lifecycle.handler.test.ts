@@ -107,7 +107,7 @@ function createHandler() {
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
   const statusService = { transition } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
-  const stopExecution = vi.fn();
+  const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
   const updateSandboxStatus = vi.fn();
@@ -127,7 +127,7 @@ function createHandler() {
     getParticipantByUserId,
     statusService,
     applySessionTitleUpdate,
-    stopExecution,
+    cancelSession,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
@@ -156,7 +156,7 @@ function createHandler() {
     getParticipantByUserId,
     transition,
     applySessionTitleUpdate,
-    stopExecution,
+    cancelSession,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
@@ -784,8 +784,7 @@ describe("createSessionLifecycleHandler", () => {
       handler,
       getSession,
       getSandbox,
-      stopExecution,
-      transition,
+      cancelSession,
       getSandboxSocket,
       sendToSandbox,
       updateSandboxStatus,
@@ -793,24 +792,14 @@ describe("createSessionLifecycleHandler", () => {
     const ws = {} as WebSocket;
     getSession.mockReturnValue(createSession({ status: "active" }));
     getSandbox.mockReturnValue(createSandbox({ status: "running" }));
-    stopExecution.mockResolvedValue(undefined);
-    transition.mockResolvedValue(true);
+    cancelSession.mockResolvedValue(undefined);
     getSandboxSocket.mockReturnValue(ws);
 
     const response = await handler.cancel();
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
-    expect(stopExecution).toHaveBeenCalledWith({
-      suppressStatusReconcile: true,
-      failPending: true,
-    });
-    expect(transition.mock.invocationCallOrder[0]).toBeLessThan(
-      stopExecution.mock.invocationCallOrder[0]
-    );
-    expect(transition).toHaveBeenLastCalledWith("cancelled");
-    expect(transition).toHaveBeenCalledTimes(2);
-    expect(transition).toHaveBeenCalledWith("cancelled");
+    expect(cancelSession).toHaveBeenCalledOnce();
     expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });

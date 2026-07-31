@@ -105,7 +105,7 @@ function buildQueue() {
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
-    failPendingMessages: vi.fn((): Array<{ id: string }> => []),
+    listPendingMessageIds: vi.fn((): Array<{ id: string }> => []),
     upsertExecutionCompleteEvent: vi.fn(),
   };
 
@@ -607,14 +607,13 @@ describe("SessionMessageQueue", () => {
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-9" });
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    await h.queue.stopExecution({ failPending: true });
+    await h.queue.stopExecution();
 
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-9",
       "failed",
       expect.any(Number)
     );
-    expect(h.repository.failPendingMessages).toHaveBeenCalledWith(expect.any(Number));
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-9",
       expect.objectContaining({ type: "execution_complete", success: false }),
@@ -637,9 +636,9 @@ describe("SessionMessageQueue", () => {
 
   it("emits completion events and callbacks for prompts cancelled before dispatch", async () => {
     const h = buildQueue();
-    h.repository.failPendingMessages.mockReturnValue([{ id: "msg-pending" }]);
+    h.repository.listPendingMessageIds.mockReturnValue([{ id: "msg-pending" }]);
 
-    await h.queue.stopExecution({ failPending: true, suppressStatusReconcile: true });
+    h.queue.cancelExecution();
 
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-pending",
@@ -655,6 +654,11 @@ describe("SessionMessageQueue", () => {
       "msg-pending",
       false,
       "Execution was cancelled before it started"
+    );
+    expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
+      "msg-pending",
+      "failed",
+      expect.any(Number)
     );
   });
 

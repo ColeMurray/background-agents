@@ -782,19 +782,19 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("failPendingMessages", () => {
-    it("fails every pending message without touching processing work", () => {
+  describe("listPendingMessageIds", () => {
+    it("returns pending messages in deterministic queue order", () => {
       mock.setData(
-        `UPDATE messages SET status = 'failed', completed_at = ? WHERE status = 'pending' RETURNING id`,
+        `SELECT id FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`,
         [{ id: "msg-1" }]
       );
 
-      expect(repo.failPendingMessages(3000)).toEqual([{ id: "msg-1" }]);
+      expect(repo.listPendingMessageIds()).toEqual([{ id: "msg-1" }]);
 
-      expect(mock.calls[0].query).toContain("status = 'failed'");
+      expect(mock.calls[0].query).toContain("SELECT id FROM messages");
       expect(mock.calls[0].query).toContain("WHERE status = 'pending'");
-      expect(mock.calls[0].query).toContain("RETURNING id");
-      expect(mock.calls[0].params).toEqual([3000]);
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
+      expect(mock.calls[0].params).toEqual([]);
     });
   });
 

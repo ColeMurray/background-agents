@@ -1,15 +1,10 @@
-import {
-  childFollowUpPromptRequestSchema,
-  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
-  type SpawnContext,
-} from "@open-inspect/shared";
+import { childFollowUpPromptRequestSchema, type SpawnContext } from "@open-inspect/shared";
 import { z } from "zod";
 import type { SessionStatus } from "../../../types";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
-import { SessionNotPromptableError } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
-import type { MessageService } from "../../services/message.service";
+import type { ChildFollowUpService } from "../../services/child-follow-up.service";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
@@ -37,8 +32,7 @@ export interface ChildSessionsHandlerDeps {
     artifact: Pick<ArtifactRow, "id" | "metadata">
   ) => Record<string, unknown> | null;
   messenger: SessionMessenger;
-  messageService: Pick<MessageService, "enqueuePrompt">;
-  countActiveSiblingSessions: (parentSessionId: string, childSessionId: string) => Promise<number>;
+  childFollowUpService: ChildFollowUpService;
 }
 
 export interface ChildSessionsHandler {
@@ -47,8 +41,6 @@ export interface ChildSessionsHandler {
   parentPrompt: (request: Request) => Promise<Response>;
   childSessionUpdate: (request: Request) => Promise<Response>;
 }
-
-export const MAX_PENDING_CHILD_PROMPTS = 10;
 
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
@@ -165,67 +157,10 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Invalid prompt body" }, { status: 400 });
       }
 
-      const session = deps.getSession();
-      if (!session || session.parent_session_id !== parsed.data.parentSessionId) {
-        return Response.json({ error: "Child session not found" }, { status: 404 });
-      }
-      if (session.status === "cancelled" || session.status === "archived") {
-        return Response.json(
-          { error: `Cannot prompt a ${session.status} session` },
-          { status: 409 }
-        );
-      }
-      if (deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
-        return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
-      }
-
-      if (session.status === "completed" || session.status === "failed") {
-        let maxConcurrentChildren = DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-        try {
-          maxConcurrentChildren =
-            parsePersistedSandboxSettings(session.sandbox_settings).maxConcurrentChildSessions ??
-            DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-        } catch {
-          maxConcurrentChildren = DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-        }
-        const childId = deps.getPublicSessionId(session);
-        const activeSiblings = await deps.countActiveSiblingSessions(
-          parsed.data.parentSessionId,
-          childId
-        );
-        if (activeSiblings >= maxConcurrentChildren) {
-          return Response.json(
-            { error: `Maximum concurrent children (${maxConcurrentChildren}) reached` },
-            { status: 429 }
-          );
-        }
-        if (deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
-          return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
-        }
-      }
-
-      const owner = deps.repository
-        .listParticipants()
-        .find((participant) => participant.role === "owner");
-      if (!owner) {
-        return Response.json({ error: "No owner participant found" }, { status: 500 });
-      }
-
-      try {
-        return Response.json(
-          await deps.messageService.enqueuePrompt({
-            content: parsed.data.content,
-            authorId: owner.user_id,
-            canonicalUserId: owner.canonical_user_id ?? undefined,
-            source: "agent",
-          })
-        );
-      } catch (error) {
-        if (error instanceof SessionNotPromptableError) {
-          return Response.json({ error: error.message }, { status: error.status });
-        }
-        throw error;
-      }
+      const result = await deps.childFollowUpService.enqueue(parsed.data);
+      return result.ok
+        ? Response.json(result.value)
+        : Response.json({ error: result.error }, { status: result.status });
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {

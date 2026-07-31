@@ -79,10 +79,7 @@ export interface SessionLifecycleHandlerDeps {
     title: string,
     options?: SessionTitleUpdateOptions
   ) => SessionTitleUpdateResult;
-  stopExecution: (options?: {
-    suppressStatusReconcile?: boolean;
-    failPending?: boolean;
-  }) => Promise<void>;
+  cancelSession: () => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
@@ -424,12 +421,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
       }
 
-      const transition = deps.statusService.transition("cancelled");
-      const stop = deps.stopExecution({ suppressStatusReconcile: true, failPending: true });
-      await Promise.all([transition, stop]);
-      // A completion event that was already in flight may have reconciled the
-      // status while the first projection awaited D1. Cancellation wins.
-      await deps.statusService.transition("cancelled");
+      await deps.cancelSession();
 
       const sandbox = deps.getSandbox();
       if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {

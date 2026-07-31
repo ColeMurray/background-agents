@@ -122,6 +122,7 @@ import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
+import { ChildFollowUpService } from "./services/child-follow-up.service";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -181,6 +182,7 @@ export class SessionDO extends DurableObject<Env> {
   private _messageQueue: SessionMessageQueue | null = null;
   // Message service (lazily initialized)
   private _messageService: MessageService | null = null;
+  private _childFollowUpService: ChildFollowUpService | null = null;
   private _eventStream: SessionEventStream | null = null;
   // Messages handler (lazily initialized)
   private _messagesHandler: MessagesHandler | null = null;
@@ -431,6 +433,19 @@ export class SessionDO extends DurableObject<Env> {
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
         messenger: this.messenger,
+        childFollowUpService: this.childFollowUpService,
+      });
+    }
+
+    return this._childSessionsHandler;
+  }
+
+  private get childFollowUpService(): ChildFollowUpService {
+    if (!this._childFollowUpService) {
+      this._childFollowUpService = new ChildFollowUpService({
+        repository: this.repository,
+        getSession: () => this.getSession(),
+        getPublicSessionId: (session) => this.getPublicSessionId(session),
         messageService: this.messageService,
         countActiveSiblingSessions: (parentSessionId, childSessionId) =>
           this.db
@@ -441,8 +456,7 @@ export class SessionDO extends DurableObject<Env> {
             : Promise.resolve(0),
       });
     }
-
-    return this._childSessionsHandler;
+    return this._childFollowUpService;
   }
 
   private get sandboxHandler(): SandboxHandler {
@@ -514,7 +528,9 @@ export class SessionDO extends DurableObject<Env> {
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
         statusService: this.statusService,
         applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
-        stopExecution: (options) => this.stopExecution(options),
+        cancelSession: async () => {
+          await this.statusService.cancel(() => this.messageQueue.cancelExecution());
+        },
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
         updateSandboxStatus: (status) => this.updateSandboxStatus(status),
@@ -1536,10 +1552,7 @@ export class SessionDO extends DurableObject<Env> {
    * broadcasts synthetic execution_complete
    * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
-  private async stopExecution(options?: {
-    suppressStatusReconcile?: boolean;
-    failPending?: boolean;
-  }): Promise<void> {
+  private async stopExecution(options?: { suppressStatusReconcile?: boolean }): Promise<void> {
     await this.messageQueue.stopExecution(options);
   }
 

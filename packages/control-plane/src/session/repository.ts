@@ -831,10 +831,9 @@ export class SessionRepository {
     );
   }
 
-  failPendingMessages(completedAt: number): Array<{ id: string }> {
+  listPendingMessageIds(): Array<{ id: string }> {
     const result = this.sql.exec(
-      `UPDATE messages SET status = 'failed', completed_at = ? WHERE status = 'pending' RETURNING id`,
-      completedAt
+      `SELECT id FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
     );
     return result.toArray() as Array<{ id: string }>;
   }

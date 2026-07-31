@@ -53,6 +53,35 @@ export class SessionStatusService {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
+    await this.projectTransition(session, publicSessionId, status, updatedAt);
+
+    return true;
+  }
+
+  /**
+   * Atomically close the local aggregate before publishing cancellation.
+   * The callback must be synchronous: no request may observe cancelled status
+   * with unfinished messages, or accept work between those two mutations.
+   */
+  async cancel(terminalizeUnfinishedMessages: () => void): Promise<boolean> {
+    const session = this.repository.getSession();
+    if (!session) return false;
+
+    const publicSessionId = this.getPublicSessionId(session);
+    const updatedAt = Math.max(Date.now(), session.updated_at + 1);
+    this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
+    terminalizeUnfinishedMessages();
+    await this.projectTransition(session, publicSessionId, "cancelled", updatedAt);
+
+    return true;
+  }
+
+  private async projectTransition(
+    session: SessionRow,
+    publicSessionId: string,
+    status: SessionStatus,
+    updatedAt: number
+  ): Promise<void> {
     await this.syncSessionIndexStatus(publicSessionId, status, updatedAt).catch((error) =>
       this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
     );
@@ -65,8 +94,6 @@ export class SessionStatusService {
 
     // Notify parent session (if this is a child) so its UI can refresh
     this.notifyParentOfStatusChange(session, publicSessionId, status);
-
-    return true;
   }
 
   /**
