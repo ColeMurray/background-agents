@@ -8,8 +8,14 @@
  */
 
 import type { ConditionRegistry } from "../conditions";
-import type { AutomationEvent, TextMatchValue } from "../types";
+import type { AutomationEvent, TextMatchValue, TriggerCondition } from "../types";
 import { SLACK_TEXT_MAX_LENGTH } from "./normalizer";
+
+type SlackChannelCondition = Extract<TriggerCondition, { type: "slack_channel" }>;
+
+export type SlackChannelConditionParseResult =
+  | { success: true; condition: SlackChannelCondition }
+  | { success: false; error: string };
 
 /** Max length of a user-supplied `text_match` regex pattern (characters). */
 export const REGEX_PATTERN_MAX_LENGTH = 200;
@@ -39,6 +45,62 @@ function isNonEmptyStringArray(value: unknown): value is string[] {
     value.length > 0 &&
     value.every((v) => typeof v === "string" && v !== "")
   );
+}
+
+/**
+ * Parse an untrusted Slack Channel condition into its canonical persisted form.
+ * Channel IDs are trimmed and unknown properties are discarded.
+ */
+export function parseSlackChannelCondition(condition: unknown): SlackChannelConditionParseResult {
+  if (typeof condition !== "object" || condition === null) {
+    return { success: false, error: "Slack Channel condition must be an object" };
+  }
+  const candidate = condition as Record<string, unknown>;
+  if (candidate.type !== "slack_channel") {
+    return { success: false, error: "Slack Channel condition type must be slack_channel" };
+  }
+  if (candidate.operator !== "any_of") {
+    return { success: false, error: "Slack Channel operator must be any_of" };
+  }
+  if (!Array.isArray(candidate.value) || candidate.value.length === 0) {
+    return {
+      success: false,
+      error: "Slack Channel requires at least one nonblank channel ID",
+    };
+  }
+  const channelIds = candidate.value.map((channelId) =>
+    typeof channelId === "string" ? channelId.trim() : ""
+  );
+  if (channelIds.some((channelId) => channelId.length === 0)) {
+    return {
+      success: false,
+      error: "Slack Channel requires at least one nonblank channel ID",
+    };
+  }
+  return {
+    success: true,
+    condition: {
+      type: "slack_channel",
+      operator: "any_of",
+      value: channelIds,
+    },
+  };
+}
+
+/** True when a Slack trigger has at least one valid watched-channel condition. */
+export function hasValidSlackChannelCondition(conditions: unknown[]): boolean {
+  return conditions.some((condition) => parseSlackChannelCondition(condition).success);
+}
+
+/** Normalize validated Slack Channel conditions before persistence. */
+export function normalizeSlackChannelConditions(
+  conditions: TriggerCondition[]
+): TriggerCondition[] {
+  return conditions.map((condition) => {
+    if (condition.type !== "slack_channel") return condition;
+    const parsed = parseSlackChannelCondition(condition);
+    return parsed.success ? parsed.condition : condition;
+  });
 }
 
 /**
@@ -101,10 +163,9 @@ export const slackConditions = {
   },
   slack_channel: {
     appliesTo: ["slack"] as const,
-    validate(c: { value: string[] }) {
-      return isNonEmptyStringArray(c.value)
-        ? null
-        : "slack_channel requires at least one channel ID";
+    validate(c: SlackChannelCondition) {
+      const parsed = parseSlackChannelCondition(c);
+      return parsed.success ? null : parsed.error;
     },
     evaluate(c: { value: string[] }, event: AutomationEvent) {
       if (event.source !== "slack") return true;

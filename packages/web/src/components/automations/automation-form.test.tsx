@@ -170,10 +170,10 @@ describe("automation cron submission", () => {
     );
 
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
 
     fireEvent.submit(container.querySelector("form")!);
 
-    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -202,6 +202,30 @@ describe("automation cron submission", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({
       triggerConfig: { conditions: [] },
     });
+  });
+
+  it("renders condition validation errors beside the condition builder", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: {
+            conditions: [{ type: "branch", operator: "glob_match", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("At least one branch pattern required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
   });
 });
 
@@ -720,6 +744,44 @@ describe("slack_event automation", () => {
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+  });
+
+  it("shows the Slack channel message only when it is the policy failure", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          name: "",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    expect(screen.queryByText(/require at least one Slack Channel/)).not.toBeInTheDocument();
+  });
+
+  it("explains why an empty slack_channel condition cannot be submitted", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(
+      screen.getByText("Slack Channel requires at least one nonblank channel ID")
+    ).toBeInTheDocument();
   });
 
   it("submits a valid slack_event", () => {

@@ -7,7 +7,15 @@ import type { TriggerSourceDefinition } from "../types";
 export type { SlackAutomationEvent } from "../types";
 export { normalizeSlackEvent, SLACK_TEXT_MAX_LENGTH } from "./normalizer";
 export type { SlackMessageInput, SlackChannelMeta } from "./normalizer";
-export { slackConditions, REGEX_PATTERN_MAX_LENGTH, ALLOWED_REGEX_FLAGS } from "./conditions";
+export {
+  slackConditions,
+  hasValidSlackChannelCondition,
+  normalizeSlackChannelConditions,
+  parseSlackChannelCondition,
+  REGEX_PATTERN_MAX_LENGTH,
+  ALLOWED_REGEX_FLAGS,
+} from "./conditions";
+export type { SlackChannelConditionParseResult } from "./conditions";
 
 export const slackSource: TriggerSourceDefinition = {
   source: "slack",

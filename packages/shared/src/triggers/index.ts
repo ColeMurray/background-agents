@@ -58,9 +58,16 @@ export {
 // Slack source module
 export {
   slackSource,
+  hasValidSlackChannelCondition,
+  normalizeSlackChannelConditions,
+  parseSlackChannelCondition,
   normalizeSlackEvent,
   SLACK_TEXT_MAX_LENGTH,
   REGEX_PATTERN_MAX_LENGTH,
   ALLOWED_REGEX_FLAGS,
 } from "./slack";
-export type { SlackMessageInput, SlackChannelMeta } from "./slack";
+export type {
+  SlackMessageInput,
+  SlackChannelMeta,
+  SlackChannelConditionParseResult,
+} from "./slack";

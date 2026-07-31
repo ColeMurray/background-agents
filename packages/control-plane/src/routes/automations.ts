@@ -2,8 +2,14 @@
  * Automation CRUD routes.
  */
 
-import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
+  isValidTimeZone,
+  nextCronOccurrence,
+  validateAutomationCron,
+} from "@open-inspect/shared/cron";
+import {
+  hasValidSlackChannelCondition,
+  normalizeSlackChannelConditions,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
@@ -12,6 +18,11 @@ import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/
 import type {
   CreateAutomationRequest,
   UpdateAutomationRequest,
+} from "@open-inspect/shared/types/automations";
+import {
+  automationRepositoriesInputSchema,
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
+  validateAutomationTargetCounts,
 } from "@open-inspect/shared/types/automations";
 import { listChannels } from "@open-inspect/shared/slack";
 import {
@@ -33,10 +44,6 @@ import { generateId } from "../auth/crypto";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
-import {
-  automationRepositoriesInputSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-} from "@open-inspect/shared/types/automations";
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   type Route,
@@ -52,14 +59,8 @@ import type { SqlDatabase, SqlStatement } from "../db/sql-database";
 
 const logger = createLogger("router:automations");
 
-/** Minimum cron interval in minutes. */
-const MIN_CRON_INTERVAL_MINUTES = 15;
-
 /** Maximum name length. */
 const MAX_NAME_LENGTH = 200;
-
-/** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
-const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
@@ -124,22 +125,12 @@ function validateTargetCounts(
   repositoryCount: number,
   environmentCount: number
 ): void {
-  if (triggerType === "github_event" || triggerType === "linear_event") {
-    if (repositoryCount === 0) {
-      throw new TargetSelectionError("Repository-scoped triggers require exactly one repository");
-    }
-    if (environmentCount > 0) {
-      throw new TargetSelectionError("Repository-scoped triggers cannot target environments");
-    }
-  }
-  if (repositoryCount + environmentCount > 1 && triggerType !== "schedule") {
-    throw new TargetSelectionError("Multi-target selections require a schedule trigger");
-  }
-  if (repositoryCount + environmentCount > MAX_AUTOMATION_REPOSITORIES) {
-    throw new TargetSelectionError(
-      `At most ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined`
-    );
-  }
+  const validationError = validateAutomationTargetCounts(
+    triggerType,
+    repositoryCount,
+    environmentCount
+  );
+  if (validationError) throw new TargetSelectionError(validationError);
 }
 
 type EnvironmentSelectionRequest =
@@ -220,18 +211,6 @@ async function resolveRepositorySelection(
   });
 }
 
-/**
- * Validate an IANA timezone string.
- */
-function isValidTimezone(tz: string): boolean {
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** Extract the watched channel IDs from a slack automation's `slack_channel` condition. */
 function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): string[] {
   for (const condition of triggerConfig?.conditions ?? []) {
@@ -258,7 +237,7 @@ function validateSlackTriggerConfig(
     return "triggerConfig.conditions must be an array";
   }
   const conditions = rawConditions ?? [];
-  if (!conditions.some((c) => c.type === "slack_channel")) {
+  if (!hasValidSlackChannelCondition(conditions)) {
     return "slack_event triggers require a slack_channel condition";
   }
   return null;
@@ -333,8 +312,11 @@ async function handleCreateAutomation(
   ) {
     return error("instructions is required", 400);
   }
-  if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
-    return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
+  if (body.instructions.length > MAX_AUTOMATION_INSTRUCTIONS_LENGTH) {
+    return error(
+      `instructions must be at most ${MAX_AUTOMATION_INSTRUCTIONS_LENGTH} characters`,
+      400
+    );
   }
 
   let selection: RepositorySelectionRequest;
@@ -375,14 +357,9 @@ async function handleCreateAutomation(
 
   // Schedule-specific validation
   if (isSchedule) {
-    if (!body.scheduleCron || !isValidCron(body.scheduleCron)) {
-      return error("scheduleCron must be a valid 5-field cron expression", 400);
-    }
-    const interval = cronIntervalMinutes(body.scheduleCron);
-    if (interval !== null && interval < MIN_CRON_INTERVAL_MINUTES) {
-      return error(`Schedule interval must be at least ${MIN_CRON_INTERVAL_MINUTES} minutes`, 400);
-    }
-    if (!body.scheduleTz || !isValidTimezone(body.scheduleTz)) {
+    const cronError = validateAutomationCron(body.scheduleCron ?? "");
+    if (cronError) return error(cronError, 400);
+    if (!body.scheduleTz || !isValidTimeZone(body.scheduleTz)) {
       return error("scheduleTz must be a valid IANA timezone", 400);
     }
   } else {
@@ -419,6 +396,10 @@ async function handleCreateAutomation(
   if (triggerType === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
+    body.triggerConfig = {
+      ...body.triggerConfig!,
+      conditions: normalizeSlackChannelConditions(body.triggerConfig!.conditions),
+    };
   }
 
   // Validate model
@@ -601,22 +582,20 @@ async function handleUpdateAutomation(
     if (typeof body.instructions !== "string" || body.instructions.trim().length === 0) {
       return error("instructions cannot be empty", 400);
     }
-    if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
-      return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
+    if (body.instructions.length > MAX_AUTOMATION_INSTRUCTIONS_LENGTH) {
+      return error(
+        `instructions must be at most ${MAX_AUTOMATION_INSTRUCTIONS_LENGTH} characters`,
+        400
+      );
     }
   }
 
   if (body.scheduleCron !== undefined) {
-    if (!isValidCron(body.scheduleCron)) {
-      return error("scheduleCron must be a valid 5-field cron expression", 400);
-    }
-    const interval = cronIntervalMinutes(body.scheduleCron);
-    if (interval !== null && interval < MIN_CRON_INTERVAL_MINUTES) {
-      return error(`Schedule interval must be at least ${MIN_CRON_INTERVAL_MINUTES} minutes`, 400);
-    }
+    const cronError = validateAutomationCron(body.scheduleCron);
+    if (cronError) return error(cronError, 400);
   }
 
-  if (body.scheduleTz !== undefined && !isValidTimezone(body.scheduleTz)) {
+  if (body.scheduleTz !== undefined && !isValidTimeZone(body.scheduleTz)) {
     return error("scheduleTz must be a valid IANA timezone", 400);
   }
 
@@ -736,6 +715,10 @@ async function handleUpdateAutomation(
       if (existing.trigger_type === "slack_event") {
         const slackError = validateSlackTriggerConfig(body.triggerConfig);
         if (slackError) return error(slackError, 400);
+        body.triggerConfig = {
+          ...body.triggerConfig,
+          conditions: normalizeSlackChannelConditions(body.triggerConfig.conditions),
+        };
       }
       if (body.triggerConfig.conditions) {
         if (!Array.isArray(body.triggerConfig.conditions)) {
