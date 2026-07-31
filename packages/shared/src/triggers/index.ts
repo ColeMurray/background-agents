@@ -58,6 +58,7 @@ export {
 // Slack source module
 export {
   slackSource,
+  hasValidSlackChannelCondition,
   normalizeSlackEvent,
   SLACK_TEXT_MAX_LENGTH,
   REGEX_PATTERN_MAX_LENGTH,

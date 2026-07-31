@@ -722,6 +722,25 @@ describe("slack_event automation", () => {
     expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
   });
 
+  it("explains why an empty slack_channel condition cannot be submitted", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+  });
+
   it("submits a valid slack_event", () => {
     const onSubmit = vi.fn();
     const { container } = render(

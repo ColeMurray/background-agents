@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { matchesConditions, validateConditions } from "../conditions";
+import { hasValidSlackChannelCondition } from "./conditions";
 import type { TriggerCondition } from "../types";
 import { conditionRegistry } from "../registry";
 import { buildMockEvent } from "../testing";
@@ -159,6 +160,16 @@ describe("slack_actor condition", () => {
 });
 
 describe("validateConditions (slack)", () => {
+  it("requires a non-empty watched-channel condition", () => {
+    expect(hasValidSlackChannelCondition([])).toBe(false);
+    expect(
+      hasValidSlackChannelCondition([{ type: "slack_channel", operator: "any_of", value: [] }])
+    ).toBe(false);
+    expect(
+      hasValidSlackChannelCondition([{ type: "slack_channel", operator: "any_of", value: ["C1"] }])
+    ).toBe(true);
+  });
+
   it("rejects an empty text_match pattern", () => {
     const errors = validateConditions(
       [{ type: "text_match", operator: "contains", value: { pattern: "" } }],

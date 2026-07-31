@@ -230,6 +230,7 @@ export {
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  validateAutomationTargetCounts,
 } from "./automations";
 export type {
   AutomationRepository,

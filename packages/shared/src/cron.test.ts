@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { isValidCron, nextCronOccurrence, describeCron, cronIntervalMinutes } from "./cron";
+import {
+  cronIntervalMinutes,
+  describeCron,
+  isValidCron,
+  isValidTimeZone,
+  nextCronOccurrence,
+  validateAutomationCron,
+} from "./cron";
 
 describe("isValidCron", () => {
   it("accepts valid 5-field expressions", () => {
@@ -109,5 +116,19 @@ describe("cronIntervalMinutes", () => {
 
   it("returns null for invalid expressions", () => {
     expect(cronIntervalMinutes("invalid")).toBeNull();
+  });
+});
+
+describe("automation schedule validation", () => {
+  it("rejects valid cron syntax that runs more often than every fifteen minutes", () => {
+    expect(validateAutomationCron("* * * * *")).toBe(
+      "Schedule interval must be at least 15 minutes"
+    );
+    expect(validateAutomationCron("*/15 * * * *")).toBeNull();
+  });
+
+  it("validates IANA time zones", () => {
+    expect(isValidTimeZone("America/Los_Angeles")).toBe(true);
+    expect(isValidTimeZone("not/a-time-zone")).toBe(false);
   });
 });

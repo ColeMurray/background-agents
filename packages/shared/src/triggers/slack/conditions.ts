@@ -8,7 +8,7 @@
  */
 
 import type { ConditionRegistry } from "../conditions";
-import type { AutomationEvent, TextMatchValue } from "../types";
+import type { AutomationEvent, TextMatchValue, TriggerCondition } from "../types";
 import { SLACK_TEXT_MAX_LENGTH } from "./normalizer";
 
 /** Max length of a user-supplied `text_match` regex pattern (characters). */
@@ -38,6 +38,14 @@ function isNonEmptyStringArray(value: unknown): value is string[] {
     Array.isArray(value) &&
     value.length > 0 &&
     value.every((v) => typeof v === "string" && v !== "")
+  );
+}
+
+/** True when a Slack trigger has at least one valid watched-channel condition. */
+export function hasValidSlackChannelCondition(conditions: TriggerCondition[]): boolean {
+  return conditions.some(
+    (condition) =>
+      condition.type === "slack_channel" && isNonEmptyStringArray(condition.value as unknown)
   );
 }
 
