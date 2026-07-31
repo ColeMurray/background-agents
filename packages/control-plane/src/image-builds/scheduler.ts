@@ -5,23 +5,18 @@ import type { ImageBuildProvider } from "./model";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
-import { resolveScopeTarget } from "./scope";
+import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
 import { resolveImageBuildProvider } from "./provider-policy";
+import { runMaintenanceTasks } from "./concurrency";
 import { repositoryIdentityKey } from "./provenance";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("image-builds:scheduler");
-const SCOPE_CURSOR = "scope-reconciliation";
-const FINALIZATION_CURSOR = "finalization-recovery";
-const CLEANUP_CURSOR = "session-cleanup";
-const SCOPE_PAGE_SIZE = 20;
-const CLEANUP_PAGE_SIZE = 20;
-const FINALIZATION_RECOVERY_LIMIT = 20;
 const TRIGGER_CAP = 8;
-const BRANCH_LOOKUP_BUDGET = 40;
+const SCHEDULER_INTERVAL_MS = 30 * 60 * 1000;
 
 export const IMAGE_BUILD_SCHEDULER_CRON = "7,37 * * * *";
 
@@ -54,7 +49,8 @@ export class ImageBuildScheduler {
     private readonly workflow: ImageBuildWorkflow,
     private readonly adapterFactory: ImageBuildAdapterFactory,
     private readonly sourceControl: SourceControlProvider | null,
-    private readonly resolveTarget: typeof resolveScopeTarget = resolveScopeTarget
+    private readonly resolveTarget: typeof resolveScopeTarget = resolveScopeTarget,
+    private readonly listScopes: typeof listEnabledScopes = listEnabledScopes
   ) {
     this.sessionCleanup = new ImageBuildSessionCleanup(store, adapterFactory);
   }
@@ -139,28 +135,7 @@ export class ImageBuildScheduler {
   private async republishRecoverableFinalizations(): Promise<number> {
     const queue = this.env.IMAGE_BUILD_FINALIZATION_QUEUE;
     if (!queue) return 0;
-    const cursor = await this.store.maintenance.getRowCursor(FINALIZATION_CURSOR);
-    const now = Date.now();
-    let rows = await this.store.maintenance.listRecoverableFinalizations({
-      now,
-      after: cursor ? { callbackTokenUsedAt: cursor.sortValue, rowId: cursor.rowId } : null,
-      limit: FINALIZATION_RECOVERY_LIMIT,
-    });
-    if (rows.length === 0 && cursor) {
-      rows = await this.store.maintenance.listRecoverableFinalizations({
-        now,
-        after: null,
-        limit: FINALIZATION_RECOVERY_LIMIT,
-      });
-    }
-
-    const last = rows.at(-1);
-    await this.store.maintenance.setRowCursor(
-      FINALIZATION_CURSOR,
-      rows.length === FINALIZATION_RECOVERY_LIMIT && last
-        ? { sortValue: last.callback_token_used_at, rowId: last.id }
-        : null
-    );
+    const rows = await this.store.listRecoverableFinalizations(Date.now());
 
     let published = 0;
     for (const row of rows) {
@@ -185,37 +160,23 @@ export class ImageBuildScheduler {
     stats: ImageBuildSchedulerStats,
     correlation: CorrelationContext
   ): Promise<void> {
-    const cursor = await this.store.maintenance.getRowCursor(CLEANUP_CURSOR);
-    const rows = await this.store.maintenance.listSessionCleanupPage({
-      after: cursor ? { createdAt: cursor.sortValue, rowId: cursor.rowId } : null,
-      limit: CLEANUP_PAGE_SIZE,
+    const rows = await this.store.listSessionCleanup();
+
+    await runMaintenanceTasks(rows, async (row) => {
+      stats.cleanupAttempted += 1;
+      try {
+        await this.sessionCleanup.run(row, correlation);
+        stats.cleanupSucceeded += 1;
+      } catch (error) {
+        stats.cleanupFailed += 1;
+        logger.warn("image_build.scheduler_session_cleanup_failed", {
+          build_id: row.id,
+          provider: row.provider,
+          provider_session_id: row.provider_session_id,
+          error: errorMessage(error),
+        });
+      }
     });
-
-    const last = rows.at(-1);
-    await this.store.maintenance.setRowCursor(
-      CLEANUP_CURSOR,
-      rows.length === CLEANUP_PAGE_SIZE && last
-        ? { sortValue: last.created_at, rowId: last.id }
-        : null
-    );
-
-    await Promise.all(
-      rows.map(async (row) => {
-        stats.cleanupAttempted += 1;
-        try {
-          await this.sessionCleanup.run(row, correlation);
-          stats.cleanupSucceeded += 1;
-        } catch (error) {
-          stats.cleanupFailed += 1;
-          logger.warn("image_build.scheduler_session_cleanup_failed", {
-            build_id: row.id,
-            provider: row.provider,
-            provider_session_id: row.provider_session_id,
-            error: errorMessage(error),
-          });
-        }
-      })
-    );
   }
 
   private async reconcileScopes(
@@ -225,14 +186,14 @@ export class ImageBuildScheduler {
     if (!this.provider || !this.sourceControl) return;
     const provider = this.provider;
     const sourceControl = this.sourceControl;
-    const cursor = await this.store.maintenance.getScopeCursor(SCOPE_CURSOR);
-    const page = await this.store.maintenance.listEnabledScopeRefsPage({
-      after: cursor ? { scopeKind: cursor.kind, scopeId: cursor.id } : null,
-      limit: SCOPE_PAGE_SIZE,
-    });
-    let branchBudget = BRANCH_LOOKUP_BUDGET;
+    const scopes = [...(await this.listScopes(this.db))].sort(
+      (left, right) => left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id)
+    );
+    const startIndex =
+      scopes.length === 0 ? 0 : Math.floor(Date.now() / SCHEDULER_INTERVAL_MS) % scopes.length;
 
-    for (const scope of page.scopes) {
+    for (let index = 0; index < scopes.length; index += 1) {
+      const scope = scopes[(startIndex + index) % scopes.length];
       try {
         const target = await this.resolveTarget(this.env, this.db, scope);
         const rows = await this.store.getReconciliationStatus(scope, provider);
@@ -248,8 +209,6 @@ export class ImageBuildScheduler {
 
         let rebuild = decision.type === "rebuild";
         if (decision.type === "check_branches") {
-          if (target.repositories.length > branchBudget) break;
-          branchBudget -= target.repositories.length;
           const heads: Array<string | null> = [];
           for (const repository of target.repositories) {
             stats.branchLookups += 1;
@@ -279,8 +238,7 @@ export class ImageBuildScheduler {
           );
         }
 
-        if (rebuild) {
-          if (stats.triggered >= TRIGGER_CAP) break;
+        if (rebuild && stats.triggered < TRIGGER_CAP) {
           try {
             const result = await this.workflow.triggerBuildWithTarget(scope, target, correlation);
             if (result.type === "triggered") stats.triggered += 1;
@@ -289,7 +247,6 @@ export class ImageBuildScheduler {
           }
         }
         stats.scopesScanned += 1;
-        await this.store.maintenance.setScopeCursor(SCOPE_CURSOR, scope);
       } catch (error) {
         stats.scopesScanned += 1;
         logger.warn("image_build.scheduler_scope_failed", {
@@ -297,12 +254,7 @@ export class ImageBuildScheduler {
           scope_id: scope.id,
           error: errorMessage(error),
         });
-        await this.store.maintenance.setScopeCursor(SCOPE_CURSOR, scope);
       }
-    }
-
-    if (!page.nextCursor && stats.scopesScanned === page.scopes.length) {
-      await this.store.maintenance.setScopeCursor(SCOPE_CURSOR, null);
     }
   }
 }

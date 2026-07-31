@@ -1,17 +1,13 @@
 import type { ImageBuildStore, ReapableImageBuildRow } from "../db/image-builds";
-import type { ImageBuildRowCursorName } from "../db/image-build-maintenance";
 import { createLogger } from "../logger";
 import type { ImageBuildProvider, SupersededImageBuild } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
+import { runMaintenanceTasks } from "./concurrency";
 
 const logger = createLogger("image-builds:reaper");
 
-/** Rows reclaimed per cleanup pass, per sweep; leftovers wait for the next tick. */
-const REAP_BATCH_LIMIT = 25;
 export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
-const FAILED_ARTIFACT_CURSOR = "failed-image-artifact-cleanup";
-const SUPERSEDED_ARTIFACT_CURSOR = "superseded-image-artifact-cleanup";
 
 type AdapterCache = Map<ImageBuildProvider, ImageBuildAdapter | null>;
 
@@ -50,18 +46,14 @@ export class ImageBuildReaper {
   ): Promise<{ deletedFailed: number; reapedFailed: number; reapedSuperseded: number }> {
     const adapters: AdapterCache = new Map();
 
-    const failedRows = await this.getRotatingPage(FAILED_ARTIFACT_CURSOR, (after) =>
-      this.store.getFailedImagesWithArtifacts(REAP_BATCH_LIMIT, after)
-    );
+    const failedRows = await this.store.getFailedImagesWithArtifacts();
     const reapedFailed = await this.reapArtifactBearingRows(failedRows, ctx, adapters, (row) =>
       this.store.clearFailedImageArtifact(row.id, row.provider_image_id)
     );
 
     const deletedFailed = await this.store.deleteOldFailedBuilds(failedMaxAgeMs);
 
-    const supersededRows = await this.getRotatingPage(SUPERSEDED_ARTIFACT_CURSOR, (after) =>
-      this.store.getSupersededImages(REAP_BATCH_LIMIT, after)
-    );
+    const supersededRows = await this.store.getSupersededImages();
     const reapedSuperseded = await this.reapArtifactBearingRows(
       supersededRows,
       ctx,
@@ -70,33 +62,6 @@ export class ImageBuildReaper {
     );
 
     return { deletedFailed, reapedFailed, reapedSuperseded };
-  }
-
-  /**
-   * Advance a persisted keyset cursor before provider calls. A provider
-   * failure therefore waits for one bounded rotation instead of pinning every
-   * later artifact behind the oldest rows forever.
-   */
-  private async getRotatingPage(
-    cursorName: ImageBuildRowCursorName,
-    select: (after: { createdAt: number; rowId: string } | null) => Promise<ReapableImageBuildRow[]>
-  ): Promise<ReapableImageBuildRow[]> {
-    const stored = await this.store.maintenance.getRowCursor(cursorName);
-    let after = stored ? { createdAt: stored.sortValue, rowId: stored.rowId } : null;
-    let rows = await select(after);
-    if (rows.length === 0 && after) {
-      after = null;
-      rows = await select(null);
-    }
-
-    const last = rows.at(-1);
-    await this.store.maintenance.setRowCursor(
-      cursorName,
-      rows.length === REAP_BATCH_LIMIT && last
-        ? { sortValue: last.created_at, rowId: last.id }
-        : null
-    );
-    return rows;
   }
 
   /**
@@ -113,25 +78,23 @@ export class ImageBuildReaper {
     commit: (row: ReapableImageBuildRow) => Promise<boolean>
   ): Promise<number> {
     let reaped = 0;
-    await Promise.all(
-      rows.map(async (row) => {
-        if (row.provider_image_id) {
-          const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
-          if (!adapter) return;
-          const deleted = await this.deleteImageBestEffort(
-            row.provider,
-            {
-              providerImageId: row.provider_image_id,
-              providerSessionId: row.provider_session_id,
-            },
-            ctx,
-            adapter
-          );
-          if (!deleted) return;
-        }
-        if (await commit(row)) reaped += 1;
-      })
-    );
+    await runMaintenanceTasks(rows, async (row) => {
+      if (row.provider_image_id) {
+        const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
+        if (!adapter) return;
+        const deleted = await this.deleteImageBestEffort(
+          row.provider,
+          {
+            providerImageId: row.provider_image_id,
+            providerSessionId: row.provider_session_id,
+          },
+          ctx,
+          adapter
+        );
+        if (!deleted) return;
+      }
+      if (await commit(row)) reaped += 1;
+    });
     return reaped;
   }
 

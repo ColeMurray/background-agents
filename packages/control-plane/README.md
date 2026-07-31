@@ -302,8 +302,6 @@ sessions index, repo metadata, and encrypted secrets:
   Replaces the former `repo_images` and `environment_images` tables (dropped in migrations
   0039/0040). The control-plane scheduler naturally rebuilds enabled scopes; no legacy backfill job
   is required.
-- `image_build_scheduler_state`: small keyset cursors for fair, bounded scope reconciliation and
-  provider-session cleanup across scheduled ticks.
 - `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
   code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
   (per-repo).

@@ -89,4 +89,101 @@ describe("image build scheduler integration", () => {
       completion_hash: completionHash,
     });
   });
+
+  it("republishes every recoverable completion in one full scan", async () => {
+    const store = new ImageBuildStore(env.DB);
+    const completionHash = "b".repeat(64);
+    for (let index = 0; index < 21; index += 1) {
+      const environmentId = await seedEnvironment({ id: `env-recover-${index}` });
+      const buildId = `recover-${index}`;
+      await store.registerBuild({
+        id: buildId,
+        scope: environmentScope(environmentId),
+        provider: "modal",
+        repositoriesFingerprint: `fingerprint-${index}`,
+        callbackTokenHash: `token-hash-${index}`,
+        callbackTokenExpiresAt: Date.now() + 60_000,
+      });
+      await store.bindProviderSession(buildId, "modal", `session-${index}`);
+      await store.finalization.acceptSuccessfulCompletion({
+        buildId,
+        provider: "modal",
+        providerSessionId: `session-${index}`,
+        tokenHash: `token-hash-${index}`,
+        completionHash,
+        repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
+        runtimeVersion: "v53-runtime",
+        buildDurationMs: 1_000,
+        now: index + 1,
+      });
+    }
+
+    const send = vi.fn(async () => undefined);
+    const workflow = {
+      cleanupImages: vi.fn(async () => ({
+        deletedFailed: 0,
+        reapedFailed: 0,
+        reapedSuperseded: 0,
+      })),
+    } as unknown as ImageBuildWorkflow;
+    const scheduler = new ImageBuildScheduler(
+      { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
+      env.DB,
+      null,
+      store,
+      workflow,
+      { create: vi.fn() } as unknown as ImageBuildAdapterFactory,
+      null
+    );
+
+    const stats = await scheduler.run({ request_id: "cron-full-scan", trace_id: "cron-full-scan" });
+
+    expect(stats.finalizationsRepublished).toBe(21);
+    expect(send).toHaveBeenCalledTimes(21);
+  });
+
+  it("cleans every pending provider session in one full scan", async () => {
+    const store = new ImageBuildStore(env.DB);
+    for (let index = 0; index < 21; index += 1) {
+      const environmentId = await seedEnvironment({ id: `env-cleanup-${index}` });
+      const buildId = `cleanup-${index}`;
+      await store.registerBuild({
+        id: buildId,
+        scope: environmentScope(environmentId),
+        provider: "modal",
+        repositoriesFingerprint: `fingerprint-${index}`,
+      });
+      await store.bindProviderSession(buildId, "modal", `session-cleanup-${index}`);
+      await store.markBuildFailed(buildId, "modal", "failed");
+    }
+
+    const cleanupFailedBuild = vi.fn(async () => undefined);
+    const workflow = {
+      cleanupImages: vi.fn(async () => ({
+        deletedFailed: 0,
+        reapedFailed: 0,
+        reapedSuperseded: 0,
+      })),
+    } as unknown as ImageBuildWorkflow;
+    const scheduler = new ImageBuildScheduler(
+      {} as Env,
+      env.DB,
+      null,
+      store,
+      workflow,
+      {
+        create: vi.fn(() => ({
+          cleanupFailedBuild,
+          cleanupCompletedBuild: vi.fn(async () => undefined),
+        })),
+      } as unknown as ImageBuildAdapterFactory,
+      null
+    );
+
+    const stats = await scheduler.run({ request_id: "cron-full-scan", trace_id: "cron-full-scan" });
+
+    expect(stats.cleanupAttempted).toBe(21);
+    expect(stats.cleanupSucceeded).toBe(21);
+    expect(cleanupFailedBuild).toHaveBeenCalledTimes(21);
+  });
 });

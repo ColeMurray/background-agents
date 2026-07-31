@@ -101,10 +101,11 @@ any of the following holds:
 - **Outdated runtime** — the image was built on a sandbox runtime older than the current
   compatibility floor (such images are also skipped at spawn time)
 
-The provider-neutral control-plane scheduler starts a bounded number of builds per tick across all
-scopes (currently 8); keyset cursors carry remaining work into later ticks. It also reclaims
-terminal provider build sessions and old artifacts. Sessions fall back to the normal startup flow
-while a scope waits for its build.
+The provider-neutral control-plane scheduler scans every enabled scope on each tick, matching the
+legacy Modal scheduler. It rotates the scan's starting scope without persisting a cursor, starts at
+most 8 builds per tick, and still checks all remaining scopes. Maintenance selects every pending
+terminal provider build session and old artifact, while bounding concurrent provider calls. Sessions
+fall back to the normal startup flow while a scope waits for its build.
 
 When changing `sandbox_provider`, keep the previous provider's credentials configured until its
 terminal build-session cleanup backlog reaches zero. Maintenance dispatches cleanup from each row's

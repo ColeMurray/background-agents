@@ -607,7 +607,7 @@ describe("Image builds", () => {
       expect((await getRow("artifact-old"))?.status).toBe("failed");
 
       // getFailedImagesWithArtifacts exposes exactly the artifact-bearing row.
-      const reapable = await store.getFailedImagesWithArtifacts(25);
+      const reapable = await store.getFailedImagesWithArtifacts();
       expect(reapable.map((r) => r.id)).toEqual(["artifact-old"]);
 
       // A stale artifact id (not the one on the row) clears nothing, so a
@@ -621,14 +621,14 @@ describe("Image builds", () => {
       const cleared = await getRow("artifact-old");
       expect(cleared?.status).toBe("failed");
       expect(cleared?.provider_image_id).toBeNull();
-      expect(await store.getFailedImagesWithArtifacts(25)).toEqual([]);
+      expect(await store.getFailedImagesWithArtifacts()).toEqual([]);
 
       // Now artifact-free and old — the age sweep removes it.
       expect(await store.deleteOldFailedBuilds(86_400_000)).toBe(1);
       expect(await getRow("artifact-old")).toBeNull();
     });
 
-    it("bounds failed-history deletion to one maintenance batch", async () => {
+    it("deletes every eligible failed-history row in one maintenance scan", async () => {
       const environmentId = await seedEnvironment();
       const store = new ImageBuildStore(env.DB);
       for (let index = 0; index < 30; index += 1) {
@@ -640,17 +640,11 @@ describe("Image builds", () => {
         });
       }
 
-      expect(await store.deleteOldFailedBuilds(1)).toBe(25);
+      expect(await store.deleteOldFailedBuilds(1)).toBe(30);
       const remaining = await env.DB.prepare(
         "SELECT id FROM image_builds WHERE status = 'failed' ORDER BY created_at, id"
       ).all<{ id: string }>();
-      expect(remaining.results?.map((row) => row.id)).toEqual([
-        "old-failed-25",
-        "old-failed-26",
-        "old-failed-27",
-        "old-failed-28",
-        "old-failed-29",
-      ]);
+      expect(remaining.results).toEqual([]);
     });
 
     it("rejects non-numeric max_age_seconds instead of treating it as 0", async () => {

@@ -1,6 +1,7 @@
 import {
   type ImageBuildRecordView,
   type ImageBuildScopeKind,
+  type ImageBuildStatus,
   type RepositoryShaEntry,
 } from "@open-inspect/shared";
 import type {
@@ -10,7 +11,6 @@ import type {
   SupersededImageBuild,
 } from "../image-builds/model";
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
-import { ImageBuildMaintenanceStore } from "./image-build-maintenance";
 import type { SqlDatabase } from "./sql-database";
 
 const MS_PER_SECOND = 1000;
@@ -96,65 +96,75 @@ export interface ReapableImageBuildRow {
   created_at: number;
 }
 
-export const SUPERSEDED_IMAGE_FIRST_PAGE_SQL = `SELECT id, scope_kind, scope_id, provider,
+export interface ImageBuildSessionCleanupRow {
+  id: string;
+  provider: ImageBuildProvider;
+  status: ImageBuildStatus;
+  provider_image_id: string | null;
+  provider_session_id: string;
+  provider_session_cleanup_pending: number | null;
+  error_message: string | null;
+  created_at: number;
+}
+
+export interface RecoverableImageBuildFinalizationRow {
+  id: string;
+  completion_hash: string;
+  callback_token_used_at: number;
+}
+
+export const PROVIDER_SESSION_CLEANUP_SQL = `SELECT id, provider, status,
+        provider_image_id, provider_session_id, provider_session_cleanup_pending,
+        error_message, created_at
+ FROM image_builds
+ WHERE status IN ('ready', 'failed', 'superseded')
+   AND provider_session_id IS NOT NULL
+   AND provider_session_cleanup_pending IS NOT 0
+ ORDER BY created_at, id`;
+
+export const RECOVERABLE_IMAGE_FINALIZATIONS_SQL = `SELECT id, completion_hash,
+        callback_token_used_at
+ FROM image_builds
+ WHERE status = 'building'
+   AND callback_token_used_at IS NOT NULL
+   AND completion_hash IS NOT NULL
+   AND (
+     finalization_lease_token IS NULL
+     OR finalization_lease_expires_at IS NULL
+     OR finalization_lease_expires_at <= ?
+   )
+ ORDER BY callback_token_used_at, id`;
+
+export const SUPERSEDED_IMAGES_SQL = `SELECT id, scope_kind, scope_id, provider,
         provider_image_id, provider_session_id, created_at
  FROM image_builds
  WHERE status = 'superseded'
    AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
- ORDER BY created_at, id
- LIMIT ?`;
+ ORDER BY created_at, id`;
 
-export const SUPERSEDED_IMAGE_NEXT_PAGE_SQL = `SELECT id, scope_kind, scope_id, provider,
-        provider_image_id, provider_session_id, created_at
- FROM image_builds
- WHERE status = 'superseded'
-   AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
-   AND (created_at, id) > (?, ?)
- ORDER BY created_at, id
- LIMIT ?`;
-
-export const FAILED_IMAGE_ARTIFACT_FIRST_PAGE_SQL = `SELECT id, scope_kind, scope_id, provider,
+export const FAILED_IMAGE_ARTIFACTS_SQL = `SELECT id, scope_kind, scope_id, provider,
         provider_image_id, provider_session_id, created_at
  FROM image_builds
  WHERE status = 'failed' AND provider_image_id IS NOT NULL
    AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
- ORDER BY created_at, id
- LIMIT ?`;
+ ORDER BY created_at, id`;
 
-export const FAILED_IMAGE_ARTIFACT_NEXT_PAGE_SQL = `SELECT id, scope_kind, scope_id, provider,
-        provider_image_id, provider_session_id, created_at
- FROM image_builds
- WHERE status = 'failed' AND provider_image_id IS NOT NULL
-   AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
-   AND (created_at, id) > (?, ?)
- ORDER BY created_at, id
- LIMIT ?`;
-
-export const DELETE_OLD_FAILED_BUILDS_SQL = `DELETE FROM image_builds WHERE id IN (
-  SELECT id FROM image_builds
-  WHERE status = 'failed' AND provider_image_id IS NULL
-    AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
-    AND created_at < ?
-  ORDER BY created_at, id
-  LIMIT ?
-)`;
+export const DELETE_OLD_FAILED_BUILDS_SQL = `DELETE FROM image_builds
+WHERE status = 'failed' AND provider_image_id IS NULL
+  AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
+  AND created_at < ?`;
 
 export const MARK_STALE_IMAGE_BUILDS_SQL = `UPDATE image_builds
 SET status = 'failed',
     error_message = ?,
     finalization_lease_token = NULL,
     finalization_lease_expires_at = NULL
-WHERE id IN (
-  SELECT id FROM image_builds
-  WHERE status = 'building'
-    AND created_at < ?
-    AND provider_image_id IS NULL
-    AND callback_token_used_at IS NULL
-    AND completion_hash IS NULL
-    AND finalization_lease_token IS NULL
-  ORDER BY created_at, id
-  LIMIT ?
-)`;
+WHERE status = 'building'
+  AND created_at < ?
+  AND provider_image_id IS NULL
+  AND callback_token_used_at IS NULL
+  AND completion_hash IS NULL
+  AND finalization_lease_token IS NULL`;
 
 /**
  * D1-backed image-build registry and state machine.
@@ -172,11 +182,9 @@ WHERE id IN (
  */
 export class ImageBuildStore {
   readonly finalization: ImageBuildFinalizationStore;
-  readonly maintenance: ImageBuildMaintenanceStore;
 
   constructor(private readonly db: SqlDatabase) {
     this.finalization = new ImageBuildFinalizationStore(db);
-    this.maintenance = new ImageBuildMaintenanceStore(db);
   }
 
   /**
@@ -654,16 +662,25 @@ export class ImageBuildStore {
    * (mark-ready replacing an older ready) and out-of-band (entity delete,
    * secret change), so cleanup sweeps whatever is left.
    */
-  async getSupersededImages(
-    limit: number,
-    after: { createdAt: number; rowId: string } | null = null
-  ): Promise<ReapableImageBuildRow[]> {
-    const statement = after
-      ? this.db.prepare(SUPERSEDED_IMAGE_NEXT_PAGE_SQL).bind(after.createdAt, after.rowId, limit)
-      : this.db.prepare(SUPERSEDED_IMAGE_FIRST_PAGE_SQL).bind(limit);
-    const result = await statement.all<ReapableImageBuildRow>();
+  async getSupersededImages(): Promise<ReapableImageBuildRow[]> {
+    const result = await this.db.prepare(SUPERSEDED_IMAGES_SQL).all<ReapableImageBuildRow>();
 
     return result.results || [];
+  }
+
+  async listSessionCleanup(): Promise<ImageBuildSessionCleanupRow[]> {
+    const result = await this.db
+      .prepare(PROVIDER_SESSION_CLEANUP_SQL)
+      .all<ImageBuildSessionCleanupRow>();
+    return result.results ?? [];
+  }
+
+  async listRecoverableFinalizations(now: number): Promise<RecoverableImageBuildFinalizationRow[]> {
+    const result = await this.db
+      .prepare(RECOVERABLE_IMAGE_FINALIZATIONS_SQL)
+      .bind(now)
+      .all<RecoverableImageBuildFinalizationRow>();
+    return result.results ?? [];
   }
 
   /**
@@ -674,16 +691,8 @@ export class ImageBuildStore {
    * The failed row itself is kept — its error_message stays visible in the
    * status feeds — until clearFailedImageArtifact nulls its artifact columns.
    */
-  async getFailedImagesWithArtifacts(
-    limit: number,
-    after: { createdAt: number; rowId: string } | null = null
-  ): Promise<ReapableImageBuildRow[]> {
-    const statement = after
-      ? this.db
-          .prepare(FAILED_IMAGE_ARTIFACT_NEXT_PAGE_SQL)
-          .bind(after.createdAt, after.rowId, limit)
-      : this.db.prepare(FAILED_IMAGE_ARTIFACT_FIRST_PAGE_SQL).bind(limit);
-    const result = await statement.all<ReapableImageBuildRow>();
+  async getFailedImagesWithArtifacts(): Promise<ReapableImageBuildRow[]> {
+    const result = await this.db.prepare(FAILED_IMAGE_ARTIFACTS_SQL).all<ReapableImageBuildRow>();
 
     return result.results || [];
   }
@@ -715,12 +724,12 @@ export class ImageBuildStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
-  async markStaleBuildsAsFailed(maxAgeMs: number, limit = 25): Promise<number> {
+  async markStaleBuildsAsFailed(maxAgeMs: number): Promise<number> {
     const now = Date.now();
     const cutoff = now - maxAgeMs;
     const result = await this.db
       .prepare(MARK_STALE_IMAGE_BUILDS_SQL)
-      .bind(STALE_BUILD_TIMEOUT_MESSAGE, cutoff, limit)
+      .bind(STALE_BUILD_TIMEOUT_MESSAGE, cutoff)
       .run();
 
     return result.meta?.changes ?? 0;
@@ -766,9 +775,9 @@ export class ImageBuildStore {
    * a live artifact) from being hard-deleted before the reaper reclaims the
    * artifact and nulls its columns, which would otherwise orphan the snapshot.
    */
-  async deleteOldFailedBuilds(maxAgeMs: number, limit = 25): Promise<number> {
+  async deleteOldFailedBuilds(maxAgeMs: number): Promise<number> {
     const cutoff = Date.now() - maxAgeMs;
-    const result = await this.db.prepare(DELETE_OLD_FAILED_BUILDS_SQL).bind(cutoff, limit).run();
+    const result = await this.db.prepare(DELETE_OLD_FAILED_BUILDS_SQL).bind(cutoff).run();
 
     return result.meta?.changes ?? 0;
   }

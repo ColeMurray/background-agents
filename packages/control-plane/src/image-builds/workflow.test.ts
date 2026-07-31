@@ -63,12 +63,6 @@ function createStore() {
     markStaleBuildsAsFailed: vi.fn().mockResolvedValue(0),
     getStatus: vi.fn().mockResolvedValue([]),
     getStatusForEnabledScopes: vi.fn().mockResolvedValue([]),
-    maintenance: {
-      getScopeCursor: vi.fn().mockResolvedValue(null),
-      setScopeCursor: vi.fn().mockResolvedValue(undefined),
-      getRowCursor: vi.fn().mockResolvedValue(null),
-      setRowCursor: vi.fn().mockResolvedValue(undefined),
-    },
   };
 }
 
@@ -915,33 +909,29 @@ describe("ImageBuildWorkflow", () => {
       expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
     });
 
-    it("advances past failed deletes so later cleanup rows are not starved", async () => {
+    it("attempts every failed artifact in one cleanup scan", async () => {
       const store = createStore();
-      const firstPage = Array.from({ length: 25 }, (_, index) =>
+      const rows = Array.from({ length: 26 }, (_, index) =>
         reapableRow(`failed-${index + 1}`, `im-${index + 1}`)
       );
-      const later = reapableRow("failed-26", "im-26");
-      store.getFailedImagesWithArtifacts
-        .mockResolvedValueOnce(firstPage)
-        .mockResolvedValueOnce([later]);
+      store.getFailedImagesWithArtifacts.mockResolvedValue(rows);
       const adapter = createAdapter();
-      adapter.deleteImage.mockRejectedValue(new Error("provider unavailable"));
+      let inFlight = 0;
+      let peakInFlight = 0;
+      adapter.deleteImage.mockImplementation(async ({ image }) => {
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        if (image.providerImageId === "im-1") throw new Error("provider unavailable");
+      });
       const { workflow } = createWorkflow({ store, adapter });
 
-      await workflow.cleanupImages(86_400_000, ctx);
-      const persisted = store.maintenance.setRowCursor.mock.calls.find(
-        ([name]) => name === "failed-image-artifact-cleanup"
-      )?.[1];
-      store.maintenance.getRowCursor.mockImplementation(async (name) =>
-        name === "failed-image-artifact-cleanup" ? persisted : null
-      );
-      adapter.deleteImage.mockResolvedValue(undefined);
-      await workflow.cleanupImages(86_400_000, ctx);
+      const result = await workflow.cleanupImages(86_400_000, ctx);
 
-      expect(store.getFailedImagesWithArtifacts).toHaveBeenNthCalledWith(2, 25, {
-        createdAt: 25,
-        rowId: "failed-25",
-      });
+      expect(result.reapedFailed).toBe(25);
+      expect(peakInFlight).toBeLessThanOrEqual(4);
+      expect(store.getFailedImagesWithArtifacts).toHaveBeenCalledWith();
       expect(store.clearFailedImageArtifact).toHaveBeenCalledWith("failed-26", "im-26");
     });
 

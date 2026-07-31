@@ -16,23 +16,7 @@ function harness(
     env?: Env;
   } = {}
 ) {
-  const getScopeCursor = vi.fn(
-    async (_name: string): Promise<{ kind: "environment" | "repo"; id: string } | null> => null
-  );
-  const setScopeCursor = vi.fn(
-    async (
-      _name: string,
-      _cursor: { kind: "environment" | "repo"; id: string } | null
-    ): Promise<void> => undefined
-  );
-  const getRowCursor = vi.fn(
-    async (_name: string): Promise<{ sortValue: number; rowId: string } | null> => null
-  );
-  const setRowCursor = vi.fn(
-    async (_name: string, _cursor: { sortValue: number; rowId: string } | null): Promise<void> =>
-      undefined
-  );
-  const listProviderSessionCleanupPage = vi.fn(async () => [
+  const listSessionCleanup = vi.fn(async () => [
     {
       id: "failed-cleanup",
       provider: "modal",
@@ -51,14 +35,8 @@ function harness(
     },
   ]);
   const clearProviderSessionCleanup = vi.fn(async () => true);
-  const listEnabledScopeRefsPage = vi.fn(
-    async (): Promise<{
-      scopes: ImageBuildScope[];
-      nextCursor: { scopeKind: ImageBuildScope["kind"]; scopeId: string } | null;
-    }> => ({
-      scopes: [{ kind: "repo", id: "acme/web" }],
-      nextCursor: null,
-    })
+  const listScopes = vi.fn(
+    async (): Promise<ImageBuildScope[]> => [{ kind: "repo", id: "acme/web" }]
   );
   const listRecoverableFinalizations = vi.fn(
     async (): Promise<
@@ -73,18 +51,9 @@ function harness(
   );
   const store = {
     markStaleBuildsAsFailed: vi.fn(async () => 1),
-    listProviderSessionCleanupPage,
+    listSessionCleanup,
     clearProviderSessionCleanup,
-    listEnabledScopeRefsPage,
-    maintenance: {
-      getScopeCursor,
-      setScopeCursor,
-      getRowCursor,
-      setRowCursor,
-      listSessionCleanupPage: listProviderSessionCleanupPage,
-      listEnabledScopeRefsPage,
-      listRecoverableFinalizations,
-    },
+    listRecoverableFinalizations,
     finalization: {
       clearSessionCleanup: clearProviderSessionCleanup,
     },
@@ -93,13 +62,13 @@ function harness(
   const adapter = {
     startBuild: vi.fn(),
     deleteImage: vi.fn(),
-    cleanupFailedBuild: vi.fn(async () => {
+    cleanupFailedBuild: vi.fn(async (): Promise<void> => {
       throw new Error("temporary cleanup failure");
     }),
     cleanupCompletedBuild: vi.fn(async () => undefined),
   };
   const workflow = {
-    triggerBuildWithTarget: vi.fn(async () => ({
+    triggerBuildWithTarget: vi.fn(async (_scope: ImageBuildScope) => ({
       type: "triggered" as const,
       buildId: "build-new",
     })),
@@ -129,13 +98,23 @@ function harness(
     workflow as unknown as ImageBuildWorkflow,
     { create: vi.fn(() => adapter) } as unknown as ImageBuildAdapterFactory,
     options.sourceControl === undefined ? ({} as SourceControlProvider) : options.sourceControl,
-    resolveTarget
+    resolveTarget,
+    listScopes
   );
-  return { scheduler, store, adapter, workflow, resolveTarget, listRecoverableFinalizations };
+  return {
+    scheduler,
+    store,
+    adapter,
+    workflow,
+    resolveTarget,
+    listScopes,
+    listSessionCleanup,
+    listRecoverableFinalizations,
+  };
 }
 
 describe("ImageBuildScheduler", () => {
-  it("contains cleanup failures, advances fairness, and still dispatches rebuilds", async () => {
+  it("contains cleanup failures and still dispatches rebuilds", async () => {
     const { scheduler, store, adapter, workflow, resolveTarget } = harness();
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
@@ -152,10 +131,6 @@ describe("ImageBuildScheduler", () => {
     });
     expect(adapter.cleanupCompletedBuild).toHaveBeenCalledOnce();
     expect(store.clearProviderSessionCleanup).toHaveBeenCalledTimes(1);
-    expect(store.maintenance.setRowCursor).toHaveBeenCalledWith("session-cleanup", null);
-    expect(store.maintenance.setRowCursor.mock.invocationCallOrder[0]).toBeLessThan(
-      adapter.cleanupFailedBuild.mock.invocationCallOrder[0]
-    );
     expect(adapter.cleanupCompletedBuild).toHaveBeenCalledWith(
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
@@ -171,11 +146,40 @@ describe("ImageBuildScheduler", () => {
     );
   });
 
+  it("bounds provider-session cleanup concurrency while attempting every row", async () => {
+    const { scheduler, adapter, listSessionCleanup } = harness({
+      provider: null,
+      sourceControl: null,
+    });
+    listSessionCleanup.mockResolvedValue(
+      Array.from({ length: 12 }, (_, index) => ({
+        id: `cleanup-${index}`,
+        provider: "modal" as const,
+        status: "failed" as const,
+        provider_image_id: null,
+        provider_session_id: `session-${index}`,
+        created_at: index,
+      }))
+    );
+    let inFlight = 0;
+    let peakInFlight = 0;
+    adapter.cleanupFailedBuild.mockImplementation(async () => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await Promise.resolve();
+      inFlight -= 1;
+    });
+
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.cleanupAttempted).toBe(12);
+    expect(stats.cleanupSucceeded).toBe(12);
+    expect(peakInFlight).toBeLessThanOrEqual(4);
+  });
+
   it("continues reconciliation and artifact cleanup when a cleanup phase query fails", async () => {
     const { scheduler, store, workflow } = harness();
-    store.maintenance.getRowCursor.mockRejectedValueOnce(
-      new Error("D1 cleanup cursor unavailable")
-    );
+    store.listSessionCleanup.mockRejectedValueOnce(new Error("D1 cleanup unavailable"));
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
@@ -184,35 +188,31 @@ describe("ImageBuildScheduler", () => {
     expect(workflow.cleanupImages).toHaveBeenCalledOnce();
   });
 
-  it("budgets branch checks independently from one scope's repository cap", async () => {
+  it("checks every enabled scope in one full scan", async () => {
     const getBranchHead = vi.fn(async () => "abc123");
-    const { scheduler, store, resolveTarget } = harness({
+    const { scheduler, store, resolveTarget, listScopes } = harness({
       sourceControl: { getBranchHead } as unknown as SourceControlProvider,
     });
-    store.maintenance.listEnabledScopeRefsPage.mockResolvedValue({
-      scopes: [
-        { kind: "environment", id: "env-many" },
-        { kind: "repo", id: "acme/next" },
-      ],
-      nextCursor: null,
-    });
+    listScopes.mockResolvedValue(
+      Array.from({ length: 41 }, (_, index) => ({
+        kind: "repo" as const,
+        id: `acme/repo-${index}`,
+      }))
+    );
     resolveTarget.mockImplementation(
       async (_env: Env, _db: SqlDatabase, scope: ImageBuildScope) => {
-        const repositories =
-          scope.id === "env-many"
-            ? Array.from({ length: 10 }, (_, index) => ({
-                repoOwner: "acme",
-                repoName: `repo-${index}`,
-                baseBranch: "main",
-              }))
-            : [{ repoOwner: "acme", repoName: "next", baseBranch: "main" }];
-        const target = {
-          repositories,
+        return {
+          kind: "repo",
+          repoId: 1,
+          repositories: [
+            {
+              repoOwner: "acme",
+              repoName: scope.id.split("/").at(-1) ?? "repo",
+              baseBranch: "main",
+            },
+          ],
           repositoriesFingerprint: `fp-${scope.id}`,
         };
-        return scope.kind === "repo"
-          ? { kind: "repo", repoId: 1, ...target }
-          : { kind: "environment", ...target };
       }
     );
     store.getReconciliationStatus.mockImplementation(async (scope: ImageBuildScope) => {
@@ -242,12 +242,55 @@ describe("ImageBuildScheduler", () => {
 
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
-    expect(stats.scopesScanned).toBe(2);
-    expect(stats.branchLookups).toBe(11);
+    expect(stats.scopesScanned).toBe(41);
+    expect(stats.branchLookups).toBe(41);
+  });
+
+  it("continues scanning after reaching the build start cap", async () => {
+    const { scheduler, listScopes, workflow } = harness();
+    listScopes.mockResolvedValue(
+      Array.from({ length: 10 }, (_, index) => ({
+        kind: "repo" as const,
+        id: `acme/repo-${index}`,
+      }))
+    );
+
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+
+    expect(stats.scopesScanned).toBe(10);
+    expect(stats.triggered).toBe(8);
+    expect(workflow.triggerBuildWithTarget).toHaveBeenCalledTimes(8);
+  });
+
+  it("rotates a stateless full scan so the build cap cannot starve a scope", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduler, listScopes, workflow } = harness();
+      listScopes.mockResolvedValue(
+        Array.from({ length: 9 }, (_, index) => ({
+          kind: "repo" as const,
+          id: `acme/repo-${index}`,
+        }))
+      );
+
+      vi.setSystemTime(new Date("2026-01-01T00:07:00Z"));
+      await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
+      vi.setSystemTime(new Date("2026-01-01T00:37:00Z"));
+      await scheduler.run({ request_id: "cron-2", trace_id: "cron-2" });
+
+      const triggeredScopes = new Set(
+        workflow.triggerBuildWithTarget.mock.calls.map(([scope]) => scope.id)
+      );
+      expect(triggeredScopes).toEqual(
+        new Set(Array.from({ length: 9 }, (_, index) => `acme/repo-${index}`))
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs provider-neutral maintenance when rebuild reconciliation is unavailable", async () => {
-    const { scheduler, store, workflow } = harness({
+    const { scheduler, listScopes, workflow } = harness({
       provider: null,
       sourceControl: null,
     });
@@ -257,7 +300,7 @@ describe("ImageBuildScheduler", () => {
     expect(stats.staleMarked).toBe(1);
     expect(stats.cleanupAttempted).toBe(2);
     expect(stats.scopesScanned).toBe(0);
-    expect(store.listEnabledScopeRefsPage).not.toHaveBeenCalled();
+    expect(listScopes).not.toHaveBeenCalled();
     expect(workflow.cleanupImages).toHaveBeenCalledOnce();
   });
 
@@ -284,51 +327,29 @@ describe("ImageBuildScheduler", () => {
     });
   });
 
-  it("rotates finalization recovery pages and contains a mid-page publish failure", async () => {
+  it("republishes every recoverable finalization and contains a publish failure", async () => {
     const send = vi.fn(async ({ buildId }: { buildId: string }) => {
       if (buildId === "build-05") throw new Error("queue unavailable");
     });
-    const { scheduler, store, listRecoverableFinalizations } = harness({
+    const { scheduler, listRecoverableFinalizations } = harness({
       env: { IMAGE_BUILD_FINALIZATION_QUEUE: { send } } as unknown as Env,
     });
-    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+    const recoverable = Array.from({ length: 21 }, (_, index) => ({
       id: `build-${String(index + 1).padStart(2, "0")}`,
       completion_hash: `${index + 1}`.repeat(64).slice(0, 64),
       callback_token_used_at: index + 1,
     }));
-    listRecoverableFinalizations.mockResolvedValueOnce(firstPage).mockResolvedValueOnce([
-      {
-        id: "build-21",
-        completion_hash: "b".repeat(64),
-        callback_token_used_at: 21,
-      },
-    ]);
+    listRecoverableFinalizations.mockResolvedValue(recoverable);
 
-    const first = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
-    const recoveryCursor = store.maintenance.setRowCursor.mock.calls.find(
-      ([name]) => name === "finalization-recovery"
-    )?.[1];
-    if (!recoveryCursor) throw new Error("expected finalization recovery cursor");
-    store.maintenance.getRowCursor.mockImplementation(async (name) =>
-      name === "finalization-recovery" ? recoveryCursor : null
-    );
-    const second = await scheduler.run({ request_id: "cron-2", trace_id: "cron-2" });
+    const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
-    expect(first.finalizationsRepublished).toBe(19);
-    expect(second.finalizationsRepublished).toBe(1);
-    expect(recoveryCursor).toEqual({ sortValue: 20, rowId: "build-20" });
-    expect(listRecoverableFinalizations).toHaveBeenNthCalledWith(2, {
-      now: expect.any(Number),
-      after: { callbackTokenUsedAt: 20, rowId: "build-20" },
-      limit: 20,
-    });
+    expect(stats.finalizationsRepublished).toBe(20);
+    expect(send).toHaveBeenCalledTimes(21);
+    expect(listRecoverableFinalizations).toHaveBeenCalledWith(expect.any(Number));
     expect(send).toHaveBeenCalledWith({
       version: 1,
       buildId: "build-21",
-      completionHash: "b".repeat(64),
+      completionHash: "21".repeat(32),
     });
-    expect(store.maintenance.setRowCursor.mock.invocationCallOrder[0]).toBeLessThan(
-      send.mock.invocationCallOrder[0]
-    );
   });
 });
