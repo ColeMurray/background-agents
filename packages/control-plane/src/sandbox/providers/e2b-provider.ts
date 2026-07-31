@@ -10,7 +10,7 @@
  * template's start command runs at build time.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createLogger } from "../../logger";
 import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";

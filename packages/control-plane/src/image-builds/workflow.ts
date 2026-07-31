@@ -30,7 +30,7 @@ import {
 import { ImageBuildReaper } from "./reaper";
 import { resolveImageBuildProvider } from "./provider-policy";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
-import type { RepositoryShaEntry } from "@open-inspect/shared";
+import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type {
   ImageBuildAdapter,
   CompleteImageBuildCallback,

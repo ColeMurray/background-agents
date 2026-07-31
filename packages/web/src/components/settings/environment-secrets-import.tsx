@@ -6,8 +6,8 @@ import { toast } from "sonner";
 import {
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
-  type EnvironmentRepository,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
+import type { EnvironmentRepository } from "@open-inspect/shared/types/environments";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { RepoIcon, ChevronDownIcon } from "@/components/ui/icons";

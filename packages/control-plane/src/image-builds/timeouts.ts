@@ -1,4 +1,4 @@
-import { MAX_BUILD_TIMEOUT_SECONDS } from "@open-inspect/shared";
+import { MAX_BUILD_TIMEOUT_SECONDS } from "@open-inspect/shared/types/integrations";
 
 const MS_PER_SECOND = 1000;
 

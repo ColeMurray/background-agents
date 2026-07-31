@@ -11,7 +11,7 @@ import {
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   IntegrationSettingsStore,

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import type { ImageBuildRecordView } from "@open-inspect/shared";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeSupersededBuilds,

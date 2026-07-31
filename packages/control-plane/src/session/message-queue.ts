@@ -1,7 +1,10 @@
 import { generateId } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
-import type { SessionAttachmentReference, ResolvedSessionAttachment } from "@open-inspect/shared";
+import type {
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "@open-inspect/shared/types/session-attachments";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,

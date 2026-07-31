@@ -1,4 +1,4 @@
-import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
+import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";

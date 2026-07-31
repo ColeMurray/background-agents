@@ -30,6 +30,13 @@ export const slackCallbackContextSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().optional(),
   reactionMessageTs: z.string().optional(),
+  /**
+   * Set when the session belongs to an automation rather than an interactive
+   * request. A thread follow-up completes through the same callback as an
+   * `@mention` turn, so the route alone cannot tell the two apart, and only the
+   * control plane knows which automation (if any) owns the thread.
+   */
+  automationId: z.string().optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;

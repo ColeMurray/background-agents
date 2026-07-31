@@ -27,7 +27,7 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import type { SessionAttachmentReference } from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -38,7 +38,10 @@ import {
 import type { ComboboxGroup } from "@/components/ui/combobox";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
-import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import type {
+  SessionDiffFile,
+  SessionDiffRepository,
+} from "@open-inspect/shared/types/session-diffs";
 import { SessionChangesPanel } from "@/components/session-changes-panel";
 import {
   SESSION_CHANGES_LAYOUT_ID,

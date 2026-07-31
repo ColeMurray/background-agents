@@ -2,7 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
-import { decodeRepositoryPathSegments } from "@open-inspect/shared";
+import { decodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import type { CorrelationContext } from "../logger";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { RequestMetrics } from "../db/instrumented-d1";

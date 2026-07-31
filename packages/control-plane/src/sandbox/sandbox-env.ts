@@ -1,4 +1,4 @@
-import type { McpServerConfig } from "@open-inspect/shared";
+import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
 import type { CreateSandboxConfig, RestoreConfig, SessionRepositoryInfo } from "./provider";

@@ -1,10 +1,10 @@
 import type {
   PullRequestSummary,
   SessionNavigationState,
-  SessionListRepository,
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared";
+import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
 

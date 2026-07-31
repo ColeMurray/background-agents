@@ -5,9 +5,9 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
 import { generateInternalToken } from "@open-inspect/shared/auth";
-import type { ImageBuildScopeKind, McpServerConfig } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";

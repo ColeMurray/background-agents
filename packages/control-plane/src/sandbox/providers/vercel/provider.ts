@@ -2,7 +2,10 @@
  * Vercel Sandbox provider implementation.
  */
 
-import { DEFAULT_BUILD_TIMEOUT_SECONDS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  DEFAULT_BUILD_TIMEOUT_SECONDS,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";

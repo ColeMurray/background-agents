@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { serverMessageSchema } from "@open-inspect/shared";
-import type { ServerMessage } from "@open-inspect/shared";
+import { serverMessageSchema } from "@open-inspect/shared/types/server-messages";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 // WebSocket URL (should come from env in production)

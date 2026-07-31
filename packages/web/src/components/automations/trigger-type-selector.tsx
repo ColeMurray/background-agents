@@ -1,6 +1,6 @@
 "use client";
 
-import type { AutomationTriggerType } from "@open-inspect/shared";
+import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 
 interface TriggerOption {
   type: AutomationTriggerType;

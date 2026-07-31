@@ -178,7 +178,7 @@ class ModalBuildSessionService:
     @staticmethod
     async def _resolve(build_id: str, provider_session_id: str):
         try:
-            sandbox = modal.Sandbox.from_id(provider_session_id)
+            sandbox = await modal.Sandbox.from_id.aio(provider_session_id)
             tags = await sandbox.get_tags.aio()
         except modal.exception.NotFoundError as e:
             raise BuildSessionNotFoundError("build session not found") from e

@@ -2,7 +2,7 @@ import type {
   ImageBuildScopeKind,
   ImageBuildStatus,
   RepositoryShaEntry,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/image-builds";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
 import type { ImageBuildCallbackBuild, ImageBuildProvider } from "../image-builds/model";
 import type { SqlDatabase } from "./sql-database";

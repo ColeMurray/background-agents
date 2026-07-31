@@ -4,7 +4,7 @@
  * delivery to the sandbox socket.
  */
 
-import type { ServerMessage } from "@open-inspect/shared";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { SandboxCommand } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 

@@ -1,10 +1,9 @@
+import { spawnChildSessionRequestSchema, spawnContextSchema } from "@open-inspect/shared";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-  spawnChildSessionRequestSchema,
-  spawnContextSchema,
   type SandboxSettings,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import {
   getValidModelOrDefault,
   isValidModel,
