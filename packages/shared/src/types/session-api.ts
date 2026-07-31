@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { recordSchema, type AgentResponse } from "./artifacts";
+import { MIN_SANDBOX_TIMEOUT_MS } from "./integrations";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import type { Session } from "./sessions";
@@ -19,6 +20,14 @@ export interface UserPreferences {
 }
 
 const nonEmptyStringSchema = z.string().trim().min(1);
+const sandboxTimeoutMsSchema = z
+  .number()
+  .refine(
+    (value) =>
+      Number.isSafeInteger(value) &&
+      value >= MIN_SANDBOX_TIMEOUT_MS &&
+      value % MIN_SANDBOX_TIMEOUT_MS === 0
+  );
 
 export const slackCallbackContextSchema = z.object({
   source: z.literal("slack"),
@@ -273,6 +282,7 @@ export const spawnContextSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().nullable(),
   baseBranch: z.string().nullable(),
+  sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
   owner: z.object({
     userId: z.string(),
     canonicalUserId: z.string().nullable().optional(),

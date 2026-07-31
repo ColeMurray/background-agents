@@ -1,5 +1,6 @@
 import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
+import { normalizeSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
@@ -56,6 +57,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         model: session.model,
         reasoningEffort: session.reasoning_effort ?? null,
         baseBranch: session.base_branch,
+        sandboxTimeoutMs: parseSandboxTimeoutMs(session.sandbox_settings),
         owner: {
           userId: owner.user_id,
           ...(owner.canonical_user_id ? { canonicalUserId: owner.canonical_user_id } : {}),
@@ -148,4 +150,13 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       return Response.json({ ok: true });
     },
   };
+}
+
+function parseSandboxTimeoutMs(settingsJson: string | null): number | undefined {
+  if (!settingsJson) return undefined;
+  try {
+    return normalizeSandboxSettings(JSON.parse(settingsJson), { invalid: "omit" }).sandboxTimeoutMs;
+  } catch {
+    return undefined;
+  }
 }

@@ -3,6 +3,7 @@ import {
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   spawnChildSessionRequestSchema,
   spawnContextSchema,
+  type SandboxSettings,
 } from "@open-inspect/shared";
 import {
   getValidModelOrDefault,
@@ -56,7 +57,7 @@ async function handleSpawnChild(
   const parentEnvironmentId = parentSession?.environmentId ?? null;
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
-  const childSandboxSettings = parentSession
+  const resolvedChildSandboxSettings = parentSession
     ? await resolveSandboxSettings(
         ctx.db,
         parentSession.repoOwner,
@@ -65,9 +66,10 @@ async function handleSpawnChild(
       )
     : {};
   const maxConcurrentChildren =
-    childSandboxSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+    resolvedChildSandboxSettings.maxConcurrentChildSessions ??
+    DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
   const maxTotalChildren =
-    childSandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
+    resolvedChildSandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
 
   const parentDepth = await sessionStore.getSpawnDepth(parentId);
   if (parentDepth >= MAX_SPAWN_DEPTH) {
@@ -107,6 +109,12 @@ async function handleSpawnChild(
     return error("Failed to get parent session context", 500);
   }
   const spawnContext = parsedSpawnContext.data;
+  const { sandboxTimeoutMs: _currentTimeoutMs, ...resolvedChildSettingsWithoutTimeout } =
+    resolvedChildSandboxSettings;
+  const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
+  if (spawnContext.sandboxTimeoutMs !== undefined) {
+    childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
+  }
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
   const requestedRepoName = body.repoName?.trim().toLowerCase() || null;

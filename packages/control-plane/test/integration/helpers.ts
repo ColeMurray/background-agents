@@ -1,4 +1,5 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
+import type { SandboxSettings } from "@open-inspect/shared";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { SandboxStatus } from "../../src/types";
 import type { SessionDO } from "../../src/session/durable-object";
@@ -165,6 +166,7 @@ export async function initSession(overrides?: {
   title?: string;
   model?: string;
   reasoningEffort?: string;
+  sandboxSettings?: SandboxSettings;
   userId?: string;
   scmLogin?: string;
 }) {

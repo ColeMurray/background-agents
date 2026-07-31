@@ -67,6 +67,7 @@ describe("DO internal sub-session routes", () => {
         userId: "user-1",
         scmLogin: "acmedev",
         model: "anthropic/claude-sonnet-4-6",
+        sandboxSettings: { sandboxTimeoutMs: 14_400_000 },
       });
 
       const res = await stub.fetch("http://internal/internal/spawn-context");
@@ -79,6 +80,7 @@ describe("DO internal sub-session routes", () => {
       expect(context.repoId).toBe(12345);
       expect(context.model).toBe("anthropic/claude-sonnet-4-6");
       expect(context.reasoningEffort).toBeNull();
+      expect(context.sandboxTimeoutMs).toBe(14_400_000);
 
       // Owner fields
       expect(context.owner).toBeDefined();

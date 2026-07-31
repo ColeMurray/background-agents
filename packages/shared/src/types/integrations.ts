@@ -171,8 +171,8 @@ export interface SandboxSettings {
   memoryMib?: number | null;
   /**
    * Requested sandbox session lifetime, in milliseconds and whole-second
-   * increments. Unset uses the provider default (or the shorter default for
-   * agent-spawned children). Provider support and limits vary.
+   * increments. Unset uses the provider default. Provider support and limits
+   * vary.
    */
   sandboxTimeoutMs?: number;
   /**

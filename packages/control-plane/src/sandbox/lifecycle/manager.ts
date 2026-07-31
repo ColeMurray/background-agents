@@ -203,9 +203,6 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
 };
 
-/** Default sandbox lifetime for agent-spawned child sessions. */
-export const CHILD_SANDBOX_TIMEOUT_MS = 3_600_000;
-
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
     ? `${session.repo_owner}-${session.repo_name}`
@@ -466,7 +463,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(session, sandboxSettings);
+      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         sandboxId: expectedSandboxId,
@@ -758,7 +755,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(session, sandboxSettings);
+      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -892,7 +889,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
 
       const sandboxSettings = this.parseSandboxSettings(session);
-      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(session, sandboxSettings);
+      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
 
       const result = await this.provider.resumeSandbox({
         providerObjectId,
@@ -1387,10 +1384,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
-  private resolveSandboxTimeoutSeconds(
-    session: SessionRow,
-    sandboxSettings: SandboxSettings
-  ): number | undefined {
+  private resolveSandboxTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
     if (!this.provider.capabilities.supportsSandboxTimeout) {
       if (sandboxSettings.sandboxTimeoutMs !== undefined) {
         throw new SandboxProviderError(
@@ -1400,9 +1394,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
       return undefined;
     }
-    const timeoutMs =
-      sandboxSettings.sandboxTimeoutMs ??
-      (session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_MS : undefined);
+    const timeoutMs = sandboxSettings.sandboxTimeoutMs;
     return timeoutMs === undefined ? undefined : timeoutMs / 1000;
   }
 
