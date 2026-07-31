@@ -195,7 +195,6 @@ jobs:
     name: Test (control-plane unit)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -222,7 +221,6 @@ jobs:
     name: Test (control-plane integration)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -249,7 +247,6 @@ jobs:
     name: Test (web)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -273,7 +270,6 @@ jobs:
     name: Test (bots)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
