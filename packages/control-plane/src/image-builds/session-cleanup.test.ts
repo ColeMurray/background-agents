@@ -57,6 +57,25 @@ describe("ImageBuildSessionCleanup", () => {
     });
   });
 
+  it("reports when the fenced cleanup obligation was not cleared", async () => {
+    const { cleanup, clearSessionCleanup } = harness();
+    clearSessionCleanup.mockResolvedValueOnce(false);
+
+    const cleared = await cleanup.run(
+      {
+        id: "build-ready",
+        provider: "modal",
+        provider_image_id: "image-1",
+        provider_session_id: "session-1",
+        provider_session_cleanup_pending: 1,
+        error_message: null,
+      },
+      correlation
+    );
+
+    expect(cleared).toBe(false);
+  });
+
   it("handles legacy null flags and bounds failed-session cleanup", async () => {
     vi.useFakeTimers();
     try {

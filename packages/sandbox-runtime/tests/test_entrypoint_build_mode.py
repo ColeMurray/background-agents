@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import signal
 from dataclasses import replace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -151,6 +152,39 @@ class TestImageBuildMode:
         clone_args = clone_calls[0]
         assert "100" in clone_args, f"Expected --depth 100 in clone args, got {clone_args}"
         assert "1" not in clone_args, "Build mode should not use --depth 1"
+
+    @pytest.mark.asyncio
+    async def test_clone_cancellation_kills_the_owned_process_group(self, build_env, tmp_path):
+        supervisor = _make_supervisor(build_env)
+        supervisor.repo_path = tmp_path / "nonexistent"
+        _repoint_primary(supervisor)
+        started = asyncio.Event()
+
+        async def communicate_forever():
+            started.set()
+            await asyncio.Event().wait()
+
+        process = MagicMock(returncode=None, pid=4321)
+        process.communicate = AsyncMock(side_effect=communicate_forever)
+        process.wait = AsyncMock(return_value=-signal.SIGKILL)
+
+        with (
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=process,
+            ) as create_process,
+            patch("sandbox_runtime.entrypoint.os.killpg") as kill_process_group,
+        ):
+            operation = asyncio.create_task(supervisor._clone_repo(supervisor.repositories[0]))
+            await started.wait()
+            operation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+
+        kill_process_group.assert_called_once_with(process.pid, signal.SIGKILL)
+        process.wait.assert_awaited_once()
+        assert create_process.await_args.kwargs["start_new_session"] is True
 
     @pytest.mark.asyncio
     async def test_setup_script_runs_in_build_mode(self, build_env):

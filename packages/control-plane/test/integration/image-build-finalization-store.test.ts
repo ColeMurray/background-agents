@@ -307,10 +307,10 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
     };
 
-    expect(await finalizer.process(job, { request_id: "queue-1" })).toEqual({
+    expect(await finalizer.process(job, { request_id: "queue-1", trace_id: "queue-1" })).toEqual({
       type: "completed",
     });
-    expect(await finalizer.process(job, { request_id: "queue-2" })).toEqual({
+    expect(await finalizer.process(job, { request_id: "queue-2", trace_id: "queue-2" })).toEqual({
       type: "completed",
     });
 

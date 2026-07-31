@@ -16,7 +16,7 @@ export const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
 
 /** Hard deadline for one provider snapshot or checkpoint attempt. */
 export const IMAGE_BUILD_PROVIDER_ATTEMPT_MS = 5 * 60 * 1000;
-const SHORT_RETRY_DELAY_SECONDS = 15;
+export const IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS = 15;
 const LEASE_EXPIRY_HEADROOM_SECONDS = 5;
 
 /** Queue disposition returned after processing one finalization command. */
@@ -27,7 +27,7 @@ export type ImageBuildFinalizationResult =
 const completed = (): ImageBuildFinalizationResult => ({ type: "completed" });
 const retrySoon = (): ImageBuildFinalizationResult => ({
   type: "retry",
-  delaySeconds: SHORT_RETRY_DELAY_SECONDS,
+  delaySeconds: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS,
 });
 
 /**
@@ -87,7 +87,7 @@ export class ImageBuildFinalizer {
     if (!claimed) {
       const current = await this.store.finalization.getBuild(build.id);
       const delayMs = Math.max(
-        SHORT_RETRY_DELAY_SECONDS * 1000,
+        IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS * 1000,
         (current?.finalization_lease_expires_at ?? now) - now
       );
       return {

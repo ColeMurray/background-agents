@@ -53,12 +53,11 @@ export class ImageBuildSessionCleanup {
           signal: controller.signal,
         });
       }
-      await this.store.finalization.clearSessionCleanup({
+      return await this.store.finalization.clearSessionCleanup({
         buildId: target.id,
         provider: target.provider,
         providerSessionId: target.provider_session_id,
       });
-      return true;
     } finally {
       clearTimeout(timeoutId);
     }

@@ -33,4 +33,28 @@ describe("image build finalization jobs", () => {
     expect(JSON.stringify(first)).not.toContain("session-1");
     expect(JSON.stringify(first)).not.toContain("abc123");
   });
+
+  it("treats repository SHA order as irrelevant to completion identity", async () => {
+    const completion = {
+      buildId: "build-1",
+      providerSessionId: "session-1",
+      repositoryShas: [
+        { repoOwner: "Acme", repoName: "Web", baseSha: "abc123" },
+        { repoOwner: "Acme", repoName: "Api", baseSha: "def456" },
+      ],
+      runtimeVersion: "v53-runtime",
+      buildDurationMs: 12_500,
+    };
+
+    const ordered = await createImageBuildFinalizationJob({ outcome: "success", completion });
+    const reordered = await createImageBuildFinalizationJob({
+      outcome: "success",
+      completion: {
+        ...completion,
+        repositoryShas: [...completion.repositoryShas].reverse(),
+      },
+    });
+
+    expect(reordered).toEqual(ordered);
+  });
 });

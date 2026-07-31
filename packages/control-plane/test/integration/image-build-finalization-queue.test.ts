@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  createExecutionContext,
-  createMessageBatch,
-  env,
-  getQueueResult,
-} from "cloudflare:test";
+import { createExecutionContext, createMessageBatch, env, getQueueResult } from "cloudflare:test";
 import worker from "../../src/index";
 import { ImageBuildStore } from "../../src/db/image-builds";
 import type { Env } from "../../src/types";

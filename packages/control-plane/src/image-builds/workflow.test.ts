@@ -540,6 +540,31 @@ describe("ImageBuildWorkflow", () => {
       expect(store.markBuildFailed).toHaveBeenCalled();
     });
 
+    it("tears down the created sandbox when provider-session binding is rejected", async () => {
+      const planBuild = vi.fn().mockResolvedValue(vercelPlannedBuild());
+      const adapter = createAdapter();
+      adapter.startBuild.mockImplementation(async (_plan, callbacks) => {
+        await callbacks.bindProviderSession("vercel-session-1");
+      });
+      const { workflow, store } = createWorkflow({
+        planBuild,
+        adapter,
+        provider: "vercel",
+        createCallbackAuth: bearerCallbackAuth(),
+      });
+      store.bindProviderSession.mockResolvedValueOnce(false);
+
+      await expect(workflow.triggerBuild(ENV_SCOPE, ctx)).rejects.toBeInstanceOf(
+        ImageBuildTriggerFailedError
+      );
+      expect(adapter.cleanupFailedBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerSessionId: "vercel-session-1",
+          errorMessage: "Failed to bind vercel build session",
+        })
+      );
+    });
+
     it("atomically accepts completion before publishing it", async () => {
       const store = sessionBuildStore();
       const queue = { send: vi.fn().mockResolvedValue(undefined) };

@@ -33,11 +33,18 @@ export async function createImageBuildFinalizationJob(
           buildId,
           providerSessionId: result.completion.providerSessionId,
           outcome: result.outcome,
-          repositoryShas: result.completion.repositoryShas?.map((repository) => ({
-            repoOwner: repository.repoOwner.toLowerCase(),
-            repoName: repository.repoName.toLowerCase(),
-            baseSha: repository.baseSha,
-          })),
+          repositoryShas: result.completion.repositoryShas
+            ?.map((repository) => ({
+              repoOwner: repository.repoOwner.toLowerCase(),
+              repoName: repository.repoName.toLowerCase(),
+              baseSha: repository.baseSha,
+            }))
+            .sort(
+              (left, right) =>
+                left.repoOwner.localeCompare(right.repoOwner) ||
+                left.repoName.localeCompare(right.repoName) ||
+                left.baseSha.localeCompare(right.baseSha)
+            ),
           runtimeVersion: result.completion.runtimeVersion,
           buildDurationMs: result.completion.buildDurationMs,
         }

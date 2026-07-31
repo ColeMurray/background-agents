@@ -598,7 +598,9 @@ async def api_create_build_sandbox(
         timeout_seconds = _validated_timeout_seconds(
             request,
             "build_timeout_seconds",
-            default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
+            default_seconds=(
+                DEFAULT_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+            ),
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS,
         )
         clone_host = _optional_string(request, "clone_host")

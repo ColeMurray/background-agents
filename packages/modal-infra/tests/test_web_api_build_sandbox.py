@@ -73,7 +73,9 @@ async def test_create_returns_provider_session_without_removing_legacy_endpoint(
         clone_username="oauth2",
         user_env_vars=None,
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
-        timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
+        timeout_seconds=(
+            DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+        ),
     )
     assert hasattr(web_api, "api_build_image")
 

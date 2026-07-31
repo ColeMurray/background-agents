@@ -12,6 +12,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 """
 
 import asyncio
+import contextlib
 import filecmp
 import json
 import os
@@ -226,6 +227,28 @@ class SandboxSupervisor:
     # Git primitives
     # ------------------------------------------------------------------
 
+    async def _terminate_owned_subprocess(self, process: asyncio.subprocess.Process) -> None:
+        """Kill a child process group and wait until the owned process exits."""
+        if process.returncode is None:
+            process_id = getattr(process, "pid", None)
+            if isinstance(process_id, int):
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process_id, signal.SIGKILL)
+            else:
+                process.kill()
+        await asyncio.shield(process.wait())
+
+    async def _communicate_owned_subprocess(
+        self, process: asyncio.subprocess.Process
+    ) -> tuple[bytes, bytes]:
+        """Collect output while guaranteeing teardown when the caller is cancelled."""
+        try:
+            stdout, stderr = await process.communicate()
+            return stdout or b"", stderr or b""
+        except asyncio.CancelledError:
+            await self._terminate_owned_subprocess(process)
+            raise
+
     async def _clone_repo(self, repo: RepoEntry) -> bool:
         """Shallow-clone a repository.
 
@@ -250,8 +273,9 @@ class SandboxSupervisor:
                 str(repo.path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await result.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(result)
         except Exception as e:
             # Keep sync_repositories' partial-failure contract: an OSError
             # here must surface as a failed member, not abort the gather.
@@ -324,8 +348,9 @@ class SandboxSupervisor:
                 value,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await proc.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(proc)
             if proc.returncode != 0:
                 self.log.warn(
                     "credential_helper.config_failed",
@@ -386,8 +411,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await proc.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(proc)
         if proc.returncode != 0:
             self.log.error(
                 "git.set_url_failed",
@@ -411,8 +437,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.error(
                 "git.fetch_error",
@@ -433,8 +460,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.warn(
                 "git.checkout_error",
@@ -501,8 +529,9 @@ class SandboxSupervisor:
                 cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            stdout, _ = await result.communicate()
+            stdout, _ = await self._communicate_owned_subprocess(result)
             if result.returncode == 0:
                 return stdout.decode().strip()
         except Exception as e:
@@ -1618,14 +1647,18 @@ class SandboxSupervisor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._hook_env(),
+                start_new_session=True,
             )
 
             try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+                stdout, _ = await asyncio.wait_for(
+                    self._communicate_owned_subprocess(process),
+                    timeout=timeout_seconds,
+                )
             except TimeoutError:
-                process.kill()
+                if process.returncode is None:
+                    await self._terminate_owned_subprocess(process)
                 stdout = await process.stdout.read() if process.stdout else b""
-                await process.wait()
                 output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 duration_ms = int((time.time() - start_time) * 1000)
                 self.log.error(

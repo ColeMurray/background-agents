@@ -168,11 +168,11 @@ session, binds its opaque id to the build row, and only then starts the runtime.
 back with a single-use bearer token minted at trigger time; only its HMAC hash is stored and the
 callback must present the exact bound provider session id.
 
-Callbacks publish a small, secret-free command to Cloudflare Queue before atomically accepting the
-payload in D1. The Queue consumer then leases the accepted row, snapshots/checkpoints the provider
-session, persists the artifact, transitions the row to `ready` or `superseded`, and performs
-idempotent session cleanup. This keeps provider operations outside the Worker's request-lifetime
-durability window and makes retries safe across all providers.
+Callbacks atomically accept the payload in D1 before publishing a small, secret-free command to
+Cloudflare Queue. The Queue consumer then leases the accepted row, snapshots/checkpoints the
+provider session, persists the artifact, transitions the row to `ready` or `superseded`, and
+performs idempotent session cleanup. This keeps provider operations outside the Worker's
+request-lifetime durability window and makes retries safe across all providers.
 
 ### Automations
 

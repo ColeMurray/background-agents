@@ -1,7 +1,11 @@
 import { ImageBuildStore } from "../db/image-builds";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
-import { ImageBuildFinalizer, type ImageBuildFinalizationResult } from "./finalizer";
+import {
+  IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS,
+  ImageBuildFinalizer,
+  type ImageBuildFinalizationResult,
+} from "./finalizer";
 import {
   imageBuildFinalizationJobSchema,
   type ImageBuildFinalizationJob,
@@ -9,7 +13,6 @@ import {
 import { createImageBuildAdapterFactory } from "./provider-factory";
 
 const logger = createLogger("image-builds:finalization-consumer");
-const ACCEPTANCE_RETRY_DELAY_SECONDS = 15;
 
 type FinalizationProcessor = (
   job: ImageBuildFinalizationJob,
@@ -50,7 +53,7 @@ export async function consumeImageBuildFinalizationBatch(
         attempts: message.attempts,
         error: error instanceof Error ? error : new Error(String(error)),
       });
-      message.retry({ delaySeconds: ACCEPTANCE_RETRY_DELAY_SECONDS });
+      message.retry({ delaySeconds: IMAGE_BUILD_FINALIZATION_RETRY_DELAY_SECONDS });
     }
   }
 }
