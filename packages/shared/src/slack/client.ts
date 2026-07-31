@@ -429,11 +429,11 @@ export interface SlackMessageFile {
  * A secondary attachment on a Slack message (subset of fields we use).
  *
  * Two very different things arrive in this array. Sharing or forwarding a
- * message produces a *message* attachment — flagged `is_share`/`is_msg_unfurl`,
- * carrying the shared message's author and body — which is the only place that
- * body exists on the new message. Posting a link produces a *link* unfurl,
- * which restates a page the text already links to. Callers that read message
- * bodies must tell the two apart.
+ * message produces a *message* attachment flagged `is_share` (and may also set
+ * `is_msg_unfurl`), carrying the shared message's author and body — which is the
+ * only place that body exists on the new message. A pasted Slack message link
+ * produces an attachment with `is_msg_unfurl` but not `is_share`. Callers that
+ * read message bodies must use `is_share` as the positive discriminator.
  */
 export interface SlackMessageAttachment {
   /** Set when the attachment is a shared/forwarded Slack message. */

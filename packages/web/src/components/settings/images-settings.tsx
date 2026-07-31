@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import useSWR, { mutate } from "swr";
-import type { ImageBuildRecordView } from "@open-inspect/shared";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";

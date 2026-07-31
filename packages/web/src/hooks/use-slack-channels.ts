@@ -1,6 +1,6 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
-import type { SlackChannelListing } from "@open-inspect/shared";
+import type { SlackChannelListing } from "@open-inspect/shared/slack";
 
 interface SlackChannelsResponse {
   channels: SlackChannelListing[];

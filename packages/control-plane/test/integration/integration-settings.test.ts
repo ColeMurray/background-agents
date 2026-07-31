@@ -3,7 +3,7 @@ import { SELF, env } from "cloudflare:test";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { EnvironmentStore } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
@@ -516,6 +516,7 @@ describe("Integration settings API", () => {
           maxTotalChildSessions: number;
           cpuCores: number | null;
           memoryMib: number | null;
+          sandboxTimeoutMs: number | null;
           enabledRepos: string[] | null;
         };
       }>();
@@ -525,7 +526,42 @@ describe("Integration settings API", () => {
       // Unset resource reservations resolve to null → provider default applies.
       expect(body.config.cpuCores).toBeNull();
       expect(body.config.memoryMib).toBeNull();
+      expect(body.config.sandboxTimeoutMs).toBeNull();
       expect(body.config.enabledRepos).toBeNull();
+    });
+
+    it("stores and resolves a sandbox session timeout", async () => {
+      const putRes = await serviceFetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { sandboxTimeoutMs: 14_400_000 },
+          },
+        }),
+      });
+      expect(putRes.status).toBe(200);
+
+      const res = await serviceFetch(
+        "https://test.local/integration-settings/sandbox/resolved/testowner/testrepo"
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json<{ config: { sandboxTimeoutMs: number | null } }>();
+      expect(body.config.sandboxTimeoutMs).toBe(14_400_000);
+    });
+
+    it("rejects an invalid sandbox session timeout", async () => {
+      const response = await serviceFetch("https://test.local/integration-settings/sandbox", {
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { sandboxTimeoutMs: 0 },
+          },
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      const body = await response.json<{ error: string }>();
+      expect(body.error).toContain("sandboxTimeoutMs must be a positive whole number of seconds");
     });
 
     it("GET /integration-settings/sandbox/resolved returns configured cpuCores and memoryMib", async () => {

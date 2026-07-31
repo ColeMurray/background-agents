@@ -9,14 +9,12 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import {
-  DEFAULT_MODEL,
-  clientMessageSchema,
-  resolveAppName,
-  sandboxEventSchema,
-  timingSafeEqual,
-  type SessionAttachmentReference,
-} from "@open-inspect/shared";
+import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
+import { sandboxEventSchema } from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { resolveAppName } from "@open-inspect/shared/app-name";
+import { timingSafeEqual } from "@open-inspect/shared/auth";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -1325,7 +1323,7 @@ export class SessionDO extends DurableObject<Env> {
     // Build client info from participant data
     const clientInfo: ClientInfo = {
       participantId: participant.id,
-      userId: participant.user_id,
+      userId: participant.canonical_user_id ?? participant.user_id,
       name: resolveParticipantName(participant),
       avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
@@ -1360,6 +1358,7 @@ export class SessionDO extends DurableObject<Env> {
       participantId: participant.id,
       participant: {
         participantId: participant.id,
+        userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(
           participant.scm_login,
@@ -1401,7 +1400,7 @@ export class SessionDO extends DurableObject<Env> {
     this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
-      userId: mapping.user_id,
+      userId: mapping.canonical_user_id ?? mapping.user_id,
       name: resolveParticipantName(mapping),
       avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",

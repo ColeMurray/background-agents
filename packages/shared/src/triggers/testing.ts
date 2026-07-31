@@ -11,8 +11,8 @@ import type {
   LinearAutomationEvent,
   SlackAutomationEvent,
 } from "./types";
-import type { TriggerCondition } from "./conditions";
 import { matchesConditions } from "./conditions";
+import type { TriggerCondition } from "./types";
 import { conditionRegistry } from "./registry";
 import type { Automation } from "../types/automations";
 

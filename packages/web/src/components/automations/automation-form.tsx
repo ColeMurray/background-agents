@@ -1,20 +1,22 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { isValidCron } from "@open-inspect/shared/cron";
 import {
-  DEFAULT_MODEL,
-  getReasoningConfig,
-  isValidCron,
-  isValidReasoningEffort,
   triggerSources,
-  MAX_AUTOMATION_REPOSITORIES,
   TRIGGER_TYPE_TO_SOURCE,
-  type AutomationRepositoryInput,
   type AutomationTriggerType,
   type AutomationEventSource,
   type TriggerCondition,
   type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
+import type { AutomationRepositoryInput } from "@open-inspect/shared/types/automations";
+import {
+  DEFAULT_MODEL,
+  getReasoningConfig,
+  isValidReasoningEffort,
+} from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";

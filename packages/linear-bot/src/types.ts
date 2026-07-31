@@ -79,9 +79,11 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
+} from "@open-inspect/shared";
+export type {
   Environment,
   ListEnvironmentsResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/environments";
 
 /**
  * Project→target mapping stored in KV under "config:project-repos".

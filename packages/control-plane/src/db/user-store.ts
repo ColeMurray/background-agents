@@ -110,6 +110,23 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
 export class UserStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  async getUsersByIds(userIds: readonly string[]): Promise<User[]> {
+    const uniqueIds = [...new Set(userIds)];
+    if (uniqueIds.length === 0) return [];
+
+    const statements = [];
+    for (let offset = 0; offset < uniqueIds.length; offset += 100) {
+      const ids = uniqueIds.slice(offset, offset + 100);
+      statements.push(
+        this.db
+          .prepare(`SELECT * FROM users WHERE id IN (${ids.map(() => "?").join(", ")})`)
+          .bind(...ids)
+      );
+    }
+    const results = await this.db.batch<UserRow>(statements);
+    return results.flatMap((result) => result.results.map(toUser));
+  }
+
   /**
    * Core resolution entry point. Finds or creates a canonical user for the
    * given provider identity, with automatic email-based cross-provider linking.

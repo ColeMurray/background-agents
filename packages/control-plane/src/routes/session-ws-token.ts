@@ -16,7 +16,6 @@ async function handleSessionWsToken(
   const body = await parseJsonBody<{
     scmLogin?: string;
     scmName?: string;
-    authName?: string;
     scmEmail?: string;
   }>(request);
   if (body instanceof Response) return body;
@@ -27,6 +26,7 @@ async function handleSessionWsToken(
   const enforcement = applyIdentityEnforcement(ctx, "ws-token", body);
   if (enforcement.rejection) return enforcement.rejection;
   const userId = enforcement.enforced.participantUserId;
+  const canonicalUserId = enforcement.enforced.canonicalUserId;
 
   return ctx.metrics.time("do_fetch", () =>
     ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.wsToken, {
@@ -34,9 +34,9 @@ async function handleSessionWsToken(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
+        canonicalUserId,
         scmLogin: body.scmLogin,
         scmName: body.scmName,
-        authName: body.authName,
         scmEmail: body.scmEmail,
       }),
     })

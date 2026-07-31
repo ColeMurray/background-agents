@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { generateInternalToken } from "@open-inspect/shared";
+import { generateInternalToken } from "@open-inspect/shared/auth";
 import { SELF, env } from "cloudflare:test";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
@@ -92,8 +92,54 @@ describe("Edge authentication", () => {
     expect(body.hasMore).toBe(false);
   });
 
+  it("filters and paginates sessions for the authenticated browser user with createdBy=me", async () => {
+    const browserUserId = "11111111111111111111111111111111";
+    const otherUserId = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+
+    for (const [id, userId, ageMs] of [
+      ["mine-newest", browserUserId, 0],
+      ["other-user", otherUserId, 500],
+      ["mine-middle", browserUserId, 1000],
+      ["mine-oldest", browserUserId, 2000],
+    ] as const) {
+      await store.create({
+        id,
+        title: null,
+        repoOwner: "acme",
+        repoName: "api",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        userId,
+        createdAt: now - ageMs,
+        updatedAt: now - ageMs,
+      });
+    }
+
+    const firstResponse = await serviceFetch(
+      "https://test.local/sessions?createdBy=me&limit=2&offset=0"
+    );
+    const secondResponse = await serviceFetch(
+      "https://test.local/sessions?createdBy=me&limit=2&offset=2"
+    );
+
+    expect(firstResponse.status).toBe(200);
+    await expect(firstResponse.json()).resolves.toMatchObject({
+      sessions: [{ id: "mine-newest" }, { id: "mine-middle" }],
+      hasMore: true,
+    });
+    expect(secondResponse.status).toBe(200);
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      sessions: [{ id: "mine-oldest" }],
+      hasMore: false,
+    });
+  });
+
   it("rejects invalid creator user id filters", async () => {
-    const response = await serviceFetch("https://test.local/sessions?createdBy=me");
+    const response = await serviceFetch("https://test.local/sessions?createdBy=not-a-user-id");
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid createdBy" });

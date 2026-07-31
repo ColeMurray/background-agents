@@ -15,7 +15,9 @@ import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import type { Artifact, SandboxEvent } from "@/types/session";
+import type { SessionParticipantProfile } from "@open-inspect/shared";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
+import { resolveParticipantDisplay } from "@/lib/participant-display";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -101,6 +103,7 @@ export function SessionTimeline({
   events,
   sessionId,
   currentParticipantId,
+  participantProfiles,
   isProcessing,
   loadingHistory,
   showSkeleton,
@@ -110,6 +113,7 @@ export function SessionTimeline({
   events: SandboxEvent[];
   sessionId: string;
   currentParticipantId: string | null;
+  participantProfiles: Record<string, SessionParticipantProfile>;
   isProcessing: boolean;
   loadingHistory: boolean;
   showSkeleton: boolean;
@@ -194,6 +198,7 @@ export function SessionTimeline({
                 event={group.event}
                 sessionId={sessionId}
                 currentParticipantId={currentParticipantId}
+                participantProfiles={participantProfiles}
                 onOpenMedia={onOpenMedia}
               />
             )
@@ -240,6 +245,7 @@ type EventRendererProps = {
   event: SandboxEvent;
   sessionId: string;
   currentParticipantId: string | null;
+  participantProfiles: Record<string, SessionParticipantProfile>;
   copied: boolean;
   onCopyContent: (content: string) => void;
   onOpenMedia: (artifactId: string) => void;
@@ -374,6 +380,7 @@ function UserMessageEvent({
   event,
   sessionId,
   currentParticipantId,
+  participantProfiles,
   copied,
   onCopyContent,
 }: EventRendererProps) {
@@ -385,14 +392,23 @@ function UserMessageEvent({
     event.author?.participantId && currentParticipantId
       ? event.author.participantId === currentParticipantId
       : !event.author;
-  const authorName = isCurrentUser ? "You" : event.author?.name || "Unknown User";
+  const profile = event.author?.userId ? participantProfiles[event.author.userId] : undefined;
+  const display = resolveParticipantDisplay(
+    {
+      name: event.author?.name || "Unknown User",
+      avatar: event.author?.avatar,
+    },
+    profile
+  );
+  const authorName = isCurrentUser ? "You" : display.name;
+  const avatar = display.avatar;
 
   return (
     <MessageFrame
       label={
         <div className="flex items-center gap-2">
-          {!isCurrentUser && event.author?.avatar && (
-            <img src={event.author.avatar} alt={authorName} className="w-5 h-5 rounded-full" />
+          {!isCurrentUser && avatar && (
+            <img src={avatar} alt={authorName} className="w-5 h-5 rounded-full" />
           )}
           <span className="text-xs text-accent">{authorName}</span>
         </div>
@@ -541,11 +557,13 @@ export const EventItem = memo(function EventItem({
   event,
   sessionId,
   currentParticipantId,
+  participantProfiles,
   onOpenMedia,
 }: {
   event: SandboxEvent;
   sessionId: string;
   currentParticipantId: string | null;
+  participantProfiles: Record<string, SessionParticipantProfile>;
   onOpenMedia: (artifactId: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -580,6 +598,7 @@ export const EventItem = memo(function EventItem({
     event,
     sessionId,
     currentParticipantId,
+    participantProfiles,
     copied,
     onCopyContent: handleCopyContent,
     onOpenMedia,

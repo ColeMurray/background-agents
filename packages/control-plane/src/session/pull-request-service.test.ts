@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
-import type { SessionRepositoryRow } from "./repository";
+import type { SessionRepositoryRow } from "./types";
 import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 import {

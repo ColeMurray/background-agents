@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent } from "rea
 
 const DIRECTION_LOCK_THRESHOLD_PX = 8;
 const OPEN_THRESHOLD_PX = 72;
+const PULL_START_MIN_X_PX = 24;
+const PULL_START_MAX_X_PX = 48;
 
 interface UseMobileSidebarPullOptions {
   isMobile: boolean;
@@ -24,12 +26,14 @@ export function useMobileSidebarPull({
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const dragDistanceRef = useRef(0);
   const sidebarWidthRef = useRef(0);
+  const activePointerIdRef = useRef<number | null>(null);
   const isEnabled = isMobile && !isSidebarOpen;
 
   const reset = useCallback(() => {
     dragStartRef.current = null;
     dragDistanceRef.current = 0;
     sidebarWidthRef.current = 0;
+    activePointerIdRef.current = null;
     setDragDistance(0);
     setDragProgress(0);
     setIsDragging(false);
@@ -42,14 +46,16 @@ export function useMobileSidebarPull({
   const handlePointerDown = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
       if (!isEnabled || (event.pointerType === "mouse" && event.button !== 0)) return;
+      if (activePointerIdRef.current !== null) return;
+      if (event.clientX < PULL_START_MIN_X_PX || event.clientX > PULL_START_MAX_X_PX) return;
 
       const sidebarWidth = getSidebarWidth();
       if (sidebarWidth <= 0) return;
 
       reset();
+      activePointerIdRef.current = event.pointerId;
       sidebarWidthRef.current = sidebarWidth;
       dragStartRef.current = { x: event.clientX, y: event.clientY };
-      event.currentTarget.setPointerCapture?.(event.pointerId);
       setIsDragging(true);
     },
     [getSidebarWidth, isEnabled, reset]
@@ -57,6 +63,8 @@ export function useMobileSidebarPull({
 
   const handlePointerMove = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== event.pointerId) return;
+
       const start = dragStartRef.current;
       if (!start) return;
 
@@ -70,6 +78,7 @@ export function useMobileSidebarPull({
       }
 
       event.preventDefault();
+      event.currentTarget.setPointerCapture?.(event.pointerId);
       const distance = Math.min(sidebarWidthRef.current, Math.max(0, deltaX));
       dragDistanceRef.current = distance;
       setDragDistance(distance);
@@ -78,11 +87,23 @@ export function useMobileSidebarPull({
     [reset]
   );
 
-  const handlePointerUp = useCallback(() => {
-    const shouldOpen = dragDistanceRef.current >= OPEN_THRESHOLD_PX;
-    reset();
-    if (shouldOpen) onOpen();
-  }, [onOpen, reset]);
+  const handlePointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== event.pointerId) return;
+
+      const shouldOpen = dragDistanceRef.current >= OPEN_THRESHOLD_PX;
+      reset();
+      if (shouldOpen) onOpen();
+    },
+    [onOpen, reset]
+  );
+
+  const handlePointerCancel = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current === event.pointerId) reset();
+    },
+    [reset]
+  );
 
   return {
     dragDistance,
@@ -92,5 +113,6 @@ export function useMobileSidebarPull({
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    handlePointerCancel,
   };
 }

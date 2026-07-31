@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ImageBuildRecordView } from "@open-inspect/shared";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import {
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,

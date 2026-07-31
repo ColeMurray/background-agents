@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { MAX_SLACK_ROUTING_KEYWORD_LENGTH, MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
+import {
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
+  MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  MAX_SLACK_ROUTING_RULES,
+} from "@open-inspect/shared/types/integrations";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -1059,6 +1063,33 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("round-trips global session instructions", async () => {
+      await store.setGlobal("slack", {
+        defaults: { sessionInstructions: "Always run tests before pushing changes." },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.sessionInstructions).toBe(
+        "Always run tests before pushing changes."
+      );
+    });
+
+    it("rejects non-string sessionInstructions", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { sessionInstructions: 42 as unknown as string },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects sessionInstructions over the maximum length", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { sessionInstructions: "x".repeat(MAX_SESSION_INSTRUCTIONS_LENGTH + 1) },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("round-trips per-repo slack settings", async () => {
       await store.setRepoSettings("slack", "acme/widgets", {
         agentNotificationsEnabled: false,
@@ -1080,6 +1111,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setRepoSettings("slack", "acme/widgets", {
           model: "anthropic/claude-sonnet-4-6",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects sessionInstructions at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          sessionInstructions: "Prefer minimal diffs.",
         } as unknown as { agentNotificationsEnabled?: boolean })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

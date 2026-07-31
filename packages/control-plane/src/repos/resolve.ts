@@ -1,4 +1,5 @@
-import type { CreateSessionRequest, RepositoryRef } from "@open-inspect/shared";
+import type { CreateSessionRequest } from "@open-inspect/shared";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import type { Env } from "../types";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";

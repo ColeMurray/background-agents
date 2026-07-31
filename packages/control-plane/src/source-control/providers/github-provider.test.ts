@@ -12,6 +12,8 @@ vi.mock("../../auth/github-app", () => ({
 }));
 
 import {
+  fetchWithTimeout,
+  getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
   getInstallationRepository,
   listInstallationRepositories,
@@ -20,6 +22,8 @@ import {
 const mockGetInstallationRepository = vi.mocked(getInstallationRepository);
 const mockListInstallationRepositories = vi.mocked(listInstallationRepositories);
 const mockGetCachedInstallationTokenWithExpiry = vi.mocked(getCachedInstallationTokenWithExpiry);
+const mockGetCachedInstallationToken = vi.mocked(getCachedInstallationToken);
+const mockFetchWithTimeout = vi.mocked(fetchWithTimeout);
 
 const fakeAppConfig = {
   appId: "123",
@@ -30,6 +34,34 @@ const fakeAppConfig = {
 describe("GitHubSourceControlProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("getBranchHead", () => {
+    it("resolves a slash-containing branch and returns its full SHA", async () => {
+      mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+      mockFetchWithTimeout.mockResolvedValue(
+        new Response(JSON.stringify({ object: { sha: "abc123" } }), { status: 200 })
+      );
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "feature/test" })
+      ).resolves.toBe("abc123");
+      expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+        expect.stringContaining("heads/feature%2Ftest"),
+        expect.any(Object)
+      );
+    });
+
+    it("returns null only for a confirmed missing branch", async () => {
+      mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+      mockFetchWithTimeout.mockResolvedValue(new Response("", { status: 404 }));
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
+      ).resolves.toBeNull();
+    });
   });
 
   describe("checkRepositoryAccess", () => {
@@ -351,11 +383,7 @@ describe("GitHubSourceControlProvider", () => {
 
 // ─── PR lifecycle tracking (getPullRequest + status derivation) ───────────────
 
-import { fetchWithTimeout, getCachedInstallationToken } from "../../auth/github-app";
 import { deriveGitHubPullRequestStatus } from "./github-provider";
-
-const mockFetchWithTimeout = vi.mocked(fetchWithTimeout);
-const mockGetCachedInstallationToken = vi.mocked(getCachedInstallationToken);
 
 function makeJsonResponse(body: unknown, status = 200): Response {
   return {

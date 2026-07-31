@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Env } from "./types";
-import type * as SharedModule from "@open-inspect/shared";
+import type * as SlackModule from "@open-inspect/shared/slack";
 
 const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo } = vi.hoisted(
   () => ({
@@ -11,8 +11,8 @@ const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo
   })
 );
 
-vi.mock("@open-inspect/shared", async () => {
-  const actual = await vi.importActual<typeof SharedModule>("@open-inspect/shared");
+vi.mock("@open-inspect/shared/slack", async () => {
+  const actual = await vi.importActual<typeof SlackModule>("@open-inspect/shared/slack");
   return {
     ...actual,
     verifySlackSignature: mockVerifySlackSignature,
@@ -1297,20 +1297,11 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("starts nothing for an image-only DM whose images all fail to download", async () => {
-    const order: string[] = [];
-    const slackFetch = mockSlackFetch(order, { fileDownloadStatus: 403 });
-    const env = makeSessionEnv(order);
-    const ctx = makeCtx();
-
-    const response = await app.fetch(
-      slackEventRequest({
-        type: "message",
+  it.each([
+    [
+      "a direct image-only DM loses every image",
+      {
         subtype: "file_share",
-        user: "U123",
-        channel: "D123",
-        ts: "444.555",
-        channel_type: "im",
         files: [
           {
             id: "F1",
@@ -1320,29 +1311,135 @@ describe("POST /events", () => {
             size: 16,
           },
         ],
-      }),
-      env,
-      ctx
-    );
+      },
+      true,
+      2,
+      "didn't start on this request",
+    ],
+    [
+      "an image-only forwarded message loses every image",
+      {
+        text: "",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            channel_id: "C999",
+            ts: "222.111",
+            from_url: "https://acme.slack.com/archives/C999/p222111",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "chart.png",
+                mimetype: "image/png",
+                url_private: "https://files.slack.com/files-pri/T1-F1/chart.png",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      true,
+      2,
+      "didn't start on this request",
+    ],
+    [
+      "a body-less forward contains only unsupported files",
+      {
+        text: "",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "incident.pdf",
+                mimetype: "application/pdf",
+                url_private: "https://files.slack.com/files-pri/T1-F1/incident.pdf",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      false,
+      0,
+      "Please include a message with your request",
+    ],
+    [
+      "an app mention contains a body-less forward with only unsupported files",
+      {
+        type: "app_mention",
+        text: "<@B123>",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "incident.pdf",
+                mimetype: "application/pdf",
+                url_private: "https://files.slack.com/files-pri/T1-F1/incident.pdf",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      false,
+      0,
+      "Please include a message with your request",
+    ],
+  ] satisfies Array<[string, Record<string, unknown>, boolean, number, string]>)(
+    "starts nothing when %s",
+    async (_caseName, eventFields, downloadsImage, expectedStartingStatuses, expectedMessage) => {
+      const order: string[] = [];
+      const slackFetch = mockSlackFetch(order, { fileDownloadStatus: 403 });
+      const env = makeSessionEnv(order);
+      const ctx = makeCtx();
 
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    // The placeholder prompt would be meaningless with no image attached, so
-    // no session is created and the user is told nothing ran.
-    expect(order).toContain("filedownload");
-    expect(order).not.toContain("session");
-    expect(order).not.toContain("prompt");
-    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          text: expect.stringContaining("didn't start on this request"),
+      const response = await app.fetch(
+        slackEventRequest({
+          type: "message",
+          user: "U123",
+          channel: "D123",
+          ts: "444.555",
+          channel_type: "im",
+          ...eventFields,
         }),
-      ])
-    );
+        env,
+        ctx
+      );
 
-    slackFetch.mockRestore();
-  });
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
+
+      // The placeholder prompt would be meaningless with no image attached, so
+      // no session is created and the user is told nothing ran.
+      if (downloadsImage) expect(order).toContain("filedownload");
+      else expect(order).not.toContain("filedownload");
+      expect(startingStatusBodies(slackFetch)).toHaveLength(expectedStartingStatuses);
+      expect(order).not.toContain("session");
+      expect(order).not.toContain("prompt");
+      expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining(expectedMessage),
+          }),
+        ])
+      );
+
+      slackFetch.mockRestore();
+    }
+  );
 
   it("keeps the interim checkpoint when the thread fetch fails", async () => {
     const order: string[] = [];

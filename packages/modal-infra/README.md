@@ -56,15 +56,9 @@ Base image definition with:
 
 - **web_api.py**: HTTP endpoints called by the control plane
 
-### Scheduler (`src/scheduler/`)
-
-- **image_builder.py**: The `build_image` worker (spawned by `api_build_image`) plus the 30-minute
-  rebuild cron. A build clones every repository of its scope — a single repository or an
-  environment's ordered set — runs each setup script in position order, snapshots the filesystem,
-  and reports the result (per-repository SHAs + runtime version) back to the control plane.
-  `rebuild_images` runs one pass over all prebuild-enabled scope units from
-  `GET /image-builds/enabled`, rebuilding on fingerprint mismatch, runtime-floor violation, or
-  branch-tip drift, capped at `TRIGGER_CAP_PER_TICK` builds per tick across all units
+Image rebuild evaluation and residual cleanup run in the provider-neutral
+control-plane scheduler. Modal only owns its short-lived create, start,
+snapshot, terminate, and delete provider operations.
 
 ## Usage
 
@@ -136,7 +130,10 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 | `api-create-sandbox` | POST | Yes | Create a new sandbox |
 | `api-snapshot-sandbox` | POST | Yes | Take filesystem snapshot |
 | `api-restore-sandbox` | POST | Yes | Restore sandbox from snapshot |
-| `api-build-image` | POST | Yes | Spawn an async prebuilt-image build for a scope (repo or environment); results POST back to the control plane's `/image-builds/*` callbacks |
+| `api-create-build-sandbox` | POST | Yes | Create a dormant, tagged sandbox for a prebuilt-image build |
+| `api-start-build-sandbox` | POST | Yes | Start the bound build runtime; results POST back to the control plane's `/image-builds/*` callbacks |
+| `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
+| `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
 | `api-delete-provider-image` | POST | Yes | Best-effort delete of a replaced provider image |
 
 ### Example: Create Sandbox

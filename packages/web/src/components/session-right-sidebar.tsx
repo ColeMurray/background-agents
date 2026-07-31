@@ -14,13 +14,12 @@ import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
+import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type {
-  ParticipantPresence,
   SessionDiffFile,
   SessionDiffRepository,
   SessionDiffState,
-  SessionState,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";

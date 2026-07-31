@@ -138,7 +138,7 @@ export function SessionHeader({
                 className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
               />
             ) : (
-              <h1 className="text-sm font-medium text-foreground max-w-40 truncate">
+              <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
                 <button
                   type="button"
                   className="max-w-full truncate cursor-text text-left"

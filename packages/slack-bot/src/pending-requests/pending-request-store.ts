@@ -1,4 +1,4 @@
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
 import type { Env } from "../types";
 

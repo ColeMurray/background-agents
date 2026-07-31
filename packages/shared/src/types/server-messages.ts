@@ -6,6 +6,7 @@ import { sandboxStatusSchema, sessionStatusSchema } from "./statuses";
 
 const participantSummarySchema = z.object({
   participantId: z.string(),
+  userId: z.string().optional(),
   name: z.string(),
   avatar: z.string().optional(),
 });

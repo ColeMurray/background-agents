@@ -1,5 +1,6 @@
-import { getUserInfo, postMessage, type CallbackContext } from "@open-inspect/shared";
-import { getAvailableModels, getSlackDefaultModel } from "../app-home/models";
+import { getUserInfo, postMessage } from "@open-inspect/shared/slack";
+import type { CallbackContext } from "@open-inspect/shared";
+import { getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
@@ -11,6 +12,7 @@ import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../t
 import type { Env } from "../types";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
+import { getSlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
 
@@ -66,12 +68,12 @@ export async function startSessionAndSendPrompt(
     );
     return null;
   }
-  const [availableModels, slackDefaultModel] = await Promise.all([
+  const [availableModels, slackConfig] = await Promise.all([
     getAvailableModels(env, traceId),
-    getSlackDefaultModel(env, traceId),
+    getSlackSettings(env, traceId),
   ]);
   const userPrefs = await getResolvedUserPreferences(env, userId, {
-    defaultModel: slackDefaultModel ?? env.DEFAULT_MODEL,
+    defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
     enabledModels: availableModels.map((modelOption) => modelOption.value),
   });
   const model = userPrefs.model;
@@ -129,9 +131,13 @@ export async function startSessionAndSendPrompt(
   };
   const channelContext = channelName ? formatChannelContext(channelName, channelDescription) : "";
   const threadContext = previousMessages ? formatThreadContext(previousMessages) : "";
+  let content = channelContext + threadContext + messageText;
+  if (slackConfig.sessionInstructions) {
+    content += `\n\n## Additional Instructions\n\n${slackConfig.sessionInstructions}`;
+  }
   const delivery = await deliverPrompt(env, {
     sessionId: session.sessionId,
-    content: channelContext + threadContext + messageText,
+    content,
     authorId: `slack:${userId}`,
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),

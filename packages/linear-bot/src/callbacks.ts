@@ -12,7 +12,7 @@ import {
   updateAgentSession,
 } from "./utils/linear-client";
 import { extractAgentResponse, formatAgentResponse } from "./completion/extractor";
-import { resolveAppName } from "@open-inspect/shared";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { makePlan } from "./plan";
 import { createLogger } from "./logger";
 import { createStartCallbackRouter } from "./callbacks/start-callback";

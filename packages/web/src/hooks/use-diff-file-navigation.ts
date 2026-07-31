@@ -5,7 +5,7 @@ import type {
   SessionDiffFile,
   SessionDiffManifest,
   SessionDiffRepository,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import type { DiffSelection } from "@/lib/session-diffs";
 
 export interface DiffFileEntry {

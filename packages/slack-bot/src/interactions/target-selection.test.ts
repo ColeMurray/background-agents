@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessageDetails, postMessage } from "@open-inspect/shared";
+import { getMessageDetails, postMessage } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { handleTargetSelection } from "./target-selection";
 import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 
-vi.mock(import("@open-inspect/shared"), async (importOriginal) => ({
+vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
   ...(await importOriginal()),
   escapeMrkdwnText: (text: string) => text,
   getMessageDetails: vi.fn(),

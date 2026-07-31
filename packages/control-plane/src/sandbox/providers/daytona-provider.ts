@@ -5,7 +5,7 @@
  * code-server password derivation that previously lived in the Python shim.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -51,6 +51,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   readonly name = "daytona";
 
   readonly capabilities: SandboxProviderCapabilities = {
+    supportsSandboxTimeout: false,
     supportsSnapshots: false,
     supportsRestore: false,
     supportsPersistentResume: true,

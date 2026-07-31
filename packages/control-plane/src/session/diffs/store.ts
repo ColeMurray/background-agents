@@ -8,7 +8,7 @@ import {
   type SessionDiffUpload,
   type SessionDiffState,
   type StoredSessionDiffBundle,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import type { SqlStorage } from "../sql-storage";
 import { DiffFileNotFoundError, DiffRevisionStaleError } from "./errors";
 

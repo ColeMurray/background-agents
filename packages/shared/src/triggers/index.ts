@@ -13,20 +13,18 @@ export type {
   WebhookAutomationEvent,
   SlackAutomationEvent,
   TriggerSourceDefinition,
+  AutomationTriggerType,
+  ConditionConfigMap,
+  ConditionType,
+  TriggerCondition,
+  JsonPathFilter,
+  TextMatchValue,
+  TriggerConfig,
 } from "./types";
 export { TRIGGER_TYPE_TO_SOURCE, automationEventSchema } from "./types";
 
 // Condition system
-export type {
-  ConditionConfigMap,
-  ConditionType,
-  TriggerCondition,
-  ConditionHandler,
-  ConditionRegistry,
-  JsonPathFilter,
-  TextMatchValue,
-  TriggerConfig,
-} from "./conditions";
+export type { ConditionHandler, ConditionRegistry } from "./conditions";
 export { matchesConditions, validateConditions } from "./conditions";
 
 // Registry

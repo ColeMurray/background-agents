@@ -5,11 +5,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type {
-  EnrichedRepository,
   GitHubBotSettings,
   GitHubGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
 expect.extend(matchers);
@@ -31,7 +31,12 @@ vi.mock("swr", () => ({
 
 vi.mock("@/hooks/use-enabled-models", () => ({
   useEnabledModels: () => ({
-    enabledModelOptions: [],
+    enabledModelOptions: [
+      {
+        category: "Anthropic",
+        models: [{ id: "anthropic/claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+      },
+    ],
   }),
 }));
 
@@ -134,6 +139,106 @@ afterEach(() => {
 });
 
 describe("GitHubIntegrationSettings", () => {
+  it("renders and preserves global model and reasoning defaults", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          autoReviewOnOpen: true,
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "high",
+        },
+      },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    expect(screen.getByText("Default model")).toBeInTheDocument();
+    expect(screen.getByText("Default reasoning effort")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Default model" })).toHaveTextContent(
+      "Claude Sonnet 4.6"
+    );
+    expect(screen.getByRole("combobox", { name: "Default reasoning effort" })).toHaveTextContent(
+      "high"
+    );
+
+    await user.click(screen.getByRole("switch", { name: /auto-review new prs/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: false,
+              model: "anthropic/claude-sonnet-4-6",
+              reasoningEffort: "high",
+            },
+          },
+        }),
+      })
+    );
+  });
+
+  it("clears global model defaults without resetting unrelated settings", async () => {
+    const user = userEvent.setup();
+    setupSWR({
+      global: {
+        defaults: {
+          autoReviewOnOpen: false,
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: "high",
+          codeReviewInstructions: "Focus on security.",
+        },
+      },
+    });
+    fetchMock.mockResolvedValue(okJson({}));
+
+    render(<GitHubIntegrationSettings />);
+
+    await user.click(screen.getByRole("combobox", { name: "Default reasoning effort" }));
+    await user.click(await screen.findByRole("option", { name: "Use model default" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: false,
+              model: "anthropic/claude-sonnet-4-6",
+              codeReviewInstructions: "Focus on security.",
+            },
+          },
+        }),
+      })
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Default model" }));
+    await user.click(await screen.findByRole("option", { name: "Use system default" }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/integration-settings/github",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: {
+              autoReviewOnOpen: false,
+              codeReviewInstructions: "Focus on security.",
+            },
+          },
+        }),
+      })
+    );
+  });
+
   it("repo auto-review override without an explicit value seeds from global default when saved", async () => {
     const user = userEvent.setup();
     setupSWR({

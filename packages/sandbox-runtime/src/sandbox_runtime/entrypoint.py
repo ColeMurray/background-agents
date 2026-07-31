@@ -12,6 +12,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 """
 
 import asyncio
+import contextlib
 import filecmp
 import json
 import os
@@ -20,6 +21,7 @@ import shutil
 import signal
 import time
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -31,6 +33,7 @@ from .constants import (
     CODE_SERVER_PORT_ENV_VAR,
     DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
     REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
@@ -56,6 +59,17 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 # Substituted for a single log line too large to forward intact, so the gap is
 # visible instead of silently dropped.
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
+
+
+@dataclass(frozen=True)
+class RepositoryBootResult:
+    """State produced by repository synchronization and hook execution."""
+
+    git_sync_success: bool
+    head_sha: str
+    repository_shas: list[dict[str, str]]
+    setup_success: bool | None
+    start_success: bool | None
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -213,6 +227,28 @@ class SandboxSupervisor:
     # Git primitives
     # ------------------------------------------------------------------
 
+    async def _terminate_owned_subprocess(self, process: asyncio.subprocess.Process) -> None:
+        """Kill a child process group and wait until the owned process exits."""
+        if process.returncode is None:
+            process_id = getattr(process, "pid", None)
+            if isinstance(process_id, int):
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process_id, signal.SIGKILL)
+            else:
+                process.kill()
+        await asyncio.shield(process.wait())
+
+    async def _communicate_owned_subprocess(
+        self, process: asyncio.subprocess.Process
+    ) -> tuple[bytes, bytes]:
+        """Collect output while guaranteeing teardown when the caller is cancelled."""
+        try:
+            stdout, stderr = await process.communicate()
+            return stdout or b"", stderr or b""
+        except asyncio.CancelledError:
+            await self._terminate_owned_subprocess(process)
+            raise
+
     async def _clone_repo(self, repo: RepoEntry) -> bool:
         """Shallow-clone a repository.
 
@@ -237,8 +273,9 @@ class SandboxSupervisor:
                 str(repo.path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await result.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(result)
         except Exception as e:
             # Keep sync_repositories' partial-failure contract: an OSError
             # here must surface as a failed member, not abort the gather.
@@ -311,8 +348,9 @@ class SandboxSupervisor:
                 value,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await proc.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(proc)
             if proc.returncode != 0:
                 self.log.warn(
                     "credential_helper.config_failed",
@@ -373,8 +411,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await proc.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(proc)
         if proc.returncode != 0:
             self.log.error(
                 "git.set_url_failed",
@@ -398,8 +437,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.error(
                 "git.fetch_error",
@@ -420,8 +460,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.warn(
                 "git.checkout_error",
@@ -488,8 +529,9 @@ class SandboxSupervisor:
                 cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            stdout, _ = await result.communicate()
+            stdout, _ = await self._communicate_owned_subprocess(result)
             if result.returncode == 0:
                 return stdout.decode().strip()
         except Exception as e:
@@ -1605,14 +1647,18 @@ class SandboxSupervisor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._hook_env(),
+                start_new_session=True,
             )
 
             try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+                stdout, _ = await asyncio.wait_for(
+                    self._communicate_owned_subprocess(process),
+                    timeout=timeout_seconds,
+                )
             except TimeoutError:
-                process.kill()
+                if process.returncode is None:
+                    await self._terminate_owned_subprocess(process)
                 stdout = await process.stdout.read() if process.stdout else b""
-                await process.wait()
                 output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 duration_ms = int((time.time() - start_time) * 1000)
                 self.log.error(
@@ -1790,6 +1836,136 @@ class SandboxSupervisor:
         )
         return False
 
+    def _image_build_execution_timeout_seconds(self) -> int | None:
+        """Return the positive clone/setup budget configured for build mode."""
+        raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
+        if not raw_timeout:
+            return None
+        try:
+            timeout_seconds = int(raw_timeout)
+        except ValueError as error:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            ) from error
+        if timeout_seconds <= 0:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            )
+        return timeout_seconds
+
+    async def _run_repository_boot(self, expected_tunnel_ports: list[int]) -> RepositoryBootResult:
+        """Synchronize repositories and run the hooks for the current boot mode."""
+        if self.repo_config_error:
+            raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
+
+        self._write_repo_manifest()
+
+        if self.repositories:
+            await self._ensure_credential_helper_configured()
+
+        failed_repos = await self.sync_repositories()
+        git_sync_success = not failed_repos
+        if failed_repos:
+            if self.boot_mode in ("fresh", "build"):
+                failed_names = ", ".join(f"{repo.owner}/{repo.name}" for repo in failed_repos)
+                raise RuntimeError(f"git sync failed for {failed_names}")
+            for repo in failed_repos:
+                self._record_boot_warning(
+                    scope="sync",
+                    repo=repo,
+                    message=(
+                        f"Could not update {repo.owner}/{repo.name} from origin; "
+                        "the checkout may be stale."
+                    ),
+                )
+        self.repositories = await resolve_session_diff_baselines(
+            self.repositories,
+            discover_missing=self.boot_mode != "snapshot_restore",
+            get_head_sha=self._get_head_sha,
+        )
+        self._write_repo_manifest()
+
+        head_sha = ""
+        repository_shas: list[dict[str, str]] = []
+        if self.boot_mode == "build" and git_sync_success and self.repositories:
+            repository_shas = [
+                {
+                    "repoOwner": repo.owner,
+                    "repoName": repo.name,
+                    "baseSha": repo.base_sha or "",
+                }
+                for repo in self.repositories
+            ]
+            head_sha = repository_shas[0]["baseSha"]
+            if head_sha:
+                self.log.info(
+                    "git.sync_complete",
+                    head_sha=head_sha,
+                    repository_shas=repository_shas,
+                )
+        self.git_sync_complete.set()
+
+        setup_success: bool | None = None
+        if self.repositories and self.boot_mode in ("fresh", "build"):
+            setup_success = True
+            for repo in self.repositories:
+                if await self.run_setup_script(repo):
+                    continue
+                setup_success = False
+                if self.boot_mode == "build":
+                    raise RuntimeError(
+                        f"setup hook failed for {repo.owner}/{repo.name} in build mode"
+                    )
+                self._record_boot_warning(
+                    scope="setup",
+                    repo=repo,
+                    message=(
+                        f"setup.sh failed for {repo.owner}/{repo.name}; "
+                        "the session continues without it."
+                    ),
+                )
+
+        start_success: bool | None = None
+        if self.repositories and self.boot_mode != "build":
+            await self._wait_for_tunnel_env_file(expected_tunnel_ports)
+            start_success = True
+            for index, repo in enumerate(self.repositories):
+                if await self.run_start_script(repo):
+                    continue
+                start_success = False
+                if index == 0:
+                    raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
+                self._record_boot_warning(
+                    scope="start",
+                    repo=repo,
+                    message=(
+                        f"start.sh failed for {repo.owner}/{repo.name}; "
+                        "the session continues without it."
+                    ),
+                )
+
+        self._write_workspace_manifest()
+        return RepositoryBootResult(
+            git_sync_success=git_sync_success,
+            head_sha=head_sha,
+            repository_shas=repository_shas,
+            setup_success=setup_success,
+            start_success=start_success,
+        )
+
+    async def _run_image_build_execution(
+        self, expected_tunnel_ports: list[int]
+    ) -> RepositoryBootResult:
+        """Run only clone and setup work inside the configured build budget."""
+        timeout_seconds = self._image_build_execution_timeout_seconds()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await self._run_repository_boot(expected_tunnel_ports)
+        except TimeoutError as error:
+            raise RuntimeError(
+                f"image build exceeded its {timeout_seconds}-second execution timeout"
+            ) from error
+
     async def run(self) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
@@ -1846,136 +2022,11 @@ class SandboxSupervisor:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
 
-        git_sync_success = False
-        head_sha = ""
-        repository_shas: list[dict[str, str]] = []
         opencode_ready = False
         try:
-            # Refuse to boot on an untrusted repository config — unsafe or
-            # duplicate names would let checkout paths escape /workspace or
-            # collide. Raised here (not __init__) so the failure reaches the
-            # control plane through the normal fatal-error path.
-            if self.repo_config_error:
-                raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
-
-            self._write_repo_manifest()
-
-            # Phase 0: Make sure the git credential helper is configured
-            # before any git operation. New images do this in /etc/gitconfig,
-            # but snapshots/repo-images built before this migration won't.
-            if self.repositories:
-                await self._ensure_credential_helper_configured()
-
-            # Phase 1: Git sync — one per-repo rule for every boot mode
-            # (existing checkout → fetch/checkout, missing → clone). Only the
-            # failure policy differs: fresh and build boots cannot do useful
-            # work without every repository, so any failure is fatal
-            # (deliberate change — previously a fresh boot limped on
-            # repo-less); image/snapshot boots keep their leniency (a deleted
-            # upstream branch must not brick a resume).
-            failed_repos = await self.sync_repositories()
-            git_sync_success = not failed_repos
-            if failed_repos:
-                if self.boot_mode in ("fresh", "build"):
-                    failed_names = ", ".join(f"{r.owner}/{r.name}" for r in failed_repos)
-                    raise RuntimeError(f"git sync failed for {failed_names}")
-                for repo in failed_repos:
-                    self._record_boot_warning(
-                        scope="sync",
-                        repo=repo,
-                        message=(
-                            f"Could not update {repo.owner}/{repo.name} from origin; "
-                            "the checkout may be stale."
-                        ),
-                    )
-            self.repositories = await resolve_session_diff_baselines(
-                self.repositories,
-                discover_missing=self.boot_mode != "snapshot_restore",
-                get_head_sha=self._get_head_sha,
-            )
-            self._write_repo_manifest()
-            if image_build_mode and git_sync_success and self.repositories:
-                # repository_shas is the cross-language provenance document
-                # ([{repoOwner, repoName, baseSha}]): parsed from this event by
-                # the Modal build orchestrator, echoed through the
-                # build-complete callback, stored in environment_images, and
-                # compared against `git ls-remote` by the rebuild cron. The
-                # scalar head_sha stays for the single-repo repo-image path.
-                repository_shas = [
-                    {
-                        "repoOwner": repo.owner,
-                        "repoName": repo.name,
-                        "baseSha": repo.base_sha or "",
-                    }
-                    for repo in self.repositories
-                ]
-                head_sha = repository_shas[0]["baseSha"]
-                if head_sha:
-                    self.log.info(
-                        "git.sync_complete", head_sha=head_sha, repository_shas=repository_shas
-                    )
-            self.git_sync_complete.set()
-
-            # Phase 2: Setup hooks, members in position order, only for fresh
-            # or build boots (prebuilt/snapshot boots ran them at build time).
-            # Build boots fail on the first failing member; fresh boots warn
-            # and continue.
-            setup_success: bool | None = None
-            if self.repositories and self.boot_mode in ("fresh", "build"):
-                setup_success = True
-                for repo in self.repositories:
-                    if await self.run_setup_script(repo):
-                        continue
-                    setup_success = False
-                    if image_build_mode:
-                        raise RuntimeError(
-                            f"setup hook failed for {repo.owner}/{repo.name} in build mode"
-                        )
-                    self._record_boot_warning(
-                        scope="setup",
-                        repo=repo,
-                        message=(
-                            f"setup.sh failed for {repo.owner}/{repo.name}; "
-                            "the session continues without it."
-                        ),
-                    )
-
-            # Phase 3: Start hooks for all non-build boots, members in
-            # position order. The primary stays fatal (a broken primary dev
-            # server is a broken session); secondary failures warn and
-            # continue. Wait for tunnel URLs first so dev servers booted by
-            # start.sh see fresh data.
-            start_success: bool | None = None
-            if self.repositories and self.boot_mode != "build":
-                await self._wait_for_tunnel_env_file(expected_tunnel_ports)
-                start_success = True
-                for index, repo in enumerate(self.repositories):
-                    if await self.run_start_script(repo):
-                        continue
-                    start_success = False
-                    if index == 0:
-                        raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
-                    self._record_boot_warning(
-                        scope="start",
-                        repo=repo,
-                        message=(
-                            f"start.sh failed for {repo.owner}/{repo.name}; "
-                            "the session continues without it."
-                        ),
-                    )
-
-            # Multi-repo workspaces get a generated manifest at /workspace/
-            # AGENTS.md (regenerated every boot; no-op for single-repo).
-            self._write_workspace_manifest()
-
-            # Image build mode: signal completion then keep sandbox alive for
-            # snapshot_filesystem(). MCP packages are not pre-installed during
-            # builds — they are installed at first use via npx at session start.
             if image_build_mode:
+                boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 duration_ms = int((time.time() - startup_start) * 1000)
-                # runtime_version is reported by the build itself (design
-                # §7.3): the baked image's SANDBOX_VERSION is the ground
-                # truth, so orchestrators never guess it from their own code.
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
@@ -1984,15 +2035,19 @@ class SandboxSupervisor:
                 )
                 if repo_image_callback:
                     reported = await repo_image_callback.report_success(
-                        base_sha=head_sha,
+                        base_sha=boot_result.head_sha,
                         build_duration_seconds=time.time() - startup_start,
-                        repository_shas=repository_shas,
+                        repository_shas=boot_result.repository_shas,
                         runtime_version=runtime_version,
                     )
                     if not reported:
                         raise RuntimeError("repo image build-complete callback failed")
+                # The sandbox remains available for deferred provider
+                # finalization after the bounded build execution completes.
                 await self.shutdown_event.wait()
                 return
+
+            boot_result = await self._run_repository_boot(expected_tunnel_ports)
 
             # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
             for sidecar_name, starter in (
@@ -2031,9 +2086,9 @@ class SandboxSupervisor:
                 boot_mode=self.boot_mode,
                 restored_from_snapshot=restored_from_snapshot,
                 from_repo_image=from_repo_image,
-                git_sync_success=git_sync_success,
-                setup_success=setup_success,
-                start_success=start_success,
+                git_sync_success=boot_result.git_sync_success,
+                setup_success=boot_result.setup_success,
+                start_success=boot_result.start_success,
                 opencode_ready=opencode_ready,
                 duration_ms=duration_ms,
                 outcome="success",

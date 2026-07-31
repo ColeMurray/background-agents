@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitHubAutomationEvent } from "@open-inspect/shared";
+import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import type { SessionPullRequestRecord } from "../db/session-pull-request-store";
 import {
   processPullRequestLifecycleEvent,

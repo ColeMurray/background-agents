@@ -1,4 +1,4 @@
-import { isCanonicalUserId } from "@open-inspect/shared";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { z } from "zod";
 
 export const browserAuthSessionUserSchema = z.object({
