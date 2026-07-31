@@ -1,25 +1,20 @@
-import { MAX_TARGET_REPOSITORIES } from "@open-inspect/shared";
 import { ImageBuildStore } from "../db/image-builds";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 import type { ImageBuildProvider } from "./model";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
-import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
+import { DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS, DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
-import { resolveScopeTarget } from "./scope";
+import { listEnabledScopes, resolveScopeTarget } from "./scope";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import { createImageBuildWorkflowFromEnv, type ImageBuildWorkflow } from "./workflow";
 import { resolveImageBuildProvider } from "./provider-policy";
+import { runMaintenanceTasks } from "./concurrency";
+import { repositoryIdentityKey } from "./provenance";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("image-builds:scheduler");
-const SCOPE_CURSOR = "scope-reconciliation";
-const CLEANUP_CURSOR = "session-cleanup";
-const SCOPE_PAGE_SIZE = 20;
-const CLEANUP_PAGE_SIZE = 20;
-const FINALIZATION_RECOVERY_LIMIT = 20;
-const TRIGGER_CAP = 8;
 
 export const IMAGE_BUILD_SCHEDULER_CRON = "7,37 * * * *";
 
@@ -52,7 +47,8 @@ export class ImageBuildScheduler {
     private readonly workflow: ImageBuildWorkflow,
     private readonly adapterFactory: ImageBuildAdapterFactory,
     private readonly sourceControl: SourceControlProvider | null,
-    private readonly resolveTarget: typeof resolveScopeTarget = resolveScopeTarget
+    private readonly resolveTarget: typeof resolveScopeTarget = resolveScopeTarget,
+    private readonly listScopes: typeof listEnabledScopes = listEnabledScopes
   ) {
     this.sessionCleanup = new ImageBuildSessionCleanup(store, adapterFactory);
   }
@@ -109,7 +105,10 @@ export class ImageBuildScheduler {
     }
 
     try {
-      const cleanup = await this.workflow.cleanupImages(24 * 60 * 60 * 1000, correlation);
+      const cleanup = await this.workflow.cleanupImages(
+        DEFAULT_ARTIFACT_CLEANUP_MAX_AGE_MS,
+        correlation
+      );
       stats.rowsAged = cleanup.deletedFailed;
       stats.artifactsReaped = cleanup.reapedFailed + cleanup.reapedSuperseded;
     } catch (error) {
@@ -134,18 +133,23 @@ export class ImageBuildScheduler {
   private async republishRecoverableFinalizations(): Promise<number> {
     const queue = this.env.IMAGE_BUILD_FINALIZATION_QUEUE;
     if (!queue) return 0;
-    const rows = await this.store.maintenance.listRecoverableFinalizations(
-      Date.now(),
-      FINALIZATION_RECOVERY_LIMIT
-    );
+    const rows = await this.store.listRecoverableFinalizations(Date.now());
+
     let published = 0;
     for (const row of rows) {
-      await queue.send({
-        version: 1,
-        buildId: row.id,
-        completionHash: row.completion_hash,
-      });
-      published += 1;
+      try {
+        await queue.send({
+          version: 1,
+          buildId: row.id,
+          completionHash: row.completion_hash,
+        });
+        published += 1;
+      } catch (error) {
+        logger.warn("image_build.scheduler_finalization_republish_row_failed", {
+          build_id: row.id,
+          error: errorMessage(error),
+        });
+      }
     }
     return published;
   }
@@ -154,45 +158,23 @@ export class ImageBuildScheduler {
     stats: ImageBuildSchedulerStats,
     correlation: CorrelationContext
   ): Promise<void> {
-    const cursor = await this.store.maintenance.getCursor(CLEANUP_CURSOR);
-    const rows = await this.store.maintenance.listSessionCleanupPage({
-      after:
-        cursor?.createdAt !== null && cursor?.createdAt !== undefined && cursor.rowId
-          ? { createdAt: cursor.createdAt, rowId: cursor.rowId }
-          : null,
-      limit: CLEANUP_PAGE_SIZE,
+    const rows = await this.store.listSessionCleanup();
+
+    await runMaintenanceTasks(rows, async (row) => {
+      stats.cleanupAttempted += 1;
+      try {
+        await this.sessionCleanup.run(row, correlation);
+        stats.cleanupSucceeded += 1;
+      } catch (error) {
+        stats.cleanupFailed += 1;
+        logger.warn("image_build.scheduler_session_cleanup_failed", {
+          build_id: row.id,
+          provider: row.provider,
+          provider_session_id: row.provider_session_id,
+          error: errorMessage(error),
+        });
+      }
     });
-
-    const last = rows.at(-1);
-    await this.store.maintenance.setCursor(
-      CLEANUP_CURSOR,
-      rows.length === CLEANUP_PAGE_SIZE && last
-        ? {
-            scopeKind: null,
-            scopeId: null,
-            createdAt: last.created_at,
-            rowId: last.id,
-          }
-        : emptyCursor()
-    );
-
-    await Promise.all(
-      rows.map(async (row) => {
-        stats.cleanupAttempted += 1;
-        try {
-          await this.sessionCleanup.run(row, correlation);
-          stats.cleanupSucceeded += 1;
-        } catch (error) {
-          stats.cleanupFailed += 1;
-          logger.warn("image_build.scheduler_session_cleanup_failed", {
-            build_id: row.id,
-            provider: row.provider,
-            provider_session_id: row.provider_session_id,
-            error: errorMessage(error),
-          });
-        }
-      })
-    );
   }
 
   private async reconcileScopes(
@@ -202,17 +184,9 @@ export class ImageBuildScheduler {
     if (!this.provider || !this.sourceControl) return;
     const provider = this.provider;
     const sourceControl = this.sourceControl;
-    const cursor = await this.store.maintenance.getCursor(SCOPE_CURSOR);
-    const page = await this.store.maintenance.listEnabledScopeRefsPage({
-      after:
-        cursor?.scopeKind && cursor.scopeId
-          ? { scopeKind: cursor.scopeKind, scopeId: cursor.scopeId }
-          : null,
-      limit: SCOPE_PAGE_SIZE,
-    });
-    let branchBudget = MAX_TARGET_REPOSITORIES;
+    const scopes = await this.listScopes(this.db);
 
-    for (const scope of page.scopes) {
+    for (const scope of scopes) {
       try {
         const target = await this.resolveTarget(this.env, this.db, scope);
         const rows = await this.store.getReconciliationStatus(scope, provider);
@@ -228,8 +202,6 @@ export class ImageBuildScheduler {
 
         let rebuild = decision.type === "rebuild";
         if (decision.type === "check_branches") {
-          if (target.repositories.length > branchBudget) break;
-          branchBudget -= target.repositories.length;
           const heads: Array<string | null> = [];
           for (const repository of target.repositories) {
             stats.branchLookups += 1;
@@ -242,11 +214,7 @@ export class ImageBuildScheduler {
               heads.push(head);
               if (head === null) {
                 stats.branchMissing += 1;
-              } else if (
-                decision.recordedShas.get(
-                  `${repository.repoOwner.toLowerCase()}/${repository.repoName.toLowerCase()}`
-                ) === head
-              ) {
+              } else if (decision.recordedShas.get(repositoryIdentityKey(repository)) === head) {
                 stats.branchMatched += 1;
               } else {
                 stats.branchDrifted += 1;
@@ -259,30 +227,19 @@ export class ImageBuildScheduler {
           rebuild = heads.some(
             (head, index) =>
               head !== null &&
-              decision.recordedShas.get(
-                `${target.repositories[index].repoOwner.toLowerCase()}/${target.repositories[
-                  index
-                ].repoName.toLowerCase()}`
-              ) !== head
+              decision.recordedShas.get(repositoryIdentityKey(target.repositories[index])) !== head
           );
         }
 
         if (rebuild) {
-          if (stats.triggered >= TRIGGER_CAP) break;
           try {
-            const result = await this.workflow.triggerBuild(scope, correlation);
+            const result = await this.workflow.triggerBuildWithTarget(scope, target, correlation);
             if (result.type === "triggered") stats.triggered += 1;
           } catch {
             stats.triggerFailed += 1;
           }
         }
         stats.scopesScanned += 1;
-        await this.store.maintenance.setCursor(SCOPE_CURSOR, {
-          scopeKind: scope.kind,
-          scopeId: scope.id,
-          createdAt: null,
-          rowId: null,
-        });
       } catch (error) {
         stats.scopesScanned += 1;
         logger.warn("image_build.scheduler_scope_failed", {
@@ -290,17 +247,7 @@ export class ImageBuildScheduler {
           scope_id: scope.id,
           error: errorMessage(error),
         });
-        await this.store.maintenance.setCursor(SCOPE_CURSOR, {
-          scopeKind: scope.kind,
-          scopeId: scope.id,
-          createdAt: null,
-          rowId: null,
-        });
       }
-    }
-
-    if (!page.nextCursor && stats.scopesScanned === page.scopes.length) {
-      await this.store.maintenance.setCursor(SCOPE_CURSOR, emptyCursor());
     }
   }
 }
@@ -331,10 +278,6 @@ export async function runImageBuildScheduler(
     createImageBuildAdapterFactory(env),
     sourceControl
   ).run(correlation);
-}
-
-function emptyCursor() {
-  return { scopeKind: null, scopeId: null, createdAt: null, rowId: null };
 }
 
 function errorMessage(error: unknown): string {

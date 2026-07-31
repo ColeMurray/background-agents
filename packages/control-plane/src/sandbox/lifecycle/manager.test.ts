@@ -7,7 +7,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   SandboxLifecycleManager,
-  CHILD_SANDBOX_TIMEOUT_MS,
   DEFAULT_LIFECYCLE_CONFIG,
   type SandboxStorage,
   type SandboxBroadcaster,
@@ -2562,7 +2561,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("lets an explicit sandbox timeout override the child-session default", async () => {
+    it("uses the configured sandbox timeout for child sessions", async () => {
       const session = createMockSession({
         spawn_source: "agent",
         sandbox_settings: '{"sandboxTimeoutMs":14400000}',
@@ -2586,7 +2585,7 @@ describe("SandboxLifecycleManager", () => {
       );
     });
 
-    it("preserves the child-session timeout when no timeout is configured", async () => {
+    it("uses the provider default for child sessions when no timeout is configured", async () => {
       const session = createMockSession({ spawn_source: "agent", sandbox_settings: null });
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const provider = createMockProvider();
@@ -2603,12 +2602,13 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutSeconds: CHILD_SANDBOX_TIMEOUT_MS / 1000 })
+        expect.objectContaining({ timeoutSeconds: undefined })
       );
     });
 
     it("rejects configured timeouts when the provider cannot enforce them", async () => {
       const session = createMockSession({
+        spawn_source: "agent",
         sandbox_settings: '{"sandboxTimeoutMs":14400000}',
       });
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -2635,7 +2635,7 @@ describe("SandboxLifecycleManager", () => {
       });
     });
 
-    it("does not pass the implicit child timeout to unsupported providers", async () => {
+    it("uses the provider default for child sessions on unsupported providers", async () => {
       const session = createMockSession({ spawn_source: "agent", sandbox_settings: null });
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const provider = createMockProvider({

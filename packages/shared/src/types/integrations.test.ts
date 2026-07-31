@@ -3,11 +3,26 @@ import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_SLACK_ROUTING_RULES,
+  isValidSandboxTimeoutMs,
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("isValidSandboxTimeoutMs", () => {
+  it("accepts safe positive whole-second millisecond values", () => {
+    expect(isValidSandboxTimeoutMs(1_000)).toBe(true);
+    expect(isValidSandboxTimeoutMs(14_400_000)).toBe(true);
+  });
+
+  it.each([undefined, "1000", 0, -1_000, 1_500, 1_000.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid timeout %s",
+    (value) => {
+      expect(isValidSandboxTimeoutMs(value)).toBe(false);
+    }
+  );
+});
 
 describe("resolveBuildTimeoutSeconds", () => {
   it("defaults when no setting is present", () => {

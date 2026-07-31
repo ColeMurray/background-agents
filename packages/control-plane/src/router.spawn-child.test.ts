@@ -30,6 +30,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     baseBranch?: string | null;
     model: string;
     reasoningEffort: string | null;
+    sandboxTimeoutMs?: number;
     owner: {
       userId: string;
       scmUserId: string | null;
@@ -48,6 +49,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     repoId: 12345,
     model: "anthropic/claude-sonnet-4-6",
     reasoningEffort: null,
+    sandboxTimeoutMs: 14_400_000,
     baseBranch: "main",
     owner: {
       userId: "user-1",
@@ -101,6 +103,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
+    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
+      sandboxTimeoutMs: 3_600_000,
+    });
 
     const parentStub: DurableObjectStub = {
       fetch: vi.fn(async () => Response.json(spawnContext)),
@@ -142,8 +147,55 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       return new URL(request.url).pathname === SessionInternalPaths.init;
     })?.[0] as Request | undefined;
     expect(initRequest).toBeDefined();
-    await expect(initRequest!.json()).resolves.toMatchObject({ environmentId: "env_parent" });
+    await expect(initRequest!.json()).resolves.toMatchObject({
+      environmentId: "env_parent",
+      sandboxSettings: { sandboxTimeoutMs: 14_400_000 },
+    });
     expect(store.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("preserves the provider default when the parent has no snapshotted timeout", async () => {
+    const store = makeStore("canonical-user-123");
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({
+      sandboxTimeoutMs: 3_600_000,
+      tunnelPorts: [3000],
+    });
+
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json({ ...spawnContext, sandboxTimeoutMs: undefined })),
+    } as never;
+    const childStub: DurableObjectStub = {
+      fetch: vi.fn(async (request: Request) => {
+        const path = new URL(request.url).pathname;
+        if (path === SessionInternalPaths.init) return Response.json({ status: "ok" });
+        if (path === SessionInternalPaths.prompt) {
+          return Response.json({ messageId: "msg-1", status: "queued" });
+        }
+        return Response.json({ error: "unexpected" }, { status: 404 });
+      }),
+    } as never;
+    const env = {
+      ...TEST_SERVICE_SECRETS,
+      SCM_PROVIDER: "github",
+      DB: {},
+      SESSION: {
+        idFromName: (name: string) => name,
+        get: (id: string) => (id === parentId ? parentStub : childStub),
+      },
+    };
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(201);
+    const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
+      const request = call[0] as Request;
+      return new URL(request.url).pathname === SessionInternalPaths.init;
+    })?.[0] as Request;
+    const initBody = await initRequest.json<{ sandboxSettings: Record<string, unknown> }>();
+    expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [3000] });
   });
 
   it("creates repo-less children for repo-less parents", async () => {

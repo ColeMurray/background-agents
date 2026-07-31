@@ -4,6 +4,7 @@ import {
   parseRuntimeVersionNumber,
   type ImageBuildProvider,
 } from "./model";
+import { parseRepositoryShasJson, repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
 
 export type ImageBuildRebuildDecision =
@@ -34,40 +35,17 @@ export function evaluateImageBuildRebuildPolicy(
     return { type: "rebuild", reason: "runtime_incompatible" };
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(ready.repository_shas);
-  } catch {
-    return { type: "rebuild", reason: "invalid_provenance" };
-  }
-  if (!Array.isArray(parsed)) {
+  const provenance = parseRepositoryShasJson(ready.repository_shas);
+  if (!provenance) {
     return { type: "rebuild", reason: "invalid_provenance" };
   }
 
   const recordedShas = new Map<string, string>();
-  for (const entry of parsed) {
-    if (
-      typeof entry !== "object" ||
-      entry === null ||
-      typeof (entry as { repoOwner?: unknown }).repoOwner !== "string" ||
-      typeof (entry as { repoName?: unknown }).repoName !== "string" ||
-      typeof (entry as { baseSha?: unknown }).baseSha !== "string"
-    ) {
-      return { type: "rebuild", reason: "invalid_provenance" };
-    }
-    const typed = entry as { repoOwner: string; repoName: string; baseSha: string };
-    recordedShas.set(
-      `${typed.repoOwner.toLowerCase()}/${typed.repoName.toLowerCase()}`,
-      typed.baseSha
-    );
+  for (const entry of provenance) {
+    recordedShas.set(repositoryIdentityKey(entry), entry.baseSha);
   }
   if (
-    unit.repositories.some(
-      (repository) =>
-        !recordedShas.has(
-          `${repository.repoOwner.toLowerCase()}/${repository.repoName.toLowerCase()}`
-        )
-    )
+    unit.repositories.some((repository) => !recordedShas.has(repositoryIdentityKey(repository)))
   ) {
     return { type: "rebuild", reason: "invalid_provenance" };
   }

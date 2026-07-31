@@ -130,7 +130,7 @@ describe("lazy trigger-time stale recovery over real D1", () => {
     expect((await getRow("accepted-finalization"))?.status).toBe("building");
   });
 
-  it("terminalizes an accepted callback after Queue recovery is exhausted", async () => {
+  it("leaves an old accepted callback recoverable instead of stale-failing it", async () => {
     const environmentId = await seedEnvironment();
     await seedImageRow({
       id: "exhausted-finalization",
@@ -148,14 +148,14 @@ describe("lazy trigger-time stale recovery over real D1", () => {
 
     expect(
       await new ImageBuildStore(env.DB).markStaleBuildsAsFailed(DEFAULT_STALE_BUILD_MAX_AGE_MS)
-    ).toBe(1);
+    ).toBe(0);
     expect(await getRow("exhausted-finalization")).toMatchObject({
-      status: "failed",
-      error_message: "image build finalization expired before completion",
+      status: "building",
+      completion_hash: "accepted-hash",
     });
   });
 
-  it("bounds global stale recovery to one maintenance batch", async () => {
+  it("marks every globally stale build in one maintenance scan", async () => {
     const environmentId = await seedEnvironment();
     for (let index = 0; index < 30; index += 1) {
       await seedImageRow({
@@ -168,11 +168,11 @@ describe("lazy trigger-time stale recovery over real D1", () => {
 
     expect(
       await new ImageBuildStore(env.DB).markStaleBuildsAsFailed(DEFAULT_STALE_BUILD_MAX_AGE_MS)
-    ).toBe(25);
+    ).toBe(30);
     const remaining = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM image_builds WHERE status = 'building'"
     ).first<{ count: number }>();
-    expect(remaining?.count).toBe(5);
+    expect(remaining?.count).toBe(0);
   });
 
   it("triggerBuild heals a wedged scope: dead row failed, fresh build registered", async () => {

@@ -142,6 +142,25 @@ describe("ImageBuildFinalizer", () => {
     expect(adapter.cleanupCompletedBuild).toHaveBeenCalledOnce();
   });
 
+  it("terminalizes invalid persisted repository provenance", async () => {
+    const { finalizer, finalization, adapter, store } = harness(
+      row({
+        provider_image_id: "image-existing",
+        repository_shas: "{invalid",
+      })
+    );
+
+    await expect(finalizer.process(job, correlation)).resolves.toEqual({ type: "completed" });
+    expect(finalization.markFailed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buildId: "build-1",
+        error: "Stored repository_shas is invalid",
+      })
+    );
+    expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
+    expect(adapter.cleanupCompletedBuild).toHaveBeenCalledOnce();
+  });
+
   it("terminalizes an expired artifact-free attempt without snapshotting again", async () => {
     const { finalizer, finalization, adapter } = harness(
       row({
