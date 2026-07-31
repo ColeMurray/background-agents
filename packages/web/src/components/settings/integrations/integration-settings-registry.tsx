@@ -1,7 +1,10 @@
 "use client";
 
 import type { ComponentType } from "react";
-import { INTEGRATION_DEFINITIONS, type IntegrationId } from "@open-inspect/shared";
+import {
+  INTEGRATION_DEFINITIONS,
+  type IntegrationId,
+} from "@open-inspect/shared/types/integrations";
 import { CodeServerIntegrationSettings } from "./code-server-integration-settings";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 import { LinearIntegrationSettings } from "./linear-integration-settings";

@@ -9,7 +9,7 @@ import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { SessionRepositoryState } from "@open-inspect/shared";
+import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {

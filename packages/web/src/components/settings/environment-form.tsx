@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { parseRepositoryFullName, type RepositoryInput } from "@open-inspect/shared";
+import {
+  parseRepositoryFullName,
+  type RepositoryInput,
+} from "@open-inspect/shared/types/repositories";
 import {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,

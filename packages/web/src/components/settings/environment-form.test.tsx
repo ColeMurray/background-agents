@@ -5,7 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { MAX_TARGET_REPOSITORIES } from "@open-inspect/shared";
+import { MAX_TARGET_REPOSITORIES } from "@open-inspect/shared/types/repositories";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import { EnvironmentForm } from "./environment-form";
 

@@ -7,7 +7,7 @@
  * exclusivity refinement can never trip on picker-built requests.
  */
 
-import { parseRepositoryFullName } from "@open-inspect/shared";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 
 export type SessionTarget =
   | { kind: "none" }

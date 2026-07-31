@@ -1,4 +1,4 @@
-import { MIN_SANDBOX_TIMEOUT_MS } from "@open-inspect/shared";
+import { MIN_SANDBOX_TIMEOUT_MS } from "@open-inspect/shared/types/integrations";
 
 const MILLISECONDS_PER_MINUTE = 60_000;
 

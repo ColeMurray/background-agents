@@ -1,7 +1,7 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
+import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
 
 const MCP_SERVERS_KEY = "/api/mcp-servers";
 

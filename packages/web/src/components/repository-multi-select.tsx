@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { MAX_TARGET_REPOSITORIES, parseRepositoryFullName } from "@open-inspect/shared";
+import {
+  MAX_TARGET_REPOSITORIES,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { parseRepositoryFullName } from "@open-inspect/shared";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { ImageBuildStatus } from "@open-inspect/shared/types/image-builds";
 import type { ComboboxGroup, ComboboxOption } from "@/components/ui/combobox";

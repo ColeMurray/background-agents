@@ -5,11 +5,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type {
-  EnrichedRepository,
   GitHubBotSettings,
   GitHubGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 
 expect.extend(matchers);

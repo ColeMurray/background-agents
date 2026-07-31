@@ -2,7 +2,7 @@
 
 import { useState, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
+import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
 import {
   useMcpServers,
   createMcpServer,
