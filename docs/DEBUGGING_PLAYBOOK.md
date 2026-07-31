@@ -108,6 +108,8 @@ One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind
 | `image_build.callback_auth_failed`                 | warn  | `build_id`, `provider`, `provider_session_id`, `trace_id`, `request_id`                                              | Build callback had invalid auth or session binding                       |
 | `image_build.finalization_job_invalid`             | error | `queue_message_id`, `attempts`                                                                                       | Malformed Queue command was rejected                                     |
 | `image_build.finalization_error`                   | error | `build_id`, `queue_message_id`, `attempts`, `error`                                                                  | Queue finalization threw; retries exhaust to the DLQ                     |
+| `image_build.scheduler_tick`                       | info  | phase counters, `provider`, `trace_id`, `request_id`                                                                 | One bounded provider-neutral maintenance pass completed                  |
+| `image_build.scheduler_session_cleanup_failed`     | warn  | `build_id`, `provider`, `provider_session_id`, `error`                                                               | One terminal build-session cleanup failed; the scan continued            |
 | `image_build.trigger_mark_failed_error`            | warn  | `build_id`, `error`, `trace_id`, `request_id`                                                                        | Build trigger failed and the workflow could not mark the build failed    |
 | `image_build.build_failed_error`                   | error | `build_id`, `error`, `trace_id`, `request_id`                                                                        | Failure callback could not mark the build failed                         |
 | `image_build.trigger_error`                        | error | `scope_kind`, `scope_id`, `error`, `trace_id`, `request_id`                                                          | Manual or scheduled build trigger failed                                 |
@@ -169,25 +171,6 @@ outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
 | `sandbox.create`   | info  | `sandbox_id`, `modal_object_id`, `repo_owner`, `repo_name`, `duration_ms`, `outcome` | Sandbox creation |
 | `sandbox.snapshot` | info  | `sandbox_id`, `snapshot_id`, `image_id`, `duration_ms`, `outcome`                    | Snapshot taken   |
 | `sandbox.restore`  | info  | `sandbox_id`, `modal_object_id`, `snapshot_image_id`, `duration_ms`, `outcome`       | Sandbox restored |
-
-#### Image Builder (`component: "image_builder"`)
-
-The `build_image` worker and the 30-minute `rebuild_images` cron. Worker events carry
-`scope_kind`/`scope_id` like the control-plane side.
-
-Dashboards and alerts must migrate `image_build.start`, `image_build.success`, and
-`image_build.failed` to `image_build.complete` outcomes.
-
-| Event                                                                                   | Level       | Key Fields                                                                                                                               | Description                                                      |
-| --------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `image_build.complete`                                                                  | info, error | `build_id`, `scope_kind`, `scope_id`, `outcome`, `duration_seconds`, `repository_count`, `provider_image_id`, `runtime_version`, `error` | Build completed; success or failure callback follows             |
-| `scheduler.start` / `scheduler.done`                                                    | info        | `builds_triggered`, `duration_s` (on done)                                                                                               | One cron pass over all enabled scope units                       |
-| `scheduler.build_triggered`                                                             | info        | `scope_kind`, `scope_id`                                                                                                                 | Cron triggered a rebuild for a unit                              |
-| `scheduler.no_ready_image` / `scheduler.runtime_below_floor` / `scheduler.sha_mismatch` | info        | `scope_kind`, `scope_id` (+ trigger-specific fields)                                                                                     | Which rebuild trigger fired for a unit                           |
-| `scheduler.skip_building`                                                               | info        | `scope_kind`, `scope_id`                                                                                                                 | Unit skipped: a build is already in flight                       |
-| `scheduler.trigger_cap_reached`                                                         | info        | `cap`                                                                                                                                    | Per-tick trigger cap hit; remaining units wait for the next tick |
-| `scheduler.malformed_repository_shas`                                                   | warn        | `scope_kind`, `scope_id`                                                                                                                 | Stored provenance JSON did not parse; unit treated as stale      |
-| `scheduler.mark_stale_error` / `scheduler.cleanup_error`                                | warn        | `error`                                                                                                                                  | Post-pass maintenance call (mark-stale / cleanup) failed         |
 
 #### Supervisor (`component: "supervisor"`)
 
