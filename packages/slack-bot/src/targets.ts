@@ -12,7 +12,7 @@
  * including the types barrel, can import it.
  */
 
-import type { RepoConfig } from "@open-inspect/shared";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Environment } from "@open-inspect/shared/types/environments";
 
 export type SlackSessionTarget =

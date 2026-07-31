@@ -7,10 +7,8 @@
  * path stays cheap.
  */
 
+import { addReaction, getChannelInfo, getPermalink } from "@open-inspect/shared/slack";
 import {
-  addReaction,
-  getChannelInfo,
-  getPermalink,
   normalizeSlackEvent,
   type SlackAutomationEvent,
   type SlackChannelMeta,

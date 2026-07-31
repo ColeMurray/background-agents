@@ -3,7 +3,7 @@ import {
   getMessageDetails,
   postMessage,
   updateMessage,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
 import { collectForwardedMessages } from "../forwarded-messages";
 import { createLogger } from "../logger";

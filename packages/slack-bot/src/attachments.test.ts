@@ -1,4 +1,5 @@
-import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES, type SlackMessageFile } from "@open-inspect/shared";
+import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@open-inspect/shared/types/session-attachments";
+import type { SlackMessageFile } from "@open-inspect/shared/slack";
 import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

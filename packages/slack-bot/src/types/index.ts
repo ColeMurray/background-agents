@@ -49,7 +49,7 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repository-catalog";
 
 /**
  * Thread context for classification.

@@ -12,15 +12,14 @@
  * images.
  */
 
+import { postMessage, type SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
-  postMessage,
-  readBodyCapped,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   type SessionAttachmentReference,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
+import { readBodyCapped } from "@open-inspect/shared";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";

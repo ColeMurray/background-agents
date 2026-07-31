@@ -1,4 +1,4 @@
-import { postBlocks, postMessage, removeReaction } from "@open-inspect/shared";
+import { postBlocks, postMessage, removeReaction } from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { extractAgentResponse } from "./extractor";

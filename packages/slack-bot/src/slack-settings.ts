@@ -1,4 +1,4 @@
-import type { SlackGlobalConfig } from "@open-inspect/shared";
+import type { SlackGlobalConfig } from "@open-inspect/shared/types/integrations";
 import { isValidModel } from "@open-inspect/shared/models";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type { Env } from "./types";

@@ -20,7 +20,7 @@
  * boilerplate ("Monitor your errors") rather than content.
  */
 
-import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared";
+import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 
 /** Shared messages beyond this many are dropped from the prompt. */
 const MAX_FORWARDED_MESSAGES = 10;

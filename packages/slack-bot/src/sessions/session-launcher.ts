@@ -1,4 +1,5 @@
-import { getUserInfo, postMessage, type CallbackContext } from "@open-inspect/shared";
+import { getUserInfo, postMessage } from "@open-inspect/shared/slack";
+import type { CallbackContext } from "@open-inspect/shared";
 import { getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,

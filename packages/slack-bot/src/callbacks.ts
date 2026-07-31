@@ -2,7 +2,7 @@
  * Callback handlers for control-plane notifications.
  */
 
-import { postEphemeral } from "@open-inspect/shared";
+import { postEphemeral } from "@open-inspect/shared/slack";
 import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import { Hono, type Context } from "hono";
 import { z } from "zod";

@@ -1,4 +1,4 @@
-import { applyMentionPolicy } from "@open-inspect/shared";
+import { applyMentionPolicy } from "@open-inspect/shared/slack";
 
 /**
  * Strip Slack user mention tokens (e.g. <@U12345>) from text and collapse
