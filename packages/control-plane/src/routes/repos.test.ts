@@ -130,4 +130,24 @@ describe("repository metadata routes", () => {
     });
     expect(mockLogger.warn).not.toHaveBeenCalled();
   });
+
+  it("rejects malformed metadata before persistence", async () => {
+    const path = "/repos/acme/widget/metadata";
+    const { handler, match } = getUpdateHandler(path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "PUT",
+        body: JSON.stringify({ aliases: ["api", 42] }),
+      }),
+      { REPOS_CACHE: {} as KVNamespace } as Env,
+      match,
+      createContext()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid repository metadata" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+  });
 });

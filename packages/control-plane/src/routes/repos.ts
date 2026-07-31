@@ -11,6 +11,7 @@ import type {
   InstallationRepository,
   RepoMetadata,
 } from "@open-inspect/shared";
+import { repoMetadataSchema } from "@open-inspect/shared";
 import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
@@ -232,7 +233,9 @@ async function handleUpdateRepoMetadata(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  const body = (await request.json()) as RepoMetadata;
+  const parsedBody = repoMetadataSchema.safeParse(await request.json());
+  if (!parsedBody.success) return error("Invalid repository metadata", 400);
+  const body = parsedBody.data;
 
   // Validate and clean the metadata structure (remove undefined fields)
   const metadata = Object.fromEntries(

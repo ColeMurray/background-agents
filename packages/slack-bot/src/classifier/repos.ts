@@ -12,7 +12,7 @@ import {
   controlPlaneReposResponseSchema,
   normalizeRoutingRules,
   repoConfigSchema,
-  type SlackGlobalConfig,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
@@ -197,8 +197,9 @@ const routingRules = createCachedResource<SlackRoutingRule[]>({
   kvKey: "slack:routing-rules",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/integration-settings/slack", traceId);
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse(body);
     return normalizeRoutingRules(
-      (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+      parsed.success ? parsed.data.settings?.defaults?.routingRules : []
     );
   },
   deserialize: (cached) =>

@@ -1,6 +1,7 @@
 // Integration settings types
 
 import { escapeRegExp } from "../regex";
+import { z } from "zod";
 
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
@@ -214,24 +215,45 @@ export type SlackMentionsPolicy = "allow" | "escape" | "strip";
 /** What a Slack routing rule points at: a repository or a saved environment. */
 export type SlackRoutingTargetType = "repository" | "environment";
 
+export const slackRoutingTargetTypeSchema = z.enum(["repository", "environment"]);
+
 /**
  * A workspace-wide keyword→target routing rule for Slack. When a Slack
  * message contains the keyword, the bot routes the agent to the target
  * repository or environment deterministically, before falling back to LLM
  * classification.
  */
-export interface SlackRoutingRule {
+export const slackRoutingRuleSchema = z.object({
   /** Case-insensitive keyword or phrase. Matched as a whole token in the message. */
-  keyword: string;
+  keyword: z.string(),
   /**
    * Canonical "owner/name" (lowercase) of the target repository, or — when
    * `targetType` is `"environment"` — the stable environment id (`env_…`),
    * never the rename-able display name.
    */
-  target: string;
+  target: z.string(),
   /** Absent means "repository" (every rule stored before environments existed). */
-  targetType?: SlackRoutingTargetType;
-}
+  targetType: slackRoutingTargetTypeSchema.optional(),
+});
+
+export type SlackRoutingRule = z.infer<typeof slackRoutingRuleSchema>;
+
+export const slackIntegrationSettingsRoutingResponseSchema = z.object({
+  settings: z
+    .object({
+      defaults: z
+        .object({
+          routingRules: z.array(slackRoutingRuleSchema).optional(),
+        })
+        .optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
+export type SlackIntegrationSettingsRoutingResponse = z.infer<
+  typeof slackIntegrationSettingsRoutingResponseSchema
+>;
 
 /** Maximum number of routing rules a workspace can configure (bounds the settings blob). */
 export const MAX_SLACK_ROUTING_RULES = 100;
