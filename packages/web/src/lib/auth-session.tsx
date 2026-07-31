@@ -2,12 +2,12 @@
 
 import useSWR, { mutate } from "swr";
 import { z } from "zod";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,
 } from "./browser-auth-session-contract";
 import { browserApiFetch } from "./browser-api-fetch";
-import type { AuthProvider } from "./build-auth-identity";
 
 const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
 
@@ -17,8 +17,6 @@ export interface AuthSession {
   user: AuthSessionUser;
 }
 
-export type SignInProvider = AuthProvider;
-
 export type AuthSessionState =
   | {
       data: AuthSession;
@@ -26,10 +24,8 @@ export type AuthSessionState =
     }
   | {
       data: null;
-      status: "loading" | "unauthenticated";
+      status: "loading" | "unauthenticated" | "unavailable";
     };
-
-export type AuthSessionStatus = AuthSessionState["status"];
 
 export async function signIn(provider: SignInProvider): Promise<void> {
   const response = await browserApiFetch("/api/auth/sign-in/social", {
@@ -85,7 +81,7 @@ export function useAuthSession(): AuthSessionState {
 
   if (data) return { data, status: "authenticated" };
   if (error) {
-    return { data: null, status: "unauthenticated" };
+    return { data: null, status: "unavailable" };
   }
   if (isLoading || data === undefined) {
     return { data: null, status: "loading" };

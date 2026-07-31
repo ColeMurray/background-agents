@@ -241,13 +241,13 @@ Every session runs in an isolated sandbox backend with a full development enviro
 - **Secrets:** AES-256-GCM encrypted, scoped globally, per-repo, or per-environment, injected as env
   vars at spawn time. Supports bulk `.env` paste import
 
-### Sub-Task Spawning
+### Child Sessions
 
 Agents can decompose work into parallel child sessions:
 
-- `spawn-task` creates a child session in its own sandbox and returns immediately
+- `spawn-child` creates a child session in its own sandbox and returns immediately
 - Parent continues working while children run in parallel on separate branches
-- `get-task-status` and `cancel-task` for coordination
+- `get-child-status` and `cancel-child` coordinate child sessions
 - Depth limits and per-repo guardrails enforced
 
 ### Repository Lifecycle Scripts

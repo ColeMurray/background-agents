@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
+import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared/models";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 

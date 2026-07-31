@@ -544,10 +544,10 @@ describe("SessionRepository", () => {
       repo.createParticipant({
         id: "p-1",
         userId: "user-1",
+        canonicalUserId: "canonical-user-1",
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
-        authName: "Authenticated User",
         scmEmail: "test@example.com",
         scmAccessTokenEncrypted: "encrypted-token",
         scmTokenExpiresAt: 9000,
@@ -560,10 +560,10 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "p-1",
         "user-1",
+        "canonical-user-1",
         "gh-123",
         "testuser",
         "Test User",
-        "Authenticated User",
         "test@example.com",
         "encrypted-token",
         null,
@@ -603,14 +603,15 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
-        authName: "Authenticated User",
+        scmEmail: "new@example.com",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
-      expect(mock.calls[0].params[0]).toBe(null); // scmUserId
-      expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[3]).toBe("Authenticated User");
+      expect(mock.calls[0].params[0]).toBe(null); // canonicalUserId
+      expect(mock.calls[0].params[1]).toBe(null); // scmUserId
+      expect(mock.calls[0].params[2]).toBe("newlogin");
+      expect(mock.calls[0].params[4]).toBe("new@example.com");
       expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });

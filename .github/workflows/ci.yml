@@ -31,6 +31,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Test complexity reporter
+        run: npm run test:lint-complexity
+
       - name: Check Prettier formatting
         run: npm run format:check
 
@@ -195,7 +198,6 @@ jobs:
     name: Test (control-plane unit)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -219,10 +221,13 @@ jobs:
         run: npm test -w @open-inspect/control-plane
 
   test-cp-integration:
-    name: Test (control-plane integration)
+    name: Test (control-plane integration ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: [lint-typescript, typecheck-typescript]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -243,13 +248,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libc++1
 
       - name: Run control-plane integration tests
-        run: npm run test:integration -w @open-inspect/control-plane
+        run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 
   test-web:
     name: Test (web)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -273,7 +277,6 @@ jobs:
     name: Test (bots)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [lint-typescript, typecheck-typescript]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -12,7 +12,8 @@ import { buildRepoDescriptions } from "./repos";
 import { buildEnvironmentDescriptions } from "./environments";
 import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
-import { escapeMrkdwnText, type ConfidenceLevel } from "@open-inspect/shared";
+import { escapeMrkdwnText } from "@open-inspect/shared/slack";
+import type { ConfidenceLevel } from "@open-inspect/shared";
 import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 

@@ -1,4 +1,4 @@
-import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
+import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
 import { generateId } from "../crypto";
 import type { CanonicalUserProjection } from "./canonical-user-projection";

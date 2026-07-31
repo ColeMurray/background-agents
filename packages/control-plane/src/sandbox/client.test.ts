@@ -386,6 +386,34 @@ describe("ModalClient", () => {
     ).resolves.toEqual({ success: true, imageId: "img-1" });
   });
 
+  it("snapshots image builds through the identity-bound build endpoint", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { image_id: "img-build-1" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.snapshotBuildSandbox({
+        buildId: "imgb-1",
+        providerSessionId: "mo-build-1",
+      })
+    ).resolves.toEqual({ success: true, imageId: "img-build-1" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme-prod-web--open-inspect-api-snapshot-build-sandbox.modal.run",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          build_id: "imgb-1",
+          provider_session_id: "mo-build-1",
+        }),
+      })
+    );
+  });
+
   it("rejects malformed snapshot responses instead of trusting the payload", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { image_id: 123 } }), {
@@ -404,68 +432,82 @@ describe("ModalClient", () => {
     ).rejects.toThrow("Modal API error: Invalid response");
   });
 
-  it("posts image builds to the single api-build-image endpoint with scope fields", async () => {
+  it("creates a dormant image-build sandbox before callback credentials are available", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(
         new Response(
-          JSON.stringify({ success: true, data: { build_id: "imgb-1", status: "building" } }),
+          JSON.stringify({ success: true, data: { provider_session_id: "modal-session-1" } }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
       );
 
     const client = createModalClient("secret", "acme", "prod-web");
-    const result = await client.buildImage({
+    const result = await client.createImageBuildSandbox({
       scopeKind: "repo",
       scopeId: "acme/repo",
       buildId: "imgb-1",
-      callbackUrl: "https://cp.test/image-builds/build-complete",
-      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
-      callbackToken: "cb-token-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
-      buildTimeoutSeconds: 2400,
+      cloneToken: "clone-token",
+      cloneHost: "gitlab.com",
+      cloneUsername: "oauth2",
+      buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://acme-prod-web--open-inspect-api-build-image.modal.run",
+      "https://acme-prod-web--open-inspect-api-create-build-sandbox.modal.run",
       expect.any(Object)
     );
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      clone_token: "clone-token",
+      clone_host: "gitlab.com",
+      clone_username: "oauth2",
+    });
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body).toEqual({
       scope_kind: "repo",
       scope_id: "acme/repo",
       build_id: "imgb-1",
-      callback_url: "https://cp.test/image-builds/build-complete",
-      failure_callback_url: "https://cp.test/image-builds/build-failed",
-      callback_token: "cb-token-1",
       repositories: [{ repo_owner: "acme", repo_name: "repo", branch: "develop" }],
+      clone_token: "clone-token",
+      clone_host: "gitlab.com",
+      clone_username: "oauth2",
+      build_execution_timeout_seconds: 1800,
       build_timeout_seconds: 2400,
     });
-    expect(result).toEqual({ buildId: "imgb-1", status: "building" });
+    expect(result).toEqual({ providerSessionId: "modal-session-1" });
   });
 
-  it("sends a null build timeout when unset so Modal applies its default", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({ success: true, data: { build_id: "imgb-1", status: "building" } }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
+  it("starts the exact bound image-build sandbox with callback credentials", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { started: true } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
 
     const client = createModalClient("secret", "acme", "prod-web");
-    await client.buildImage({
-      scopeKind: "environment",
-      scopeId: "env_1",
+    await client.startImageBuildSandbox({
       buildId: "imgb-1",
+      providerSessionId: "modal-session-1",
       callbackUrl: "https://cp.test/image-builds/build-complete",
       failureCallbackUrl: "https://cp.test/image-builds/build-failed",
       callbackToken: "cb-token-1",
-      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     });
 
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://acme-prod-web--open-inspect-api-start-build-sandbox.modal.run",
+      expect.any(Object)
+    );
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
-    expect(body.build_timeout_seconds).toBeNull();
+    expect(body).toEqual({
+      build_id: "imgb-1",
+      provider_session_id: "modal-session-1",
+      callback_url: "https://cp.test/image-builds/build-complete",
+      failure_callback_url: "https://cp.test/image-builds/build-failed",
+      callback_token: "cb-token-1",
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
-import type { SessionRepositoryRow } from "../../repository";
+import type { SessionRepositoryRow } from "../../types";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "../../repository-target";
 import type { ArtifactRow, ParticipantRow, SessionRow } from "../../types";
 import { createPullRequestHandler } from "./pull-request.handler";

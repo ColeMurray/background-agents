@@ -1,7 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { signIn, useAuthSession } from "@/lib/auth-session";
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
@@ -11,9 +10,9 @@ import { useIsMobile } from "@/hooks/use-media-query";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 import { COMMAND_MENU_SESSIONS_KEY, type SessionListResponse } from "@/lib/session-list";
 import { Button } from "@/components/ui/button";
-import { GitHubIcon, GoogleIcon, SidebarIcon } from "@/components/ui/icons";
-import { APP_NAME, GOOGLE_LOGIN_ENABLED } from "@/lib/site-config";
+import { SidebarIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -74,16 +73,24 @@ export function CollapsedSidebarControls() {
 }
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
-  const { data: session, status } = useAuthSession();
   const router = useRouter();
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
+  const mobileSidebarRef = useRef<HTMLDivElement>(null);
+  const getMobileSidebarWidth = useCallback(
+    () => mobileSidebarRef.current?.getBoundingClientRect().width ?? 0,
+    []
+  );
+  const sidebarPull = useMobileSidebarPull({
+    isMobile,
+    isSidebarOpen: sidebar.isOpen,
+    getSidebarWidth: getMobileSidebarWidth,
+    onOpen: sidebar.open,
+  });
 
   const { data: sessionsResponse } = useSWR<SessionListResponse>(
-    status === "authenticated" && Boolean(session) && isCommandMenuOpen
-      ? COMMAND_MENU_SESSIONS_KEY
-      : null
+    isCommandMenuOpen ? COMMAND_MENU_SESSIONS_KEY : null
   );
 
   const handleNewSession = useCallback(() => {
@@ -117,55 +124,38 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
   );
 
   useGlobalShortcuts({
-    enabled: status === "authenticated" && Boolean(session),
+    enabled: true,
     onOpenCommandMenu: handleOpenCommandMenu,
     onNewSession: handleNewSession,
     onToggleSidebar: sidebar.toggle,
   });
 
-  // Show loading state
-  if (status === "loading") {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-foreground" />
-      </div>
-    );
-  }
-
-  // Show sign-in page if not authenticated
-  if (!session) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-8">
-        <h1 className="text-4xl font-bold text-foreground">{APP_NAME}</h1>
-        <p className="text-muted-foreground max-w-md text-center">
-          Background coding agent for your team. Ship faster with AI-powered code changes.
-        </p>
-        <div className="flex flex-col items-stretch gap-3">
-          <Button onClick={() => signIn("github")} className="gap-2 px-6 py-3">
-            <GitHubIcon className="w-5 h-5" />
-            Sign in with GitHub
-          </Button>
-          {GOOGLE_LOGIN_ENABLED && (
-            <Button onClick={() => signIn("google")} variant="outline" className="gap-2 px-6 py-3">
-              <GoogleIcon className="w-5 h-5" />
-              Sign in with Google
-            </Button>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <SidebarContext.Provider value={sidebar}>
       <AppShellActionsContext.Provider value={appShellActions}>
-        <div className="flex h-dvh overflow-hidden">
+        <div
+          data-testid="mobile-sidebar-gesture-boundary"
+          className={`flex h-dvh overflow-hidden ${
+            isMobile && !sidebar.isOpen ? "touch-pan-y" : ""
+          }`}
+          onPointerDownCapture={sidebarPull.handlePointerDown}
+          onPointerMoveCapture={sidebarPull.handlePointerMove}
+          onPointerUpCapture={sidebarPull.handlePointerUp}
+          onPointerCancelCapture={sidebarPull.handlePointerCancel}
+        >
           {/* Mobile: overlay backdrop */}
           {isMobile && (
             <div
-              className={`fixed inset-0 z-30 bg-overlay transition-opacity duration-200 ${
-                sidebar.isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
-              }`}
+              className={`fixed inset-0 z-30 bg-overlay ${
+                sidebarPull.isDragging ? "" : "transition-opacity duration-200"
+              } ${sidebar.isOpen ? "opacity-100" : "pointer-events-none"}`}
+              style={
+                !sidebar.isOpen && sidebarPull.dragProgress > 0
+                  ? { opacity: sidebarPull.dragProgress }
+                  : !sidebar.isOpen
+                    ? { opacity: 0 }
+                    : undefined
+              }
               role="presentation"
               aria-hidden="true"
               onClick={sidebar.close}
@@ -173,14 +163,21 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
           )}
           {/* Sidebar: overlay on mobile, push on desktop */}
           <div
+            ref={mobileSidebarRef}
+            data-testid="mobile-sidebar-drawer"
             className={
               isMobile
-                ? `fixed inset-y-0 left-0 z-40 w-72 transition-transform duration-200 ease-in-out ${
-                    sidebar.isOpen ? "translate-x-0" : "-translate-x-full"
-                  }`
+                ? `fixed inset-y-0 left-0 z-40 w-72 ease-in-out ${
+                    sidebarPull.isDragging ? "" : "transition-transform duration-200"
+                  } ${sidebar.isOpen ? "translate-x-0" : "-translate-x-full"}`
                 : `transition-all duration-200 ease-in-out ${
                     sidebar.isOpen ? "w-72" : "w-0"
                   } flex-shrink-0 overflow-hidden`
+            }
+            style={
+              isMobile && !sidebar.isOpen && sidebarPull.dragDistance > 0
+                ? { transform: `translateX(calc(-100% + ${sidebarPull.dragDistance}px))` }
+                : undefined
             }
           >
             <SessionSidebar

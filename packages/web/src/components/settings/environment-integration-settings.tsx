@@ -3,7 +3,8 @@
 import { useState } from "react";
 import useSWR from "swr";
 import { toast } from "sonner";
-import type { CodeServerSettings, EnvironmentRepository } from "@open-inspect/shared";
+import type { EnvironmentRepository } from "@open-inspect/shared/types/environments";
+import type { CodeServerSettings } from "@open-inspect/shared/types/integrations";
 import { Button } from "@/components/ui/button";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {

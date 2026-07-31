@@ -1,6 +1,9 @@
 import useSWR from "swr";
 import { useAuthSession } from "@/lib/auth-session";
-import type { Environment, ListEnvironmentsResponse } from "@open-inspect/shared";
+import type {
+  Environment,
+  ListEnvironmentsResponse,
+} from "@open-inspect/shared/types/environments";
 
 export const ENVIRONMENTS_KEY = "/api/environments";
 

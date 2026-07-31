@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { Env } from "./types";
-import type * as SharedModule from "@open-inspect/shared";
+import type * as SlackModule from "@open-inspect/shared/slack";
 
 const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo } = vi.hoisted(
   () => ({
@@ -11,8 +11,8 @@ const { mockVerifySlackSignature, mockPublishView, mockOpenView, mockGetUserInfo
   })
 );
 
-vi.mock("@open-inspect/shared", async () => {
-  const actual = await vi.importActual<typeof SharedModule>("@open-inspect/shared");
+vi.mock("@open-inspect/shared/slack", async () => {
+  const actual = await vi.importActual<typeof SlackModule>("@open-inspect/shared/slack");
   return {
     ...actual,
     verifySlackSignature: mockVerifySlackSignature,
@@ -56,6 +56,24 @@ function createMockKV() {
   };
 }
 
+function mockReposResponseBody(repos: Array<Record<string, unknown>>) {
+  return {
+    repos: repos.map((repo, index) => ({
+      ...repo,
+      id: typeof repo.id === "number" ? repo.id : index + 1,
+      fullName:
+        typeof repo.fullName === "string"
+          ? repo.fullName
+          : `${String(repo.owner)}/${String(repo.name)}`,
+      description:
+        repo.description === null || typeof repo.description === "string" ? repo.description : null,
+      archived: typeof repo.archived === "boolean" ? repo.archived : false,
+    })),
+    cached: false,
+    cachedAt: "2026-07-27T00:00:00.000Z",
+  };
+}
+
 function makeEnv(): Env {
   return {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
@@ -67,8 +85,8 @@ function makeEnv(): Env {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -77,8 +95,8 @@ function makeEnv(): Env {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
@@ -129,12 +147,12 @@ function buildNumberedRepos(count: number) {
 }
 
 /** Point CONTROL_PLANE.fetch at a fixed repo list (other routes return enabledModels). */
-function mockReposFetch(env: Env, repos: unknown[]) {
+function mockReposFetch(env: Env, repos: Array<Record<string, unknown>>) {
   (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
     async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("/repos")) {
-        return new Response(JSON.stringify({ repos }), {
+        return new Response(JSON.stringify(mockReposResponseBody(repos)), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -176,8 +194,8 @@ function makeSessionEnv(
       if (url.includes("/repos")) {
         order.push("repos");
         return new Response(
-          JSON.stringify({
-            repos: [
+          JSON.stringify(
+            mockReposResponseBody([
               {
                 id: "acme/app",
                 owner: "acme",
@@ -186,8 +204,8 @@ function makeSessionEnv(
                 defaultBranch: "main",
                 private: true,
               },
-            ],
-          }),
+            ])
+          ),
           {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -553,13 +571,13 @@ describe("POST /events", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 { owner: "acme", name: "web", defaultBranch: "main", private: true },
                 { owner: "acme", name: "api", defaultBranch: "main", private: true },
                 { owner: "acme", name: "docs", defaultBranch: "main", private: true },
-              ],
-            }),
+              ])
+            ),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
@@ -1037,15 +1055,16 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
-    // Event already carried files, so no single-message recovery lookup runs
-    // (inclusive-anchored); the interim-history fetch (limit=200) is unrelated.
+    // The event carried files, so the single-message lookup (inclusive-anchored;
+    // the interim-history fetch at limit=200 is unrelated) runs only for the
+    // attachments the event omitted, and the event's own files are used as-is.
     expect(
-      slackFetch.mock.calls.some(
+      slackFetch.mock.calls.filter(
         ([input]) =>
           String(input).includes("conversations.replies") &&
           String(input).includes("inclusive=true")
       )
-    ).toBe(false);
+    ).toHaveLength(1);
     expect(order).toContain("filedownload");
     expect(order).toContain("attachment");
     expect(order).not.toContain("session");
@@ -1133,27 +1152,126 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("starts nothing for an image-only DM whose images all fail to download", async () => {
+  it("quotes a message forwarded with a mention into the prompt", async () => {
+    // Forwarding puts the shared message's body in the message's `attachments`,
+    // never in its `text` — which holds only the comment the user typed. The
+    // mention event may omit attachments, so they come back with the same
+    // single-message lookup that recovers files.
     const order: string[] = [];
-    const slackFetch = mockSlackFetch(order, { fileDownloadStatus: 403 });
+    const slackFetch = mockSlackFetch(order, {
+      threadMessages: [
+        {
+          type: "message",
+          text: "<@B123> deal with this",
+          user: "U123",
+          ts: "333.444",
+          attachments: [
+            {
+              is_msg_unfurl: true,
+              is_share: true,
+              author_name: "Ada Lovelace",
+              channel_name: "engineering",
+              channel_id: "C999",
+              ts: "222.111",
+              from_url: "https://acme.slack.com/archives/C999/p222111",
+              text: "The nightly analytics job has failed three days running",
+              files: [
+                {
+                  id: "F1",
+                  name: "chart.png",
+                  mimetype: "image/png",
+                  url_private: "https://files.slack.com/files-pri/T1-F1/chart.png",
+                  size: 16,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
     const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:C123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
+    const ctx = makeCtx();
+
+    const response = await app.fetch(
+      slackEventRequest({
+        type: "app_mention",
+        text: "<@B123> deal with this",
+        user: "U123",
+        channel: "C123",
+        ts: "333.444",
+        thread_ts: "111.222",
+      }),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await flushWaitUntil(ctx);
+
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
+    );
+    expect(promptBodies).toHaveLength(1);
+    const content = String(promptBodies[0].content);
+    expect(content).toContain("Slack messages forwarded with this request");
+    expect(content).toContain("[Forwarded message from Ada Lovelace in #engineering]");
+    expect(content).toContain("The nightly analytics job has failed three days running");
+    // Source ids let an agent with Slack tooling read the original thread.
+    expect(content).toContain(
+      "Source: https://acme.slack.com/archives/C999/p222111 — Slack channel C999 — message ts 222.111"
+    );
+    // The user's own instruction still lands last, after the quoted context.
+    expect(content.endsWith("deal with this")).toBe(true);
+    // The image the forwarded message carried rides the normal attachment path.
+    expect(order).toContain("filedownload");
+    expect(promptBodies[0].attachments).toEqual([{ attachmentId: "att-1", name: "chart.png" }]);
+
+    slackFetch.mockRestore();
+  });
+
+  it("runs a forwarded message that arrived in a DM with no comment", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
+    const env = makeSessionEnv(order);
+    await (env.SLACK_KV as unknown as { put: (k: string, v: string) => Promise<void> }).put(
+      "thread:D123:111.222",
+      JSON.stringify({
+        sessionId: "session-1",
+        repoId: "acme/app",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+        createdAt: Date.now(),
+        lastPromptTs: "111.222",
+      })
+    );
     const ctx = makeCtx();
 
     const response = await app.fetch(
       slackEventRequest({
         type: "message",
-        subtype: "file_share",
+        channel_type: "im",
+        text: "",
         user: "U123",
         channel: "D123",
-        ts: "444.555",
-        channel_type: "im",
-        files: [
+        ts: "333.444",
+        thread_ts: "111.222",
+        attachments: [
           {
-            id: "F1",
-            name: "screenshot.png",
-            mimetype: "image/png",
-            url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
-            size: 16,
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            text: "The nightly analytics job has failed three days running",
           },
         ],
       }),
@@ -1164,21 +1282,164 @@ describe("POST /events", () => {
     expect(response.status).toBe(200);
     await flushWaitUntil(ctx);
 
-    // The placeholder prompt would be meaningless with no image attached, so
-    // no session is created and the user is told nothing ran.
-    expect(order).toContain("filedownload");
-    expect(order).not.toContain("session");
-    expect(order).not.toContain("prompt");
-    expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          text: expect.stringContaining("didn't start on this request"),
-        }),
-      ])
+    const promptBodies = promptFetchBodies(
+      env.CONTROL_PLANE.fetch as unknown as { mock: { calls: readonly (readonly unknown[])[] } }
     );
+    expect(promptBodies).toHaveLength(1);
+    const content = String(promptBodies[0].content);
+    expect(content).toContain(
+      "[Forwarded message from Ada Lovelace]\nThe nightly analytics job has failed three days running"
+    );
+    // With no comment of their own the forward is the whole request, so the
+    // prompt still ends with something actionable.
+    expect(content.endsWith("See the forwarded Slack message(s).")).toBe(true);
 
     slackFetch.mockRestore();
   });
+
+  it.each([
+    [
+      "a direct image-only DM loses every image",
+      {
+        subtype: "file_share",
+        files: [
+          {
+            id: "F1",
+            name: "screenshot.png",
+            mimetype: "image/png",
+            url_private: "https://files.slack.com/files-pri/T1-F1/screenshot.png",
+            size: 16,
+          },
+        ],
+      },
+      true,
+      2,
+      "didn't start on this request",
+    ],
+    [
+      "an image-only forwarded message loses every image",
+      {
+        text: "",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            channel_id: "C999",
+            ts: "222.111",
+            from_url: "https://acme.slack.com/archives/C999/p222111",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "chart.png",
+                mimetype: "image/png",
+                url_private: "https://files.slack.com/files-pri/T1-F1/chart.png",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      true,
+      2,
+      "didn't start on this request",
+    ],
+    [
+      "a body-less forward contains only unsupported files",
+      {
+        text: "",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "incident.pdf",
+                mimetype: "application/pdf",
+                url_private: "https://files.slack.com/files-pri/T1-F1/incident.pdf",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      false,
+      0,
+      "Please include a message with your request",
+    ],
+    [
+      "an app mention contains a body-less forward with only unsupported files",
+      {
+        type: "app_mention",
+        text: "<@B123>",
+        attachments: [
+          {
+            is_msg_unfurl: true,
+            is_share: true,
+            author_name: "Ada Lovelace",
+            text: "",
+            files: [
+              {
+                id: "F1",
+                name: "incident.pdf",
+                mimetype: "application/pdf",
+                url_private: "https://files.slack.com/files-pri/T1-F1/incident.pdf",
+                size: 16,
+              },
+            ],
+          },
+        ],
+      },
+      false,
+      0,
+      "Please include a message with your request",
+    ],
+  ] satisfies Array<[string, Record<string, unknown>, boolean, number, string]>)(
+    "starts nothing when %s",
+    async (_caseName, eventFields, downloadsImage, expectedStartingStatuses, expectedMessage) => {
+      const order: string[] = [];
+      const slackFetch = mockSlackFetch(order, { fileDownloadStatus: 403 });
+      const env = makeSessionEnv(order);
+      const ctx = makeCtx();
+
+      const response = await app.fetch(
+        slackEventRequest({
+          type: "message",
+          user: "U123",
+          channel: "D123",
+          ts: "444.555",
+          channel_type: "im",
+          ...eventFields,
+        }),
+        env,
+        ctx
+      );
+
+      expect(response.status).toBe(200);
+      await flushWaitUntil(ctx);
+
+      // The placeholder prompt would be meaningless with no image attached, so
+      // no session is created and the user is told nothing ran.
+      if (downloadsImage) expect(order).toContain("filedownload");
+      else expect(order).not.toContain("filedownload");
+      expect(startingStatusBodies(slackFetch)).toHaveLength(expectedStartingStatuses);
+      expect(order).not.toContain("session");
+      expect(order).not.toContain("prompt");
+      expect(slackApiBodies(slackFetch, "chat.postMessage")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining(expectedMessage),
+          }),
+        ])
+      );
+
+      slackFetch.mockRestore();
+    }
+  );
 
   it("keeps the interim checkpoint when the thread fetch fails", async () => {
     const order: string[] = [];
@@ -1417,7 +1678,7 @@ describe("POST /interactions", () => {
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
-          return new Response(JSON.stringify({ repos: [] }), {
+          return new Response(JSON.stringify(mockReposResponseBody([])), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           });
@@ -1822,8 +2083,8 @@ describe("POST /interactions", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -1832,8 +2093,8 @@ describe("POST /interactions", () => {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             {
               status: 200,
               headers: { "Content-Type": "application/json" },
@@ -1945,8 +2206,8 @@ describe("POST /interactions", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -1955,8 +2216,8 @@ describe("POST /interactions", () => {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }
@@ -2050,8 +2311,8 @@ describe("POST /interactions", () => {
         const url = typeof input === "string" ? input : input.toString();
         if (url.includes("/repos")) {
           return new Response(
-            JSON.stringify({
-              repos: [
+            JSON.stringify(
+              mockReposResponseBody([
                 {
                   id: "acme/app",
                   owner: "acme",
@@ -2060,8 +2321,8 @@ describe("POST /interactions", () => {
                   defaultBranch: "main",
                   private: true,
                 },
-              ],
-            }),
+              ])
+            ),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
         }

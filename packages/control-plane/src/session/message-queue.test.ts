@@ -192,6 +192,39 @@ describe("SessionMessageQueue", () => {
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
 
+  it("does not block queue processing on the sandbox spawn", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    let resolveSpawn!: () => void;
+    h.sandboxLifecycle.spawnSandbox.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveSpawn = resolve;
+      })
+    );
+
+    // Resolves immediately even though the spawn is still in flight; the
+    // spawn is handed to waitUntil so the prompt response is not held open.
+    await h.queue.processMessageQueue();
+
+    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    resolveSpawn();
+    await h.waitUntil.mock.calls[0][0];
+  });
+
+  it("broadcasts sandbox_error when the background spawn throws", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.sandboxLifecycle.spawnSandbox.mockRejectedValue(new Error("modal exploded"));
+
+    await h.queue.processMessageQueue();
+    await h.waitUntil.mock.calls[0][0];
+
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_error",
+      error: "modal exploded",
+    });
+  });
+
   it("marks session active when a prompt is enqueued", async () => {
     const h = buildQueue();
 
@@ -355,12 +388,13 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("uses the provider-agnostic auth name for user messages without SCM identity", () => {
+  it("uses the canonical profile userId instead of a bot transport identity", () => {
     const h = buildQueue();
     const participant = createParticipant({
       scm_name: null,
       scm_login: null,
-      auth_name: "Pat PM",
+      user_id: "slack:U123",
+      canonical_user_id: "user-pat",
     });
 
     h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
@@ -369,7 +403,7 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({
         type: "sandbox_event",
         event: expect.objectContaining({
-          author: expect.objectContaining({ name: "Pat PM" }),
+          author: expect.objectContaining({ userId: "user-pat", name: "slack:U123" }),
         }),
       })
     );
@@ -601,7 +635,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -623,7 +657,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
       });
 
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
@@ -635,7 +669,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -664,7 +698,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
       });
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();

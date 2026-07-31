@@ -154,20 +154,23 @@ statuses are `building | ready | failed | superseded`.
 | -------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/image-builds/build-complete`               | POST   | Success callback from image builders (public route, callback-authenticated)                                                                                          |
 | `/image-builds/build-failed`                 | POST   | Failure callback from image builders (public route, callback-authenticated)                                                                                          |
-| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build (cron, save-hooks, manual rebuild)                                                                                                        |
-| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build                                                                                                                                   |
+| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build manually                                                                                                                                  |
+| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build manually                                                                                                                          |
 | `/image-builds/toggle/repo/:owner/:name`     | PUT    | Toggle repo prebuilds (`repo_metadata.image_build_enabled`); toggling on triggers a build. The environment toggle stays on the environments CRUD (`prebuildEnabled`) |
 | `/image-builds/status`                       | GET    | Cross-scope aggregate over every prebuild-enabled scope — excludes superseded, includes failed                                                                       |
 | `/image-builds/status?scope_kind=&scope_id=` | GET    | One scope's recent non-superseded builds (settings/debug view)                                                                                                       |
-| `/image-builds/enabled`                      | GET    | Cron feed: enabled scope units with repositories + fingerprint, plus the runtime floor                                                                               |
-| `/image-builds/mark-stale`                   | POST   | Mark old `building` rows failed (called by the scheduler)                                                                                                            |
-| `/image-builds/cleanup`                      | POST   | Delete old failed rows and reap superseded rows' provider artifacts                                                                                                  |
+| `/image-builds/enabled`                      | GET    | Settings feed: enabled scope identities with their current repository-set fingerprints                                                                               |
 
-Build callbacks authenticate in one of two modes, decided per provider: Modal builders call back
-with the deployment-wide internal HMAC token, while Vercel/OpenComputer build sandboxes use a
-single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row and
-bound to the provider session. Success callbacks verify it before payload validation and consume it
-atomically when accepted; failure callbacks consume it while marking the build failed.
+Every provider uses the same callback contract. The control plane creates a dormant provider
+session, binds its opaque id to the build row, and only then starts the runtime. The runtime calls
+back with a single-use bearer token minted at trigger time; only its HMAC hash is stored and the
+callback must present the exact bound provider session id.
+
+Callbacks atomically accept the payload in D1 before publishing a small, secret-free command to
+Cloudflare Queue. The Queue consumer then leases the accepted row, snapshots/checkpoints the
+provider session, persists the artifact, transitions the row to `ready` or `superseded`, and
+performs idempotent session cleanup. This keeps provider operations outside the Worker's
+request-lifetime durability window and makes retries safe across all providers.
 
 ### Automations
 
@@ -293,9 +296,10 @@ sessions index, repo metadata, and encrypted secrets:
 - `image_builds`: the unified prebuilt-image registry for both scope kinds (`scope_kind` +
   `scope_id` columns) — provider artifact id, per-repository SHAs (`repository_shas`), a
   repositories fingerprint for spawn matching, the runtime version for the compatibility-floor
-  check, and callback-token state. Replaces the former `repo_images` and `environment_images` tables
-  (dropped in migrations 0039/0040; environment rows were copied over, repo rows are rebuilt by the
-  cron).
+  check, callback-token state, Queue-finalization lease state, and provider-session cleanup state.
+  Replaces the former `repo_images` and `environment_images` tables (dropped in migrations
+  0039/0040). The control-plane scheduler naturally rebuilds enabled scopes; no legacy backfill job
+  is required.
 - `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
   code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
   (per-repo).
@@ -332,6 +336,13 @@ accounts do not participate in browser-session authentication.
 Terraform configures `WEB_APP_URL`, provider credentials, admission allowlists, and
 `BROWSER_AUTH_SECRET` on this worker. `WEB_APP_URL` must be the exact browser-visible HTTPS origin,
 except that an HTTP loopback origin is accepted for local development.
+
+A complete GitHub or Google OAuth credential pair enables that sign-in provider; partial pairs and
+an empty provider set fail closed. Google requires verified-email/domain admission (or explicit
+unsafe allow-all), while GitHub may also use username or organization admission. The normalized
+runtime constructs Better Auth and the immutable provider list from the same configuration.
+`GET /internal/auth/sign-in-providers` exposes only those identifiers to signed `service:web`
+requests so the React `/login` route can render them server-side.
 
 ## Token Encryption
 

@@ -1,4 +1,4 @@
-import { prArtifactBelongsToRepo } from "@open-inspect/shared";
+import { prArtifactBelongsToRepo } from "@open-inspect/shared/types/repositories";
 import type { Artifact } from "@/types/session";
 
 /**

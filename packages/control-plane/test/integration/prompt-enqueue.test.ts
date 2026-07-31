@@ -73,7 +73,12 @@ describe("POST /internal/prompt", () => {
     const res = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Refactor auth", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        content: "Refactor auth",
+        authorId: "slack:U123",
+        canonicalUserId: "canonical-bot",
+        source: "slack",
+      }),
     });
 
     const { messageId } = await res.json<{ messageId: string }>();
@@ -88,7 +93,9 @@ describe("POST /internal/prompt", () => {
     const data = JSON.parse(matching[0].data);
     expect(data.content).toBe("Refactor auth");
     expect(data.messageId).toBe(messageId);
-    expect(data.author).toBeDefined();
+    expect(data.author).toEqual(
+      expect.objectContaining({ participantId: expect.any(String), userId: "canonical-bot" })
+    );
   });
 
   it("stores attachments as JSON", async () => {

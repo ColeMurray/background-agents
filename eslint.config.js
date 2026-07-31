@@ -60,6 +60,59 @@ export default tseslint.config(
         "error",
         { prefer: "type-imports", fixStyle: "separate-type-imports" },
       ],
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@open-inspect/shared",
+              importNames: [
+                "TOKEN_VALIDITY_MS",
+                "timingSafeEqual",
+                "bytesToHex",
+                "computeHmacHex",
+                "generateInternalToken",
+                "verifyCallbackSignature",
+                "verifyCallbackFromControlPlane",
+                "verifyInternalToken",
+              ],
+              message: "Import auth-owned names from @open-inspect/shared/auth.",
+            },
+            {
+              name: "@open-inspect/shared",
+              importNames: [
+                "ACTOR_HEADER",
+                "ControlPlaneFetcher",
+                "OutboundBinaryBody",
+                "OutboundCredentialEnv",
+                "OutboundRequestToSign",
+                "OutboundServiceCredential",
+                "SERVICE_HEADER",
+                "SERVICE_NAMES",
+                "SERVICE_SIGNATURE_HEADER",
+                "SIG1_PREFIX",
+                "ServiceName",
+                "ServiceSignatureFailure",
+                "ServiceSignatureHeaderParse",
+                "ServiceSignatureResult",
+                "SignedFetchInit",
+                "buildCanonicalRequestString",
+                "buildOutboundAuthHeaders",
+                "buildServiceAuthHeaders",
+                "canonicalizeQuery",
+                "isServiceName",
+                "parseServiceSignatureHeader",
+                "resolveOutboundCredential",
+                "sha256Hex",
+                "signedControlPlaneFetch",
+                "verifyServiceSignature",
+              ],
+              message: "Import service-auth-owned names from @open-inspect/shared/service-auth.",
+            },
+          ],
+        },
+      ],
       // Allow console in backend/server code - disable per-file if needed
       "no-console": "off",
     },
@@ -146,10 +199,8 @@ export default tseslint.config(
     ignores: [
       "**/*.test.{ts,tsx}",
       "**/*.spec.{ts,tsx}",
-      "packages/web/src/lib/auth.ts",
       "packages/web/src/lib/browser-api-fetch.ts",
       "packages/web/src/lib/control-plane-transport.ts",
-      "packages/web/src/lib/github-org-membership.ts",
     ],
     rules: {
       "no-restricted-globals": [
@@ -161,7 +212,6 @@ export default tseslint.config(
       ],
     },
   },
-
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

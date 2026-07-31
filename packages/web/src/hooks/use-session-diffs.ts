@@ -3,7 +3,10 @@
 import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 import { mutate } from "swr";
-import { sessionDiffStateSchema, type SessionDiffState } from "@open-inspect/shared";
+import {
+  sessionDiffStateSchema,
+  type SessionDiffState,
+} from "@open-inspect/shared/types/session-diffs";
 import { parseDiffErrorBody } from "@/lib/session-diffs";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 

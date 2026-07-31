@@ -1,12 +1,12 @@
+import { type SandboxEvent } from "@open-inspect/shared";
 import {
   SESSION_DIFF_ID_PATTERN,
   sessionDiffFailureSchema,
   sessionDiffUploadSchema,
-  type SandboxEvent,
   type SessionDiffBaselineRepository,
   type SessionDiffState,
   type SessionDiffUpload,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";

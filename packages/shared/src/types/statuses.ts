@@ -24,7 +24,16 @@ export type SandboxStatus =
   | "failed";
 export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
 export type MessageStatus = "pending" | "processing" | "completed" | "failed";
-export type MessageSource = "web" | "slack" | "linear" | "extension" | "github" | "automation";
+export const messageSourceSchema = z.enum([
+  "web",
+  "slack",
+  "linear",
+  "extension",
+  "github",
+  "automation",
+  "agent",
+]);
+export type MessageSource = z.infer<typeof messageSourceSchema>;
 export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
 export type EventType =
   | "heartbeat"

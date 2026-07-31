@@ -1,4 +1,4 @@
-import { isCanonicalUserId } from "@open-inspect/shared";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { z } from "zod";
 
 export const browserAuthSessionUserSchema = z.object({
@@ -22,4 +22,3 @@ export const browserAuthSessionResponseSchema = z
   });
 
 export type BrowserAuthSessionUser = z.infer<typeof browserAuthSessionUserSchema>;
-export type BrowserAuthSessionResponse = z.infer<typeof browserAuthSessionResponseSchema>;

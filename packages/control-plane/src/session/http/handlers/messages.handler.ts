@@ -2,8 +2,8 @@ import type { Logger } from "../../../logger";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
-  type MessageService,
-} from "../../services/message.service";
+} from "../../enqueue-prompt-contract";
+import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 

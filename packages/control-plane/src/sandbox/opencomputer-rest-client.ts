@@ -23,7 +23,7 @@ export interface OpenComputerRestConfig {
   /** OpenComputer API key */
   apiKey: string;
   /** Declarative template identifier containing the OpenInspect runtime */
-  template: string;
+  template?: string;
   /** Header used for API key authentication. Defaults to X-API-Key. */
   authHeaderName?: string;
   /** Optional prefix for the API key header value, e.g. "Bearer ". */
@@ -222,8 +222,6 @@ export class OpenComputerRestClient {
   constructor(public readonly config: OpenComputerRestConfig) {
     if (!config.apiUrl) throw new Error("OpenComputerRestClient requires apiUrl");
     if (!config.apiKey) throw new Error("OpenComputerRestClient requires apiKey");
-    if (!config.template) throw new Error("OpenComputerRestClient requires template");
-
     this.baseUrl = config.apiUrl.replace(/\/+$/, "");
     this.paths = { ...DEFAULT_PATHS, ...(config.paths ?? {}) };
   }
@@ -353,14 +351,20 @@ export class OpenComputerRestClient {
     });
   }
 
-  async deleteSandbox(id: string, options?: OpenComputerDeleteSandboxOptions): Promise<void> {
+  async deleteSandbox(
+    id: string,
+    options?: OpenComputerDeleteSandboxOptions,
+    signal?: AbortSignal
+  ): Promise<void> {
     const params = new URLSearchParams();
     if (options?.deleteSecretStore) params.set("deleteSecretStore", "true");
     const query = params.toString() ? `?${params.toString()}` : "";
     await this.request<void>(
       "DELETE",
       `${this.expandPath(this.paths.sandbox, { id })}${query}`,
-      TIMEOUT_GET_MS
+      TIMEOUT_GET_MS,
+      undefined,
+      signal
     );
   }
 
@@ -400,7 +404,8 @@ export class OpenComputerRestClient {
   async createCheckpoint(
     id: string,
     name: string,
-    options: OpenComputerCreateCheckpointOptions = {}
+    options: OpenComputerCreateCheckpointOptions = {},
+    signal?: AbortSignal
   ): Promise<OpenComputerCheckpointResponse> {
     return await this.request<OpenComputerCheckpointResponse>(
       "POST",
@@ -410,15 +415,18 @@ export class OpenComputerRestClient {
         name,
         kind: options.kind ?? OPENCOMPUTER_CHECKPOINT_KIND,
         retentionPolicy: options.retentionPolicy ?? OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
-      }
+      },
+      signal
     );
   }
 
-  async deleteCheckpoint(id: string, checkpointId: string): Promise<void> {
+  async deleteCheckpoint(id: string, checkpointId: string, signal?: AbortSignal): Promise<void> {
     await this.request<void>(
       "DELETE",
       this.expandPath(this.paths.checkpoint, { id, checkpointId }),
-      TIMEOUT_CHECKPOINT_MS
+      TIMEOUT_CHECKPOINT_MS,
+      undefined,
+      signal
     );
   }
 
@@ -447,7 +455,8 @@ export class OpenComputerRestClient {
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
-    body?: unknown
+    body?: unknown,
+    externalSignal?: AbortSignal
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -457,7 +466,9 @@ export class OpenComputerRestClient {
       const init: RequestInit = {
         method,
         headers: this.getHeaders(),
-        signal: controller.signal,
+        signal: externalSignal
+          ? AbortSignal.any([controller.signal, externalSignal])
+          : controller.signal,
       };
       if (body !== undefined) init.body = JSON.stringify(body);
 

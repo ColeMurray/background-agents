@@ -34,6 +34,7 @@ notification controls and safety notes are covered near the end.
 | Start from a DM             | Send the bot a direct message                                              |
 | Continue a session          | Reply in the same Slack thread                                             |
 | Send images to the agent    | Attach PNG, JPEG, WebP, or GIF images to an interactive request            |
+| Forward a message           | Share another Slack message with the bot; text, images, and source travel  |
 | Pick the repository         | Let Open-Inspect infer it, or choose from a dropdown when it is unsure     |
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
@@ -110,6 +111,24 @@ session or follow-up is sent.
 This feature requires the Slack app's `files:read` bot scope and a reinstall after adding the scope.
 Remote files hosted outside Slack and non-image attachments are not forwarded.
 
+### With forwarded messages
+
+Forward (share) another Slack message to a DM, to a channel request that `@mentions` the bot, or to
+an interactive thread follow-up. Add your own comment — "deal with this" — and it becomes the
+instruction the agent acts on; forward with no comment and the shared message is the whole request.
+
+The whole forwarded message reaches the agent:
+
+- Its text, with any links exactly as written.
+- Its images, forwarded as prompt attachments like images you attach yourself. They share the
+  per-message limits: at most six images, each no larger than 10 MiB.
+- Its author, source channel, permalink, channel id, and message timestamp. An agent with Slack
+  tooling of its own can use those to read the original thread for wider context.
+
+Forward several messages at once and each is quoted separately, up to ten per request. Each shared
+message's text is truncated at 4,000 characters. Link previews are skipped, since the message text
+already carries the link.
+
 ### Repository dropdowns
 
 Repository dropdowns are tied to the pending Slack thread, not to a personal GitHub repository list.
@@ -145,6 +164,16 @@ How matching works:
 
 Routing rules do not override an active thread: a keyword in a thread reply does not move that
 conversation to a different repository.
+
+### Session instructions
+
+Administrators can define workspace-wide instructions for Slack-started sessions under **Settings →
+Integrations → Slack → Session Instructions** in the web app. When set, the instructions are
+appended to the first prompt of every new Slack-initiated session as an `## Additional Instructions`
+section — use them for standing guidance such as coding standards, preferred tools, or PR
+conventions. They apply to new sessions only (thread follow-ups continue with the session's existing
+context), are limited to 10,000 characters, and mirror the Linear integration's **Issue Session
+Instructions**.
 
 ---
 
@@ -269,9 +298,10 @@ The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED`
 When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
 automation in the web app is still allowed, but it will not run until the flag is enabled.
 
-Slack Message automations currently ingest text only. File uploads, including image-only
-`file_share` messages, do not start these automations, and attachments on automation thread replies
-are not forwarded to the session. Use an interactive DM or `@mention` when the agent needs an image.
+Slack Message automations currently ingest the message's own text only. File uploads, including
+image-only `file_share` messages, do not start these automations; attachments on automation thread
+replies are not forwarded to the session; and the body of a forwarded message is not read. Use an
+interactive DM or `@mention` when the agent needs an image or a forwarded message.
 
 ### Slack app setup
 
@@ -295,6 +325,15 @@ condition to filter by content. See
 - When the run finishes, the agent's final response is posted into the triggering message's thread
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
+- A run can **decline to reply**. If the agent's entire final message is `NO_REPLY` (or empty),
+  nothing is posted and only the 👀 reaction is cleared. This lets an automation that watches a busy
+  channel stay quiet on messages that turn out to need nothing from it — chatter between people, or
+  a follow-up addressed to someone else — instead of posting its reasoning about why it has nothing
+  to say. It applies to thread follow-ups as much as to the first trigger, which is where it matters
+  most: every reply in the thread wakes the automation. Tell the agent about the sentinel in the
+  automation's instructions; without an explicit instruction it will answer every message it is
+  woken for. A run that opened a pull request or produced other artifacts always posts, and
+  interactive `@mention` sessions never decline — a person is waiting on a visible answer there.
 - Every reply in a thread continues the same session — during the run and after it finishes — for up
   to 7 days after the thread's first trigger, like replying in an `@mention` thread. The reply is
   routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),
@@ -378,6 +417,12 @@ The bot may also need `channels:history` for public-channel messages or `groups:
 private-channel messages so it can recover file details that Slack omits from `app_mention` events.
 If some images fail, check the warning posted in the thread. `files:write` does not grant inbound
 image access; it is used only when Open-Inspect posts generated media back to Slack.
+
+### A forwarded message did not reach the agent
+
+The same `channels:history` / `groups:history` scopes let the bot recover a forwarded message's
+content when Slack omits it from the `app_mention` event, and images inside a forwarded message need
+`files:read` like any other inbound image.
 
 ### The wrong model or branch was used
 

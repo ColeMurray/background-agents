@@ -6,10 +6,12 @@ import { toast } from "sonner";
 import {
   encodeRepositoryPathSegments,
   parseRepositoryFullName,
-  type EnrichedRepository,
-  type CodeServerSettings,
-  type CodeServerGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  CodeServerSettings,
+  CodeServerGlobalConfig,
+} from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/form-controls";

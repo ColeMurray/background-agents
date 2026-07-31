@@ -3,7 +3,7 @@
  *
  * The `config:*` and `user_prefs:*` keys are operator-managed: edit them
  * directly with `wrangler kv key put --namespace-id <LINEAR_KV> <key> <json>`
- * (the HTTP /config endpoints were retired with the shared bearer):
+ * using these key formats:
  * - `config:team-repos`   — { [teamKey]: "owner/repo" }
  * - `config:project-repos` — { [projectId]: "owner/repo" }
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }

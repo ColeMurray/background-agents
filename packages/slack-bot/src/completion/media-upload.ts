@@ -2,8 +2,8 @@ import {
   completeExternalUpload,
   getExternalUploadUrl,
   uploadToExternalUrl,
-  type MediaArtifactInfo,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
+import type { MediaArtifactInfo } from "@open-inspect/shared";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";

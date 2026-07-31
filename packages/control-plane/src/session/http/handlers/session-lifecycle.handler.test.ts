@@ -3,7 +3,7 @@ import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionStatusService } from "../../session-status-service";
-import { getValidModelOrDefault } from "@open-inspect/shared";
+import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -222,7 +222,8 @@ describe("createSessionLifecycleHandler", () => {
           title: "Session title",
           model: "anthropic/claude-haiku-4-5",
           reasoningEffort: "high",
-          userId: "user-1",
+          userId: "slack:U123",
+          canonicalUserId: "canonical-user-1",
           scmLogin: "octocat",
           scmName: "The Octocat",
           scmEmail: "octocat@example.com",
@@ -267,7 +268,8 @@ describe("createSessionLifecycleHandler", () => {
     });
     expect(repository.createParticipant).toHaveBeenCalledWith({
       id: "participant-1",
-      userId: "user-1",
+      userId: "slack:U123",
+      canonicalUserId: "canonical-user-1",
       scmUserId: "github-user-123",
       scmLogin: "octocat",
       scmName: "The Octocat",

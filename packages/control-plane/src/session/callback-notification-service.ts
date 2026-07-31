@@ -7,7 +7,7 @@
  * - HMAC payload signing for callback authentication
  */
 
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";

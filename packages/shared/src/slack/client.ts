@@ -199,6 +199,23 @@ export function postMessage(
   });
 }
 
+export function postBlocks(
+  token: string,
+  channel: string,
+  blocks: unknown[],
+  options?: {
+    thread_ts?: string;
+    reply_broadcast?: boolean;
+  }
+): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
+  return slackPost(token, "chat.postMessage", {
+    channel,
+    blocks,
+    thread_ts: options?.thread_ts,
+    reply_broadcast: options?.reply_broadcast,
+  });
+}
+
 export function getPermalink(
   token: string,
   channel: string,
@@ -409,20 +426,54 @@ export interface SlackMessageFile {
 }
 
 /**
- * Fetch the files attached to a single message.
+ * A secondary attachment on a Slack message (subset of fields we use).
  *
- * `app_mention` events don't include the message's `files` array, so when an
- * event arrives without files we recover them from conversation history. Pass
- * `threadTs` when the message is a thread reply; otherwise the top-level
- * message at `ts` is fetched. Returns the failure arm on API errors so callers
- * can distinguish "the message has no files" from "the lookup failed".
+ * Two very different things arrive in this array. Sharing or forwarding a
+ * message produces a *message* attachment flagged `is_share` (and may also set
+ * `is_msg_unfurl`), carrying the shared message's author and body — which is the
+ * only place that body exists on the new message. A pasted Slack message link
+ * produces an attachment with `is_msg_unfurl` but not `is_share`. Callers that
+ * read message bodies must use `is_share` as the positive discriminator.
  */
-export async function getMessageFiles(
+export interface SlackMessageAttachment {
+  /** Set when the attachment is a shared/forwarded Slack message. */
+  is_share?: boolean;
+  /** Set when the attachment unfurls a Slack message permalink. */
+  is_msg_unfurl?: boolean;
+  /** Body of the shared message, in mrkdwn. */
+  text?: string;
+  /** Plain-text rendering Slack always provides, e.g. "[date] user: body". */
+  fallback?: string;
+  /** Display name of the shared message's author. */
+  author_name?: string;
+  /** Channel the shared message came from; absent when Slack omits it. */
+  channel_name?: string;
+  /** Id of the channel the shared message came from. */
+  channel_id?: string;
+  /** Slack ts of the shared message, i.e. its identity within the channel. */
+  ts?: string;
+  /** Permalink of the shared message. */
+  from_url?: string;
+  /** Files the shared message carried, Slack-hosted like any message file. */
+  files?: SlackMessageFile[];
+}
+
+/**
+ * Fetch the files and attachments on a single message.
+ *
+ * `app_mention` events don't include the message's `files` array — and may omit
+ * `attachments` too — so when an event arrives without them we recover them
+ * from conversation history. Pass `threadTs` when the message is a thread
+ * reply; otherwise the top-level message at `ts` is fetched. Returns the
+ * failure arm on API errors so callers can distinguish "the message has none"
+ * from "the lookup failed".
+ */
+export async function getMessageDetails(
   token: string,
   channelId: string,
   ts: string,
   threadTs?: string
-): Promise<SlackEnvelope<{ files: SlackMessageFile[] }>> {
+): Promise<SlackEnvelope<{ files: SlackMessageFile[]; attachments: SlackMessageAttachment[] }>> {
   // Single-message fetch. The two endpoints sort differently, so the window
   // anchor differs: conversations.history returns newest-first, so
   // `latest=<ts>&inclusive=true&limit=1` yields the target; conversations.replies
@@ -431,7 +482,13 @@ export async function getMessageFiles(
   // latest to the same ts — an equal pair is a zero-width window that Slack
   // returns empty for. `limit=2` on replies tolerates the thread root being
   // included alongside the target; the find-by-ts below is the source of truth.
-  type HistoryResult = { messages?: Array<{ ts?: string; files?: SlackMessageFile[] }> };
+  type HistoryResult = {
+    messages?: Array<{
+      ts?: string;
+      files?: SlackMessageFile[];
+      attachments?: SlackMessageAttachment[];
+    }>;
+  };
   const res =
     threadTs && threadTs !== ts
       ? await slackGet<HistoryResult>(token, "conversations.replies", {
@@ -449,7 +506,7 @@ export async function getMessageFiles(
         });
   if (!res.ok) return res;
   const message = res.messages?.find((m) => m.ts === ts);
-  return { ok: true, files: message?.files ?? [] };
+  return { ok: true, files: message?.files ?? [], attachments: message?.attachments ?? [] };
 }
 
 export interface SlackUser {

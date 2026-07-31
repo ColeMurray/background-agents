@@ -1,4 +1,4 @@
-import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared";
+import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next/headers", () => ({
@@ -110,6 +110,17 @@ describe("controlPlaneUserFetch", () => {
 
     expect(init?.signal?.aborted).toBe(true);
     expect(init?.signal?.reason).toBe("caller disconnected");
+  });
+
+  it("preserves caller redirect and cache policy", async () => {
+    await controlPlaneUserFetch("/sessions", {
+      redirect: "error",
+      cache: "force-cache",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.redirect).toBe("error");
+    expect(init?.cache).toBe("force-cache");
   });
 
   it("generates a fresh trace id when the inbound one is invalid", async () => {

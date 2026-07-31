@@ -1,4 +1,3 @@
-import { createLogger } from "../logger";
 import type { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
 import type { ImageBuildProviderImageRef } from "./model";
 import type {
@@ -6,12 +5,10 @@ import type {
   FailedImageBuildInput,
   FinalizeImageBuildInput,
   ImageBuildAdapter,
+  ImageBuildPlan,
   ImageBuildStartCallbacks,
-  OpenComputerImageBuildPlan,
 } from "./types";
-
-const logger = createLogger("image-builds:opencomputer-adapter");
-const MS_PER_SECOND = 1000;
+import { resolveImageBuildProviderSessionTimeoutSeconds } from "./timeouts";
 
 /**
  * OpenComputer adapter for provider-session image builds.
@@ -20,13 +17,10 @@ const MS_PER_SECOND = 1000;
  * checkpoints that sandbox into the image artifact; cleanup hooks handle
  * teardown.
  */
-export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComputerImageBuildPlan> {
+export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly provider: OpenComputerSandboxProvider) {}
 
-  async startBuild(
-    plan: OpenComputerImageBuildPlan,
-    callbacks: ImageBuildStartCallbacks
-  ): Promise<void> {
+  async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerEnvironmentImageBuild({
       // The provider build API is keyed by environmentId (used only for
       // sandbox naming/labels); scope.id fills it for every scope kind.
@@ -38,7 +32,10 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
       callbackToken: plan.callbackToken,
       userEnvVars: plan.userEnvVars,
       cloneToken: plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.token : undefined,
-      buildTimeoutSeconds: Math.ceil(plan.buildTimeoutMs / MS_PER_SECOND),
+      buildExecutionTimeoutSeconds: Math.ceil(plan.buildTimeoutMs / 1000),
+      providerSessionTimeoutSeconds: resolveImageBuildProviderSessionTimeoutSeconds(
+        plan.buildTimeoutMs
+      ),
       onProviderSessionCreated: callbacks.bindProviderSession,
     });
   }
@@ -54,6 +51,7 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
         ...input.correlation,
         sandbox_id: input.providerSessionId,
       },
+      signal: input.signal,
     });
 
     if (!snapshot.success || !snapshot.imageId) {
@@ -75,23 +73,36 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
     // that outlives its image is reclaimed by the orphaned-store sweep, not at
     // build teardown (the sandbox is gone by the time the image is deleted, so
     // there is no attachment left to delete it through).
-    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation, {
-      deleteSecretStore: false,
-    });
+    await this.deleteBuildSandbox(
+      input.buildId,
+      input.providerSessionId,
+      input.correlation,
+      {
+        deleteSecretStore: false,
+      },
+      input.signal
+    );
   }
 
   async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
     // A failed build produced no checkpoint, so nothing references its store —
     // delete it with the sandbox.
-    await this.deleteBuildSandbox(input.buildId, input.providerSessionId, input.correlation, {
-      deleteSecretStore: true,
-    });
+    await this.deleteBuildSandbox(
+      input.buildId,
+      input.providerSessionId,
+      input.correlation,
+      {
+        deleteSecretStore: true,
+      },
+      input.signal
+    );
   }
 
   async deleteImage(input: DeleteImageInput): Promise<void> {
     await this.provider.deleteProviderImage(
       input.image.providerImageId,
-      input.image.providerSessionId
+      input.image.providerSessionId,
+      ...(input.signal ? [input.signal] : [])
     );
   }
 
@@ -99,20 +110,17 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter<OpenComp
     buildId: string,
     providerSessionId: string,
     correlation: FinalizeImageBuildInput["correlation"],
-    options: { deleteSecretStore: boolean }
+    options: { deleteSecretStore: boolean },
+    signal?: AbortSignal
   ): Promise<void> {
-    try {
-      await this.provider.deleteSandbox(providerSessionId, {
+    void buildId;
+    void correlation;
+    await this.provider.deleteSandbox(
+      providerSessionId,
+      {
         deleteSecretStore: options.deleteSecretStore,
-      });
-    } catch (error) {
-      logger.warn("image_build.opencomputer_build_cleanup_failed", {
-        build_id: buildId,
-        provider_session_id: providerSessionId,
-        error: error instanceof Error ? error.message : String(error),
-        request_id: correlation.request_id,
-        trace_id: correlation.trace_id,
-      });
-    }
+      },
+      ...(signal ? [signal] : [])
+    );
   }
 }

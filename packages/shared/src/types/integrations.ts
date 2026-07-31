@@ -36,6 +36,13 @@ export interface LinearBotSettings {
   issueSessionInstructions?: string;
 }
 
+/**
+ * Maximum length of a custom session-instructions value (Linear
+ * `issueSessionInstructions`, Slack `sessionInstructions`). Bounds the
+ * settings blob and the prompt section built from it.
+ */
+export const MAX_SESSION_INSTRUCTIONS_LENGTH = 10000;
+
 /** Overridable behavior settings for the code-server integration. */
 export interface CodeServerSettings {
   enabled?: boolean;
@@ -103,17 +110,29 @@ export const DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS = 5;
 /** Default maximum agent-spawned child sessions per parent session. */
 export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 
+/** Minimum configurable sandbox session lifetime, in milliseconds. */
+export const MIN_SANDBOX_TIMEOUT_MS = 1000;
+
+/** Whether a sandbox lifetime is a safe positive whole-second millisecond value. */
+export function isValidSandboxTimeoutMs(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= MIN_SANDBOX_TIMEOUT_MS &&
+    value % MIN_SANDBOX_TIMEOUT_MS === 0
+  );
+}
+
 /**
  * Default repo-image build timeout (the build sandbox lifetime), in seconds.
  * Mirrors `DEFAULT_BUILD_TIMEOUT_SECONDS` in the Modal data plane
- * (`packages/modal-infra/src/sandbox/manager.py`).
+ * (`packages/modal-infra/src/sandbox/build_session.py`).
  */
 export const DEFAULT_BUILD_TIMEOUT_SECONDS = 1800;
 
 /**
- * Maximum configurable repo-image build timeout, in seconds. The Modal
- * stale-build sweep (`STALE_BUILD_THRESHOLD_SECONDS`) is sized above this, so
- * raising it requires raising that threshold in lockstep.
+ * Maximum configurable repo-image build timeout, in seconds. Control-plane
+ * stale recovery derives its provider-session ceiling from this value.
  */
 export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
 
@@ -159,6 +178,12 @@ export interface SandboxSettings {
    * default.
    */
   memoryMib?: number | null;
+  /**
+   * Requested sandbox session lifetime, in milliseconds and whole-second
+   * increments. Unset uses the provider default. Provider support and limits
+   * vary.
+   */
+  sandboxTimeoutMs?: number;
   /**
    * Repo-image build timeout (the build sandbox lifetime), in seconds.
    * Build-only — sessions are unaffected. Unset → DEFAULT_BUILD_TIMEOUT_SECONDS.
@@ -224,6 +249,11 @@ export interface SlackGlobalSettings extends SlackRepoSettings {
   mentionsPolicy?: SlackMentionsPolicy;
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
   routingRules?: SlackRoutingRule[];
+  /**
+   * Custom instructions appended to the first prompt of every Slack-initiated
+   * session (global-only, like mentionsPolicy).
+   */
+  sessionInstructions?: string;
 }
 
 /**
