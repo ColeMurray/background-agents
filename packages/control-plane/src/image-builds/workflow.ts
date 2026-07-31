@@ -323,6 +323,10 @@ export class ImageBuildWorkflow {
     }
   }
 
+  /**
+   * Authenticates and durably accepts runtime success before publishing the
+   * secret-free Queue command. Exact retries republish safely.
+   */
   async acceptBuildComplete(
     command: AcceptBuildCompleteCommand
   ): Promise<ImageBuildWorkflowResult> {
@@ -375,6 +379,10 @@ export class ImageBuildWorkflow {
     return { type: "completion_accepted" };
   }
 
+  /**
+   * Persists runtime failure and its cleanup obligation before publishing the
+   * Queue command that tears down the bound provider session.
+   */
   async acceptBuildFailed(command: AcceptBuildFailedCommand): Promise<ImageBuildWorkflowResult> {
     const { failure, context: ctx } = command;
     const providerSessionId = failure.providerSessionId ?? "";

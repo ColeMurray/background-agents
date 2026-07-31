@@ -16,6 +16,11 @@ type FinalizationProcessor = (
   requestId: string
 ) => Promise<ImageBuildFinalizationResult>;
 
+/**
+ * Applies Queue delivery semantics to one batch: invalid commands are
+ * discarded, completed work is acknowledged, and busy or failed work is
+ * retried without aborting later messages in the batch.
+ */
 export async function consumeImageBuildFinalizationBatch(
   batch: MessageBatch<unknown>,
   process: FinalizationProcessor
@@ -50,6 +55,7 @@ export async function consumeImageBuildFinalizationBatch(
   }
 }
 
+/** Cloudflare Queue composition root for the production finalizer. */
 export async function consumeImageBuildFinalizations(
   batch: MessageBatch<unknown>,
   env: Env

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CompleteImageBuildCallback, FailImageBuildCallback } from "./types";
 
+/** Versioned, secret-free command accepted by the finalization Queue. */
 export const imageBuildFinalizationJobSchema = z.object({
   version: z.literal(1),
   buildId: z.string().min(1),
@@ -9,6 +10,7 @@ export const imageBuildFinalizationJobSchema = z.object({
 
 export type ImageBuildFinalizationJob = z.infer<typeof imageBuildFinalizationJobSchema>;
 
+/** Minimal producer boundary used by callback workflows. */
 export interface ImageBuildFinalizationQueue {
   send(job: ImageBuildFinalizationJob): Promise<void>;
 }
@@ -17,6 +19,10 @@ type FinalizationOutcome =
   | { outcome: "success"; completion: CompleteImageBuildCallback & { providerSessionId: string } }
   | { outcome: "failure"; failure: FailImageBuildCallback & { providerSessionId: string } };
 
+/**
+ * Creates a deterministic command whose hash binds the accepted callback
+ * payload without placing repository credentials or callback tokens on Queue.
+ */
 export async function createImageBuildFinalizationJob(
   result: FinalizationOutcome
 ): Promise<ImageBuildFinalizationJob> {

@@ -124,6 +124,62 @@ describe("ImageBuildStore finalization state", () => {
     expect(row?.provider_session_cleanup_pending).toBe(1);
   });
 
+  it("delivers a failed callback to provider-session cleanup exactly once", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    const now = Date.now();
+    const completionHash = "b".repeat(64);
+    await store.registerBuild({
+      id: "build-failed-cleanup",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+      callbackTokenHash: "token-hash",
+      callbackTokenExpiresAt: now + 60_000,
+    });
+    await store.bindProviderSession("build-failed-cleanup", "modal", "session-failed-cleanup");
+    await store.finalization.acceptFailedCompletion({
+      buildId: "build-failed-cleanup",
+      provider: "modal",
+      providerSessionId: "session-failed-cleanup",
+      tokenHash: "token-hash",
+      completionHash,
+      errorMessage: "setup failed",
+      now,
+    });
+
+    const adapter = {
+      startBuild: vi.fn(),
+      deleteImage: vi.fn(),
+      finalizeSuccessfulBuild: vi.fn(),
+      cleanupCompletedBuild: vi.fn(),
+      cleanupFailedBuild: vi.fn(async () => undefined),
+    };
+    const finalizer = new ImageBuildFinalizer(store, {
+      create: vi.fn(() => adapter),
+    });
+    const job = {
+      version: 1 as const,
+      buildId: "build-failed-cleanup",
+      completionHash,
+    };
+
+    await expect(finalizer.process(job, { request_id: "queue-failed-1" })).resolves.toEqual({
+      type: "completed",
+    });
+    await expect(finalizer.process(job, { request_id: "queue-failed-2" })).resolves.toEqual({
+      type: "completed",
+    });
+
+    expect(await getRow("build-failed-cleanup")).toMatchObject({
+      status: "failed",
+      provider_session_id: null,
+      provider_session_cleanup_pending: 0,
+    });
+    expect(adapter.finalizeSuccessfulBuild).not.toHaveBeenCalled();
+    expect(adapter.cleanupFailedBuild).toHaveBeenCalledTimes(1);
+  });
+
   it("never hard-deletes a terminal row while provider-session cleanup is pending", async () => {
     const environmentId = await seedEnvironment();
     const store = new ImageBuildStore(env.DB);

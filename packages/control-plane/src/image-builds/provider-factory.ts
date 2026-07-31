@@ -12,6 +12,11 @@ import { VercelImageBuildAdapter } from "./vercel-adapter";
  * Providers share one lifecycle contract; only API translation varies.
  */
 export interface ImageBuildAdapterFactory {
+  /**
+   * `start` validates configuration needed to create a provider session.
+   * `existing_session` requires only the configuration needed to finalize or
+   * clean up a session that has already been bound to the build.
+   */
   create(provider: ImageBuildProvider, operation: "start" | "existing_session"): ImageBuildAdapter;
 }
 

@@ -877,6 +877,74 @@ describe("Image builds", () => {
       expect((await getRow("cb-noauth"))?.status).toBe("building");
     });
 
+    it("does not consume callback authorization for the wrong provider session", async () => {
+      const environmentId = await seedEnvironment();
+      await registerBuild(environmentId, "cb-wrong-session");
+
+      const wrongSession = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-wrong-session",
+          provider_session_id: "session-other",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(wrongSession.status).toBe(401);
+      expect((await getRow("cb-wrong-session"))?.callback_token_used_at).toBeNull();
+
+      const boundSession = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-wrong-session",
+          provider_session_id: "session-cb-wrong-session",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(boundSession.status).toBe(202);
+      expect((await getRow("cb-wrong-session"))?.callback_token_used_at).not.toBeNull();
+    });
+
+    it("rejects an expired callback token without changing build state", async () => {
+      const environmentId = await seedEnvironment();
+      const store = new ImageBuildStore(env.DB);
+      await store.registerBuild({
+        id: "cb-expired",
+        scope: environmentScope(environmentId),
+        provider: "modal",
+        repositoriesFingerprint: "fp-cb",
+        callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
+        callbackTokenExpiresAt: Date.now() - 1,
+      });
+      await store.bindProviderSession("cb-expired", "modal", "session-cb-expired");
+
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-expired",
+          provider_session_id: "session-cb-expired",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(response.status).toBe(401);
+      expect(await getRow("cb-expired")).toMatchObject({
+        status: "building",
+        callback_token_used_at: null,
+        completion_hash: null,
+      });
+    });
+
     it.each([
       ["missing runtime_version", { runtime_version: undefined }],
       ["unparseable runtime_version", { runtime_version: "53-no-prefix" }],

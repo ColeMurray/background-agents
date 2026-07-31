@@ -1804,6 +1804,7 @@ class SandboxSupervisor:
         return False
 
     def _image_build_execution_timeout_seconds(self) -> int | None:
+        """Return the positive clone/setup budget configured for build mode."""
         raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
         if not raw_timeout:
             return None

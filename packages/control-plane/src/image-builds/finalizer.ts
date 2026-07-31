@@ -11,11 +11,15 @@ import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
 export { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
+/** Lease exceeds the provider deadline so overlapping creation attempts cannot run. */
 export const IMAGE_BUILD_FINALIZATION_LEASE_MS = 6 * 60 * 1000;
+
+/** Hard deadline for one provider snapshot or checkpoint attempt. */
 export const IMAGE_BUILD_PROVIDER_ATTEMPT_MS = 5 * 60 * 1000;
 const SHORT_RETRY_DELAY_SECONDS = 15;
 const LEASE_EXPIRY_HEADROOM_SECONDS = 5;
 
+/** Queue disposition returned after processing one finalization command. */
 export type ImageBuildFinalizationResult =
   | { type: "completed" }
   | { type: "retry"; delaySeconds: number };
@@ -26,6 +30,11 @@ const retrySoon = (): ImageBuildFinalizationResult => ({
   delaySeconds: SHORT_RETRY_DELAY_SECONDS,
 });
 
+/**
+ * Resumes accepted image builds from D1 and advances them through provider
+ * artifact creation, fenced persistence, ready-state publication, and
+ * idempotent provider-session teardown.
+ */
 export class ImageBuildFinalizer {
   private readonly reaper: ImageBuildReaper;
   private readonly sessionCleanup: ImageBuildSessionCleanup;
@@ -39,6 +48,12 @@ export class ImageBuildFinalizer {
     this.sessionCleanup = new ImageBuildSessionCleanup(store, adapterFactory);
   }
 
+  /**
+   * Processes one at-least-once Queue delivery.
+   *
+   * The completion hash rejects stale commands, the lease serializes provider
+   * work, and a persisted artifact is always resumed rather than recreated.
+   */
   async process(
     job: ImageBuildFinalizationJob,
     correlation: CorrelationContext
@@ -205,6 +220,10 @@ export class ImageBuildFinalizer {
     return completed();
   }
 
+  /**
+   * Removes an artifact that could not be fenced. If deletion also fails, the
+   * artifact is quarantined on the row so maintenance can reap it later.
+   */
   private async compensateUnrecordedArtifact(
     adapter: AnyImageBuildAdapter,
     build: ImageBuildFinalizationRow,

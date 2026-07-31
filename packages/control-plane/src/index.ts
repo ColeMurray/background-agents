@@ -35,11 +35,7 @@ export default {
   /**
    * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
    */
-  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    if (event.cron !== "* * * * *") {
-      logger.warn("Unknown scheduled trigger", { cron: event.cron });
-      return;
-    }
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     if (!env.SCHEDULER) {
       logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
       return;

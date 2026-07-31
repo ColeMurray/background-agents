@@ -4,6 +4,7 @@ import type { CorrelationContext } from "../logger";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS } from "./reaper";
 
+/** Durable row fields required to tear down one provider build session. */
 export interface ImageBuildSessionCleanupTarget {
   id: string;
   provider: ImageBuildProvider;
@@ -21,6 +22,11 @@ export class ImageBuildSessionCleanup {
     private readonly attemptTimeoutMs = IMAGE_BUILD_CLEANUP_ATTEMPT_MS
   ) {}
 
+  /**
+   * Runs the provider-specific terminal cleanup and clears the obligation only
+   * after the provider call succeeds. Returns false when cleanup was already
+   * completed or no provider session was ever bound.
+   */
   async run(
     target: ImageBuildSessionCleanupTarget,
     correlation: CorrelationContext

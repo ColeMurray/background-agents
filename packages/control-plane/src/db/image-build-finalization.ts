@@ -21,9 +21,13 @@ interface CallbackTokenRow {
   callback_token_used_at: number | null;
 }
 
+/** Result of atomically consuming or replaying a callback completion. */
 export type ImageBuildCompletionAcceptance = "accepted" | "replayed" | "rejected";
+
+/** Whether callback credentials are fresh or belong to an accepted replay. */
 export type ImageBuildCallbackAuthorization = "fresh" | "accepted";
 
+/** Internal columns required to resume Queue finalization and session cleanup. */
 export interface ImageBuildFinalizationRow {
   id: string;
   provider: ImageBuildProvider;
@@ -45,6 +49,11 @@ export interface ImageBuildFinalizationRow {
 export class ImageBuildFinalizationStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /**
+   * Atomically consumes a fresh callback token and persists success metadata.
+   * An exact duplicate is reported as a replay; any conflicting or stale
+   * callback is rejected without changing the row.
+   */
   async acceptSuccessfulCompletion(params: {
     buildId: string;
     provider: ImageBuildProvider;
@@ -87,6 +96,10 @@ export class ImageBuildFinalizationStore {
     return this.readReplayAcceptance(params);
   }
 
+  /**
+   * Atomically terminalizes a runtime failure while retaining its provider
+   * session as a durable cleanup obligation.
+   */
   async acceptFailedCompletion(params: {
     buildId: string;
     provider: ImageBuildProvider;
@@ -151,6 +164,11 @@ export class ImageBuildFinalizationStore {
     return replay ? "replayed" : "rejected";
   }
 
+  /**
+   * Authenticates a callback against its build and bound provider session.
+   * Accepted callbacks remain authorizable so a lost HTTP response can safely
+   * republish the same Queue command.
+   */
   async authorizeCompletionCallback(params: {
     buildId: string;
     providerSessionId: string;
@@ -201,6 +219,7 @@ export class ImageBuildFinalizationStore {
       .first<CallbackTokenRow & { completion_hash: string | null }>();
   }
 
+  /** Reads the durable state used by a Queue delivery or cleanup retry. */
   async getBuild(buildId: string): Promise<ImageBuildFinalizationRow | null> {
     return this.db
       .prepare(
@@ -214,6 +233,10 @@ export class ImageBuildFinalizationStore {
       .first<ImageBuildFinalizationRow>();
   }
 
+  /**
+   * Claims exclusive finalization ownership when no live lease exists.
+   * Expired leases may be replaced by a redelivery.
+   */
   async claimLease(params: {
     buildId: string;
     completionHash: string;
@@ -239,6 +262,10 @@ export class ImageBuildFinalizationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Fences a provider artifact to the exact build, completion, session, and
+   * lease that created it before any ready-state transition is attempted.
+   */
   async recordArtifact(params: {
     buildId: string;
     provider: ImageBuildProvider;
@@ -266,6 +293,7 @@ export class ImageBuildFinalizationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** Releases a retryable attempt only when the caller still owns its lease. */
   async clearLease(buildId: string, leaseToken: string): Promise<boolean> {
     const result = await this.db
       .prepare(
@@ -278,6 +306,7 @@ export class ImageBuildFinalizationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /** Terminalizes an ambiguous attempt only when the caller owns the lease. */
   async markFailed(params: {
     buildId: string;
     leaseToken: string;
@@ -332,6 +361,11 @@ export class ImageBuildFinalizationStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Clears an idempotent teardown obligation for the exact provider session.
+   * Failed builds drop their now-useless session id; image-bearing rows retain
+   * it because provider artifact deletion may require that provenance.
+   */
   async clearSessionCleanup(params: {
     buildId: string;
     provider: ImageBuildProvider;

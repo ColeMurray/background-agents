@@ -126,6 +126,34 @@ The build process runs the same setup steps that a normal session would:
 3. Calls the control plane with the exact bound provider session id
 4. Lets a durable Queue consumer save the provider image artifact and terminate the build session
 
+```mermaid
+flowchart TD
+    trigger[Build trigger] --> register[Register building row and callback token]
+    register --> create[Create dormant provider session]
+    create --> bind[Persist the provider session id]
+    bind --> run[Start runtime: clone repositories and run setup]
+
+    run -->|success callback| accept[Authenticate and persist completion metadata]
+    run -->|failure callback| fail[Authenticate and persist failed state]
+    accept --> publish[Publish secret-free Queue command]
+    fail --> publish
+
+    publish --> lease{D1 finalization lease available?}
+    lease -->|no| retry[Retry after the active lease]
+    retry --> lease
+    lease -->|success build| artifact[Snapshot or checkpoint provider session]
+    lease -->|failed build| cleanup[Terminate provider session]
+
+    artifact --> fence[Fence provider artifact id in D1]
+    fence --> ready[Mark image ready or superseded]
+    ready --> cleanup
+    cleanup --> done[Clear cleanup obligation]
+
+    artifact -->|definitely no artifact created| retry
+    artifact -->|outcome ambiguous| terminal[Mark failed; do not create again]
+    terminal --> cleanup
+```
+
 A failing setup script fails the whole build, and for environment builds the error names the
 repository. Build-time secrets are exactly what the scope's sessions get: global + repository
 secrets for a repository scope, global + environment secrets for an environment scope
