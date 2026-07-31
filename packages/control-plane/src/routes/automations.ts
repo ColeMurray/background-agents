@@ -2,19 +2,18 @@
  * Automation CRUD routes.
  */
 
+import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
-  isValidCron,
-  nextCronOccurrence,
-  cronIntervalMinutes,
   validateConditions,
   conditionRegistry,
-  listChannels,
   TRIGGER_TYPE_TO_SOURCE,
-  type CreateAutomationRequest,
-  type UpdateAutomationRequest,
-  type AutomationTriggerType,
-  type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import type { AutomationTriggerType, TriggerConfig } from "@open-inspect/shared/triggers";
+import type {
+  CreateAutomationRequest,
+  UpdateAutomationRequest,
+} from "@open-inspect/shared/types/automations";
+import { listChannels } from "@open-inspect/shared/slack";
 import {
   getValidModelOrDefault,
   isValidModel,
@@ -37,7 +36,7 @@ import { createLogger } from "../logger";
 import {
   automationRepositoriesInputSchema,
   MAX_AUTOMATION_REPOSITORIES,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/automations";
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   type Route,
