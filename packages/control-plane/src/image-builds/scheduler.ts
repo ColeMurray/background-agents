@@ -15,8 +15,6 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 
 const logger = createLogger("image-builds:scheduler");
-const TRIGGER_CAP = 8;
-const SCHEDULER_INTERVAL_MS = 30 * 60 * 1000;
 
 export const IMAGE_BUILD_SCHEDULER_CRON = "7,37 * * * *";
 
@@ -186,14 +184,9 @@ export class ImageBuildScheduler {
     if (!this.provider || !this.sourceControl) return;
     const provider = this.provider;
     const sourceControl = this.sourceControl;
-    const scopes = [...(await this.listScopes(this.db))].sort(
-      (left, right) => left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id)
-    );
-    const startIndex =
-      scopes.length === 0 ? 0 : Math.floor(Date.now() / SCHEDULER_INTERVAL_MS) % scopes.length;
+    const scopes = await this.listScopes(this.db);
 
-    for (let index = 0; index < scopes.length; index += 1) {
-      const scope = scopes[(startIndex + index) % scopes.length];
+    for (const scope of scopes) {
       try {
         const target = await this.resolveTarget(this.env, this.db, scope);
         const rows = await this.store.getReconciliationStatus(scope, provider);
@@ -238,7 +231,7 @@ export class ImageBuildScheduler {
           );
         }
 
-        if (rebuild && stats.triggered < TRIGGER_CAP) {
+        if (rebuild) {
           try {
             const result = await this.workflow.triggerBuildWithTarget(scope, target, correlation);
             if (result.type === "triggered") stats.triggered += 1;

@@ -246,7 +246,7 @@ describe("ImageBuildScheduler", () => {
     expect(stats.branchLookups).toBe(41);
   });
 
-  it("continues scanning after reaching the build start cap", async () => {
+  it("starts every required build found by the full scan", async () => {
     const { scheduler, listScopes, workflow } = harness();
     listScopes.mockResolvedValue(
       Array.from({ length: 10 }, (_, index) => ({
@@ -258,35 +258,8 @@ describe("ImageBuildScheduler", () => {
     const stats = await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
 
     expect(stats.scopesScanned).toBe(10);
-    expect(stats.triggered).toBe(8);
-    expect(workflow.triggerBuildWithTarget).toHaveBeenCalledTimes(8);
-  });
-
-  it("rotates a stateless full scan so the build cap cannot starve a scope", async () => {
-    vi.useFakeTimers();
-    try {
-      const { scheduler, listScopes, workflow } = harness();
-      listScopes.mockResolvedValue(
-        Array.from({ length: 9 }, (_, index) => ({
-          kind: "repo" as const,
-          id: `acme/repo-${index}`,
-        }))
-      );
-
-      vi.setSystemTime(new Date("2026-01-01T00:07:00Z"));
-      await scheduler.run({ request_id: "cron-1", trace_id: "cron-1" });
-      vi.setSystemTime(new Date("2026-01-01T00:37:00Z"));
-      await scheduler.run({ request_id: "cron-2", trace_id: "cron-2" });
-
-      const triggeredScopes = new Set(
-        workflow.triggerBuildWithTarget.mock.calls.map(([scope]) => scope.id)
-      );
-      expect(triggeredScopes).toEqual(
-        new Set(Array.from({ length: 9 }, (_, index) => `acme/repo-${index}`))
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(stats.triggered).toBe(10);
+    expect(workflow.triggerBuildWithTarget).toHaveBeenCalledTimes(10);
   });
 
   it("runs provider-neutral maintenance when rebuild reconciliation is unavailable", async () => {
