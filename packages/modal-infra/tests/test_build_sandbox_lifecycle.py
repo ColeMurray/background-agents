@@ -23,6 +23,12 @@ def _async_method(return_value=None):
     return method
 
 
+def _mock_sandbox_lookup(monkeypatch, sandbox):
+    from_id = _async_method(sandbox)
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", from_id)
+    return from_id
+
+
 @pytest.mark.parametrize(
     ("constant_name", "python_value"),
     [
@@ -101,7 +107,7 @@ async def test_start_build_sandbox_verifies_tags_and_injects_exact_callback_env(
         ),
         exec=_async_method(process),
     )
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", lambda _id: sandbox)
+    from_id = _mock_sandbox_lookup(monkeypatch, sandbox)
 
     await ModalBuildSessionService().start(
         build_id="build-1",
@@ -124,6 +130,8 @@ async def test_start_build_sandbox_verifies_tags_and_injects_exact_callback_env(
         "OI_REPO_IMAGE_PROVIDER_SESSION_ID": "modal-session-1",
     }
     assert sandbox.exec.aio.await_args.kwargs["workdir"] == "/workspace"
+    from_id.assert_not_called()
+    from_id.aio.assert_awaited_once_with("modal-session-1")
 
 
 @pytest.mark.asyncio
@@ -137,7 +145,7 @@ async def test_start_build_sandbox_refuses_mismatched_tags(monkeypatch):
         ),
         exec=_async_method(),
     )
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", lambda _id: sandbox)
+    _mock_sandbox_lookup(monkeypatch, sandbox)
 
     with pytest.raises(BuildSessionNotFoundError, match="build session not found"):
         await ModalBuildSessionService().start(
@@ -160,7 +168,7 @@ async def test_snapshot_build_awaits_async_snapshot_operation(monkeypatch):
         ),
         snapshot_filesystem=snapshot_filesystem,
     )
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", lambda _id: sandbox)
+    _mock_sandbox_lookup(monkeypatch, sandbox)
 
     image_id = await ModalBuildSessionService().snapshot(
         build_id="build-1",
@@ -183,7 +191,7 @@ async def test_terminate_build_sandbox_verifies_tags(monkeypatch):
         ),
         terminate=_async_method(),
     )
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", lambda _id: sandbox)
+    _mock_sandbox_lookup(monkeypatch, sandbox)
 
     await ModalBuildSessionService().terminate(
         build_id="build-1",
@@ -203,7 +211,7 @@ async def test_terminate_build_sandbox_treats_provider_not_found_as_success(monk
         terminate=_async_method(),
     )
     sandbox.get_tags.aio.side_effect = NotFoundError("sandbox no longer exists")
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.from_id", lambda _id: sandbox)
+    _mock_sandbox_lookup(monkeypatch, sandbox)
 
     await ModalBuildSessionService().terminate(
         build_id="build-1",
