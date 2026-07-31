@@ -160,8 +160,6 @@ statuses are `building | ready | failed | superseded`.
 | `/image-builds/status`                       | GET    | Cross-scope aggregate over every prebuild-enabled scope — excludes superseded, includes failed                                                                       |
 | `/image-builds/status?scope_kind=&scope_id=` | GET    | One scope's recent non-superseded builds (settings/debug view)                                                                                                       |
 | `/image-builds/enabled`                      | GET    | Cron feed: enabled scope units with repositories + fingerprint, plus the runtime floor                                                                               |
-| `/image-builds/mark-stale`                   | POST   | Mark old `building` rows failed (called by the scheduler)                                                                                                            |
-| `/image-builds/cleanup`                      | POST   | Delete old failed rows and reap superseded rows' provider artifacts                                                                                                  |
 
 Every provider uses the same callback contract. The control plane creates a dormant provider
 session, binds its opaque id to the build row, and only then starts the runtime. The runtime calls

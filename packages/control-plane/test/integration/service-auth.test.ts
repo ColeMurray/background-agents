@@ -17,7 +17,6 @@ const SERVICE_SECRET: Record<ServiceName, string> = {
   "slack-bot": "test-service-secret-slack-bot",
   "github-bot": "test-service-secret-github-bot",
   "linear-bot": "test-service-secret-linear-bot",
-  modal: "test-service-secret-modal",
 };
 
 async function signedFetch(p: {
@@ -75,8 +74,8 @@ describe("sig1 service-credential authentication", () => {
     const createdBy = "a".repeat(32);
     const signedUrl = `https://test.local/sessions?limit=5&createdBy=${createdBy}`;
     const headers = await buildServiceAuthHeaders({
-      service: "modal",
-      secret: SERVICE_SECRET.modal,
+      service: "linear-bot",
+      secret: SERVICE_SECRET["linear-bot"],
       method: "GET",
       url: signedUrl,
     });
@@ -91,7 +90,7 @@ describe("sig1 service-credential authentication", () => {
 
   it("delivers the signed body intact to the handler (D1 write lands)", async () => {
     const response = await signedFetch({
-      service: "modal",
+      service: "linear-bot",
       method: "PUT",
       url: "https://test.local/secrets",
       body: JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } }),
@@ -109,8 +108,8 @@ describe("sig1 service-credential authentication", () => {
     const url = "https://test.local/secrets";
     const intactBody = JSON.stringify({ secrets: { SIGNED_BODY_TEST: "intact" } });
     const headers = await buildServiceAuthHeaders({
-      service: "modal",
-      secret: SERVICE_SECRET.modal,
+      service: "linear-bot",
+      secret: SERVICE_SECRET["linear-bot"],
       method: "PUT",
       url,
       body: intactBody,
@@ -181,16 +180,14 @@ describe("sig1 service-credential authentication", () => {
     expect(response.status).toBe(401);
   });
 
-  it("denies actor assertions from web and modal", async () => {
-    for (const service of ["web", "modal"] as const) {
-      const response = await signedFetch({
-        service,
-        method: "GET",
-        url: "https://test.local/sessions",
-        actor: service === "web" ? "slack:U1" : "github:1",
-      });
-      expect(response.status, service).toBe(401);
-    }
+  it("denies actor assertions from web", async () => {
+    const response = await signedFetch({
+      service: "web",
+      method: "GET",
+      url: "https://test.local/sessions",
+      actor: "slack:U1",
+    });
+    expect(response.status).toBe(401);
   });
 
   it("persists bot session ownership from the signed actor", async () => {
@@ -248,7 +245,7 @@ describe("sig1 service-credential authentication", () => {
 
   it("rejects an unknown service name", async () => {
     const response = await signedFetch({
-      service: "modal",
+      service: "linear-bot",
       method: "GET",
       url: "https://test.local/sessions",
       mutateHeaders: (headers) => {

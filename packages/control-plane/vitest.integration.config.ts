@@ -56,7 +56,6 @@ export default defineConfig({
             SERVICE_AUTH_SECRET_SLACK_BOT: "test-service-secret-slack-bot",
             SERVICE_AUTH_SECRET_GITHUB_BOT: "test-service-secret-github-bot",
             SERVICE_AUTH_SECRET_LINEAR_BOT: "test-service-secret-linear-bot",
-            SERVICE_AUTH_SECRET_MODAL: "test-service-secret-modal",
             BROWSER_AUTH_SECRET: "test-browser-auth-secret-with-at-least-32-characters",
             GITHUB_CLIENT_ID: "github-app-client-id",
             GITHUB_CLIENT_SECRET: "github-app-client-secret",

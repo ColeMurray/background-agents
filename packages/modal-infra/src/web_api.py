@@ -559,7 +559,10 @@ async def api_restore_sandbox(
         )
 
 
-@app.function(image=function_image, secrets=[internal_api_secret])
+@app.function(
+    image=function_image,
+    secrets=[internal_api_secret],
+)
 @fastapi_endpoint(method="POST")
 async def api_create_build_sandbox(
     request: dict,
@@ -577,10 +580,10 @@ async def api_create_build_sandbox(
     require_auth(authorization)
 
     try:
-        from .sandbox.build_session import ModalBuildSessionService
-        from .sandbox.manager import (
+        from .sandbox.build_session import (
             DEFAULT_BUILD_TIMEOUT_SECONDS,
             MAX_BUILD_TIMEOUT_SECONDS,
+            ModalBuildSessionService,
         )
 
         build_id = _required_string(request, "build_id")
@@ -838,130 +841,6 @@ def _validated_build_repositories(value: object) -> list[dict]:
     except RepoConfigError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return value
-
-
-@app.function(
-    image=function_image,
-    secrets=[internal_api_secret, github_app_secrets],
-)
-@fastapi_endpoint(method="POST")
-async def api_build_image(
-    request: dict,
-    authorization: str | None = Header(None),
-    x_trace_id: str | None = Header(None),
-    x_request_id: str | None = Header(None),
-) -> dict:
-    """
-    Kick off an async scope image build (design §4). Returns immediately.
-
-    Spawns a build_image worker that clones every repository in the set, runs
-    their setup hooks sequentially, snapshots the filesystem, and POSTs the
-    result (repository_shas + runtime_version) to callback_url.
-
-    POST body:
-    {
-        "scope_kind": "repo" | "environment",  // logging only
-        "scope_id": "...",                      // logging only
-        "build_id": "...",
-        "callback_url": "...",
-        "failure_callback_url": "...",
-        "callback_token": "...",  # bearer for both callbacks
-        "repositories": [{"repo_owner": "...", "repo_name": "...", "branch": "..."}],
-        "user_env_vars": {...},          // optional
-        "build_timeout_seconds": 1800    // optional
-    }
-    """
-    start_time = time.time()
-    http_status = 200
-    outcome = "success"
-
-    require_auth(authorization)
-
-    try:
-        from .sandbox.manager import (
-            DEFAULT_BUILD_TIMEOUT_SECONDS,
-            MAX_BUILD_TIMEOUT_SECONDS,
-            build_function_timeout_seconds,
-        )
-        from .scheduler.image_builder import build_image
-
-        scope_kind = request.get("scope_kind", "")
-        scope_id = request.get("scope_id", "")
-        build_id = request.get("build_id", "")
-        callback_url = request.get("callback_url", "")
-        failure_callback_url = request.get("failure_callback_url", "")
-        callback_token = request.get("callback_token", "")
-        repositories = request.get("repositories")
-        user_env_vars = request.get("user_env_vars") or None
-        # Already capped by the control plane; default when absent/null.
-        build_timeout_seconds = _validated_timeout_seconds(
-            request,
-            "build_timeout_seconds",
-            default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
-            max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
-        )
-
-        if not build_id:
-            raise HTTPException(status_code=400, detail="build_id is required")
-
-        if not callback_url:
-            raise HTTPException(status_code=400, detail="callback_url is required")
-
-        if not failure_callback_url:
-            raise HTTPException(status_code=400, detail="failure_callback_url is required")
-
-        if not callback_token:
-            # A tokenless build could never report success or failure — the
-            # control plane requires the callback bearer — so it would wedge
-            # as 'building' until the stale sweep reaps it. Fail fast instead.
-            raise HTTPException(status_code=400, detail="callback_token is required")
-
-        repositories = _validated_build_repositories(repositories)
-
-        function_timeout = build_function_timeout_seconds(build_timeout_seconds)
-
-        # Spawn the async builder — returns immediately
-        await build_image.with_options(timeout=function_timeout).spawn.aio(
-            scope_kind=scope_kind,
-            scope_id=scope_id,
-            repositories=repositories,
-            callback_url=callback_url,
-            failure_callback_url=failure_callback_url,
-            callback_token=callback_token,
-            build_id=build_id,
-            user_env_vars=user_env_vars,
-            build_timeout_seconds=build_timeout_seconds,
-        )
-
-        return {
-            "success": True,
-            "data": {
-                "build_id": build_id,
-                "status": "building",
-            },
-        }
-    except HTTPException as e:
-        outcome = "error"
-        http_status = e.status_code
-        raise
-    except Exception as e:
-        outcome = "error"
-        http_status = 500
-        log.error("api.error", exc=e, endpoint_name="api_build_image")
-        return {"success": False, "error": str(e)}
-    finally:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log.info(
-            "modal.http_request",
-            http_method="POST",
-            http_path="/api_build_image",
-            http_status=http_status,
-            duration_ms=duration_ms,
-            outcome=outcome,
-            endpoint_name="api_build_image",
-            trace_id=x_trace_id,
-            request_id=x_request_id,
-        )
 
 
 @app.function(

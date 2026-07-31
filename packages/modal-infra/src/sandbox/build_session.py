@@ -18,10 +18,14 @@ from sandbox_runtime.repo_image_callback import (
 
 from ..app import app
 from ..images.base import base_image
-from .manager import DEFAULT_BUILD_TIMEOUT_SECONDS, SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from .manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("build_session")
+
+# Mirrors the shared image-build limits.
+DEFAULT_BUILD_TIMEOUT_SECONDS = 1800
+MAX_BUILD_TIMEOUT_SECONDS = 3600
 
 
 class BuildSessionNotFoundError(LookupError):
