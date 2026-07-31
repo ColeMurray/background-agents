@@ -3,9 +3,11 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { SandboxEvent } from "@/types/session";
-import { EventItem } from "./session-timeline";
+import { ToolCallGroup } from "./tool-call-group";
+import { dedupeAndGroupEvents, EventItem } from "./session-timeline";
 
 expect.extend(matchers);
 afterEach(cleanup);
@@ -23,6 +25,26 @@ function event(userId?: string): SandboxEvent {
       avatar: "https://historical.example/avatar",
     },
   };
+}
+
+function toolCall(callId: string, tool: string, filePath: string): SandboxEvent {
+  return {
+    type: "tool_call",
+    sandboxId: "sandbox-1",
+    messageId: `message-${callId}`,
+    callId,
+    tool,
+    args: { filePath },
+    timestamp: Number(callId.replace(/\D/g, "")) || 1,
+  };
+}
+
+function ToolGroups({ events }: { events: SandboxEvent[] }) {
+  return dedupeAndGroupEvents(events).map((group) =>
+    group.type === "tool_group" ? (
+      <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+    ) : null
+  );
 }
 
 describe("user message authors", () => {
@@ -86,5 +108,24 @@ describe("user message authors", () => {
       "src",
       "https://historical.example/avatar"
     );
+  });
+});
+
+describe("tool call groups", () => {
+  it("preserves expanded group and row state when history is prepended", async () => {
+    const readEvents = [
+      toolCall("call-1", "Read", "/workspace/one.ts"),
+      toolCall("call-2", "Read", "/workspace/two.ts"),
+    ];
+    const { rerender } = render(<ToolGroups events={readEvents} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Read2 files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Read one\.ts/i }));
+    expect(screen.getByText("Arguments:")).toBeInTheDocument();
+
+    rerender(<ToolGroups events={[toolCall("call-0", "Bash", "older command"), ...readEvents]} />);
+
+    expect(screen.getByRole("button", { name: /Read one\.ts/i })).toBeInTheDocument();
+    expect(screen.getByText("Arguments:")).toBeInTheDocument();
   });
 });

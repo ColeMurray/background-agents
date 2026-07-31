@@ -35,8 +35,9 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
       groups.push({
         type: "tool_group",
         events: [...currentToolGroup],
-        id: `tool-group-${groupIndex++}`,
+        id: `tool-group-${currentToolGroup[0].callId}`,
       });
+      groupIndex += 1;
       currentToolGroup = [];
     }
   };

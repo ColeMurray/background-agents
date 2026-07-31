@@ -49,7 +49,12 @@ function RepositoryGroup({
 }) {
   const [open, setOpen] = useState(true);
   return (
-    <details open={forceOpen || open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details
+      open={forceOpen || open}
+      onToggle={(event) => {
+        if (!forceOpen) setOpen(event.currentTarget.open);
+      }}
+    >
       <summary className="mb-1.5 cursor-pointer truncate text-[11px] font-medium text-muted-foreground">
         {label}
       </summary>
