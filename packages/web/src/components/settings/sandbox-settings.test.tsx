@@ -83,6 +83,49 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("No tunnel ports configured.")).toBeInTheDocument();
   });
 
+  it("displays session timeout in minutes and saves milliseconds", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });
+      throw new Error("unexpected fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: {
+            [SETTINGS_KEY]: {
+              integrationId: "sandbox",
+              settings: { defaults: { sandboxTimeoutMs: 7_200_000 } },
+            },
+          },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    const input = screen.getByLabelText("Session Timeout");
+    expect(input).toHaveValue(120);
+    await user.clear(input);
+    await user.type(input, "240");
+    await user.click(screen.getByText("Save Settings"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        SETTINGS_KEY,
+        expect.objectContaining({
+          method: "PUT",
+          body: expect.stringContaining('"sandboxTimeoutMs":14400000'),
+        })
+      );
+    });
+  });
+
   it("renders existing ports as individual input rows", () => {
     renderWithSWR(globalSettings([3000, 5173]));
 
@@ -1033,7 +1076,14 @@ describe("SandboxSettingsEditor — environment scope", () => {
     const { fetchMock } = renderEnvironmentEditor({
       [SETTINGS_KEY]: {
         integrationId: "sandbox",
-        settings: { defaults: { tunnelPorts: [], cpuCores: 2, buildTimeoutSeconds: 600 } },
+        settings: {
+          defaults: {
+            tunnelPorts: [],
+            cpuCores: 2,
+            buildTimeoutSeconds: 600,
+            sandboxTimeoutMs: 7_200_000,
+          },
+        },
       },
       [repoSettingsKey]: { integrationId: "sandbox", repo: "acme/app", settings: null },
       [environmentSettingsKey]: {
@@ -1046,6 +1096,8 @@ describe("SandboxSettingsEditor — environment scope", () => {
     await user.clear(screen.getByLabelText("Image Build Timeout"));
     await user.type(screen.getByLabelText("Image Build Timeout"), "2400");
     await user.click(screen.getByText("Save Settings"));
+
+    expect(screen.getByLabelText("Session Timeout")).toHaveValue(120);
 
     // Only the edited field is pinned — inherited cpu and the inherited
     // build-timeout base stay inherited.

@@ -285,11 +285,11 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         wokeSandbox = true;
       }
 
+      const timeoutSeconds = config.timeoutSeconds;
+      if (timeoutSeconds !== undefined) {
+        await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
+      }
       if (wokeSandbox) {
-        const timeoutSeconds = config.timeoutSeconds;
-        if (timeoutSeconds !== undefined) {
-          await this.client.setSandboxTimeout(config.providerObjectId, timeoutSeconds);
-        }
         await this.client.startRuntime(config.providerObjectId);
       }
 

@@ -463,6 +463,7 @@ async function handleGetResolvedConfig(
         // null → use the provider's default reservation (no override configured).
         cpuCores: sandboxSettings.cpuCores ?? null,
         memoryMib: sandboxSettings.memoryMib ?? null,
+        sandboxTimeoutMs: sandboxSettings.sandboxTimeoutMs ?? null,
         enabledRepos,
       },
     });

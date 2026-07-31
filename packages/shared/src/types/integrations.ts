@@ -167,6 +167,12 @@ export interface SandboxSettings {
    */
   memoryMib?: number | null;
   /**
+   * Requested sandbox session lifetime, in milliseconds and whole-second
+   * increments. Unset uses the provider default (or the shorter default for
+   * agent-spawned children). Provider support and limits vary.
+   */
+  sandboxTimeoutMs?: number;
+  /**
    * Repo-image build timeout (the build sandbox lifetime), in seconds.
    * Build-only — sessions are unaffected. Unset → DEFAULT_BUILD_TIMEOUT_SECONDS.
    * The trigger caps the effective value at MAX_BUILD_TIMEOUT_SECONDS via

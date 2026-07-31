@@ -75,6 +75,32 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({ terminalEnabled: true });
   });
 
+  it("accepts a positive integer sandboxTimeoutMs", () => {
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 14_400_000 })).toEqual({
+      sandboxTimeoutMs: 14_400_000,
+    });
+  });
+
+  it("requires sandboxTimeoutMs to be a positive whole number of seconds", () => {
+    expect(() => normalizeSandboxSettings({ sandboxTimeoutMs: 0 })).toThrow(
+      SandboxSettingsValidationError
+    );
+    for (const sandboxTimeoutMs of [1, 999, 1500, 1000.5]) {
+      expect(() => normalizeSandboxSettings({ sandboxTimeoutMs })).toThrow(
+        SandboxSettingsValidationError
+      );
+    }
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 })).toEqual({
+      sandboxTimeoutMs: 1000,
+    });
+  });
+
+  it("omits an invalid sandboxTimeoutMs while preserving valid fields", () => {
+    expect(
+      normalizeSandboxSettings({ sandboxTimeoutMs: -1, terminalEnabled: true }, { invalid: "omit" })
+    ).toEqual({ terminalEnabled: true });
+  });
+
   it("accepts valid codeServerPort and terminalPort", () => {
     expect(normalizeSandboxSettings({ codeServerPort: 8081, terminalPort: 7000 })).toEqual({
       codeServerPort: 8081,

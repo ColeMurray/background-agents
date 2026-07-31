@@ -122,6 +122,19 @@ export function normalizeSandboxSettings(
     }
   }
 
+  if (settings.sandboxTimeoutMs !== undefined) {
+    if (
+      typeof settings.sandboxTimeoutMs !== "number" ||
+      !Number.isSafeInteger(settings.sandboxTimeoutMs) ||
+      settings.sandboxTimeoutMs < 1000 ||
+      settings.sandboxTimeoutMs % 1000 !== 0
+    ) {
+      reject("sandboxTimeoutMs must be a positive whole number of seconds");
+    } else {
+      result.sandboxTimeoutMs = settings.sandboxTimeoutMs;
+    }
+  }
+
   const buildTimeoutSeconds = normalizePositiveIntegerSetting(
     settings.buildTimeoutSeconds,
     "buildTimeoutSeconds",

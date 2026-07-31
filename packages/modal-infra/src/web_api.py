@@ -87,6 +87,23 @@ def _normalize_optional_repository_context(
     return normalized_owner, normalized_name
 
 
+def _timeout_seconds_from_request(request: dict, default_timeout_seconds: int) -> int:
+    value = request.get("timeout_seconds")
+    if value is None:
+        return default_timeout_seconds
+    if isinstance(value, bool):
+        raise HTTPException(status_code=400, detail="timeout_seconds must be a positive integer")
+    try:
+        timeout_seconds = int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400, detail="timeout_seconds must be a positive integer"
+        ) from None
+    if timeout_seconds < 1 or timeout_seconds != value:
+        raise HTTPException(status_code=400, detail="timeout_seconds must be a positive integer")
+    return timeout_seconds
+
+
 def _session_config_from_create_request(
     request: dict, *, repo_owner: str | None, repo_name: str | None
 ):
@@ -152,7 +169,11 @@ async def api_create_sandbox(
     require_valid_control_plane_url(control_plane_url)
 
     try:
-        from .sandbox.manager import SandboxConfig, SandboxManager
+        from .sandbox.manager import (
+            DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            SandboxConfig,
+            SandboxManager,
+        )
 
         manager = SandboxManager()
 
@@ -185,6 +206,7 @@ async def api_create_sandbox(
             code_server_enabled=bool(request.get("code_server_enabled", False)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
             settings=request.get("sandbox_settings") or None,
+            timeout_seconds=_timeout_seconds_from_request(request, DEFAULT_SANDBOX_TIMEOUT_SECONDS),
         )
 
         handle = await manager.create_sandbox(config)
@@ -396,7 +418,7 @@ async def api_restore_sandbox(
         sandbox_id = request.get("sandbox_id")
         sandbox_auth_token = request.get("sandbox_auth_token", "")
         user_env_vars = request.get("user_env_vars") or None
-        timeout_seconds = int(request.get("timeout_seconds", DEFAULT_SANDBOX_TIMEOUT_SECONDS))
+        timeout_seconds = _timeout_seconds_from_request(request, DEFAULT_SANDBOX_TIMEOUT_SECONDS)
         repo_owner, repo_name = _normalize_optional_repository_context(
             session_config.get("repo_owner") if isinstance(session_config, dict) else None,
             session_config.get("repo_name") if isinstance(session_config, dict) else None,

@@ -823,6 +823,28 @@ describe("OpenComputerSandboxProvider", () => {
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1");
   });
 
+  it("renews an explicit timeout when the sandbox is already running", async () => {
+    const client = createMockClient({
+      getSandbox: vi.fn(async () => ({ id: "oc-sandbox-1", state: "running" })),
+    });
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.resumeSandbox({
+      providerObjectId: "oc-sandbox-1",
+      sessionId: "session-1",
+      sandboxId: "sandbox-acme-repo-1",
+      codeServerEnabled: false,
+      timeoutSeconds: 120,
+    });
+
+    expect(client.wakeSandbox).not.toHaveBeenCalled();
+    expect(client.setSandboxTimeout).toHaveBeenCalledWith("oc-sandbox-1", 120);
+    expect(client.startRuntime).not.toHaveBeenCalled();
+  });
+
   it("hibernates sandboxes on stop", async () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
