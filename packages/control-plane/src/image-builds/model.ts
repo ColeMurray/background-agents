@@ -9,7 +9,10 @@
  * (`repository_shas`) and spawn selection is gated by the runtime version
  * baked at build time.
  */
-import { formatRepositoryFullName, parseRepositoryFullName } from "@open-inspect/shared";
+import {
+  formatRepositoryFullName,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
 import type {
   ImageBuildScopeKind,
   ImageBuildStatus,

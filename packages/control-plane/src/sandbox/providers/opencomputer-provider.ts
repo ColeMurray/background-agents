@@ -6,7 +6,10 @@
  * to OpenComputer rather than being driven by OpenInspect's lifecycle manager.
  */
 
-import { DEFAULT_BUILD_TIMEOUT_SECONDS, type SandboxSettings } from "@open-inspect/shared";
+import {
+  DEFAULT_BUILD_TIMEOUT_SECONDS,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";

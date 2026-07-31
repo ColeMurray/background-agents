@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { InstallationRepository } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,

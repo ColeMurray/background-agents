@@ -4,7 +4,7 @@ import {
   MAX_TUNNEL_PORTS,
   type ConfiguredSandboxPort,
   type SandboxSettings,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 
 export type InvalidSandboxSettingsBehavior = "throw" | "omit";
 

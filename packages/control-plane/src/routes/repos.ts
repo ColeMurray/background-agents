@@ -10,7 +10,7 @@ import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repository-catalog";
 import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
