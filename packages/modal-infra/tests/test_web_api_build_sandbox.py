@@ -83,6 +83,28 @@ async def test_create_build_sandbox_is_dormant_and_returns_provider_session(monk
 
 
 @pytest.mark.asyncio
+async def test_create_build_sandbox_adds_finalization_grace_to_default_timeout(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+
+    await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+        },
+    )
+
+    assert service.create.await_args.kwargs["build_execution_timeout_seconds"] == (
+        DEFAULT_BUILD_TIMEOUT_SECONDS
+    )
+    assert service.create.await_args.kwargs["timeout_seconds"] == (
+        DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [
