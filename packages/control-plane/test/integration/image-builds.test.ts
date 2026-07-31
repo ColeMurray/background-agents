@@ -1,7 +1,6 @@
 /**
  * Image-build lifecycle against real D1: store state machine (register →
- * ready → supersede → reap), the cron-facing routes (enabled/status/
- * mark-stale/cleanup), the build callbacks with single-use token auth and
+ * ready → supersede → reap), the internal read/trigger routes, the build callbacks with single-use token auth and
  * their fail-closed registration, and the secret-change supersede save-hook.
  *
  * Builds are seeded via ImageBuildStore (or raw SQL when a test needs to
@@ -64,13 +63,13 @@ const WIRE_KEYS = [
 // only forwards token-shaped bearers to the workflow).
 const MODAL_BUILD_TOKEN = "ab".repeat(32);
 
-/** The cron-facing routes are called by the Modal scheduler under its own sig1 credential. */
-async function modalFetch(url: string, init?: { method?: string; body?: string }) {
+/** Call an internal route with a registered service credential. */
+async function serviceFetch(url: string, init?: { method?: string; body?: string }) {
   const method = init?.method ?? "GET";
   const headers = {
     ...(await buildServiceAuthHeaders({
-      service: "modal",
-      secret: "test-service-secret-modal",
+      service: "linear-bot",
+      secret: "test-service-secret-linear-bot",
       method,
       url,
       body: init?.body,
@@ -402,7 +401,7 @@ describe("Image builds", () => {
       });
       await seedEnvironment({ prebuildEnabled: false });
 
-      const response = await modalFetch(`${BASE}/image-builds/enabled`);
+      const response = await serviceFetch(`${BASE}/image-builds/enabled`);
 
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
@@ -451,7 +450,7 @@ describe("Image builds", () => {
       // scopes — failed builds are visible in the aggregate feed (they were
       // silently filtered before the unification); disabled scopes never
       // crowd it.
-      const all = await modalFetch(`${BASE}/image-builds/status`);
+      const all = await serviceFetch(`${BASE}/image-builds/status`);
       const allBody = (await all.json()) as {
         images: Array<{ id: string; scope_kind: string; scope_id: string }>;
       };
@@ -459,7 +458,7 @@ describe("Image builds", () => {
       expect(allBody.images.every((i) => i.scope_kind === "environment")).toBe(true);
 
       // Per-scope debug view keeps failed rows, drops only superseded.
-      const filtered = await modalFetch(
+      const filtered = await serviceFetch(
         `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`
       );
       const filteredBody = (await filtered.json()) as { images: Array<{ id: string }> };
@@ -485,12 +484,12 @@ describe("Image builds", () => {
         }
       };
 
-      const cross = await modalFetch(`${BASE}/image-builds/status`);
+      const cross = await serviceFetch(`${BASE}/image-builds/status`);
       assertWireKeysOnly(
         ((await cross.json()) as { images: Array<Record<string, unknown>> }).images
       );
 
-      const perScope = await modalFetch(
+      const perScope = await serviceFetch(
         `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`
       );
       assertWireKeysOnly(
@@ -504,84 +503,9 @@ describe("Image builds", () => {
         "?scope_id=env_x",
         "?scope_kind=bogus&scope_id=x",
       ]) {
-        const response = await modalFetch(`${BASE}/image-builds/status${query}`);
+        const response = await serviceFetch(`${BASE}/image-builds/status${query}`);
         expect(response.status, query).toBe(400);
       }
-    });
-
-    it("POST /image-builds/mark-stale fails old building rows", async () => {
-      const environmentId = await seedEnvironment();
-      await seedImageRow({
-        id: "stale-build",
-        environmentId,
-        status: "building",
-        createdAt: Date.now() - 10_000_000,
-      });
-      await seedImageRow({ id: "fresh-build", environmentId, status: "building" });
-
-      const response = await modalFetch(`${BASE}/image-builds/mark-stale`, {
-        method: "POST",
-        body: JSON.stringify({ max_age_seconds: 3600 }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(((await response.json()) as { markedFailed: number }).markedFailed).toBe(1);
-      expect((await getRow("stale-build"))?.status).toBe("failed");
-      expect((await getRow("fresh-build"))?.status).toBe("building");
-    });
-
-    it("POST /image-builds/cleanup deletes old failed rows and reaps artifact-less superseded rows", async () => {
-      const environmentId = await seedEnvironment();
-      await seedImageRow({
-        id: "old-failed",
-        environmentId,
-        status: "failed",
-        createdAt: Date.now() - 100_000_000,
-      });
-      // Superseded before any artifact was recorded (entity delete or secret
-      // change mid-build) — reaped directly.
-      await seedImageRow({ id: "bare-superseded", environmentId, status: "superseded" });
-      // Superseded with an artifact: reclaiming it needs the provider adapter,
-      // which is unconfigured in the test env (no MODAL_WORKSPACE) — the row
-      // must survive for a later pass instead of leaking the artifact.
-      await seedImageRow({
-        id: "artifact-superseded",
-        environmentId,
-        status: "superseded",
-        providerImageId: "im-artifact",
-      });
-      // Restore-failed row carrying a live artifact and old enough to age out:
-      // with the adapter unconfigured the artifact can't be reaped, so the row
-      // must NOT be hard-deleted (that was the leak — the snapshot would be
-      // orphaned forever). It survives, artifact intact, for a later pass.
-      await seedImageRow({
-        id: "old-failed-with-artifact",
-        environmentId,
-        status: "failed",
-        providerImageId: "im-restore-orphan",
-        createdAt: Date.now() - 100_000_000,
-      });
-
-      const response = await modalFetch(`${BASE}/image-builds/cleanup`, {
-        method: "POST",
-        body: JSON.stringify({ max_age_seconds: 86400 }),
-      });
-
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        deleted: number;
-        reapedFailed: number;
-        reapedSuperseded: number;
-      };
-      expect(body.deleted).toBe(1);
-      expect(body.reapedFailed).toBe(0);
-      expect(body.reapedSuperseded).toBe(1);
-      expect(await getRow("old-failed")).toBeNull();
-      expect(await getRow("bare-superseded")).toBeNull();
-      expect((await getRow("artifact-superseded"))?.status).toBe("superseded");
-      const survivor = await getRow("old-failed-with-artifact");
-      expect(survivor?.status).toBe("failed");
-      expect(survivor?.provider_image_id).toBe("im-restore-orphan");
     });
 
     it("deleteOldFailedBuilds ages out only artifact-free failed rows", async () => {
@@ -653,31 +577,11 @@ describe("Image builds", () => {
       ]);
     });
 
-    it("rejects non-numeric max_age_seconds instead of treating it as 0", async () => {
-      const environmentId = await seedEnvironment();
-      await seedImageRow({ id: "guard-building", environmentId, status: "building" });
-      await seedImageRow({ id: "guard-failed", environmentId, status: "failed" });
-
-      for (const path of ["mark-stale", "cleanup"]) {
-        const response = await modalFetch(`${BASE}/image-builds/${path}`, {
-          method: "POST",
-          body: JSON.stringify({ max_age_seconds: null }),
-        });
-        // A null that fell through to 0 would fail every building row or
-        // delete every failed row.
-        expect(response.status, path).toBe(400);
-      }
-      expect((await getRow("guard-building"))?.status).toBe("building");
-      expect((await getRow("guard-failed"))?.status).toBe("failed");
-    });
-
-    it("requires internal auth on cron-facing routes", async () => {
+    it("requires internal auth on image-build routes", async () => {
       for (const [method, path] of [
         ["GET", "/image-builds/enabled"],
         ["GET", "/image-builds/enabled-repos"],
         ["GET", "/image-builds/status"],
-        ["POST", "/image-builds/mark-stale"],
-        ["POST", "/image-builds/cleanup"],
         ["POST", "/image-builds/trigger/environment/env_x"],
         ["POST", "/image-builds/trigger/repo/acme/web"],
         ["PUT", "/image-builds/toggle/repo/acme/web"],
@@ -693,7 +597,7 @@ describe("Image builds", () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       await seedImageRow({ id: "only-failed", environmentId, status: "failed" });
 
-      const response = await modalFetch(`${BASE}/image-builds/status`);
+      const response = await serviceFetch(`${BASE}/image-builds/status`);
       const body = (await response.json()) as {
         images: Array<{ id: string; status: string; scope_id: string }>;
       };
@@ -1132,7 +1036,7 @@ describe("Image builds", () => {
         providerImageId: "im-disabled",
       });
 
-      const response = await modalFetch(`${BASE}/image-builds/status`);
+      const response = await serviceFetch(`${BASE}/image-builds/status`);
       const body = (await response.json()) as {
         images: Array<{ id: string; scope_kind: string; scope_id: string }>;
       };
@@ -1157,7 +1061,7 @@ describe("Image builds", () => {
       });
       await seedImageRowForScope(REPO_SCOPE, { id: "ps-superseded", status: "superseded" });
 
-      const response = await modalFetch(
+      const response = await serviceFetch(
         `${BASE}/image-builds/status?scope_kind=repo&scope_id=acme/web`
       );
       const body = (await response.json()) as { images: Array<{ id: string }> };
@@ -1172,7 +1076,7 @@ describe("Image builds", () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       await enableRepo();
 
-      const response = await modalFetch(`${BASE}/image-builds/enabled`);
+      const response = await serviceFetch(`${BASE}/image-builds/enabled`);
 
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
@@ -1189,7 +1093,7 @@ describe("Image builds", () => {
       // state never flickers off on a transient resolution failure.
       await enableRepo();
 
-      const response = await modalFetch(`${BASE}/image-builds/enabled-repos`);
+      const response = await serviceFetch(`${BASE}/image-builds/enabled-repos`);
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({
@@ -1203,7 +1107,7 @@ describe("Image builds", () => {
       // The integration harness has no source-control provider configured, so
       // enabling — which resolves the repo through the trigger path's
       // canonical resolver first — fails without persisting the flag.
-      const enable = await modalFetch(`${BASE}/image-builds/toggle/repo/Acme/Web`, {
+      const enable = await serviceFetch(`${BASE}/image-builds/toggle/repo/Acme/Web`, {
         method: "PUT",
         body: JSON.stringify({ enabled: true }),
       });
@@ -1213,7 +1117,7 @@ describe("Image builds", () => {
       // Disabling never resolves — a repo that became unresolvable must
       // remain disableable.
       await enableRepo();
-      const disable = await modalFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
+      const disable = await serviceFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
         method: "PUT",
         body: JSON.stringify({ enabled: false }),
       });
@@ -1223,7 +1127,7 @@ describe("Image builds", () => {
     });
 
     it("rejects a non-boolean toggle body", async () => {
-      const response = await modalFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
+      const response = await serviceFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
         method: "PUT",
         body: JSON.stringify({ enabled: "yes" }),
       });
@@ -1244,7 +1148,7 @@ describe("Image builds", () => {
       });
       await seedImageRow({ id: "sec-building", environmentId, status: "building" });
 
-      const response = await modalFetch(`${BASE}/environments/${environmentId}/secrets`, {
+      const response = await serviceFetch(`${BASE}/environments/${environmentId}/secrets`, {
         method: "PUT",
         body: JSON.stringify({ secrets: { API_KEY: "rotated-value" } }),
       });
@@ -1264,7 +1168,7 @@ describe("Image builds", () => {
         status: "ready",
         providerImageId: "im-del",
       });
-      await modalFetch(`${BASE}/environments/${environmentId}/secrets`, {
+      await serviceFetch(`${BASE}/environments/${environmentId}/secrets`, {
         method: "PUT",
         body: JSON.stringify({ secrets: { API_KEY: "v" } }),
       });
@@ -1277,7 +1181,7 @@ describe("Image builds", () => {
         providerImageId: "im-del-2",
       });
 
-      const response = await modalFetch(`${BASE}/environments/${environmentId}/secrets/API_KEY`, {
+      const response = await serviceFetch(`${BASE}/environments/${environmentId}/secrets/API_KEY`, {
         method: "DELETE",
       });
 
