@@ -8,6 +8,13 @@ export interface SessionReadStateResult {
   unread: boolean;
 }
 
+export class SessionReadStateRequestError extends Error {
+  constructor(readonly status: number) {
+    super(`Failed to update read state: ${status}`);
+    this.name = "SessionReadStateRequestError";
+  }
+}
+
 type SessionReadStateAction =
   | { action: "acknowledge"; observedAttentionId: string }
   | { action: "mark_read" };
@@ -21,7 +28,7 @@ async function patchSessionReadState(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(action),
   });
-  if (!response.ok) throw new Error(`Failed to update read state: ${response.status}`);
+  if (!response.ok) throw new SessionReadStateRequestError(response.status);
   return response.json();
 }
 

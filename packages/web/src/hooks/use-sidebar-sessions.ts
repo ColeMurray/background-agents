@@ -30,11 +30,14 @@ export function useSidebarSessions(currentSessionId: string | null) {
   const router = useRouter();
   const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
   const [extraSessionsState, setExtraSessionsState] = useState<{
-    source: SessionListResponse | undefined;
+    key: string | null;
     sessions: SessionItem[];
-  }>({ source: undefined, sessions: [] });
+  }>({ key: null, sessions: [] });
   const [hasMorePages, setHasMorePages] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [navigationOverrides, setNavigationOverrides] = useState(
+    new Map<string, { unread: boolean; source: SessionListResponse | undefined }>()
+  );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const offsetRef = useRef(0);
   const hasMoreRef = useRef(false);
@@ -62,28 +65,39 @@ export function useSidebarSessions(currentSessionId: string | null) {
         : 0,
     refreshWhenHidden: false,
   });
+  const dataRef = useRef(data);
+  dataRef.current = data;
   const loading = sessionsLoading;
   const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
 
-  // Hide paginated rows synchronously when SWR replaces their source page.
+  // Pagination belongs to the filter key, not a particular first-page object.
+  // Polling replaces that object every 30 seconds and must not collapse rows
+  // the user has already loaded.
   const extraSessions = useMemo(
-    () => (extraSessionsState.source === data ? extraSessionsState.sessions : []),
-    [data, extraSessionsState]
+    () => (extraSessionsState.key === sidebarSessionsKey ? extraSessionsState.sessions : []),
+    [extraSessionsState, sidebarSessionsKey]
   );
 
   useEffect(() => {
     sessionListVersionRef.current += 1;
-    setExtraSessionsState({ source: data, sessions: [] });
+    setExtraSessionsState({ key: sidebarSessionsKey, sessions: [] });
+    setNavigationOverrides(new Map());
+    setLoadingMore(false);
+    loadingMoreRef.current = false;
+  }, [sidebarSessionsKey]);
+
+  useEffect(() => {
+    sessionListVersionRef.current += 1;
     setLoadingMore(false);
     loadingMoreRef.current = false;
 
-    const nextHasMore = data?.hasMore ?? false;
-    const nextOffset = data ? firstPageSessions.length : 0;
-
-    setHasMorePages(nextHasMore);
-    offsetRef.current = nextOffset;
-    hasMoreRef.current = nextHasMore;
-  }, [sidebarSessionsKey, data, firstPageSessions.length]);
+    if (extraSessions.length === 0) {
+      const nextHasMore = data?.hasMore ?? false;
+      setHasMorePages(nextHasMore);
+      hasMoreRef.current = nextHasMore;
+    }
+    offsetRef.current = data ? firstPageSessions.length + extraSessions.length : 0;
+  }, [data, extraSessions.length, firstPageSessions.length]);
 
   const loadMoreSessions = useCallback(async () => {
     if (!authSession || !sidebarSessionsKey || loadingMoreRef.current || !hasMoreRef.current) {
@@ -115,8 +129,11 @@ export function useSidebarSessions(currentSessionId: string | null) {
       }
 
       setExtraSessionsState((previous) => ({
-        source: data,
-        sessions: mergeUniqueSessions(previous.source === data ? previous.sessions : [], fetched),
+        key: sidebarSessionsKey,
+        sessions: mergeUniqueSessions(
+          previous.key === sidebarSessionsKey ? previous.sessions : [],
+          fetched
+        ),
       }));
       setHasMorePages(page.hasMore);
       offsetRef.current += fetched.length;
@@ -129,7 +146,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
         setLoadingMore(false);
       }
     }
-  }, [authSession, data, sessionCreatorFilter, sidebarSessionsKey]);
+  }, [authSession, sessionCreatorFilter, sidebarSessionsKey]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -157,10 +174,15 @@ export function useSidebarSessions(currentSessionId: string | null) {
     extraSessions.length,
   ]);
 
-  const sessions = useMemo(
-    () => mergeUniqueSessions(firstPageSessions, extraSessions),
-    [firstPageSessions, extraSessions]
-  );
+  const sessions = useMemo(() => {
+    return mergeUniqueSessions(firstPageSessions, extraSessions).map((session) => {
+      const override = navigationOverrides.get(session.id);
+      if (override && override.source === data) {
+        return { ...session, navigation: { unread: override.unread } };
+      }
+      return session;
+    });
+  }, [data, extraSessions, firstPageSessions, navigationOverrides]);
 
   // Sort sessions by updatedAt (most recent first) and group children under their parent sessions.
   const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
@@ -259,6 +281,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
 
   const handleSessionMarkedRead = useCallback(
     async (sessionId: string) => {
+      const dataAtStart = dataRef.current;
       const result = await markSessionRead(sessionId);
       await mutateSidebarSessions(
         (current) => applySessionUnread(current, result.sessionId, result.unread),
@@ -271,7 +294,13 @@ export function useSidebarSessions(currentSessionId: string | null) {
           session.id === sessionId ? { ...session, navigation: { unread: result.unread } } : session
         ),
       }));
-      return result.unread;
+      if (dataRef.current === dataAtStart) {
+        setNavigationOverrides((previous) => {
+          const next = new Map(previous);
+          next.set(sessionId, { unread: result.unread, source: dataAtStart });
+          return next;
+        });
+      }
     },
     [mutateSidebarSessions]
   );

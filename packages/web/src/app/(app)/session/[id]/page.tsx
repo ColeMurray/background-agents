@@ -22,7 +22,6 @@ import { archiveSession } from "@/lib/archive-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   isArchivedSessionListKey,
-  isSessionListKey,
   isUnarchivedSessionListKey,
   removeSessionFromList,
   type SessionListResponse,
@@ -49,7 +48,11 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
-import { acknowledgeSessionAttention, reconcileSessionUnread } from "@/lib/session-read-state";
+import {
+  acknowledgeSessionAttention,
+  reconcileSessionUnread,
+  SessionReadStateRequestError,
+} from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -213,12 +216,22 @@ function SessionPageContent() {
   }, []);
   const acknowledgeVisibleOutcome = useCallback(
     async (messageId: string) => {
-      const result = await acknowledgeSessionAttention(sessionId, messageId);
-      await reconcileSessionUnread(result);
-      if (!result.accepted) {
-        await mutate(isSessionListKey);
+      try {
+        const result = await acknowledgeSessionAttention(sessionId, messageId);
+        await reconcileSessionUnread(result);
+        if (result.accepted) return "acknowledged" as const;
+        if (result.unread) return "not_applicable" as const;
+
+        return "retry" as const;
+      } catch (error) {
+        if (
+          error instanceof SessionReadStateRequestError &&
+          (error.status === 404 || error.status === 405)
+        ) {
+          return "not_applicable" as const;
+        }
+        return "retry" as const;
       }
-      return result.accepted;
     },
     [sessionId]
   );

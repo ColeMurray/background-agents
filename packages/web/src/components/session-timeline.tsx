@@ -25,6 +25,8 @@ export type EventGroup =
   | { type: "tool_group"; events: ToolCallEvent[]; id: string }
   | { type: "single"; event: SandboxEvent; id: string };
 
+export type TerminalOutcomeAcknowledgement = "acknowledged" | "retry" | "not_applicable";
+
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
   let currentToolGroup: ToolCallEvent[] = [];
@@ -122,7 +124,7 @@ export function SessionTimeline({
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
   canAcknowledgeTerminalOutcome?: boolean;
-  onTerminalOutcomeVisible?: (messageId: string) => Promise<boolean>;
+  onTerminalOutcomeVisible?: (messageId: string) => Promise<TerminalOutcomeAcknowledgement>;
 }) {
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
   const latestTerminalMessageId = useMemo(() => {
@@ -132,6 +134,12 @@ export function SessionTimeline({
     }
     return null;
   }, [events]);
+  const latestTerminalMessageHasOutput = useMemo(
+    () =>
+      latestTerminalMessageId !== null &&
+      events.some((event) => event.type === "token" && event.messageId === latestTerminalMessageId),
+    [events, latestTerminalMessageId]
+  );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -203,8 +211,10 @@ export function SessionTimeline({
           groupedEvents.map((group) =>
             group.type === "tool_group" ? (
               <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-            ) : group.event.type === "execution_complete" &&
+            ) : "messageId" in group.event &&
               group.event.messageId === latestTerminalMessageId &&
+              (group.event.type === "token" ||
+                (!latestTerminalMessageHasOutput && group.event.type === "execution_complete")) &&
               onTerminalOutcomeVisible ? (
               <TerminalOutcomeVisibilityBoundary
                 key={group.id}
@@ -241,6 +251,7 @@ export function SessionTimeline({
 }
 
 const TERMINAL_ACK_RETRY_MS = 2_000;
+const TERMINAL_ACK_MAX_ATTEMPTS = 4;
 
 function TerminalOutcomeVisibilityBoundary({
   messageId,
@@ -250,7 +261,7 @@ function TerminalOutcomeVisibilityBoundary({
 }: {
   messageId: string;
   enabled: boolean;
-  onVisible: (messageId: string) => Promise<boolean>;
+  onVisible: (messageId: string) => Promise<TerminalOutcomeAcknowledgement>;
   children: ReactNode;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
@@ -258,6 +269,8 @@ function TerminalOutcomeVisibilityBoundary({
   const acknowledgedRef = useRef(false);
   const requestInFlightRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const attemptCountRef = useRef(0);
+  const cancelledRef = useRef(false);
 
   const attemptAcknowledgement = useCallback(async () => {
     if (
@@ -272,24 +285,35 @@ function TerminalOutcomeVisibilityBoundary({
     }
 
     requestInFlightRef.current = true;
+    attemptCountRef.current += 1;
+    let result: TerminalOutcomeAcknowledgement;
     try {
-      acknowledgedRef.current = await onVisible(messageId);
+      result = await onVisible(messageId);
     } catch (error) {
       console.error("Failed to acknowledge visible terminal outcome", error);
-      acknowledgedRef.current = false;
+      result = "retry";
     } finally {
       requestInFlightRef.current = false;
     }
+    if (cancelledRef.current) return;
 
-    if (!acknowledgedRef.current && intersectingRef.current) {
+    acknowledgedRef.current = result !== "retry";
+
+    if (
+      result === "retry" &&
+      intersectingRef.current &&
+      attemptCountRef.current < TERMINAL_ACK_MAX_ATTEMPTS
+    ) {
+      const retryDelayMs = TERMINAL_ACK_RETRY_MS * 2 ** (attemptCountRef.current - 1);
       retryTimerRef.current = setTimeout(() => {
         retryTimerRef.current = null;
         void attemptAcknowledgement();
-      }, TERMINAL_ACK_RETRY_MS);
+      }, retryDelayMs);
     }
   }, [enabled, messageId, onVisible]);
 
   useEffect(() => {
+    cancelledRef.current = false;
     const element = elementRef.current;
     if (!element) return;
     const observer = new IntersectionObserver(
@@ -297,17 +321,20 @@ function TerminalOutcomeVisibilityBoundary({
         intersectingRef.current = entry.isIntersecting;
         if (entry.isIntersecting) void attemptAcknowledgement();
       },
-      { threshold: 0.5 }
+      { threshold: 0 }
     );
     observer.observe(element);
     return () => observer.disconnect();
   }, [attemptAcknowledgement]);
 
   useEffect(() => {
+    cancelledRef.current = false;
     const attempt = () => void attemptAcknowledgement();
     document.addEventListener("visibilitychange", attempt);
     window.addEventListener("focus", attempt);
     return () => {
+      cancelledRef.current = true;
+      intersectingRef.current = false;
       document.removeEventListener("visibilitychange", attempt);
       window.removeEventListener("focus", attempt);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);

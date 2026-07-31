@@ -197,13 +197,11 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "execution_complete") {
       const completionMessageId = messageId;
-      if (messageId) {
-        this.repository.upsertExecutionCompleteEvent(messageId, event, now);
-      }
       const isStillProcessing =
         completionMessageId != null && processingMessage?.id === completionMessageId;
 
       if (isStillProcessing) {
+        this.repository.upsertExecutionCompleteEvent(completionMessageId, event, now);
         const status = event.success ? "completed" : "failed";
         this.repository.updateMessageCompletion(completionMessageId, status, now);
 

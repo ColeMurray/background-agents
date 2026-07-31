@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { SWRConfig } from "swr";
+import { SWRConfig, useSWRConfig } from "swr";
 import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
 import {
   buildSessionsPageKey,
@@ -350,6 +350,64 @@ describe("SessionSidebar", () => {
         }
       );
     });
+  });
+
+  it("retains loaded pagination rows when the first page revalidates", async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
+    const secondPage = [createSession(51)];
+    let firstPageRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === SIDEBAR_SESSIONS_KEY) {
+        firstPageRequests += 1;
+        return jsonResponse({
+          sessions: firstPage.map((session, index) =>
+            index === 0 && firstPageRequests > 1
+              ? { ...session, title: "Revalidated session" }
+              : session
+          ),
+          hasMore: true,
+        });
+      }
+      if (url === buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })) {
+        return jsonResponse({ sessions: secondPage, hasMore: false });
+      }
+      throw new Error(`Unexpected fetch for ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    function RevalidateButton() {
+      const { mutate } = useSWRConfig();
+      return <button onClick={() => mutate(SIDEBAR_SESSIONS_KEY)}>Revalidate</button>;
+    }
+
+    const { container } = render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          fetcher: async (url: string) => (await fetch(url)).json(),
+        }}
+      >
+        <RevalidateButton />
+        <SessionSidebar />
+      </SWRConfig>
+    );
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, value: 2_000 },
+      clientHeight: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, value: 1_705, writable: true },
+    });
+    fireEvent.scroll(scrollContainer);
+    expect(await screen.findByText("Session 51")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Revalidate" }));
+    expect(await screen.findByText("Revalidated session")).toBeInTheDocument();
+    expect(screen.getByText("Session 51")).toBeInTheDocument();
   });
 
   it("filters sessions to the current user when Mine is selected", async () => {

@@ -54,7 +54,7 @@ export function SessionListItem({
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onSessionRenamed: (sessionId: string, title: string) => void;
-  onMarkRead: (sessionId: string) => Promise<boolean>;
+  onMarkRead: (sessionId: string) => Promise<void>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
@@ -72,7 +72,6 @@ export function SessionListItem({
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [isMarkingRead, setIsMarkingRead] = useState(false);
-  const [isUnread, setIsUnread] = useState(session.navigation?.unread ?? false);
   const [title, setTitle] = useState(displayTitle);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const isStartingRenameRef = useRef(false);
@@ -85,10 +84,6 @@ export function SessionListItem({
       setTitle(displayTitle);
     }
   }, [displayTitle, isRenaming]);
-
-  useEffect(() => {
-    setIsUnread(session.navigation?.unread ?? false);
-  }, [session.navigation?.unread]);
 
   const handleStartRename = () => {
     isStartingRenameRef.current = true;
@@ -122,7 +117,7 @@ export function SessionListItem({
     setIsActionsOpen(false);
     setIsMarkingRead(true);
     try {
-      setIsUnread(await onMarkRead(session.id));
+      await onMarkRead(session.id);
     } finally {
       setIsMarkingRead(false);
     }
@@ -280,7 +275,7 @@ export function SessionListItem({
             className="block pr-8"
           >
             <div className="flex items-center gap-1.5 text-sm text-foreground">
-              {isUnread && (
+              {session.navigation?.unread && (
                 <span
                   role="status"
                   aria-label="Unread"
@@ -290,7 +285,9 @@ export function SessionListItem({
               {prDisplay && (
                 <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />
               )}
-              <span className={`truncate ${isUnread ? "font-semibold" : "font-medium"}`}>
+              <span
+                className={`truncate ${session.navigation?.unread ? "font-semibold" : "font-medium"}`}
+              >
                 {displayTitle}
               </span>
             </div>
@@ -349,7 +346,7 @@ export function SessionListItem({
               }}
             >
               <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
-              {isUnread && (
+              {session.navigation?.unread && (
                 <DropdownMenuItem onSelect={handleMarkRead} disabled={isMarkingRead}>
                   Mark as read
                 </DropdownMenuItem>
@@ -385,17 +382,13 @@ export function ChildSessionListItem({
   isMobile: boolean;
   onSessionSelect?: () => void;
   depth: number;
-  onMarkRead: (sessionId: string) => Promise<boolean>;
+  onMarkRead: (sessionId: string) => Promise<void>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
   const displayTitle = session.title || "Sub-task";
   const paddingLeftRem = 1.75 + Math.max(depth - 1, 0) * 1;
-  const [isUnread, setIsUnread] = useState(session.navigation?.unread ?? false);
-  useEffect(() => {
-    setIsUnread(session.navigation?.unread ?? false);
-  }, [session.navigation?.unread]);
   return (
     <div className="group relative">
       <Link
@@ -409,7 +402,7 @@ export function ChildSessionListItem({
         style={{ paddingLeft: `${paddingLeftRem}rem` }}
       >
         <div className="flex items-center gap-1.5 text-xs">
-          {isUnread && (
+          {session.navigation?.unread && (
             <span
               role="status"
               aria-label="Unread"
@@ -419,13 +412,13 @@ export function ChildSessionListItem({
           <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
           {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
           <span
-            className={`truncate text-foreground ${isUnread ? "font-semibold" : "font-medium"}`}
+            className={`truncate text-foreground ${session.navigation?.unread ? "font-semibold" : "font-medium"}`}
           >
             {displayTitle}
           </span>
         </div>
       </Link>
-      {isUnread && (
+      {session.navigation?.unread && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -441,7 +434,7 @@ export function ChildSessionListItem({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={async () => setIsUnread(await onMarkRead(session.id))}>
+            <DropdownMenuItem onSelect={() => onMarkRead(session.id)}>
               Mark as read
             </DropdownMenuItem>
           </DropdownMenuContent>

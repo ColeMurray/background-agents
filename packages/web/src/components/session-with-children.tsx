@@ -23,7 +23,7 @@ export function SessionWithChildren({
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onSessionRenamed: (sessionId: string, title: string) => void;
-  onMarkRead: (sessionId: string) => Promise<boolean>;
+  onMarkRead: (sessionId: string) => Promise<void>;
 }) {
   return (
     <>
@@ -65,7 +65,7 @@ function ChildSessionTree({
   currentSessionId: string | null;
   isMobile: boolean;
   onSessionSelect?: () => void;
-  onMarkRead: (sessionId: string) => Promise<boolean>;
+  onMarkRead: (sessionId: string) => Promise<void>;
   visitedIds: Set<string>;
   depth?: number;
 }) {

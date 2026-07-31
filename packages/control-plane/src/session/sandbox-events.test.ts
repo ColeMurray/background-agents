@@ -364,6 +364,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
 
     expect(h.recordTerminalOutcome).not.toHaveBeenCalled();
+    expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
   });
 
   it("projects a failed sandbox completion", async () => {

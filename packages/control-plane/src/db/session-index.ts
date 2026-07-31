@@ -140,6 +140,25 @@ interface LatestAttentionRow {
   latest_attention_message_id: string | null;
 }
 
+export function sessionNavigationQuery(sessionCount: number): string {
+  const placeholders = Array.from({ length: sessionCount }, () => "?").join(", ");
+  return `SELECT s.id AS session_id,
+                 CASE
+                   WHEN s.latest_attention_message_id IS NOT NULL
+                     AND s.latest_attention_at >= u.created_at
+                     AND (
+                       r.acknowledged_attention_message_id IS NULL
+                       OR r.acknowledged_attention_message_id != s.latest_attention_message_id
+                     )
+                   THEN 1 ELSE 0
+                 END AS unread
+          FROM sessions s
+          LEFT JOIN users u ON u.id = ?
+          LEFT JOIN session_read_states r
+            ON r.session_id = s.id AND r.user_id = u.id
+          WHERE s.id IN (${placeholders})`;
+}
+
 function toEntry(row: SessionRow): SessionEntry {
   return {
     id: row.id,
@@ -406,25 +425,8 @@ export class SessionIndexStore {
     userId: string,
     sessionIds: readonly string[]
   ): Promise<Map<string, SessionNavigationState>> {
-    const placeholders = sessionIds.map(() => "?").join(", ");
     const result = await this.db
-      .prepare(
-        `SELECT s.id AS session_id,
-                CASE
-                  WHEN s.latest_attention_message_id IS NOT NULL
-                    AND s.latest_attention_at >= u.created_at
-                    AND (
-                      r.acknowledged_attention_message_id IS NULL
-                      OR r.acknowledged_attention_message_id != s.latest_attention_message_id
-                    )
-                  THEN 1 ELSE 0
-                END AS unread
-         FROM sessions s
-         LEFT JOIN users u ON u.id = ?
-         LEFT JOIN session_read_states r
-           ON r.session_id = s.id AND r.user_id = u.id
-         WHERE s.id IN (${placeholders})`
-      )
+      .prepare(sessionNavigationQuery(sessionIds.length))
       .bind(userId, ...sessionIds)
       .all<SessionNavigationRow>();
 
@@ -524,10 +526,12 @@ export class SessionIndexStore {
     }
 
     const navigation = await this.navigationForSessions(userId, [sessionId]);
+    const currentNavigation = navigation.get(sessionId);
+    if (!currentNavigation) return null;
     return {
       sessionId,
       accepted,
-      unread: navigation.get(sessionId)?.unread ?? false,
+      unread: currentNavigation.unread,
     };
   }
 

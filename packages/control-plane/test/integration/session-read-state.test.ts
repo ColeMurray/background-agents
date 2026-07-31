@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { SessionIndexStore } from "../../src/db/session-index";
+import { SessionIndexStore, sessionNavigationQuery } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import type { SqlDatabase } from "../../src/db/sql-database";
@@ -305,5 +305,15 @@ describe("session read state", () => {
       name: string;
     }>();
     expect(indexes.results.map(({ name }) => name)).toContain("idx_session_read_states_session");
+
+    const sessionIds = result.sessions.map(({ id }) => id);
+    const queryPlan = await env.DB.prepare(
+      `EXPLAIN QUERY PLAN ${sessionNavigationQuery(sessionIds.length)}`
+    )
+      .bind("viewer", ...sessionIds)
+      .all<{ detail: string }>();
+    expect(queryPlan.results.map(({ detail }) => detail).join("\n")).toMatch(
+      /INDEX .*session_read_states/i
+    );
   });
 });
