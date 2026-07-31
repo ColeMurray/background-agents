@@ -1,11 +1,13 @@
 import {
-  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   callbackContextSchema,
   sendPromptRequestSchema,
-  sessionAttachmentReferencesSchema,
   type CallbackContext,
-  type SessionAttachmentReference,
 } from "@open-inspect/shared";
+import {
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  sessionAttachmentReferencesSchema,
+  type SessionAttachmentReference,
+} from "@open-inspect/shared/types/session-attachments";
 import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
