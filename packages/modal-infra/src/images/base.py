@@ -20,6 +20,15 @@ import sandbox_runtime
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
+
+def overlay_sandbox_runtime(image: modal.Image) -> modal.Image:
+    """Overlay the deployed runtime onto an existing image or snapshot."""
+    return image.add_local_dir(
+        str(SANDBOX_RUNTIME_DIR),
+        remote_path="/app/sandbox_runtime",
+    )
+
+
 # OpenCode version to install.
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
@@ -37,8 +46,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v54: upgrade OpenCode after upstream SSE fixes
-CACHE_BUSTER = "v54-opencode-1-17-18"
+# v55: rename child session tools
+CACHE_BUSTER = "v55-child-session-tools"
 
 # Base image with all development tools
 base_image = (
@@ -205,9 +214,7 @@ base_image = (
             "NODE_PATH": "/usr/lib/node_modules",
         }
     )
-    # Add sandbox runtime code to the image (provider-agnostic bridge, entrypoint, tools, plugins)
-    .add_local_dir(
-        str(SANDBOX_RUNTIME_DIR),
-        remote_path="/app/sandbox_runtime",
-    )
 )
+
+# Add sandbox runtime code to the image (provider-agnostic bridge, entrypoint, tools, plugins).
+base_image = overlay_sandbox_runtime(base_image)

@@ -31,7 +31,7 @@ from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.types import SandboxStatus, SessionConfig, SessionRepositoryConfig
 
 from ..app import app, llm_secrets
-from ..images.base import base_image
+from ..images.base import base_image, overlay_sandbox_runtime
 
 log = get_logger("manager")
 
@@ -436,9 +436,11 @@ class SandboxManager:
 
         # Determine image to use (priority: session snapshot > repo image > base image)
         if config.snapshot_id:
-            image = modal.Image.from_registry(f"open-inspect-snapshot:{config.snapshot_id}")
+            image = overlay_sandbox_runtime(
+                modal.Image.from_registry(f"open-inspect-snapshot:{config.snapshot_id}")
+            )
         elif config.repo_image_id:
-            image = modal.Image.from_id(config.repo_image_id)
+            image = overlay_sandbox_runtime(modal.Image.from_id(config.repo_image_id))
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
         else:
@@ -719,8 +721,9 @@ class SandboxManager:
             sandbox_name = f"{repo_owner}-{repo_name}" if has_repository else "no-repository"
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
-        # Lookup the image by ID
-        image = modal.Image.from_id(snapshot_image_id)
+        # Snapshot images include the runtime present when they were taken. Overlay the
+        # deployed runtime so restores receive migrations and current agent tools.
+        image = overlay_sandbox_runtime(modal.Image.from_id(snapshot_image_id))
 
         # Prepare environment variables (user vars first, system vars override)
         env_vars: dict[str, str] = {}

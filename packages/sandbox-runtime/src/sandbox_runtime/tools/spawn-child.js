@@ -1,19 +1,19 @@
 /**
- * Spawn Task Tool — creates a child coding session.
+ * Spawn Child Tool — creates a child coding session.
  *
  * The child inherits the parent's repository and runs independently.
- * Returns immediately with the task ID so the parent can continue working.
+ * Returns immediately with the child ID so the parent can continue working.
  */
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { bridgeFetch, extractError } from "./_bridge-client.js";
 
 export default tool({
-  name: "spawn-task",
+  name: "spawn-child",
   description:
-    "Spawn a child coding task in a separate sandbox. Invoke only when the user's current request explicitly asks for a 'child session' or 'child sessions'; otherwise work directly. Never infer permission or suggest using one. The child inherits the repository, not conversation context, and continues running after the parent responds. Returns a task ID; check status only when its result is needed.",
+    "Spawn a child coding session in a separate sandbox. Invoke only when the user's current request explicitly asks for a 'child session' or 'child sessions'; otherwise work directly. Never infer permission or suggest using one. The child inherits the repository, not conversation context, and continues running after the parent responds. Returns a child ID; check status only when its result is needed.",
   args: {
-    title: z.string().describe("Short title describing the child task (shown in the UI)."),
+    title: z.string().describe("Short title describing the child session (shown in the UI)."),
     prompt: z
       .string()
       .describe(
@@ -42,25 +42,25 @@ export default tool({
         const errorMessage = await extractError(response);
 
         if (response.status === 403) {
-          return `Cannot spawn task: ${errorMessage}. This may be a depth limit or repository restriction.`;
+          return `Cannot spawn child: ${errorMessage}. This may be a depth limit or repository restriction.`;
         }
         if (response.status === 429) {
-          return `Rate limited: ${errorMessage}. Wait a moment before spawning another task.`;
+          return `Rate limited: ${errorMessage}. Wait a moment before spawning another child.`;
         }
-        return `Failed to spawn task: ${errorMessage} (HTTP ${response.status})`;
+        return `Failed to spawn child: ${errorMessage} (HTTP ${response.status})`;
       }
 
       const result = await response.json();
       return [
-        `Task spawned successfully.`,
+        `Child spawned successfully.`,
         ``,
-        `  Task ID: ${result.sessionId}`,
+        `  Child ID: ${result.sessionId}`,
         `  Status:  PENDING`,
         ``,
-        `The task will continue independently. Check status only when you need its result; do not poll repeatedly.`,
+        `The child will continue independently. Check status only when you need its result; do not poll repeatedly.`,
       ].join("\n");
     } catch (error) {
-      return `Failed to spawn task: ${error instanceof Error ? error.message : String(error)}`;
+      return `Failed to spawn child: ${error instanceof Error ? error.message : String(error)}`;
     }
   },
 });

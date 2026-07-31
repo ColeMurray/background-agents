@@ -3,6 +3,13 @@
 from typing import Any
 
 import httpx
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def stub_sandbox_runtime_overlay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep lifecycle tests focused on launch options rather than Modal image composition."""
+    monkeypatch.setattr("src.sandbox.manager.overlay_sandbox_runtime", lambda image: image)
 
 
 class MockResponse:

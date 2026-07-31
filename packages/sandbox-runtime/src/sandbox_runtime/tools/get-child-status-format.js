@@ -150,10 +150,10 @@ export function formatRecentEvents(recentEvents = []) {
   return lines;
 }
 
-export function formatChildDetail(detail, taskId, options = {}) {
+export function formatChildDetail(detail, childId, options = {}) {
   const s = detail.session || {};
   const lines = [
-    `Task: ${s.id || taskId}`,
+    `Child: ${s.id || childId}`,
     `  Title:   ${s.title || "(untitled)"}`,
     `  Status:  ${formatStatus(s.status || "unknown")}`,
     `  Model:   ${s.model || "default"}`,
