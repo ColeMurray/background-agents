@@ -37,11 +37,11 @@ describe("buildSessionsPageKey", () => {
     expect(
       buildSessionsPageKey({
         excludeStatus: "archived",
-        excludeSpawnSource: "automation",
+        excludeAutomationLineage: true,
         createdBy: [CURRENT_USER_CREATED_BY],
       })
     ).toBe(
-      "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeSpawnSource=automation&createdBy=me"
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
   });
 

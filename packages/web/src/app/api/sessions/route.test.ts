@@ -43,12 +43,12 @@ describe("sessions API route", () => {
 
     const response = await GET(
       request(
-        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&excludeSpawnSource=automation&createdBy=0123456789abcdef0123456789abcdef"
+        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
       )
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=10&offset=20&excludeStatus=archived&excludeSpawnSource=automation&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
@@ -80,23 +80,23 @@ describe("sessions API route", () => {
 
     await GET(
       request(
-        "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeSpawnSource=automation&createdBy=me"
+        "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
       )
     );
     await GET(
       request(
-        "/api/sessions?limit=50&offset=50&excludeStatus=archived&excludeSpawnSource=automation&createdBy=me"
+        "/api/sessions?limit=50&offset=50&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
       )
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(2);
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       1,
-      "/sessions?limit=50&offset=0&excludeStatus=archived&excludeSpawnSource=automation&createdBy=me"
+      "/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       2,
-      "/sessions?limit=50&offset=50&excludeStatus=archived&excludeSpawnSource=automation&createdBy=me"
+      "/sessions?limit=50&offset=50&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
   });

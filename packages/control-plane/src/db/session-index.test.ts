@@ -381,8 +381,9 @@ class FakeD1Database {
       }
 
       if (conditions.includes("automation_id IS NULL")) {
-        const spawnSource = args[argIdx++] as string;
-        rows = rows.filter((row) => row.automation_id === null && row.spawn_source !== spawnSource);
+        rows = rows.filter(
+          (row) => row.automation_id === null && row.spawn_source !== "automation"
+        );
       }
 
       if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
@@ -620,7 +621,7 @@ describe("SessionIndexStore", () => {
       expect(result.hasMore).toBe(false);
     });
 
-    it("filters excluded spawn-source trees before pagination", async () => {
+    it("filters automation lineage before pagination", async () => {
       await store.create(makeSession({ id: "manual-new", spawnSource: "user", updatedAt: 4000 }));
       await store.create(
         makeSession({
@@ -644,7 +645,7 @@ describe("SessionIndexStore", () => {
       await store.create(makeSession({ id: "manual-old", spawnSource: "user", updatedAt: 2000 }));
       await store.delete("automation");
 
-      const result = await store.list({ excludeSpawnSource: "automation", limit: 2 });
+      const result = await store.list({ excludeAutomationLineage: true, limit: 2 });
 
       expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);

@@ -102,7 +102,7 @@ interface SessionRow {
 export interface ListSessionsOptions {
   status?: SessionStatus;
   excludeStatus?: SessionStatus;
-  excludeSpawnSource?: SpawnSource;
+  excludeAutomationLineage?: boolean;
   repoOwner?: string;
   repoName?: string;
   createdByUserIds?: readonly string[];
@@ -273,7 +273,7 @@ export class SessionIndexStore {
     const {
       status,
       excludeStatus,
-      excludeSpawnSource,
+      excludeAutomationLineage,
       repoOwner,
       repoName,
       createdByUserIds,
@@ -294,13 +294,8 @@ export class SessionIndexStore {
       params.push(excludeStatus);
     }
 
-    if (excludeSpawnSource) {
-      conditions.push(
-        excludeSpawnSource === "automation"
-          ? "automation_id IS NULL AND spawn_source != ?"
-          : "spawn_source != ?"
-      );
-      params.push(excludeSpawnSource);
+    if (excludeAutomationLineage) {
+      conditions.push("automation_id IS NULL AND spawn_source != 'automation'");
     }
 
     // Repo filters match against the membership table so a session is found

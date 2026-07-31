@@ -1,4 +1,4 @@
-import { spawnSourceSchema, type SessionStatus, type SpawnSource } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
@@ -15,12 +15,6 @@ const SESSION_STATUSES: SessionStatus[] = [
 function parseSessionStatus(value: string | null): SessionStatus | undefined {
   if (!value) return undefined;
   return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
-}
-
-function parseSpawnSource(value: string | null): SpawnSource | undefined {
-  if (!value) return undefined;
-  const result = spawnSourceSchema.safeParse(value);
-  return result.success ? result.data : undefined;
 }
 
 function parseCreatedByFilters(
@@ -70,10 +64,10 @@ async function handleListSessions(
   const offset = parsePaginationOffset(url.searchParams.get("offset"));
   const statusParam = url.searchParams.get("status");
   const excludeStatusParam = url.searchParams.get("excludeStatus");
-  const excludeSpawnSourceParam = url.searchParams.get("excludeSpawnSource");
+  const excludeAutomationLineageParam = url.searchParams.get("excludeAutomationLineage");
   const status = parseSessionStatus(statusParam);
   const excludeStatus = parseSessionStatus(excludeStatusParam);
-  const excludeSpawnSource = parseSpawnSource(excludeSpawnSourceParam);
+  const excludeAutomationLineage = excludeAutomationLineageParam === "true";
   const createdByUserIds = parseCreatedByFilters(url.searchParams, ctx.principal);
 
   if (statusParam && !status) {
@@ -84,8 +78,12 @@ async function handleListSessions(
     return error("Invalid excludeStatus", 400);
   }
 
-  if (excludeSpawnSourceParam && !excludeSpawnSource) {
-    return error("Invalid excludeSpawnSource", 400);
+  if (
+    excludeAutomationLineageParam !== null &&
+    excludeAutomationLineageParam !== "true" &&
+    excludeAutomationLineageParam !== "false"
+  ) {
+    return error("Invalid excludeAutomationLineage", 400);
   }
 
   if (createdByUserIds instanceof Response) {
@@ -96,7 +94,7 @@ async function handleListSessions(
   const result = await store.list({
     status,
     excludeStatus,
-    excludeSpawnSource,
+    excludeAutomationLineage,
     createdByUserIds,
     limit,
     offset,

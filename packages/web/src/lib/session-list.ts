@@ -1,4 +1,4 @@
-import type { Session, SpawnSource } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
@@ -26,14 +26,14 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
-  excludeSpawnSource,
+  excludeAutomationLineage,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
-  excludeSpawnSource?: SpawnSource;
+  excludeAutomationLineage?: boolean;
   createdBy?: readonly string[];
 }): BrowserApiPath {
   const searchParams = new URLSearchParams({
@@ -49,8 +49,8 @@ export function buildSessionsPageKey({
     searchParams.set("excludeStatus", excludeStatus);
   }
 
-  if (excludeSpawnSource) {
-    searchParams.set("excludeSpawnSource", excludeSpawnSource);
+  if (excludeAutomationLineage) {
+    searchParams.set("excludeAutomationLineage", "true");
   }
 
   for (const userId of createdBy ?? []) {
