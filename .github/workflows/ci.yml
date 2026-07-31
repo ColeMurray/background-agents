@@ -218,14 +218,13 @@ jobs:
         run: npm test -w @open-inspect/control-plane
 
   test-cp-integration:
-    name: Test (control-plane integration ${{ matrix.shard }}/${{ strategy.job-total }})
+    name: Test (control-plane integration ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
       fail-fast: false
-      # Keep shard as the only matrix axis: strategy.job-total is Vitest's shard denominator.
       matrix:
-        shard: [1, 2]
+        shard: ["1/2", "2/2"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -246,7 +245,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libc++1
 
       - name: Run control-plane integration tests
-        run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        run: npm run test:integration -w @open-inspect/control-plane -- --shard=${{ matrix.shard }}
 
   test-web:
     name: Test (web)
