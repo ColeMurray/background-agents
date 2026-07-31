@@ -126,14 +126,13 @@ export function isValidSandboxTimeoutMs(value: unknown): value is number {
 /**
  * Default repo-image build timeout (the build sandbox lifetime), in seconds.
  * Mirrors `DEFAULT_BUILD_TIMEOUT_SECONDS` in the Modal data plane
- * (`packages/modal-infra/src/sandbox/manager.py`).
+ * (`packages/modal-infra/src/sandbox/build_session.py`).
  */
 export const DEFAULT_BUILD_TIMEOUT_SECONDS = 1800;
 
 /**
- * Maximum configurable repo-image build timeout, in seconds. The Modal
- * stale-build sweep (`STALE_BUILD_THRESHOLD_SECONDS`) is sized above this, so
- * raising it requires raising that threshold in lockstep.
+ * Maximum configurable repo-image build timeout, in seconds. Control-plane
+ * stale recovery derives its provider-session ceiling from this value.
  */
 export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
 

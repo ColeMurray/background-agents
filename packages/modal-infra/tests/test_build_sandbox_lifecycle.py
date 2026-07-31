@@ -1,12 +1,19 @@
 """Provider-session lifecycle tests for Modal image-build sandboxes."""
 
 import json
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.sandbox.build_session import BuildSessionNotFoundError, ModalBuildSessionService
+from src.sandbox.build_session import (
+    DEFAULT_BUILD_TIMEOUT_SECONDS,
+    MAX_BUILD_TIMEOUT_SECONDS,
+    BuildSessionNotFoundError,
+    ModalBuildSessionService,
+)
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
 
 
@@ -14,6 +21,24 @@ def _async_method(return_value=None):
     method = MagicMock()
     method.aio = AsyncMock(return_value=return_value)
     return method
+
+
+@pytest.mark.parametrize(
+    ("constant_name", "python_value"),
+    [
+        ("DEFAULT_BUILD_TIMEOUT_SECONDS", DEFAULT_BUILD_TIMEOUT_SECONDS),
+        ("MAX_BUILD_TIMEOUT_SECONDS", MAX_BUILD_TIMEOUT_SECONDS),
+    ],
+)
+def test_build_timeout_limits_match_shared_contract(constant_name, python_value):
+    """Keep Modal's runtime limits aligned with the shared TypeScript contract."""
+    shared_source = (
+        Path(__file__).resolve().parents[2] / "shared" / "src" / "types" / "integrations.ts"
+    ).read_text()
+    match = re.search(rf"export\s+const\s+{constant_name}\s*=\s*(\d+)\s*;", shared_source)
+
+    assert match is not None, f"missing numeric shared constant: {constant_name}"
+    assert python_value == int(match.group(1))
 
 
 @pytest.mark.asyncio

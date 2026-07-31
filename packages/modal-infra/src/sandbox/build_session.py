@@ -23,7 +23,7 @@ from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("build_session")
 
-# Mirrors the shared image-build limits.
+# Mirrors packages/shared/src/types/integrations.ts; guarded by a contract test.
 DEFAULT_BUILD_TIMEOUT_SECONDS = 1800
 MAX_BUILD_TIMEOUT_SECONDS = 3600
 
