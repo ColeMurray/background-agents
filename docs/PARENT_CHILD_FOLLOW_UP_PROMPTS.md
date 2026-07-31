@@ -51,8 +51,8 @@ identity and SCM credentials, and enqueues the initial prompt with source `agent
 
 The parent currently has three child operations:
 
-| Tool              | Parent-scoped API                                   |
-| ----------------- | --------------------------------------------------- |
+| Tool               | Parent-scoped API                                   |
+| ------------------ | --------------------------------------------------- |
 | `spawn-child`      | `POST /sessions/:parentId/children`                 |
 | `get-child-status` | `GET /sessions/:parentId/children[/:childId]`       |
 | `cancel-child`     | `POST /sessions/:parentId/children/:childId/cancel` |
@@ -103,9 +103,8 @@ Content-Type: application/json
 {"content":"..."}
 ```
 
-On success it returns the child ID, queued message ID, and a statement that the prompt was
-queued. A successful response means the message is durable, not that execution has started or
-finished.
+On success it returns the child ID, queued message ID, and a statement that the prompt was queued. A
+successful response means the message is durable, not that execution has started or finished.
 
 ### Shared HTTP contract
 
@@ -385,8 +384,8 @@ ordering. Keep existing sandbox lifecycle tests as the primary coverage for snap
 ### Sandbox runtime tests
 
 - Verify `send-child-prompt.js` is installed with the other runtime tools.
-- Verify child IDs are URL encoded and the request body contains only `content` if a lightweight tool
-  fetch test harness is added.
+- Verify child IDs are URL encoded and the request body contains only `content` if a lightweight
+  tool fetch test harness is added.
 - Verify user-facing error text distinguishes not found, terminal child, and transport failure.
 - Verify an active resumed child labels an earlier result as the latest completed response rather
   than the current final response.
@@ -410,8 +409,8 @@ This feature requires no D1 migration, Durable Object SQLite migration, Modal AP
 environment change, or WebSocket protocol change.
 
 The sandbox runtime is captured inside session snapshots. A parent restored from a snapshot created
-before this tool shipped will still contain the old runtime and will not gain `send-child-prompt`. V1
-should document that the tool is available to parent sandboxes created from a post-deployment
+before this tool shipped will still contain the old runtime and will not gain `send-child-prompt`.
+V1 should document that the tool is available to parent sandboxes created from a post-deployment
 runtime. Existing sessions gain it only after a fresh sandbox is created from the new runtime; a
 future runtime-overlay or snapshot-version policy can improve this without blocking the API.
 

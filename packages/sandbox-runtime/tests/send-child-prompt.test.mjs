@@ -11,9 +11,8 @@ globalThis.fetch = async (url, options) => {
   return Response.json({ messageId: "message-1", status: "queued" });
 };
 
-const { executeSendChildPrompt } = await import(
-  "../src/sandbox_runtime/tools/_send-child-prompt.js"
-);
+const { executeSendChildPrompt } =
+  await import("../src/sandbox_runtime/tools/_send-child-prompt.js");
 
 test("send-child-prompt queues content through the parent-scoped child route", async () => {
   const output = await executeSendChildPrompt({
