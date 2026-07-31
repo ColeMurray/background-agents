@@ -594,6 +594,8 @@ async def api_create_build_sandbox(
             default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
         )
+        clone_host = _optional_string(request, "clone_host")
+        clone_username = _optional_string(request, "clone_username")
 
         provider_session_id = await ModalBuildSessionService().create(
             build_id=build_id,
@@ -601,8 +603,8 @@ async def api_create_build_sandbox(
             scope_id=scope_id,
             repositories=repositories,
             clone_token=request.get("clone_token") or "",
-            clone_host=request.get("clone_host") or None,
-            clone_username=request.get("clone_username") or None,
+            clone_host=clone_host,
+            clone_username=clone_username,
             user_env_vars=request.get("user_env_vars") or None,
             timeout_seconds=timeout_seconds,
         )
@@ -750,6 +752,15 @@ def _required_string(request: dict, field: str) -> str:
     value = request.get(field)
     if not isinstance(value, str) or not value:
         raise HTTPException(status_code=400, detail=f"{field} is required")
+    return value
+
+
+def _optional_string(request: dict, field: str) -> str | None:
+    value = request.get(field)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail=f"{field} must be a string")
     return value
 
 
