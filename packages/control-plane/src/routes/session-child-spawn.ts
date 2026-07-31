@@ -204,6 +204,8 @@ async function handleSpawnChild(
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
+    automationId: parentSession?.automationId ?? null,
+    automationRunId: parentSession?.automationRunId ?? null,
   };
 
   try {

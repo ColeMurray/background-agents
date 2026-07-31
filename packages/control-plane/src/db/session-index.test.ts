@@ -380,28 +380,9 @@ class FakeD1Database {
         rows = rows.filter((r) => r.status !== statusVal);
       }
 
-      if (conditions.includes("WITH RECURSIVE excluded_sessions")) {
+      if (conditions.includes("automation_id IS NULL")) {
         const spawnSource = args[argIdx++] as string;
-        const excludedIds = new Set(
-          Array.from(this.rows.values())
-            .filter((row) => row.spawn_source === spawnSource)
-            .map((row) => row.id)
-        );
-        let addedDescendant = true;
-        while (addedDescendant) {
-          addedDescendant = false;
-          for (const row of this.rows.values()) {
-            if (
-              row.parent_session_id &&
-              excludedIds.has(row.parent_session_id) &&
-              !excludedIds.has(row.id)
-            ) {
-              excludedIds.add(row.id);
-              addedDescendant = true;
-            }
-          }
-        }
-        rows = rows.filter((row) => !excludedIds.has(row.id));
+        rows = rows.filter((row) => row.automation_id === null && row.spawn_source !== spawnSource);
       }
 
       if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
@@ -642,17 +623,26 @@ describe("SessionIndexStore", () => {
     it("filters excluded spawn-source trees before pagination", async () => {
       await store.create(makeSession({ id: "manual-new", spawnSource: "user", updatedAt: 4000 }));
       await store.create(
-        makeSession({ id: "automation", spawnSource: "automation", updatedAt: 3000 })
+        makeSession({
+          id: "automation",
+          spawnSource: "automation",
+          automationId: "automation-1",
+          automationRunId: "run-1",
+          updatedAt: 3000,
+        })
       );
       await store.create(
         makeSession({
           id: "automation-child",
           parentSessionId: "automation",
           spawnSource: "agent",
+          automationId: "automation-1",
+          automationRunId: "run-1",
           updatedAt: 3500,
         })
       );
       await store.create(makeSession({ id: "manual-old", spawnSource: "user", updatedAt: 2000 }));
+      await store.delete("automation");
 
       const result = await store.list({ excludeSpawnSource: "automation", limit: 2 });
 

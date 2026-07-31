@@ -295,15 +295,11 @@ export class SessionIndexStore {
     }
 
     if (excludeSpawnSource) {
-      conditions.push(`id NOT IN (
-        WITH RECURSIVE excluded_sessions(id) AS (
-          SELECT id FROM sessions WHERE spawn_source = ?
-          UNION
-          SELECT child.id FROM sessions child
-          JOIN excluded_sessions parent ON child.parent_session_id = parent.id
-        )
-        SELECT id FROM excluded_sessions
-      )`);
+      conditions.push(
+        excludeSpawnSource === "automation"
+          ? "automation_id IS NULL AND spawn_source != ?"
+          : "spawn_source != ?"
+      );
       params.push(excludeSpawnSource);
     }
 
