@@ -193,7 +193,16 @@ export class ImageBuildFinalizer {
     }
 
     const repositoryShas = parseRepositoryShasJson(build.repository_shas);
-    if (!repositoryShas) throw new Error("Stored repository_shas is invalid");
+    if (!repositoryShas) {
+      await this.store.finalization.markFailed({
+        buildId: build.id,
+        leaseToken,
+        error: "Stored repository_shas is invalid",
+      });
+      const failed = await this.store.finalization.getBuild(build.id);
+      if (failed) await this.cleanupTerminalBuild(failed, correlation);
+      return completed();
+    }
     const ready = await this.store.tryMarkImageBuildReady(
       build.id,
       build.provider,
