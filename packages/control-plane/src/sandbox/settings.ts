@@ -22,7 +22,7 @@ export class SandboxSettingsValidationError extends Error {
 
 /** Decode and normalize a session's persisted sandbox settings snapshot. */
 export function parsePersistedSandboxSettings(settingsJson: string | null): SandboxSettings {
-  if (!settingsJson) return {};
+  if (settingsJson === null) return {};
   return normalizeSandboxSettings(JSON.parse(settingsJson), { invalid: "omit" });
 }
 

@@ -19,8 +19,8 @@ describe("parsePersistedSandboxSettings", () => {
     ).toEqual({ sandboxTimeoutMs: 14_400_000, tunnelPorts: [3000] });
   });
 
-  it("throws when the persisted blob is not valid JSON", () => {
-    expect(() => parsePersistedSandboxSettings("not-json")).toThrow(SyntaxError);
+  it.each(["", "not-json"])("throws when persisted blob %j is not valid JSON", (settingsJson) => {
+    expect(() => parsePersistedSandboxSettings(settingsJson)).toThrow(SyntaxError);
   });
 });
 
