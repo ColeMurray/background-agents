@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDiffRepository } from "@open-inspect/shared";
+import type { SessionDiffRepository } from "@open-inspect/shared/types/session-diffs";
 import { FilesChangedSection } from "./files-changed-section";
 
 afterEach(cleanup);
