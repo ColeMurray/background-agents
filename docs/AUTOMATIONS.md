@@ -258,6 +258,14 @@ finishes, the agent's final response is posted as a reply in that message's thre
 any pull requests it opened and to the full web session — and the reaction is cleared. A failed run
 posts a short failure notice in the thread instead.
 
+A run can also **decline to reply**: if the agent's entire final message is `NO_REPLY` (or empty),
+nothing is posted and only the reaction is cleared. Because every reply in a watched thread wakes
+the automation (see below), an automation that watches a busy channel will otherwise answer messages
+that need nothing from it. Mention the sentinel in the automation's instructions — for example _"if
+the message needs nothing from you, reply with exactly `NO_REPLY` and nothing else"_ — since the
+agent will answer everything it is woken for unless told otherwise. A run that opened a pull request
+or produced other artifacts always posts.
+
 Every reply in a thread **continues the same session** — during the run and after it finishes — for
 up to 7 days after the thread's first trigger, exactly like replying in an `@mention` thread. The
 reply is enqueued as a follow-up turn on that session (re-spawning it from a snapshot if it had gone

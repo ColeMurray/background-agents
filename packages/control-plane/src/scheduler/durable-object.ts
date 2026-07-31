@@ -1361,6 +1361,9 @@ export class SchedulerDO extends DurableObject<Env> {
       repoFullName: formatRunRepositoryLabel(run),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
+      // Marks the turn as automation-owned: a follow-up completes through the
+      // interactive callback, which would otherwise treat it as a user request.
+      automationId: automation.id,
     };
 
     try {

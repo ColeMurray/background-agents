@@ -25,6 +25,8 @@ const slackCallbackContextSchema = z.looseObject({
   model: z.string(),
   reasoningEffort: z.string().optional(),
   reactionMessageTs: z.string().optional(),
+  /** Present when the control plane owns this thread as an automation. */
+  automationId: z.string().optional(),
 });
 
 const completionCallbackSchema = z.looseObject({
@@ -214,7 +216,11 @@ callbacksRouter.post("/complete", async (c) => {
   return enqueueCompletion(
     c,
     createSlackCompletionJob({
-      source: "session",
+      // A Slack thread follow-up completes through this route whether it
+      // continues an interactive @mention or an automation's thread. Only the
+      // latter may decline to reply, so trust the control plane's marker rather
+      // than the route.
+      source: valid.context.automationId ? "automation" : "session",
       sessionId: valid.sessionId,
       messageId: valid.messageId,
       success: valid.success,
