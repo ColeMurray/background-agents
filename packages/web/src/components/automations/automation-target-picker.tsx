@@ -79,7 +79,7 @@ function getSelectionDescription({
 }) {
   if (repositoryRequired) return "Repository-scoped triggers need exactly one repository.";
   if (multipleSelectionEnabled) {
-    return `Select up to ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined. Each firing works every selected repository in its own session and opens one session per selected environment's full workspace.`;
+    return `Select up to ${MAX_AUTOMATION_REPOSITORIES} repositories and environments combined. Each firing works on every selected repository in its own session and opens one session per selected environment's full workspace.`;
   }
   return "Select no repository, one repository, or one environment.";
 }

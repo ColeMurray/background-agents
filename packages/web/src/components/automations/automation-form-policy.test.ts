@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_AUTOMATION_SCHEDULE_CRON,
   createAutomationFormDraft,
   evaluateAutomationForm,
   transitionAutomationTriggerType,
+  type AutomationFormDraft,
 } from "./automation-form-policy";
 
 describe("automation form policy", () => {
@@ -10,7 +12,6 @@ describe("automation form policy", () => {
     const draft = createAutomationFormDraft({
       name: "  Daily review  ",
       instructions: "  Review the repository  ",
-      scheduleCron: "0 9 * * *",
       scheduleTz: "America/Los_Angeles",
     });
 
@@ -33,7 +34,7 @@ describe("automation form policy", () => {
         environmentIds: [],
         model: draft.agent.model,
         reasoningEffort: null,
-        scheduleCron: "0 9 * * *",
+        scheduleCron: DEFAULT_AUTOMATION_SCHEDULE_CRON,
         scheduleTz: "America/Los_Angeles",
         instructions: "Review the repository",
         triggerType: "schedule",
@@ -270,6 +271,58 @@ describe("automation form policy", () => {
     expect(transitionAutomationTriggerType(draft, "linear_event").conditions).toEqual([
       { type: "label", operator: "any_of", value: ["bug"] },
     ]);
+  });
+
+  it("drops unknown persisted conditions when changing trigger sources", () => {
+    const draft = createAutomationFormDraft({
+      triggerType: "github_event",
+      triggerConfig: {
+        conditions: [
+          {
+            type: "removed_condition",
+            operator: "any_of",
+            value: ["legacy"],
+          } as unknown as AutomationFormDraft["trigger"]["conditions"][number],
+        ],
+      },
+    }).trigger;
+
+    expect(transitionAutomationTriggerType(draft, "linear_event").conditions).toEqual([]);
+  });
+
+  it("reports when enabled models are still loading", () => {
+    const draft = createAutomationFormDraft({
+      name: "Daily review",
+      instructions: "Review the repository",
+      scheduleTz: "UTC",
+    });
+
+    expect(
+      evaluateAutomationForm({
+        mode: "create",
+        draft,
+        loadingModels: true,
+        resolvedModel: draft.agent.model,
+        targets: { repositories: [], environmentIds: [] },
+      })
+    ).toEqual({ valid: false, reason: "models-loading" });
+  });
+
+  it("reports missing required fields after models finish loading", () => {
+    const draft = createAutomationFormDraft({
+      instructions: "Review the repository",
+      scheduleTz: "UTC",
+    });
+
+    expect(
+      evaluateAutomationForm({
+        mode: "create",
+        draft,
+        loadingModels: false,
+        resolvedModel: draft.agent.model,
+        targets: { repositories: [], environmentIds: [] },
+      })
+    ).toEqual({ valid: false, reason: "required-fields" });
   });
 
   it("rejects schedules that run more often than every fifteen minutes", () => {

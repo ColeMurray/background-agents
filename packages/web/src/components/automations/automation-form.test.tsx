@@ -170,10 +170,10 @@ describe("automation cron submission", () => {
     );
 
     expect(screen.getByRole("button", { name: "Create Automation" })).toBeDisabled();
+    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
 
     fireEvent.submit(container.querySelector("form")!);
 
-    expect(screen.getByText("Event type is required.")).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
@@ -744,6 +744,23 @@ describe("slack_event automation", () => {
     fireEvent.submit(container.querySelector("form")!);
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+  });
+
+  it("shows the Slack channel message only when it is the policy failure", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          ...slackBase,
+          name: "",
+          triggerConfig: { conditions: [] },
+        }}
+      />
+    );
+
+    expect(screen.queryByText(/require at least one Slack Channel/)).not.toBeInTheDocument();
   });
 
   it("explains why an empty slack_channel condition cannot be submitted", () => {

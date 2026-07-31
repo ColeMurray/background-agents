@@ -78,6 +78,8 @@ export type AutomationFormEvaluation =
 
 type InitialAutomationFormValues = Partial<AutomationFormValues>;
 
+export const DEFAULT_AUTOMATION_SCHEDULE_CRON = "0 9 * * *";
+
 export function createAutomationFormDraft(
   initialValues: InitialAutomationFormValues = {}
 ): AutomationFormDraft {
@@ -86,7 +88,7 @@ export function createAutomationFormDraft(
     instructions: initialValues.instructions ?? "",
     trigger: {
       type: initialValues.triggerType ?? "schedule",
-      scheduleCron: initialValues.scheduleCron ?? "0 9 * * *",
+      scheduleCron: initialValues.scheduleCron ?? DEFAULT_AUTOMATION_SCHEDULE_CRON,
       scheduleTz: initialValues.scheduleTz ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
       eventType: initialValues.eventType ?? "",
       conditions: initialValues.triggerConfig?.conditions ?? [],
@@ -121,10 +123,10 @@ export function transitionAutomationTriggerType(
     ...trigger,
     type: nextType,
     eventType: eventTypeStillValid ? trigger.eventType : "",
-    conditions: trigger.conditions.filter(
-      (condition) =>
-        nextEventSource && conditionRegistry[condition.type].appliesTo.includes(nextEventSource)
-    ),
+    conditions: trigger.conditions.filter((condition) => {
+      const conditionDefinition = conditionRegistry[condition.type];
+      return Boolean(nextEventSource && conditionDefinition?.appliesTo.includes(nextEventSource));
+    }),
   };
 }
 

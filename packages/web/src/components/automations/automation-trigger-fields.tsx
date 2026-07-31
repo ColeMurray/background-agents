@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  hasValidSlackChannelCondition,
   triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationEventSource,
@@ -70,8 +69,8 @@ interface AutomationTriggerFieldsProps {
 
 interface AutomationTriggerConfigurationFieldsProps extends AutomationTriggerFieldsProps {
   eventTypeError: string;
+  slackChannelError: string;
   conditionErrors: string[];
-  onClearEventTypeError: () => void;
 }
 
 function updateTriggerDraft(
@@ -123,16 +122,14 @@ export function AutomationTriggerConfigurationFields({
   value,
   onChange,
   eventTypeError,
+  slackChannelError,
   conditionErrors,
-  onClearEventTypeError,
 }: AutomationTriggerConfigurationFieldsProps) {
   const source = triggerSources.find((candidate) => candidate.triggerType === value.type);
   const eventTypes = source?.eventTypes ?? [];
   const showEventTypeSelector = Boolean(source?.supportsEventTypes && eventTypes.length > 0);
   const eventTypePlaceholder = source?.eventTypePlaceholder || "Select event type...";
   const isSchedule = value.type === "schedule";
-  const slackConditionsValid =
-    value.type !== "slack_event" || hasValidSlackChannelCondition(value.conditions);
 
   const update = (changes: Partial<AutomationTriggerDraft>) => {
     updateTriggerDraft(value, onChange, changes);
@@ -186,13 +183,7 @@ export function AutomationTriggerConfigurationFields({
       {showEventTypeSelector && (
         <div>
           <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
-          <Select
-            value={value.eventType}
-            onValueChange={(eventType) => {
-              update({ eventType });
-              onClearEventTypeError();
-            }}
-          >
+          <Select value={value.eventType} onValueChange={(eventType) => update({ eventType })}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder={eventTypePlaceholder} />
             </SelectTrigger>
@@ -257,10 +248,8 @@ export function AutomationTriggerConfigurationFields({
               {conditionError}
             </p>
           ))}
-          {!slackConditionsValid && conditionErrors.length === 0 && (
-            <p className="mt-1 text-xs text-destructive">
-              Slack triggers require at least one Slack Channel condition.
-            </p>
+          {slackChannelError && (
+            <p className="mt-1 text-xs text-destructive">{slackChannelError}</p>
           )}
         </div>
       )}

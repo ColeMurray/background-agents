@@ -46,7 +46,6 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   const [instructions, setInstructions] = useState(initialDraft.instructions);
   const [trigger, setTrigger] = useState(initialDraft.trigger);
   const repositoryRequired = requiresRepositoryContext(trigger.type);
-  const [eventTypeError, setEventTypeError] = useState("");
 
   const isSchedule = trigger.type === "schedule";
   // Multi-repository selections are schedule-only (the server rejects them for
@@ -92,31 +91,24 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     !formEvaluation.valid && formEvaluation.reason === "invalid-conditions"
       ? formEvaluation.conditionErrors
       : [];
+  const eventTypeError =
+    !formEvaluation.valid && formEvaluation.reason === "event-type-required"
+      ? "Event type is required."
+      : "";
+  const slackChannelError =
+    !formEvaluation.valid && formEvaluation.reason === "slack-channel-required"
+      ? "Slack triggers require at least one Slack Channel condition."
+      : "";
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formEvaluation.valid) {
-      if (formEvaluation.reason === "event-type-required") {
-        setEventTypeError("Event type is required.");
-      }
-      return;
-    }
-    if (eventTypeError) {
-      setEventTypeError("");
-    }
+    if (!formEvaluation.valid) return;
     onSubmit(formEvaluation.values);
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <AutomationTriggerTypeField
-        mode={mode}
-        value={trigger}
-        onChange={(nextTrigger) => {
-          setTrigger(nextTrigger);
-          setEventTypeError("");
-        }}
-      />
+      <AutomationTriggerTypeField mode={mode} value={trigger} onChange={setTrigger} />
 
       {/* Name */}
       <div>
@@ -159,8 +151,8 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         value={trigger}
         onChange={setTrigger}
         eventTypeError={eventTypeError}
+        slackChannelError={slackChannelError}
         conditionErrors={conditionErrors}
-        onClearEventTypeError={() => setEventTypeError("")}
       />
 
       <AutomationInstructionsField
