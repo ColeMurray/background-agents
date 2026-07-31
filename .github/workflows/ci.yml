@@ -320,6 +320,16 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node dependencies
+        working-directory: .
+        run: npm ci
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -327,6 +337,10 @@ jobs:
 
       - name: Run tests
         run: pytest tests/ -v
+
+      - name: Run sandbox tool tests
+        working-directory: .
+        run: npm test -w @open-inspect/sandbox-runtime
 
   test-python:
     name: Test (Python - modal-infra)

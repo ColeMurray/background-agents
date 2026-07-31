@@ -7,6 +7,9 @@
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { bridgeFetch, extractError } from "./_bridge-client.js";
+import { buildChildSpawnBody, spawnChildArgs } from "./spawn-child-config.js";
+
+export { buildChildSpawnBody } from "./spawn-child-config.js";
 
 export default tool({
   name: "spawn-child",
@@ -25,13 +28,11 @@ export default tool({
       .describe(
         "Override the LLM model for the child. Must use 'provider/model' format (e.g. 'anthropic/claude-sonnet-4-6', 'openai/gpt-5.4'). Defaults to the parent's model."
       ),
+    ...spawnChildArgs,
   },
   async execute(args) {
     try {
-      const body = { title: args.title, prompt: args.prompt };
-      if (args.model) {
-        body.model = args.model;
-      }
+      const body = buildChildSpawnBody(args);
 
       const response = await bridgeFetch("/children", {
         method: "POST",

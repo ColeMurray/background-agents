@@ -104,6 +104,110 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.status).toBe("active");
   });
 
+  it("inherits the parent's reasoning effort when omitted", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      reasoningEffort: "high",
+    });
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({ title: "Inherited effort", prompt: "Use the parent effort" }),
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect((await store.get(sessionId))?.reasoningEffort).toBe("high");
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(sessionId));
+    const [session] = await queryDO<{ reasoning_effort: string | null }>(
+      childStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(session.reasoning_effort).toBe("high");
+  });
+
+  it("persists an explicit reasoning effort override", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      reasoningEffort: "low",
+    });
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({
+        title: "Overridden effort",
+        prompt: "Use the explicit effort",
+        reasoningEffort: "high",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect((await store.get(sessionId))?.reasoningEffort).toBe("high");
+  });
+
+  it("keeps incompatible reasoning effort compatibility semantics", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+    });
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({
+        title: "Incompatible effort",
+        prompt: "Keep the existing fallback",
+        reasoningEffort: "xhigh",
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const { sessionId } = await response.json<{ sessionId: string }>();
+    expect((await store.get(sessionId))?.reasoningEffort).toBeNull();
+  });
+
+  it("inherits an overridden effort through a grandchild", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      reasoningEffort: "low",
+    });
+
+    const childResponse = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${sandboxToken}` },
+      body: JSON.stringify({
+        title: "Child effort",
+        prompt: "Spawn a grandchild",
+        reasoningEffort: "high",
+      }),
+    });
+    expect(childResponse.status).toBe(201);
+    const { sessionId: childId } = await childResponse.json<{ sessionId: string }>();
+    const childStub = env.SESSION.get(env.SESSION.idFromName(childId));
+    const childToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+
+    const grandchildResponse = await SELF.fetch(`https://test.local/sessions/${childId}/children`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${childToken}` },
+      body: JSON.stringify({ title: "Grandchild effort", prompt: "Use inherited effort" }),
+    });
+    expect(grandchildResponse.status).toBe(201);
+    const { sessionId: grandchildId } = await grandchildResponse.json<{ sessionId: string }>();
+    expect((await store.get(grandchildId))?.reasoningEffort).toBe("high");
+
+    const grandchildStub = env.SESSION.get(env.SESSION.idFromName(grandchildId));
+    const [session] = await queryDO<{ reasoning_effort: string | null }>(
+      grandchildStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(session.reasoning_effort).toBe("high");
+  });
+
   it("persists environment provenance for spawned children", async () => {
     const { parentName, sandboxToken, store } = await setupParent({
       repoId: 12345,
