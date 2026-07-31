@@ -28,7 +28,7 @@ import { resolveImageBuildProvider } from "./provider-policy";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
 import type { RepositoryShaEntry } from "@open-inspect/shared";
 import type {
-  AnyImageBuildAdapter,
+  ImageBuildAdapter,
   CompleteImageBuildCallback,
   FailImageBuildCallback,
   ImageBuildWorkflowContext,
@@ -230,7 +230,7 @@ export class ImageBuildWorkflow {
     }
 
     let providerSessionIdForCleanup: string | null = null;
-    let startAdapter: AnyImageBuildAdapter | null = null;
+    let startAdapter: ImageBuildAdapter | null = null;
     try {
       const registered = await this.store.registerBuild({
         id: buildId,
@@ -546,7 +546,7 @@ export class ImageBuildWorkflow {
     operation: string,
     ctx: ImageBuildWorkflowContext,
     adapterOperation: "start" | "existing_session" = "existing_session"
-  ): AnyImageBuildAdapter {
+  ): ImageBuildAdapter {
     return this.createAdapterGuarded(provider, operation, ctx, () =>
       this.adapterFactory.create(provider, adapterOperation)
     );

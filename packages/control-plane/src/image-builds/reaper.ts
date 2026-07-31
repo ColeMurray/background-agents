@@ -2,7 +2,7 @@ import type { ImageBuildStore, ReapableImageBuildRow } from "../db/image-builds"
 import { createLogger } from "../logger";
 import type { ImageBuildProvider, SupersededImageBuild } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
-import type { AnyImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
+import type { ImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
 
 const logger = createLogger("image-builds:reaper");
 
@@ -10,7 +10,7 @@ const logger = createLogger("image-builds:reaper");
 const REAP_BATCH_LIMIT = 25;
 export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
 
-type AdapterCache = Map<ImageBuildProvider, AnyImageBuildAdapter | null>;
+type AdapterCache = Map<ImageBuildProvider, ImageBuildAdapter | null>;
 
 /**
  * Best-effort provider-artifact reclamation: inline deletion of images a
@@ -107,7 +107,7 @@ export class ImageBuildReaper {
     buildId: string,
     ctx: ImageBuildWorkflowContext,
     adapters: AdapterCache
-  ): AnyImageBuildAdapter | null {
+  ): ImageBuildAdapter | null {
     if (!adapters.has(provider)) {
       adapters.set(provider, this.createAdapterForBestEffortCleanup(provider, buildId, ctx));
     }
@@ -164,7 +164,7 @@ export class ImageBuildReaper {
     provider: ImageBuildProvider,
     image: { providerImageId: string; providerSessionId?: string | null },
     ctx: ImageBuildWorkflowContext,
-    adapter: AnyImageBuildAdapter
+    adapter: ImageBuildAdapter
   ): Promise<boolean> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
@@ -194,7 +194,7 @@ export class ImageBuildReaper {
     provider: ImageBuildProvider,
     buildId: string,
     ctx: ImageBuildWorkflowContext
-  ): AnyImageBuildAdapter | null {
+  ): ImageBuildAdapter | null {
     try {
       return this.adapterFactory.create(provider, "existing_session");
     } catch (e) {

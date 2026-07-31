@@ -25,7 +25,7 @@ import {
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
 import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
-import type { AnyImageBuildAdapter, DeleteImageInput } from "../../src/image-builds/types";
+import type { DeleteImageInput, ImageBuildAdapter } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
@@ -723,7 +723,7 @@ describe("Image builds", () => {
           if (image.providerImageId === opts?.stuckImageId) throw new Error("provider 500");
           deleted.push(image.providerImageId);
         },
-      } as unknown as AnyImageBuildAdapter;
+      } as unknown as ImageBuildAdapter;
       const factory: ImageBuildAdapterFactory = {
         create: (_provider: ImageBuildProvider) => adapter,
       } as ImageBuildAdapterFactory;

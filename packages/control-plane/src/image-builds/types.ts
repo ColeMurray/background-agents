@@ -123,5 +123,3 @@ export type ImageBuildAdapter = {
   cleanupFailedBuild(input: FailedImageBuildInput): Promise<void>;
   cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void>;
 };
-
-export type AnyImageBuildAdapter = ImageBuildAdapter;

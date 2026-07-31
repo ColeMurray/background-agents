@@ -601,28 +601,6 @@ export class ImageBuildStore {
   }
 
   /**
-   * Authoritative scheduler input for one provider. Unlike the bounded UI
-   * history read, this cannot hide a live build behind failures from another
-   * provider.
-   */
-  async getReconciliationStatus(
-    scope: ImageBuildScope,
-    provider: ImageBuildProvider
-  ): Promise<ImageBuildRecordView[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
-         WHERE scope_kind = ? AND scope_id = ? AND provider = ?
-           AND status IN ('building', 'ready')
-         ORDER BY created_at DESC`
-      )
-      .bind(scope.kind, scope.id, provider)
-      .all<ImageBuildRecordView>();
-
-    return result.results || [];
-  }
-
-  /**
    * Cross-scope status for the given (enabled) scopes: every non-superseded
    * row, so failed builds are visible in the aggregate feed alongside ready
    * and building rows. Unbounded per scope on purpose: the state machine caps

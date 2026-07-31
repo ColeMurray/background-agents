@@ -13,7 +13,7 @@ import { ImageBuildStore } from "../../src/db/image-builds";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "../../src/image-builds/maintenance";
 import type { ImageBuildScope } from "../../src/image-builds/model";
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
-import type { AnyImageBuildAdapter } from "../../src/image-builds/types";
+import type { ImageBuildAdapter } from "../../src/image-builds/types";
 import { ImageBuildWorkflow } from "../../src/image-builds/workflow";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
@@ -28,7 +28,7 @@ const TWO_HOURS_AGO = () => Date.now() - 2 * 60 * 60 * 1000;
  * one seam.
  */
 function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
-  const adapter = { async startBuild() {} } as unknown as AnyImageBuildAdapter;
+  const adapter = { async startBuild() {} } as unknown as ImageBuildAdapter;
   const factory = { create: () => adapter } as ImageBuildAdapterFactory;
   const planner = {
     resolveTarget: async () => ({

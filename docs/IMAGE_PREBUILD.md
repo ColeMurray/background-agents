@@ -138,11 +138,12 @@ flowchart TD
     accept --> publish[Publish secret-free Queue command]
     fail --> publish
 
-    publish --> lease{D1 finalization lease available?}
+    publish --> state{Accepted build state}
+    state -->|success: building| lease{D1 finalization lease available?}
+    state -->|failure: failed| cleanup[Terminate provider session]
     lease -->|no| retry[Retry after the active lease]
     retry --> lease
-    lease -->|success build| artifact[Snapshot or checkpoint provider session]
-    lease -->|failed build| cleanup[Terminate provider session]
+    lease -->|yes| artifact[Snapshot or checkpoint provider session]
 
     artifact --> fence[Fence provider artifact id in D1]
     fence --> ready[Mark image ready or superseded]
@@ -171,8 +172,8 @@ shared one-hour limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
-durably accepted. There is no separate long-running Modal `build_image` function or Modal rebuild
-cron.
+durably accepted. New builds no longer invoke the long-running Modal `build_image` function; the
+legacy function and cron remain deployed only until the final cleanup step in the rollout.
 
 Terraform deploys the Modal app before the control-plane Worker so a one-shot upgrade cannot expose
 the new Worker until Modal's provider-session endpoints are available. The repository history keeps

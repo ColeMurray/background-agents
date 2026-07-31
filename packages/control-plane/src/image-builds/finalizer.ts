@@ -6,7 +6,7 @@ import type { ImageBuildFinalizationJob } from "./finalization-job";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { ImageBuildReaper } from "./reaper";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
-import type { AnyImageBuildAdapter } from "./types";
+import type { ImageBuildAdapter } from "./types";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
 export { ImageBuildFinalizationAttemptError } from "./finalization-error";
@@ -225,7 +225,7 @@ export class ImageBuildFinalizer {
    * artifact is quarantined on the row so maintenance can reap it later.
    */
   private async compensateUnrecordedArtifact(
-    adapter: AnyImageBuildAdapter,
+    adapter: ImageBuildAdapter,
     build: ImageBuildFinalizationRow,
     providerSessionId: string,
     providerImageId: string,
@@ -257,7 +257,7 @@ export class ImageBuildFinalizer {
   }
 
   private async finalizeWithDeadline(
-    adapter: AnyImageBuildAdapter,
+    adapter: ImageBuildAdapter,
     buildId: string,
     providerSessionId: string,
     correlation: CorrelationContext
