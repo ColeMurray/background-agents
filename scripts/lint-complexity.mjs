@@ -3,6 +3,8 @@ import process from "node:process";
 
 import { ESLint } from "eslint";
 
+import { parseComplexityMessage } from "./lint-complexity-message.mjs";
+
 const TARGET_GLOB = "packages/**/*.{ts,tsx}";
 const HOTSPOT_THRESHOLD = 20;
 const RESULT_LIMIT = 25;
@@ -33,21 +35,6 @@ function compareFindings(left, right) {
   );
 }
 
-function parseFinding(file, message) {
-  const match = /^(.*?) has a complexity of (\d+)\./u.exec(message.message);
-  if (!match) {
-    throw new Error(`Could not parse complexity at ${file}:${message.line}:${message.column}`);
-  }
-
-  return {
-    file,
-    line: message.line,
-    column: message.column,
-    complexity: Number(match[2]),
-    description: match[1],
-  };
-}
-
 function collectFindings(results) {
   const files = { total: results.length, production: 0, test: 0 };
   const findings = { production: [], test: [] };
@@ -64,7 +51,7 @@ function collectFindings(results) {
         );
       }
       if (message.ruleId === "complexity") {
-        findings[category].push(parseFinding(file, message));
+        findings[category].push(parseComplexityMessage(file, message));
       }
     }
   }
@@ -171,6 +158,7 @@ async function main() {
   }
 
   const eslint = new ESLint({
+    ruleFilter: ({ ruleId }) => ruleId === "complexity",
     overrideConfig: [
       {
         files: [TARGET_GLOB],

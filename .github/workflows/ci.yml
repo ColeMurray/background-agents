@@ -31,6 +31,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Test complexity reporter
+        run: npm run test:lint-complexity
+
       - name: Check Prettier formatting
         run: npm run format:check
 
