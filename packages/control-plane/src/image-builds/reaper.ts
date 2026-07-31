@@ -9,6 +9,8 @@ const logger = createLogger("image-builds:reaper");
 /** Rows reclaimed per cleanup pass, per sweep; leftovers wait for the next tick. */
 const REAP_BATCH_LIMIT = 25;
 export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
+const FAILED_ARTIFACT_CURSOR = "failed-image-artifact-cleanup";
+const SUPERSEDED_ARTIFACT_CURSOR = "superseded-image-artifact-cleanup";
 
 type AdapterCache = Map<ImageBuildProvider, AnyImageBuildAdapter | null>;
 
@@ -47,23 +49,59 @@ export class ImageBuildReaper {
   ): Promise<{ deletedFailed: number; reapedFailed: number; reapedSuperseded: number }> {
     const adapters: AdapterCache = new Map();
 
-    const reapedFailed = await this.reapArtifactBearingRows(
-      await this.store.getFailedImagesWithArtifacts(REAP_BATCH_LIMIT),
-      ctx,
-      adapters,
-      (row) => this.store.clearFailedImageArtifact(row.id, row.provider_image_id)
+    const failedRows = await this.getRotatingPage(FAILED_ARTIFACT_CURSOR, (after) =>
+      this.store.getFailedImagesWithArtifacts(REAP_BATCH_LIMIT, after)
+    );
+    const reapedFailed = await this.reapArtifactBearingRows(failedRows, ctx, adapters, (row) =>
+      this.store.clearFailedImageArtifact(row.id, row.provider_image_id)
     );
 
     const deletedFailed = await this.store.deleteOldFailedBuilds(failedMaxAgeMs);
 
+    const supersededRows = await this.getRotatingPage(SUPERSEDED_ARTIFACT_CURSOR, (after) =>
+      this.store.getSupersededImages(REAP_BATCH_LIMIT, after)
+    );
     const reapedSuperseded = await this.reapArtifactBearingRows(
-      await this.store.getSupersededImages(REAP_BATCH_LIMIT),
+      supersededRows,
       ctx,
       adapters,
       (row) => this.store.deleteSupersededImage(row.id, row.provider_image_id)
     );
 
     return { deletedFailed, reapedFailed, reapedSuperseded };
+  }
+
+  /**
+   * Advance a persisted keyset cursor before provider calls. A provider
+   * failure therefore waits for one bounded rotation instead of pinning every
+   * later artifact behind the oldest rows forever.
+   */
+  private async getRotatingPage(
+    cursorName: string,
+    select: (after: { createdAt: number; rowId: string } | null) => Promise<ReapableImageBuildRow[]>
+  ): Promise<ReapableImageBuildRow[]> {
+    const stored = await this.store.maintenance.getCursor(cursorName);
+    let after =
+      stored?.createdAt !== null &&
+      stored?.createdAt !== undefined &&
+      stored.rowId !== null &&
+      stored.rowId !== undefined
+        ? { createdAt: stored.createdAt, rowId: stored.rowId }
+        : null;
+    let rows = await select(after);
+    if (rows.length === 0 && after) {
+      after = null;
+      rows = await select(null);
+    }
+
+    const last = rows.at(-1);
+    await this.store.maintenance.setCursor(cursorName, {
+      scopeKind: null,
+      scopeId: null,
+      createdAt: rows.length === REAP_BATCH_LIMIT && last ? last.created_at : null,
+      rowId: rows.length === REAP_BATCH_LIMIT && last ? last.id : null,
+    });
+    return rows;
   }
 
   /**

@@ -874,6 +874,36 @@ describe("ImageBuildWorkflow", () => {
       expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
     });
 
+    it("advances past failed deletes so later cleanup rows are not starved", async () => {
+      const store = createStore();
+      const firstPage = Array.from({ length: 25 }, (_, index) =>
+        reapableRow(`failed-${index + 1}`, `im-${index + 1}`)
+      );
+      const later = reapableRow("failed-26", "im-26");
+      store.getFailedImagesWithArtifacts
+        .mockResolvedValueOnce(firstPage)
+        .mockResolvedValueOnce([later]);
+      const adapter = createAdapter();
+      adapter.deleteImage.mockRejectedValue(new Error("provider unavailable"));
+      const { workflow } = createWorkflow({ store, adapter });
+
+      await workflow.cleanupImages(86_400_000, ctx);
+      const persisted = store.maintenance.setCursor.mock.calls.find(
+        ([name]) => name === "failed-image-artifact-cleanup"
+      )?.[1];
+      store.maintenance.getCursor.mockImplementation(async (name) =>
+        name === "failed-image-artifact-cleanup" ? persisted : null
+      );
+      adapter.deleteImage.mockResolvedValue(undefined);
+      await workflow.cleanupImages(86_400_000, ctx);
+
+      expect(store.getFailedImagesWithArtifacts).toHaveBeenNthCalledWith(2, 25, {
+        createdAt: 25,
+        rowId: "failed-25",
+      });
+      expect(store.clearFailedImageArtifact).toHaveBeenCalledWith("failed-26", "im-26");
+    });
+
     it("does not select already-reaped failed rows (idempotent across ticks)", async () => {
       const store = createStore();
       // getFailedImagesWithArtifacts only returns artifact-bearing rows, so a

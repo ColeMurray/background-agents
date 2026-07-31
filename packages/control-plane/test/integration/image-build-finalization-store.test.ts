@@ -1,6 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
-import { ImageBuildStore } from "../../src/db/image-builds";
+import {
+  ENABLED_ENVIRONMENT_FIRST_PAGE_SQL,
+  ENABLED_ENVIRONMENT_NEXT_PAGE_SQL,
+  ENABLED_REPOSITORY_FIRST_PAGE_SQL,
+  ENABLED_REPOSITORY_NEXT_PAGE_SQL,
+  PROVIDER_SESSION_CLEANUP_FIRST_PAGE_SQL,
+  PROVIDER_SESSION_CLEANUP_NEXT_PAGE_SQL,
+  RECOVERABLE_IMAGE_FINALIZATIONS_SQL,
+} from "../../src/db/image-build-maintenance";
+import {
+  DELETE_OLD_FAILED_BUILDS_SQL,
+  FAILED_IMAGE_ARTIFACT_FIRST_PAGE_SQL,
+  FAILED_IMAGE_ARTIFACT_NEXT_PAGE_SQL,
+  ImageBuildStore,
+  MARK_STALE_IMAGE_BUILDS_SQL,
+  SUPERSEDED_IMAGE_FIRST_PAGE_SQL,
+  SUPERSEDED_IMAGE_NEXT_PAGE_SQL,
+} from "../../src/db/image-builds";
 import { ImageBuildFinalizer } from "../../src/image-builds/finalizer";
 import { cleanD1Tables } from "./cleanup";
 import { environmentScope, getRow, seedEnvironment } from "./image-build-helpers";
@@ -85,6 +102,40 @@ describe("ImageBuildStore finalization state", () => {
     expect(row?.callback_token_used_at).toBe(now);
     expect(row?.runtime_version).toBe("v53-runtime");
     expect(row?.build_duration_seconds).toBe(12.5);
+  });
+
+  it("recovers an accepted unleased finalization before artifact persistence", async () => {
+    const environmentId = await seedEnvironment();
+    const store = new ImageBuildStore(env.DB);
+    const now = Date.now();
+    await store.registerBuild({
+      id: "build-accepted-unleased",
+      scope: environmentScope(environmentId),
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-1",
+      callbackTokenHash: "token-hash",
+      callbackTokenExpiresAt: now + 60_000,
+    });
+    await store.bindProviderSession("build-accepted-unleased", "modal", "session-1");
+    await store.finalization.acceptSuccessfulCompletion({
+      buildId: "build-accepted-unleased",
+      provider: "modal",
+      providerSessionId: "session-1",
+      tokenHash: "token-hash",
+      completionHash: "completion-hash",
+      repositoryShas: [],
+      runtimeVersion: "v53-runtime",
+      buildDurationMs: 1_000,
+      now,
+    });
+
+    expect((await getRow("build-accepted-unleased"))?.provider_image_id).toBeNull();
+    expect(await store.maintenance.listRecoverableFinalizations(now + 1, 10)).toEqual([
+      {
+        id: "build-accepted-unleased",
+        completion_hash: "completion-hash",
+      },
+    ]);
   });
 
   it("durably accepts a failed callback while retaining the cleanup handle", async () => {
@@ -205,6 +256,129 @@ describe("ImageBuildStore finalization state", () => {
       provider_image_id: "image-orphan",
       provider_session_cleanup_pending: 1,
     });
+  });
+
+  it("pages enabled scopes and terminal cleanup obligations deterministically", async () => {
+    await seedEnvironment({ id: "env_enabled", prebuildEnabled: true });
+    await env.DB.prepare(
+      `INSERT INTO repo_metadata
+         (repo_owner, repo_name, created_at, updated_at, image_build_enabled)
+       VALUES ('Acme', 'Web', 1, 1, 1)`
+    ).run();
+    const store = new ImageBuildStore(env.DB);
+
+    const first = await store.maintenance.listEnabledScopeRefsPage({ after: null, limit: 1 });
+    expect(first.scopes).toEqual([{ kind: "environment", id: "env_enabled" }]);
+    const second = await store.maintenance.listEnabledScopeRefsPage({
+      after: first.nextCursor,
+      limit: 1,
+    });
+    expect(second.scopes).toEqual([{ kind: "repo", id: "acme/web" }]);
+
+    await store.registerBuild({
+      id: "cleanup-terminal",
+      scope: environmentScope("env_enabled"),
+      provider: "modal",
+      repositoriesFingerprint: "fp",
+    });
+    await store.bindProviderSession("cleanup-terminal", "modal", "session-terminal");
+    await store.markBuildFailed("cleanup-terminal", "modal", "failed");
+    // Legacy terminal rows predate the cleanup flag. They are swept naturally
+    // without a one-off backfill.
+    await env.DB.prepare(
+      "UPDATE image_builds SET provider_session_cleanup_pending = NULL WHERE id = ?"
+    )
+      .bind("cleanup-terminal")
+      .run();
+
+    expect(await store.maintenance.listSessionCleanupPage({ after: null, limit: 10 })).toEqual([
+      expect.objectContaining({
+        id: "cleanup-terminal",
+        provider_session_id: "session-terminal",
+      }),
+    ]);
+  });
+
+  it("uses ordered indexes for bounded maintenance pagination", async () => {
+    async function explain(sql: string, bindings: unknown[]): Promise<string> {
+      const result = await env.DB.prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .bind(...bindings)
+        .all<{ detail: string }>();
+      return (result.results ?? []).map((row) => row.detail).join("\n");
+    }
+
+    const plans = {
+      environmentFirst: await explain(ENABLED_ENVIRONMENT_FIRST_PAGE_SQL, [21]),
+      environmentNext: await explain(ENABLED_ENVIRONMENT_NEXT_PAGE_SQL, ["env_a", 21]),
+      repositoryFirst: await explain(ENABLED_REPOSITORY_FIRST_PAGE_SQL, [21]),
+      repositoryNext: await explain(ENABLED_REPOSITORY_NEXT_PAGE_SQL, ["acme/a", 21]),
+      cleanupFirst: await explain(PROVIDER_SESSION_CLEANUP_FIRST_PAGE_SQL, [20]),
+      cleanupNext: await explain(PROVIDER_SESSION_CLEANUP_NEXT_PAGE_SQL, [1, "build-a", 20]),
+      supersededFirst: await explain(SUPERSEDED_IMAGE_FIRST_PAGE_SQL, [25]),
+      supersededNext: await explain(SUPERSEDED_IMAGE_NEXT_PAGE_SQL, [1, "build-a", 25]),
+      failedArtifactFirst: await explain(FAILED_IMAGE_ARTIFACT_FIRST_PAGE_SQL, [25]),
+      failedArtifactNext: await explain(FAILED_IMAGE_ARTIFACT_NEXT_PAGE_SQL, [1, "build-a", 25]),
+      failedHistoryDelete: await explain(DELETE_OLD_FAILED_BUILDS_SQL, [100, 25]),
+      staleRecovery: await explain(MARK_STALE_IMAGE_BUILDS_SQL, ["timed out", 100, 100, 200, 25]),
+      finalizationRecovery: await explain(RECOVERABLE_IMAGE_FINALIZATIONS_SQL, [200, 20]),
+    };
+
+    expect(plans.environmentFirst).toContain("idx_environments_prebuild_scope");
+    expect(plans.environmentNext).toContain("idx_environments_prebuild_scope");
+    expect(plans.repositoryFirst).toContain("idx_repo_metadata_image_build_scope");
+    expect(plans.repositoryNext).toContain("idx_repo_metadata_image_build_scope");
+    expect(plans.cleanupFirst).toContain("idx_image_builds_session_cleanup");
+    expect(plans.cleanupNext).toContain("idx_image_builds_session_cleanup");
+    expect(plans.supersededFirst).toContain("idx_image_builds_superseded_cleanup");
+    expect(plans.supersededNext).toContain("idx_image_builds_superseded_cleanup");
+    expect(plans.failedArtifactFirst).toContain("idx_image_builds_failed_artifact_cleanup");
+    expect(plans.failedArtifactNext).toContain("idx_image_builds_failed_artifact_cleanup");
+    expect(plans.failedHistoryDelete).toContain("idx_image_builds_failed_history_cleanup");
+    expect(plans.staleRecovery).toContain("idx_image_builds_stale_recovery");
+    expect(plans.finalizationRecovery).toContain("idx_image_builds_finalization_recovery");
+    for (const plan of Object.values(plans)) {
+      expect(plan).not.toContain("USE TEMP B-TREE");
+    }
+    expect(plans.environmentNext).toContain("id>?");
+    expect(plans.repositoryNext).toContain("<expr>>?");
+    expect(plans.cleanupNext).toContain("(created_at,id)>(?,?)");
+  });
+
+  it("keeps the authoritative ready image visible beyond the bounded UI history", async () => {
+    const environmentId = await seedEnvironment();
+    const scope = environmentScope(environmentId);
+    const store = new ImageBuildStore(env.DB);
+
+    await store.registerBuild({
+      id: "ready-build",
+      scope,
+      provider: "modal",
+      repositoriesFingerprint: "fingerprint-ready",
+    });
+    await env.DB.prepare(
+      `UPDATE image_builds
+       SET status = 'ready', runtime_version = 'v53-runtime', created_at = 1
+       WHERE id = 'ready-build'`
+    ).run();
+
+    for (let index = 0; index < 11; index += 1) {
+      const id = `failed-${index}`;
+      await store.registerBuild({
+        id,
+        scope,
+        provider: "vercel",
+        repositoriesFingerprint: `failed-${index}`,
+      });
+      await store.markBuildFailed(id, "vercel", "failed");
+      await env.DB.prepare("UPDATE image_builds SET created_at = ? WHERE id = ?")
+        .bind(100 + index, id)
+        .run();
+    }
+
+    expect((await store.getStatus(scope)).some((row) => row.id === "ready-build")).toBe(false);
+    expect(await store.getReconciliationStatus(scope, "modal")).toEqual([
+      expect.objectContaining({ id: "ready-build", status: "ready" }),
+    ]);
   });
 
   it("finalizes an accepted build once and clears cleanup after teardown", async () => {

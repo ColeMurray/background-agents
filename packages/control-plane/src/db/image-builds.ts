@@ -10,6 +10,7 @@ import type {
   SupersededImageBuild,
 } from "../image-builds/model";
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
+import { ImageBuildMaintenanceStore } from "./image-build-maintenance";
 import type { SqlDatabase } from "./sql-database";
 
 const MS_PER_SECOND = 1000;
@@ -184,9 +185,11 @@ WHERE id IN (
  */
 export class ImageBuildStore {
   readonly finalization: ImageBuildFinalizationStore;
+  readonly maintenance: ImageBuildMaintenanceStore;
 
   constructor(private readonly db: SqlDatabase) {
     this.finalization = new ImageBuildFinalizationStore(db);
+    this.maintenance = new ImageBuildMaintenanceStore(db);
   }
 
   /**

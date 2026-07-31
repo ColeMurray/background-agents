@@ -101,9 +101,15 @@ any of the following holds:
 - **Outdated runtime** — the image was built on a sandbox runtime older than the current
   compatibility floor (such images are also skipped at spawn time)
 
-The scheduler starts a bounded number of builds per tick across all scopes (`TRIGGER_CAP_PER_TICK`,
-currently 8); anything beyond the cap is picked up on the next tick. Sessions fall back to the
-normal startup flow while a scope waits for its build.
+The provider-neutral control-plane scheduler starts a bounded number of builds per tick across all
+scopes (currently 8); keyset cursors carry remaining work into later ticks. It also reclaims
+terminal provider build sessions and old artifacts. Sessions fall back to the normal startup flow
+while a scope waits for its build.
+
+When changing `sandbox_provider`, keep the previous provider's credentials configured until its
+terminal build-session cleanup backlog reaches zero. Maintenance dispatches cleanup from each row's
+recorded provider, independently of which provider is currently active; removing old credentials
+early leaves those rows pending until the provider's own timeout or credentials are restored.
 
 Builds also trigger immediately, outside the schedule, when:
 
