@@ -10,6 +10,7 @@ import type {
   SupersededImageBuild,
 } from "../image-builds/model";
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
+import { ImageBuildMaintenanceStore } from "./image-build-maintenance";
 import type { SqlDatabase } from "./sql-database";
 
 const MS_PER_SECOND = 1000;
@@ -184,9 +185,11 @@ WHERE id IN (
  */
 export class ImageBuildStore {
   readonly finalization: ImageBuildFinalizationStore;
+  readonly maintenance: ImageBuildMaintenanceStore;
 
   constructor(private readonly db: SqlDatabase) {
     this.finalization = new ImageBuildFinalizationStore(db);
+    this.maintenance = new ImageBuildMaintenanceStore(db);
   }
 
   /**
@@ -595,6 +598,28 @@ export class ImageBuildStore {
         `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds WHERE scope_kind = ? AND scope_id = ? AND status <> 'superseded' ORDER BY created_at DESC LIMIT 10`
       )
       .bind(scope.kind, scope.id)
+      .all<ImageBuildRecordView>();
+
+    return result.results || [];
+  }
+
+  /**
+   * Authoritative scheduler input for one provider. Unlike the bounded UI
+   * history read, this cannot hide a live build behind failures from another
+   * provider.
+   */
+  async getReconciliationStatus(
+    scope: ImageBuildScope,
+    provider: ImageBuildProvider
+  ): Promise<ImageBuildRecordView[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ?
+           AND status IN ('building', 'ready')
+         ORDER BY created_at DESC`
+      )
+      .bind(scope.kind, scope.id, provider)
       .all<ImageBuildRecordView>();
 
     return result.results || [];
