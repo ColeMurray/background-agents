@@ -1,20 +1,24 @@
+import { ModalApiError } from "../sandbox/client";
+import { SandboxProviderError } from "../sandbox/provider";
 import type { ModalImageBuildProvider } from "../sandbox/providers/modal-provider";
 import type {
   DeleteImageInput,
   FailedImageBuildInput,
   FinalizeImageBuildInput,
   ImageBuildAdapter,
+  ImageBuildPlan,
   ImageBuildStartCallbacks,
-  ModalImageBuildPlan,
 } from "./types";
+import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { resolveImageBuildProviderSessionTimeoutMs } from "./timeouts";
 
 /**
- * Modal adapter for provider-session image builds.
+ * Modal provider-session image build adapter.
  */
-export class ModalImageBuildAdapter implements ImageBuildAdapter<ModalImageBuildPlan> {
+export class ModalImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly provider: ModalImageBuildProvider) {}
 
-  async startBuild(plan: ModalImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
+  async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerEnvironmentImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
@@ -25,7 +29,8 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter<ModalImageBuild
       cloneUsername:
         plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.username : undefined,
       userEnvVars: plan.userEnvVars,
-      buildTimeoutMs: plan.buildTimeoutMs,
+      buildExecutionTimeoutSeconds: Math.ceil(plan.buildTimeoutMs / 1000),
+      providerSessionTimeoutMs: resolveImageBuildProviderSessionTimeoutMs(plan.buildTimeoutMs),
       callbackUrl: plan.callbackUrl,
       failureCallbackUrl: plan.failureCallbackUrl,
       callbackToken: plan.callbackToken,
@@ -37,11 +42,26 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter<ModalImageBuild
   async finalizeSuccessfulBuild(
     input: FinalizeImageBuildInput
   ): Promise<{ providerImageId: string; providerSessionId: string }> {
-    const result = await this.provider.snapshotImageBuildSandbox({
-      buildId: input.buildId,
-      providerSessionId: input.providerSessionId,
-      correlation: { ...input.correlation, sandbox_id: input.providerSessionId },
-    });
+    let result;
+    try {
+      result = await this.provider.snapshotImageBuildSandbox({
+        buildId: input.buildId,
+        providerSessionId: input.providerSessionId,
+        correlation: { ...input.correlation, sandbox_id: input.providerSessionId },
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (
+        error instanceof SandboxProviderError &&
+        error.cause instanceof ModalApiError &&
+        error.cause.status === 429
+      ) {
+        throw new ImageBuildFinalizationAttemptError(error.message, "definitely_not_created", {
+          cause: error,
+        });
+      }
+      throw error;
+    }
     if (!result.success || !result.imageId) {
       throw new Error(result.error || "Modal image build snapshot failed");
     }
@@ -52,26 +72,30 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter<ModalImageBuild
   }
 
   async cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void> {
-    await this.terminateBuildSandbox(input, "image_build_complete");
-  }
-
-  async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
-    await this.terminateBuildSandbox(input, "image_build_failed");
-  }
-
-  async deleteImage(input: DeleteImageInput): Promise<void> {
-    await this.provider.deleteProviderImage(input.image.providerImageId, input.correlation);
-  }
-
-  private async terminateBuildSandbox(
-    input: FinalizeImageBuildInput | FailedImageBuildInput,
-    reason: string
-  ): Promise<void> {
     await this.provider.terminateImageBuildSandbox({
       buildId: input.buildId,
       providerSessionId: input.providerSessionId,
-      reason,
+      reason: "image_build_complete",
       correlation: input.correlation,
+      signal: input.signal,
     });
+  }
+
+  async cleanupFailedBuild(input: FailedImageBuildInput): Promise<void> {
+    await this.provider.terminateImageBuildSandbox({
+      buildId: input.buildId,
+      providerSessionId: input.providerSessionId,
+      reason: "image_build_failed",
+      correlation: input.correlation,
+      signal: input.signal,
+    });
+  }
+
+  async deleteImage(input: DeleteImageInput): Promise<void> {
+    await this.provider.deleteProviderImage(
+      input.image.providerImageId,
+      input.correlation,
+      ...(input.signal ? [input.signal] : [])
+    );
   }
 }

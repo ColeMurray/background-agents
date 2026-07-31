@@ -123,8 +123,8 @@ The build process runs the same setup steps that a normal session would:
 1. Clones every repository in the scope at its base branch (for an environment, **sequentially, in
    position order**)
 2. Runs each repository's `.openinspect/setup.sh` script (if present) in the same order
-3. Calls the control plane with the exact provider sandbox id
-4. Lets the control plane snapshot or checkpoint that sandbox into the provider image artifact
+3. Calls the control plane with the exact bound provider session id
+4. Lets a durable Queue consumer save the provider image artifact and terminate the build session
 
 A failing setup script fails the whole build, and for environment builds the error names the
 repository. Build-time secrets are exactly what the scope's sessions get: global + repository
@@ -135,10 +135,21 @@ Everything your setup scripts install — dependencies, build artifacts, caches 
 image artifact. Depending on the active sandbox provider, this is stored as a Modal image, Vercel
 snapshot, or OpenComputer checkpoint.
 
-Modal follows the same provider-session lifecycle as Vercel and OpenComputer: the control plane
-creates a dormant sandbox, records its id, starts the runtime, and snapshots it after the success
-callback. The legacy Modal builder remains deployed temporarily so builds already in flight can
-finish during the rollout, but new builds do not use it.
+The configured build timeout covers clone and setup execution. Build sandboxes receive an additional
+ten minutes for callback delivery and snapshot/checkpoint finalization. Because Vercel limits
+sandbox lifetime to 45 minutes, Vercel image-build execution is capped at 35 minutes so that reserve
+is never lost; Modal and OpenComputer continue to honor the configured execution timeout up to the
+shared one-hour limit.
+
+Modal follows the same lifecycle as the other providers: the control plane creates a dormant
+sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
+durably accepted. There is no separate long-running Modal `build_image` function or Modal rebuild
+cron.
+
+Terraform deploys the Modal app before the control-plane Worker so a one-shot upgrade cannot expose
+the new Worker until Modal's provider-session endpoints are available. The repository history keeps
+that cutover reviewable as three changes: add the compatible Modal endpoints, switch the Worker to
+Queue finalization, then remove the legacy Modal builder.
 
 ### What Happens When You Start a Session
 

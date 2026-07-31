@@ -8,6 +8,7 @@ const logger = createLogger("image-builds:reaper");
 
 /** Rows reclaimed per cleanup pass, per sweep; leftovers wait for the next tick. */
 const REAP_BATCH_LIMIT = 25;
+export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
 
 type AdapterCache = Map<ImageBuildProvider, AnyImageBuildAdapter | null>;
 
@@ -59,7 +60,7 @@ export class ImageBuildReaper {
       await this.store.getSupersededImages(REAP_BATCH_LIMIT),
       ctx,
       adapters,
-      (row) => this.store.deleteSupersededImage(row.id)
+      (row) => this.store.deleteSupersededImage(row.id, row.provider_image_id)
     );
 
     return { deletedFailed, reapedFailed, reapedSuperseded };
@@ -141,7 +142,10 @@ export class ImageBuildReaper {
         );
         if (deleted) {
           try {
-            await this.store.deleteSupersededImage(replacedImage.imageBuildId);
+            await this.store.deleteSupersededImage(
+              replacedImage.imageBuildId,
+              replacedImage.image.providerImageId
+            );
           } catch (e) {
             logger.warn("image_build.delete_superseded_row_failed", {
               image_build_id: replacedImage.imageBuildId,
@@ -162,10 +166,13 @@ export class ImageBuildReaper {
     ctx: ImageBuildWorkflowContext,
     adapter: AnyImageBuildAdapter
   ): Promise<boolean> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
     try {
       await adapter.deleteImage({
         image,
         correlation: ctx,
+        signal: controller.signal,
       });
       return true;
     } catch (e) {
@@ -177,6 +184,8 @@ export class ImageBuildReaper {
         trace_id: ctx.trace_id,
       });
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -187,7 +196,7 @@ export class ImageBuildReaper {
     ctx: ImageBuildWorkflowContext
   ): AnyImageBuildAdapter | null {
     try {
-      return this.adapterFactory.create(provider);
+      return this.adapterFactory.create(provider, "existing_session");
     } catch (e) {
       logger.error("image_build.adapter_config_error", {
         operation: "cleanup",

@@ -11,6 +11,7 @@ import {
   applyScmCloneEnv,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
   scmCloneIdentity,
   SESSION_CONFIG_ENV_VAR,
@@ -65,6 +66,7 @@ const REPO_IMAGE_CALLBACK_ENV_KEYS = [
 const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
   "OI_REPO_IMAGE_CALLBACK_SECRET",
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
 ] as const;
 
 function resolveVercelTimeoutMs(timeoutSeconds?: number): number {
@@ -94,12 +96,9 @@ export interface TriggerVercelEnvironmentImageBuildConfig {
   callbackToken: string;
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
-  /**
-   * Build sandbox lifetime, in seconds (already capped at
-   * MAX_BUILD_TIMEOUT_SECONDS by the trigger). Further capped to Vercel's own
-   * limit. Omitted → DEFAULT_BUILD_TIMEOUT_SECONDS.
-   */
-  buildTimeoutSeconds?: number;
+  buildExecutionTimeoutSeconds: number;
+  /** Provider-session lifetime, including deferred finalization headroom. */
+  providerSessionTimeoutSeconds?: number;
   onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
   correlation?: CorrelationContext;
 }
@@ -236,6 +235,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.providerObjectId,
         {
           expirationMs: this.providerConfig.snapshotExpirationMs ?? DEFAULT_SNAPSHOT_EXPIRATION_MS,
+          signal: config.signal,
         },
         config.correlation
       );
@@ -256,7 +256,11 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async stopSandbox(config: StopConfig): Promise<StopResult> {
     try {
-      await this.client.stopSession(config.providerObjectId, config.correlation);
+      await this.client.stopSession(
+        config.providerObjectId,
+        config.correlation,
+        ...(config.signal ? [config.signal] : [])
+      );
       return { success: true };
     } catch (error) {
       if (error instanceof VercelSandboxApiError && error.status === 404) {
@@ -305,7 +309,7 @@ export class VercelSandboxProvider implements SandboxProvider {
           name: sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
           timeoutMs: resolveVercelTimeoutMs(
-            config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS
+            config.providerSessionTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS
           ),
           env,
           tags: {
@@ -344,10 +348,15 @@ export class VercelSandboxProvider implements SandboxProvider {
     }
   }
 
-  async deleteProviderImage(providerImageId: string): Promise<void> {
+  async deleteProviderImage(providerImageId: string, signal?: AbortSignal): Promise<void> {
     try {
-      await this.client.deleteSnapshot(providerImageId);
+      if (signal) {
+        await this.client.deleteSnapshot(providerImageId, undefined, signal);
+      } else {
+        await this.client.deleteSnapshot(providerImageId);
+      }
     } catch (error) {
+      if (error instanceof VercelSandboxApiError && error.status === 404) return;
       throw this.classifyError("Failed to delete Vercel snapshot", error);
     }
   }
@@ -590,6 +599,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       callbackUrl: string;
       failureCallbackUrl: string;
       callbackToken: string;
+      buildExecutionTimeoutSeconds: number;
     },
     sessionId: string
   ): Record<string, string> {
@@ -599,6 +609,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
+      [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
     };
   }
 

@@ -70,7 +70,7 @@ brew install node@22
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
-     - Queues: **Edit** (required when the Slack bot is enabled)
+     - Queues: **Edit** (required for durable image-build finalization)
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
 
@@ -128,9 +128,10 @@ The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `c
 `groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`, `files:write`, and
 `reactions:write`. Reinstall the app after changing scopes.
 
-When upgrading an existing Slack deployment, add **Queues: Edit** to the Cloudflare API token before
-running `terraform apply`. Add `files:write` and `files:read`, reinstall the Slack app, and update
-the deployed bot token if Slack issued a replacement before deploying this version.
+Before upgrading any deployment, add **Queues: Edit** to the Cloudflare API token before running
+`terraform apply`; image-build finalization now provisions a Queue and dead-letter Queue. For Slack
+deployments, also add `files:write` and `files:read`, reinstall the Slack app, and update the
+deployed bot token if Slack issued a replacement before deploying this version.
 
 ## Quick Start
 
@@ -488,7 +489,7 @@ variables.
    - `Workers KV Storage: Edit`
    - `Workers R2 Storage: Edit`
    - `D1: Edit`
-   - `Queues: Edit` if the Slack bot is enabled
+   - `Queues: Edit`
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments

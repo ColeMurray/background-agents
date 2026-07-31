@@ -1,5 +1,6 @@
 """Tests for entrypoint boot modes and git sync."""
 
+import asyncio
 import json
 import os
 from dataclasses import replace
@@ -360,6 +361,77 @@ class TestImageBuildMode:
         callback.report_failure.assert_awaited_once_with(
             "setup hook failed for acme/my-repo in build mode"
         )
+
+    @pytest.mark.asyncio
+    async def test_enforces_execution_deadline_before_deferred_finalization(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def wait_forever():
+            await asyncio.sleep(3600)
+
+        supervisor.sync_repositories = AsyncMock(side_effect=wait_forever)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with (
+            patch.dict(
+                os.environ,
+                {**build_env, "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "1"},
+                clear=False,
+            ),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+        ):
+            await supervisor.run()
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_awaited_once_with(
+            "image build exceeded its 1-second execution timeout"
+        )
+
+    @pytest.mark.asyncio
+    async def test_external_cancellation_is_not_reported_as_build_timeout(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        started = asyncio.Event()
+
+        async def wait_for_cancellation():
+            started.set()
+            await asyncio.Event().wait()
+
+        supervisor.sync_repositories = AsyncMock(side_effect=wait_for_cancellation)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with (
+            patch.dict(
+                os.environ,
+                {**build_env, "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "3600"},
+                clear=False,
+            ),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+        ):
+            operation = asyncio.create_task(supervisor.run())
+            await started.wait()
+            operation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await operation
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
 
 
 class TestFromRepoImage:

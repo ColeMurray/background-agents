@@ -72,6 +72,7 @@ async def test_create_returns_provider_session_without_removing_legacy_endpoint(
         clone_host="gitlab.com",
         clone_username="oauth2",
         user_env_vars=None,
+        build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
     )
     assert hasattr(web_api, "api_build_image")
@@ -136,7 +137,11 @@ async def test_create_logs_http_outcome(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_non_integer_build_timeout(monkeypatch):
+@pytest.mark.parametrize(
+    "field",
+    ["build_execution_timeout_seconds", "build_timeout_seconds"],
+)
+async def test_create_rejects_non_integer_build_timeout(monkeypatch, field):
     service = _patch_dependencies(monkeypatch)
 
     with pytest.raises(web_api.HTTPException) as exc:
@@ -147,7 +152,7 @@ async def test_create_rejects_non_integer_build_timeout(monkeypatch):
                 "scope_id": "acme/repo",
                 "build_id": "imgb-1",
                 "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
-                "build_timeout_seconds": "1800",
+                field: "1800",
             },
         )
 
@@ -170,7 +175,7 @@ async def test_create_clamps_build_timeout_to_provider_maximum(monkeypatch):
         },
     )
 
-    assert service.create.await_args.kwargs["timeout_seconds"] == 3600
+    assert service.create.await_args.kwargs["timeout_seconds"] == 4200
 
 
 @pytest.mark.asyncio

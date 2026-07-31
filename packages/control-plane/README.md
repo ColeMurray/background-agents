@@ -163,11 +163,16 @@ statuses are `building | ready | failed | superseded`.
 | `/image-builds/mark-stale`                   | POST   | Mark old `building` rows failed (called by the scheduler)                                                                                                            |
 | `/image-builds/cleanup`                      | POST   | Delete old failed rows and reap superseded rows' provider artifacts                                                                                                  |
 
-New Modal, Vercel, and OpenComputer builds run in provider sessions. Their sandboxes use a
-single-use bearer token minted at trigger time; only its HMAC hash is stored on the build row and
-bound to the provider session. Success callbacks verify it before payload validation and consume it
-when accepted; failure callbacks consume it while marking the build failed. Unbound Modal rows
-retain the legacy provider-image callback path so builds started before the rollout can finish.
+Every provider uses the same callback contract. The control plane creates a dormant provider
+session, binds its opaque id to the build row, and only then starts the runtime. The runtime calls
+back with a single-use bearer token minted at trigger time; only its HMAC hash is stored and the
+callback must present the exact bound provider session id.
+
+Callbacks publish a small, secret-free command to Cloudflare Queue before atomically accepting the
+payload in D1. The Queue consumer then leases the accepted row, snapshots/checkpoints the provider
+session, persists the artifact, transitions the row to `ready` or `superseded`, and performs
+idempotent session cleanup. This keeps provider operations outside the Worker's request-lifetime
+durability window and makes retries safe across all providers.
 
 ### Automations
 
@@ -293,9 +298,9 @@ sessions index, repo metadata, and encrypted secrets:
 - `image_builds`: the unified prebuilt-image registry for both scope kinds (`scope_kind` +
   `scope_id` columns) — provider artifact id, per-repository SHAs (`repository_shas`), a
   repositories fingerprint for spawn matching, the runtime version for the compatibility-floor
-  check, and callback-token state. Replaces the former `repo_images` and `environment_images` tables
-  (dropped in migrations 0039/0040; environment rows were copied over, repo rows are rebuilt by the
-  cron).
+  check, callback-token state, Queue-finalization lease state, and provider-session cleanup state.
+  Replaces the former `repo_images` and `environment_images` tables (dropped in migrations
+  0039/0040; environment rows were copied over, repo rows are rebuilt by the cron).
 - `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
   code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
   (per-repo).

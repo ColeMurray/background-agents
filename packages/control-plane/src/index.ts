@@ -7,6 +7,7 @@
 import { handleRequest } from "./router";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
+import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 
 const logger = createLogger("worker");
 
@@ -34,7 +35,11 @@ export default {
   /**
    * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
    */
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    if (event.cron !== "* * * * *") {
+      logger.warn("Unknown scheduled trigger", { cron: event.cron });
+      return;
+    }
     if (!env.SCHEDULER) {
       logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
       return;
@@ -47,6 +52,8 @@ export default {
 
     await stub.fetch("http://internal/internal/tick", { method: "POST" });
   },
+
+  queue: consumeImageBuildFinalizations,
 };
 
 /**

@@ -11,8 +11,10 @@ import {
   ImageBuildWorkflowUnavailableError,
 } from "./errors";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
+import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS } from "./reaper";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
+import type { ImageBuildFinalizationQueue } from "./finalization-job";
 import type { PlannedImageBuild } from "./types";
 import { ImageBuildWorkflow } from "./workflow";
 
@@ -33,19 +35,23 @@ function createEnv(overrides: Partial<Env> = {}): Env {
 }
 
 function createStore() {
+  const acceptSuccessfulCompletion = vi.fn().mockResolvedValue("accepted");
+  const acceptFailedCompletion = vi.fn().mockResolvedValue("accepted");
+  const authorizeCompletionCallback = vi.fn().mockResolvedValue(null);
   return {
     registerBuild: vi.fn().mockResolvedValue(true),
     getActiveBuild: vi.fn().mockResolvedValue(null),
     markScopeStaleBuildFailed: vi.fn().mockResolvedValue(0),
     hasReadyImageForFingerprint: vi.fn().mockResolvedValue(false),
-    getCallbackBuild: vi.fn().mockResolvedValue(null),
-    getBuildRow: vi.fn().mockResolvedValue(null),
-    recordArtifactOnSupersededBuild: vi.fn().mockResolvedValue(true),
     bindProviderSession: vi.fn().mockResolvedValue(true),
-    verifyCallbackToken: vi.fn().mockResolvedValue(false),
-    verifyCallbackTokenForArtifactRecording: vi.fn().mockResolvedValue(false),
-    consumeCallbackToken: vi.fn().mockResolvedValue(null),
-    markBuildFailedWithCallbackToken: vi.fn().mockResolvedValue(false),
+    acceptSuccessfulCompletion,
+    acceptFailedCompletion,
+    authorizeCompletionCallback,
+    finalization: {
+      acceptSuccessfulCompletion,
+      acceptFailedCompletion,
+      authorizeCompletionCallback,
+    },
     tryMarkImageBuildReady: vi.fn(),
     markBuildFailed: vi.fn().mockResolvedValue(true),
     deleteSupersededImage: vi.fn().mockResolvedValue(true),
@@ -57,6 +63,10 @@ function createStore() {
     markStaleBuildsAsFailed: vi.fn().mockResolvedValue(0),
     getStatus: vi.fn().mockResolvedValue([]),
     getStatusForEnabledScopes: vi.fn().mockResolvedValue([]),
+    maintenance: {
+      getCursor: vi.fn().mockResolvedValue(null),
+      setCursor: vi.fn().mockResolvedValue(undefined),
+    },
   };
 }
 
@@ -85,7 +95,6 @@ function plannedBuild(overrides: Record<string, unknown> = {}): PlannedImageBuil
       buildTimeoutMs: 1800_000,
       correlation: { trace_id: "t", request_id: "r" },
       provider: "modal",
-      callbackMode: "provider_session",
       callbackToken: MODAL_CALLBACK_TOKEN,
       cloneAuth: { type: "unavailable" },
       ...overrides,
@@ -106,7 +115,6 @@ function vercelPlannedBuild(): PlannedImageBuild {
       buildTimeoutMs: 1800_000,
       correlation: { trace_id: "t", request_id: "r" },
       provider: "vercel",
-      callbackMode: "provider_session",
       callbackToken: "callback-token",
       cloneAuth: { type: "unavailable" },
     },
@@ -122,6 +130,7 @@ function createWorkflow(options: {
   createCallbackAuth?: ReturnType<typeof vi.fn>;
   env?: Env;
   provider?: "modal" | "vercel" | "opencomputer" | null;
+  queue?: ImageBuildFinalizationQueue;
 }) {
   const store = options.store ?? createStore();
   const adapter = options.adapter ?? createAdapter();
@@ -150,7 +159,8 @@ function createWorkflow(options: {
     options.env ?? createEnv(),
     store as unknown as ImageBuildStore,
     factory,
-    provider ? { provider, planner } : null
+    provider ? { provider, planner } : null,
+    options.queue ?? { send: vi.fn().mockResolvedValue(undefined) }
   );
   return { workflow, store, adapter, factory, planBuild, resolveTarget, createCallbackAuth };
 }
@@ -160,7 +170,6 @@ const ctx = { trace_id: "t", request_id: "r" };
 function validCompletion(overrides: Record<string, unknown> = {}) {
   return {
     buildId: "imgb-env_1-1-abcd",
-    providerImageId: "im-modal-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
     runtimeVersion: "v53-list-native-runtime",
     buildDurationMs: 12_500,
@@ -452,380 +461,19 @@ describe("ImageBuildWorkflow", () => {
     });
   });
 
-  describe("acceptBuildComplete", () => {
-    function readyBuildStore() {
-      const store = createStore();
-      const build = {
-        id: "imgb-env_1-1-abcd",
-        scope: ENV_SCOPE,
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      };
-      store.getCallbackBuild.mockResolvedValue(build);
-      store.verifyCallbackToken.mockResolvedValue(true);
-      store.consumeCallbackToken.mockResolvedValue(build);
-      return store;
-    }
-
-    it("rejects unknown builds", async () => {
-      const { workflow } = createWorkflow({});
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: MODAL_CALLBACK_TOKEN,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
-    });
-
-    it("rejects a bad callback token", async () => {
-      const store = readyBuildStore();
-      store.verifyCallbackToken.mockResolvedValue(false);
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: "forged",
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-      expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
-    });
-
-    it("rejects a missing callback token", async () => {
-      const { workflow, store } = createWorkflow({ store: readyBuildStore() });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: null,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-      expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
-    });
-
-    it("verifies the token against the build row with no provider-session binding", async () => {
-      const store = readyBuildStore();
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "marked_ready",
-        supersededImages: [],
-      });
-      const { workflow } = createWorkflow({ store });
-
-      await workflow.acceptBuildComplete({
-        completion: validCompletion(),
-        callbackToken: MODAL_CALLBACK_TOKEN,
-        context: ctx,
-      });
-
-      expect(store.verifyCallbackToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          buildId: "imgb-env_1-1-abcd",
-          provider: "modal",
-          providerSessionId: null,
-          tokenHash: expect.any(String),
-        })
-      );
-    });
-
-    it("consumes the token atomically inside the ready transition, not as a separate step", async () => {
-      const store = readyBuildStore();
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "marked_ready",
-        supersededImages: [],
-      });
-      const { workflow } = createWorkflow({ store });
-
-      await workflow.acceptBuildComplete({
-        completion: validCompletion(),
-        callbackToken: MODAL_CALLBACK_TOKEN,
-        context: ctx,
-      });
-
-      // The Modal path threads the token into tryMarkImageBuildReady so the
-      // single-use consume and the ready transition are one conditional
-      // UPDATE — never a separate consumeCallbackToken that could burn the
-      // token while the transition fails.
-      expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "modal",
-        "im-modal-1",
-        expect.any(Array),
-        expect.any(String),
-        expect.any(Number),
-        { tokenHash: expect.any(String), providerSessionId: null, now: expect.any(Number) }
-      );
-      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
-    });
-
-    it("records the artifact and rejects when the build no longer accepts the completion", async () => {
-      const store = readyBuildStore();
-      // Auth (verify) passed, but the atomic transition finds the row
-      // superseded/already-consumed: the already-built Modal image is recorded
-      // on the superseded row for the reaper instead of leaking, then rejected.
-      store.tryMarkImageBuildReady.mockResolvedValue({ type: "not_accepting_completion" });
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: MODAL_CALLBACK_TOKEN,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
-      expect(store.recordArtifactOnSupersededBuild).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "modal",
-        "im-modal-1"
-      );
-    });
-
-    it.each([
-      ["missing provider_image_id", { providerImageId: undefined }],
-      ["missing repository_shas", { repositoryShas: undefined }],
-      ["empty repository_shas", { repositoryShas: [] }],
-      ["missing runtime_version", { runtimeVersion: undefined }],
-      ["unparseable runtime_version", { runtimeVersion: "53-no-prefix" }],
-      ["negative duration", { buildDurationMs: -1 }],
-    ])("fails closed on %s", async (_label, overrides) => {
-      const { workflow, store } = createWorkflow({ store: readyBuildStore() });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(overrides),
-          callbackToken: MODAL_CALLBACK_TOKEN,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
-      expect(store.tryMarkImageBuildReady).not.toHaveBeenCalled();
-    });
-
-    it("marks ready and deletes replaced artifacts", async () => {
-      const store = readyBuildStore();
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "marked_ready",
-        supersededImages: [
-          { imageBuildId: "old-1", image: { providerImageId: "im-old" } },
-          { imageBuildId: "old-2", image: { providerImageId: "" } },
-        ],
-      });
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.acceptBuildComplete({
-        completion: validCompletion(),
-        callbackToken: MODAL_CALLBACK_TOKEN,
-        context: ctx,
-      });
-
-      expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "modal",
-        "im-modal-1",
-        [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
-        "v53-list-native-runtime",
-        12_500,
-        { tokenHash: expect.any(String), providerSessionId: null, now: expect.any(Number) }
-      );
-      expect(result.type).toBe("build_ready");
-      if (result.type !== "build_ready") throw new Error("unreachable");
-      await result.cleanup;
-      // Artifact-bearing row: provider delete then row delete. Artifact-less
-      // row: left for the reaper.
-      expect(adapter.deleteImage).toHaveBeenCalledTimes(1);
-      expect(adapter.deleteImage).toHaveBeenCalledWith(
-        expect.objectContaining({ image: expect.objectContaining({ providerImageId: "im-old" }) })
-      );
-      expect(store.deleteSupersededImage).toHaveBeenCalledTimes(1);
-      expect(store.deleteSupersededImage).toHaveBeenCalledWith("old-1");
-    });
-
-    it("reports a late build superseded by a newer ready image", async () => {
-      const store = readyBuildStore();
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "superseded_by_newer_ready",
-        supersededImage: { imageBuildId: "late-1", image: { providerImageId: "im-late" } },
-      });
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.acceptBuildComplete({
-        completion: validCompletion(),
-        callbackToken: MODAL_CALLBACK_TOKEN,
-        context: ctx,
-      });
-
-      expect(result.type).toBe("build_superseded");
-      if (result.type !== "build_superseded") throw new Error("unreachable");
-      await result.cleanup;
-      expect(adapter.deleteImage).toHaveBeenCalledTimes(1);
-      expect(store.deleteSupersededImage).toHaveBeenCalledWith("late-1");
-    });
-
-    it("rejects completion the state machine no longer accepts, recording the artifact", async () => {
-      const store = readyBuildStore();
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "not_accepting_completion",
-      });
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: MODAL_CALLBACK_TOKEN,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
-      // Superseded mid-transition: the artifact must reach the reaper.
-      expect(store.recordArtifactOnSupersededBuild).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "modal",
-        "im-modal-1"
-      );
-    });
-
-    it("records the artifact of an out-of-band superseded build before rejecting", async () => {
-      const store = createStore();
-      store.getCallbackBuild.mockResolvedValue(null);
-      store.getBuildRow.mockResolvedValue({
-        id: "imgb-env_1-1-abcd",
-        scope_kind: "environment",
-        scope_id: "env_1",
-        provider: "modal",
-        status: "superseded",
-      });
-      store.verifyCallbackTokenForArtifactRecording.mockResolvedValue(true);
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: MODAL_CALLBACK_TOKEN,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
-      // The row has left 'building', so the token check is the
-      // status-relaxed artifact-recording variant.
-      expect(store.verifyCallbackTokenForArtifactRecording).toHaveBeenCalledWith(
-        expect.objectContaining({ buildId: "imgb-env_1-1-abcd", provider: "modal" })
-      );
-      expect(store.recordArtifactOnSupersededBuild).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "modal",
-        "im-modal-1"
-      );
-    });
-
-    it("never records late artifacts for unauthenticated callers", async () => {
-      const store = createStore();
-      store.getCallbackBuild.mockResolvedValue(null);
-      store.getBuildRow.mockResolvedValue({
-        id: "imgb-env_1-1-abcd",
-        scope_kind: "environment",
-        scope_id: "env_1",
-        provider: "modal",
-        status: "superseded",
-      });
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: "forged",
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-      expect(store.recordArtifactOnSupersededBuild).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("acceptBuildFailed", () => {
-    it("marks the build failed via its callback token, with no session binding", async () => {
-      const store = createStore();
-      store.getCallbackBuild.mockResolvedValue({
-        id: "imgb-env_1-1-abcd",
-        scope: ENV_SCOPE,
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      });
-      store.markBuildFailedWithCallbackToken.mockResolvedValue(true);
-      const { workflow } = createWorkflow({ store });
-
-      const result = await workflow.acceptBuildFailed({
-        failure: { buildId: "imgb-env_1-1-abcd", errorMessage: "setup.failed: boom" },
-        callbackToken: MODAL_CALLBACK_TOKEN,
-        context: ctx,
-      });
-
-      expect(result).toEqual({ type: "build_failed" });
-      expect(store.markBuildFailedWithCallbackToken).toHaveBeenCalledWith(
-        expect.objectContaining({
-          buildId: "imgb-env_1-1-abcd",
-          provider: "modal",
-          providerSessionId: null,
-          error: "setup.failed: boom",
-        })
-      );
-      expect(store.markBuildFailed).not.toHaveBeenCalled();
-    });
-
-    it("rejects a modal failure callback with a bad token", async () => {
-      const store = createStore();
-      store.getCallbackBuild.mockResolvedValue({
-        id: "imgb-env_1-1-abcd",
-        scope: ENV_SCOPE,
-        provider: "modal",
-        providerSessionId: null,
-        status: "building",
-      });
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildFailed({
-          failure: { buildId: "imgb-env_1-1-abcd", errorMessage: "boom" },
-          callbackToken: "forged",
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-      expect(store.markBuildFailed).not.toHaveBeenCalled();
-    });
-
-    it("rejects failures for unknown builds", async () => {
-      const { workflow } = createWorkflow({});
-
-      await expect(
-        workflow.acceptBuildFailed({
-          failure: { buildId: "nope", errorMessage: "boom" },
-          callbackToken: MODAL_CALLBACK_TOKEN,
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildFailureNotAcceptedError);
-    });
-  });
-
-  describe("provider_session builds (Vercel/OpenComputer)", () => {
+  describe("provider-session build callbacks", () => {
     function sessionBuildStore() {
       const store = createStore();
-      store.getCallbackBuild.mockResolvedValue({
-        id: "imgb-env_1-1-abcd",
-        scope: ENV_SCOPE,
-        provider: "vercel",
-        providerSessionId: "vercel-session-1",
-        status: "building",
+      store.authorizeCompletionCallback.mockResolvedValue({
+        authorization: "fresh",
+        build: {
+          id: "imgb-env_1-1-abcd",
+          scope: ENV_SCOPE,
+          provider: "vercel",
+          providerSessionId: "vercel-session-1",
+          status: "building",
+        },
       });
-      store.consumeCallbackToken.mockResolvedValue({
-        id: "imgb-env_1-1-abcd",
-        scope: ENV_SCOPE,
-        provider: "vercel",
-        providerSessionId: "vercel-session-1",
-        status: "building",
-      });
-      store.verifyCallbackToken.mockResolvedValue(true);
       return store;
     }
 
@@ -892,18 +540,13 @@ describe("ImageBuildWorkflow", () => {
       expect(store.markBuildFailed).toHaveBeenCalled();
     });
 
-    it("accepts completion with a valid callback token and finalizes deferred", async () => {
+    it("atomically accepts completion before publishing it", async () => {
       const store = sessionBuildStore();
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "marked_ready",
-        supersededImages: [],
-      });
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
+      const queue = { send: vi.fn().mockResolvedValue(undefined) };
+      const { workflow } = createWorkflow({ store, queue });
 
       const result = await workflow.acceptBuildComplete({
         completion: validCompletion({
-          providerImageId: undefined,
           providerSessionId: "vercel-session-1",
         }),
         callbackToken: "callback-token",
@@ -911,95 +554,65 @@ describe("ImageBuildWorkflow", () => {
       });
 
       expect(result.type).toBe("completion_accepted");
-      if (result.type !== "completion_accepted") throw new Error("unreachable");
-      await result.finalization;
-
-      expect(store.consumeCallbackToken).toHaveBeenCalledWith(
+      expect(queue.send).toHaveBeenCalledWith({
+        version: 1,
+        buildId: "imgb-env_1-1-abcd",
+        completionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(store.acceptSuccessfulCompletion).toHaveBeenCalledWith(
         expect.objectContaining({
           buildId: "imgb-env_1-1-abcd",
           provider: "vercel",
           providerSessionId: "vercel-session-1",
+          completionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
         })
       );
-      expect(store.verifyCallbackToken).toHaveBeenCalledWith(
+      expect(store.authorizeCompletionCallback).toHaveBeenCalledWith(
         expect.objectContaining({
           buildId: "imgb-env_1-1-abcd",
-          provider: "vercel",
           providerSessionId: "vercel-session-1",
         })
       );
-      expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledWith(
-        expect.objectContaining({ providerSessionId: "vercel-session-1" })
+      expect(store.acceptSuccessfulCompletion.mock.invocationCallOrder[0]).toBeLessThan(
+        queue.send.mock.invocationCallOrder[0]
       );
-      // The artifact id comes from finalization, never the callback.
-      expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "vercel",
-        "im-finalized",
-        [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
-        "v53-list-native-runtime",
-        12_500
-      );
-      expect(adapter.cleanupCompletedBuild).toHaveBeenCalled();
     });
 
-    it("uses provider-session finalization for newly bound Modal builds", async () => {
+    it("leaves an accepted completion recoverable when publishing fails", async () => {
       const store = sessionBuildStore();
-      const modalBuild = {
-        id: "imgb-env_1-1-abcd",
-        scope: ENV_SCOPE,
-        provider: "modal" as const,
-        providerSessionId: "modal-session-1",
-        status: "building" as const,
-      };
-      store.getCallbackBuild.mockResolvedValue(modalBuild);
-      store.consumeCallbackToken.mockResolvedValue(modalBuild);
-      store.tryMarkImageBuildReady.mockResolvedValue({
-        type: "marked_ready",
-        supersededImages: [],
-      });
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter, provider: "modal" });
+      const queue = { send: vi.fn().mockRejectedValue(new Error("queue unavailable")) };
+      const { workflow } = createWorkflow({ store, queue });
 
-      const result = await workflow.acceptBuildComplete({
-        completion: validCompletion({
-          providerImageId: undefined,
-          providerSessionId: "modal-session-1",
-        }),
-        callbackToken: "callback-token",
-        context: ctx,
-      });
-      if (result.type !== "completion_accepted") throw new Error("unreachable");
-      await result.finalization;
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion({
+            providerSessionId: "vercel-session-1",
+          }),
+          callbackToken: "callback-token",
+          context: ctx,
+        })
+      ).rejects.toThrow("queue unavailable");
 
-      expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledWith(
-        expect.objectContaining({ providerSessionId: "modal-session-1" })
-      );
-      expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "modal",
-        "im-finalized",
-        expect.any(Array),
-        expect.any(String),
-        expect.any(Number)
+      expect(store.acceptSuccessfulCompletion).toHaveBeenCalledOnce();
+      expect(store.acceptSuccessfulCompletion.mock.invocationCallOrder[0]).toBeLessThan(
+        queue.send.mock.invocationCallOrder[0]
       );
     });
 
     it("rejects completion when the callback token does not consume", async () => {
       const store = sessionBuildStore();
-      store.consumeCallbackToken.mockResolvedValue(null);
+      store.acceptSuccessfulCompletion.mockResolvedValue("rejected");
       const { workflow } = createWorkflow({ store });
 
       await expect(
         workflow.acceptBuildComplete({
           completion: validCompletion({
-            providerImageId: undefined,
             providerSessionId: "vercel-session-1",
           }),
           callbackToken: "stale-token",
           context: ctx,
         })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+      ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
     });
 
     it("does not consume the token for an authenticated malformed completion", async () => {
@@ -1009,7 +622,6 @@ describe("ImageBuildWorkflow", () => {
       await expect(
         workflow.acceptBuildComplete({
           completion: validCompletion({
-            providerImageId: undefined,
             providerSessionId: "vercel-session-1",
             runtimeVersion: undefined,
           }),
@@ -1018,8 +630,7 @@ describe("ImageBuildWorkflow", () => {
         })
       ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
 
-      expect(store.verifyCallbackToken).toHaveBeenCalled();
-      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
+      expect(store.authorizeCompletionCallback).toHaveBeenCalled();
     });
 
     it("requires provider_session_id on provider-session completions", async () => {
@@ -1027,7 +638,7 @@ describe("ImageBuildWorkflow", () => {
 
       await expect(
         workflow.acceptBuildComplete({
-          completion: validCompletion({ providerImageId: undefined }),
+          completion: validCompletion(),
           callbackToken: "callback-token",
           context: ctx,
         })
@@ -1036,7 +647,7 @@ describe("ImageBuildWorkflow", () => {
 
     it("authenticates the token before validating the completion payload", async () => {
       const store = sessionBuildStore();
-      store.verifyCallbackToken.mockResolvedValue(false);
+      store.authorizeCompletionCallback.mockResolvedValue(null);
       const { workflow } = createWorkflow({ store });
 
       // Malformed payload (no session id, no runtime version) + bad token:
@@ -1044,80 +655,18 @@ describe("ImageBuildWorkflow", () => {
       await expect(
         workflow.acceptBuildComplete({
           completion: validCompletion({
-            providerImageId: undefined,
             runtimeVersion: undefined,
           }),
           callbackToken: "stale-token",
           context: ctx,
         })
       ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
-      expect(store.consumeCallbackToken).not.toHaveBeenCalled();
     });
 
-    it("marks the build failed when deferred finalization fails", async () => {
+    it("atomically accepts failures before publishing them", async () => {
       const store = sessionBuildStore();
-      const adapter = createAdapter();
-      adapter.finalizeSuccessfulBuild.mockRejectedValue(new Error("snapshot failed"));
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.acceptBuildComplete({
-        completion: validCompletion({
-          providerImageId: undefined,
-          providerSessionId: "vercel-session-1",
-        }),
-        callbackToken: "callback-token",
-        context: ctx,
-      });
-      if (result.type !== "completion_accepted") throw new Error("unreachable");
-      await result.finalization;
-
-      expect(store.markBuildFailed).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "vercel",
-        "snapshot failed"
-      );
-      expect(adapter.cleanupCompletedBuild).toHaveBeenCalled();
-    });
-
-    it("reclaims the finalized snapshot when the ready transition fails after it", async () => {
-      // finalize succeeded (artifact exists provider-side) but the D1 ready
-      // transition threw: nothing recorded the artifact id, so the deferred
-      // path must delete it and fail the build — not leave the row building
-      // with an orphaned snapshot.
-      const store = sessionBuildStore();
-      store.tryMarkImageBuildReady.mockRejectedValue(new Error("D1 unavailable"));
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
-
-      const result = await workflow.acceptBuildComplete({
-        completion: validCompletion({
-          providerImageId: undefined,
-          providerSessionId: "vercel-session-1",
-        }),
-        callbackToken: "callback-token",
-        context: ctx,
-      });
-      if (result.type !== "completion_accepted") throw new Error("unreachable");
-      await result.finalization;
-
-      expect(adapter.deleteImage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          image: expect.objectContaining({ providerImageId: "im-finalized" }),
-        })
-      );
-      expect(store.markBuildFailed).toHaveBeenCalledWith(
-        "imgb-env_1-1-abcd",
-        "vercel",
-        "D1 unavailable"
-      );
-      expect(adapter.cleanupCompletedBuild).toHaveBeenCalled();
-    });
-
-    it("marks provider-session failures through the callback token", async () => {
-      const store = sessionBuildStore();
-      store.markBuildFailedWithCallbackToken.mockResolvedValue(true);
-      const adapter = createAdapter();
-      const { workflow } = createWorkflow({ store, adapter });
+      const queue = { send: vi.fn().mockResolvedValue(undefined) };
+      const { workflow } = createWorkflow({ store, queue });
 
       const result = await workflow.acceptBuildFailed({
         failure: {
@@ -1129,23 +678,96 @@ describe("ImageBuildWorkflow", () => {
         context: ctx,
       });
 
-      expect(result.type).toBe("build_failed");
-      if (result.type !== "build_failed") throw new Error("unreachable");
-      await result.cleanup;
-      expect(store.markBuildFailedWithCallbackToken).toHaveBeenCalledWith(
+      expect(result.type).toBe("failure_accepted");
+      expect(queue.send).toHaveBeenCalledWith({
+        version: 1,
+        buildId: "imgb-env_1-1-abcd",
+        completionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(store.acceptFailedCompletion).toHaveBeenCalledWith(
         expect.objectContaining({
           buildId: "imgb-env_1-1-abcd",
           provider: "vercel",
           providerSessionId: "vercel-session-1",
-          error: "setup.failed: boom",
+          errorMessage: "setup.failed: boom",
         })
       );
-      expect(adapter.cleanupFailedBuild).toHaveBeenCalled();
+      expect(store.acceptFailedCompletion.mock.invocationCallOrder[0]).toBeLessThan(
+        queue.send.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("republishes an exact accepted replay", async () => {
+      const store = sessionBuildStore();
+      store.authorizeCompletionCallback.mockResolvedValue({
+        authorization: "accepted",
+        build: {
+          id: "imgb-env_1-1-abcd",
+          scope: ENV_SCOPE,
+          provider: "vercel",
+          providerSessionId: "vercel-session-1",
+          status: "building",
+        },
+      });
+      store.acceptSuccessfulCompletion.mockResolvedValue("replayed");
+      const queue = { send: vi.fn().mockResolvedValue(undefined) };
+      const { workflow } = createWorkflow({ store, queue });
+
+      await expect(
+        workflow.acceptBuildComplete({
+          completion: validCompletion({
+            providerSessionId: "vercel-session-1",
+          }),
+          callbackToken: "callback-token",
+          context: ctx,
+        })
+      ).resolves.toEqual({ type: "completion_accepted" });
+
+      expect(queue.send).toHaveBeenCalledWith({
+        version: 1,
+        buildId: "imgb-env_1-1-abcd",
+        completionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+    });
+
+    it("republishes an exact accepted failure replay", async () => {
+      const store = sessionBuildStore();
+      store.authorizeCompletionCallback.mockResolvedValue({
+        authorization: "accepted",
+        build: {
+          id: "imgb-env_1-1-abcd",
+          scope: ENV_SCOPE,
+          provider: "vercel",
+          providerSessionId: "vercel-session-1",
+          status: "failed",
+        },
+      });
+      store.acceptFailedCompletion.mockResolvedValue("replayed");
+      const queue = { send: vi.fn().mockResolvedValue(undefined) };
+      const { workflow } = createWorkflow({ store, queue });
+
+      await expect(
+        workflow.acceptBuildFailed({
+          failure: {
+            buildId: "imgb-env_1-1-abcd",
+            providerSessionId: "vercel-session-1",
+            errorMessage: "setup.failed: boom",
+          },
+          callbackToken: "callback-token",
+          context: ctx,
+        })
+      ).resolves.toEqual({ type: "failure_accepted" });
+
+      expect(queue.send).toHaveBeenCalledWith({
+        version: 1,
+        buildId: "imgb-env_1-1-abcd",
+        completionHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
     });
 
     it("rejects provider-session failures whose token does not consume", async () => {
       const store = sessionBuildStore();
-      store.markBuildFailedWithCallbackToken.mockResolvedValue(false);
+      store.acceptFailedCompletion.mockResolvedValue("rejected");
       const { workflow } = createWorkflow({ store });
 
       await expect(
@@ -1158,12 +780,12 @@ describe("ImageBuildWorkflow", () => {
           callbackToken: "stale-token",
           context: ctx,
         })
-      ).rejects.toBeInstanceOf(ImageBuildCallbackAuthRejectedError);
+      ).rejects.toBeInstanceOf(ImageBuildFailureNotAcceptedError);
     });
 
     it("authenticates the token before requiring provider_session_id on failures", async () => {
       const store = sessionBuildStore();
-      store.markBuildFailedWithCallbackToken.mockResolvedValue(false);
+      store.authorizeCompletionCallback.mockResolvedValue(null);
       const { workflow } = createWorkflow({ store });
 
       await expect(
@@ -1188,6 +810,7 @@ describe("ImageBuildWorkflow", () => {
         provider: "modal" as const,
         provider_image_id: providerImageId,
         provider_session_id: null,
+        created_at: Number(id.replace(/\D/g, "")) || 1,
       };
     }
 
@@ -1210,9 +833,9 @@ describe("ImageBuildWorkflow", () => {
       // s-artifact: artifact deleted then row reaped. s-bare: no artifact, row
       // reaped directly. s-stuck: artifact delete failed, row kept for retry.
       expect(result).toEqual({ deletedFailed: 3, reapedFailed: 0, reapedSuperseded: 2 });
-      expect(store.deleteSupersededImage).toHaveBeenCalledWith("s-artifact");
-      expect(store.deleteSupersededImage).toHaveBeenCalledWith("s-bare");
-      expect(store.deleteSupersededImage).not.toHaveBeenCalledWith("s-stuck");
+      expect(store.deleteSupersededImage).toHaveBeenCalledWith("s-artifact", "im-a");
+      expect(store.deleteSupersededImage).toHaveBeenCalledWith("s-bare", null);
+      expect(store.deleteSupersededImage).not.toHaveBeenCalledWith("s-stuck", "im-stuck");
     });
 
     it("reaps a restore-failed row's artifact then clears its columns, keeping it failed", async () => {
@@ -1264,6 +887,30 @@ describe("ImageBuildWorkflow", () => {
       expect(result.reapedFailed).toBe(0);
       expect(adapter.deleteImage).not.toHaveBeenCalled();
       expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
+    });
+
+    it("bounds a hung provider artifact deletion", async () => {
+      vi.useFakeTimers();
+      try {
+        const store = createStore();
+        store.getFailedImagesWithArtifacts.mockResolvedValue([reapableRow("f-hung", "im-hung")]);
+        const adapter = createAdapter();
+        adapter.deleteImage.mockImplementation(
+          async ({ signal }) =>
+            new Promise<void>((_, reject) => {
+              signal?.addEventListener("abort", () => reject(new Error("aborted")));
+            })
+        );
+        const { workflow } = createWorkflow({ store, adapter });
+
+        const cleanup = workflow.cleanupImages(86_400_000, ctx);
+        await vi.advanceTimersByTimeAsync(IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
+
+        await expect(cleanup).resolves.toMatchObject({ reapedFailed: 0 });
+        expect(store.clearFailedImageArtifact).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

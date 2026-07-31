@@ -100,45 +100,15 @@ export class ImageBuildPlanner {
 
     const registration = { tokenHash: callbackAuth.tokenHash, expiresAt: callbackAuth.expiresAt };
 
-    switch (this.provider) {
-      case "modal":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "modal",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      case "vercel":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "vercel",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      case "opencomputer":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "opencomputer",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      default: {
-        const exhaustive: never = this.provider;
-        throw new Error(`Unsupported image build provider: ${String(exhaustive)}`);
-      }
-    }
+    return {
+      plan: {
+        ...basePlan,
+        provider: this.provider,
+        callbackToken: callbackAuth.token,
+        cloneAuth,
+      },
+      callbackAuth: registration,
+    };
   }
 
   private async resolveCloneAuth(scope: ImageBuildScope): Promise<ImageBuildCloneAuth> {

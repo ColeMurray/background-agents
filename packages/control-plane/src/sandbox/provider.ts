@@ -203,6 +203,8 @@ export interface SnapshotConfig {
   reason: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
+  /** Optional caller deadline for long-running provider artifact creation. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -269,6 +271,8 @@ export interface StopConfig {
   reason: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
+  /** Optional caller deadline for provider cleanup. */
+  signal?: AbortSignal;
 }
 
 /**

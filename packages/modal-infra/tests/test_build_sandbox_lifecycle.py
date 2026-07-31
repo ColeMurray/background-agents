@@ -29,16 +29,31 @@ async def test_create_provider_session_build_is_dormant_tagged_and_scrubs_callba
         clone_token="clone-token",
         clone_host="gitlab.com",
         clone_username="oauth2",
-        user_env_vars={"OI_REPO_IMAGE_CALLBACK_TOKEN": "attacker-token"},
+        user_env_vars={
+            "FOO": "bar",
+            "OI_REPO_IMAGE_CALLBACK_TOKEN": "attacker-token",
+            "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "99999",
+        },
+        build_execution_timeout_seconds=1200,
+        timeout_seconds=1800,
     )
 
     assert provider_session_id == "modal-session-1"
-    assert create.aio.await_args.args[:2] == ("python", "-c")
-    assert create.aio.await_args.kwargs["tags"]["openinspect_build_id"] == "build-1"
-    assert create.aio.await_args.kwargs["env"]["OI_REPO_IMAGE_CALLBACK_TOKEN"] == ""
-    assert create.aio.await_args.kwargs["env"]["VCS_HOST"] == "gitlab.com"
-    assert create.aio.await_args.kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
-    assert create.aio.await_args.kwargs["env"]["VCS_CLONE_TOKEN"] == "clone-token"
+    args = create.aio.await_args.args
+    kwargs = create.aio.await_args.kwargs
+    assert args[:2] == ("python", "-c")
+    assert kwargs["tags"] == {
+        "openinspect_kind": "image-build",
+        "openinspect_build_id": "build-1",
+        "openinspect_scope_kind": "repo",
+        "openinspect_scope_id": "acme/repo",
+    }
+    assert kwargs["env"]["FOO"] == "bar"
+    assert kwargs["env"]["OI_REPO_IMAGE_CALLBACK_TOKEN"] == ""
+    assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == "1200"
+    assert kwargs["env"]["VCS_HOST"] == "gitlab.com"
+    assert kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
+    assert kwargs["env"]["VCS_CLONE_TOKEN"] == "clone-token"
 
 
 @pytest.mark.asyncio
