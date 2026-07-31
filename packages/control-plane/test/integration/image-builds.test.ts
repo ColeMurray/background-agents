@@ -16,7 +16,6 @@ import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerprint";
 import { hashImageBuildCallbackToken } from "../../src/image-builds/callback-auth";
 import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
   type ImageBuildProvider,
   type ImageBuildScope,
@@ -390,8 +389,12 @@ describe("Image builds", () => {
     });
   });
 
-  describe("cron-facing routes", () => {
-    it("GET /image-builds/enabled returns prebuild-enabled units with fingerprints", async () => {
+  describe("settings and status routes", () => {
+    it("GET /image-builds/enabled returns only enabled scope identities and fingerprints", async () => {
+      const repositories = [
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+      ];
       const enabledId = await seedEnvironment({
         prebuildEnabled: true,
         repositories: [
@@ -409,21 +412,17 @@ describe("Image builds", () => {
           scopeKind: string;
           scopeId: string;
           repositoriesFingerprint: string;
-          repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
         }>;
-        minRuntimeVersion: number;
       };
-      expect(body.minRuntimeVersion).toBe(MIN_COMPATIBLE_RUNTIME_VERSION);
-      expect(body.units).toHaveLength(1);
-      expect(body.units[0].scopeKind).toBe("environment");
-      expect(body.units[0].scopeId).toBe(enabledId);
-      expect(body.units[0].repositories).toEqual([
-        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
-        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
-      ]);
-      expect(body.units[0].repositoriesFingerprint).toBe(
-        await computeRepositoriesFingerprint(body.units[0].repositories)
-      );
+      expect(body).toEqual({
+        units: [
+          {
+            scopeKind: "environment",
+            scopeId: enabledId,
+            repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+          },
+        ],
+      });
     });
 
     it("GET /image-builds/status serves the cross-scope view and the per-scope debug view", async () => {

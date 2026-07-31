@@ -154,12 +154,12 @@ statuses are `building | ready | failed | superseded`.
 | -------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/image-builds/build-complete`               | POST   | Success callback from image builders (public route, callback-authenticated)                                                                                          |
 | `/image-builds/build-failed`                 | POST   | Failure callback from image builders (public route, callback-authenticated)                                                                                          |
-| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build (cron, save-hooks, manual rebuild)                                                                                                        |
-| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build                                                                                                                                   |
+| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build manually                                                                                                                                  |
+| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build manually                                                                                                                          |
 | `/image-builds/toggle/repo/:owner/:name`     | PUT    | Toggle repo prebuilds (`repo_metadata.image_build_enabled`); toggling on triggers a build. The environment toggle stays on the environments CRUD (`prebuildEnabled`) |
 | `/image-builds/status`                       | GET    | Cross-scope aggregate over every prebuild-enabled scope — excludes superseded, includes failed                                                                       |
 | `/image-builds/status?scope_kind=&scope_id=` | GET    | One scope's recent non-superseded builds (settings/debug view)                                                                                                       |
-| `/image-builds/enabled`                      | GET    | Cron feed: enabled scope units with repositories + fingerprint, plus the runtime floor                                                                               |
+| `/image-builds/enabled`                      | GET    | Settings feed: enabled scope identities with their current repository-set fingerprints                                                                               |
 
 Every provider uses the same callback contract. The control plane creates a dormant provider
 session, binds its opaque id to the build row, and only then starts the runtime. The runtime calls

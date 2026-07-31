@@ -47,8 +47,8 @@ export async function GET() {
       statusResponse.json(),
     ]);
 
-    // The enabled feed also carries the cron's repository lists — serve the
-    // scope identity plus the current fingerprint the status fold keys on.
+    // Serve the enabled scope identities and current fingerprints that the
+    // status fold keys on.
     const units = ((enabledData.units ?? []) as ImageBuildUnitView[]).map((unit) => ({
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,

@@ -3,7 +3,7 @@
  *
  * Handles:
  * - Build callbacks from async image builders (build-complete, build-failed)
- * - Build triggers (cron pass, save-hooks, manual rebuild)
+ * - Manual build triggers and the repo-toggle save hook
  * - The repo prebuild toggle (the repo_metadata flag write)
  * - Enabled-scope and status queries
  */
@@ -14,11 +14,7 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  repoImageBuildScope,
-  type ImageBuildScope,
-} from "../image-builds/model";
+import { repoImageBuildScope, type ImageBuildScope } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
 import { decodeRepositoryShas } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
@@ -295,7 +291,7 @@ async function triggerBuildForScope(
 
 /**
  * POST /image-builds/trigger/environment/:id
- * Trigger a build for an environment scope (cron, save-hooks, manual rebuild).
+ * Trigger a manual rebuild for an environment scope.
  */
 async function handleTriggerEnvironmentBuild(
   _request: Request,
@@ -314,7 +310,7 @@ async function handleTriggerEnvironmentBuild(
 
 /**
  * POST /image-builds/trigger/repo/:owner/:name
- * Trigger a build for a repo scope (cron, save-hooks, manual rebuild).
+ * Trigger a manual rebuild for a repo scope.
  */
 async function handleTriggerRepoBuild(
   _request: Request,
@@ -458,9 +454,8 @@ async function handleGetStatus(
 
 /**
  * GET /image-builds/enabled
- * Prebuild-enabled scopes with their current repositories and fingerprint,
- * plus the runtime floor — everything the cron's trigger checks need, so the
- * fingerprint algorithm never leaves the control plane.
+ * Prebuild-enabled scope identities with their current repository-set
+ * fingerprints for the settings and session-target feeds.
  */
 async function handleGetEnabledUnits(
   _request: Request,
@@ -478,9 +473,7 @@ async function handleGetEnabledUnits(
         scopeKind: unit.scope.kind,
         scopeId: unit.scope.id,
         repositoriesFingerprint: unit.repositoriesFingerprint,
-        repositories: unit.repositories,
       })),
-      minRuntimeVersion: MIN_COMPATIBLE_RUNTIME_VERSION,
     });
   } catch (e) {
     logger.error("image_build.enabled_error", {
