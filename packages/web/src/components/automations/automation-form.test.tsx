@@ -203,6 +203,30 @@ describe("automation cron submission", () => {
       triggerConfig: { conditions: [] },
     });
   });
+
+  it("renders condition validation errors beside the condition builder", () => {
+    render(
+      <AutomationForm
+        mode="edit"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Review PRs",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review incoming PRs.",
+          triggerType: "github_event",
+          eventType: "pull_request.opened",
+          triggerConfig: {
+            conditions: [{ type: "branch", operator: "glob_match", value: [] }],
+          },
+        }}
+      />
+    );
+
+    expect(screen.getByText("At least one branch pattern required")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+  });
 });
 
 describe("environment binding", () => {
@@ -738,7 +762,9 @@ describe("slack_event automation", () => {
     );
 
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
-    expect(screen.getByText(/require at least one Slack Channel/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Slack Channel requires at least one nonblank channel ID")
+    ).toBeInTheDocument();
   });
 
   it("submits a valid slack_event", () => {

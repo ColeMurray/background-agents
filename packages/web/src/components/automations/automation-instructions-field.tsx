@@ -1,13 +1,11 @@
 "use client";
 
-import type { AutomationTriggerType } from "@open-inspect/shared";
+import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
+import { MAX_AUTOMATION_INSTRUCTIONS_LENGTH } from "@open-inspect/shared/types/automations";
 import { Textarea } from "@/components/ui/textarea";
 import { FieldDescription } from "./automation-form-field";
 
-// Keep in sync with MAX_INSTRUCTIONS_LENGTH in
-// packages/control-plane/src/routes/automations.ts.
-const INSTRUCTIONS_MAX_LENGTH = 15000;
-const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(INSTRUCTIONS_MAX_LENGTH * 0.9);
+const INSTRUCTIONS_WARNING_THRESHOLD = Math.floor(MAX_AUTOMATION_INSTRUCTIONS_LENGTH * 0.9);
 
 const INSTRUCTION_PLACEHOLDERS: Partial<Record<AutomationTriggerType, string>> = {
   sentry:
@@ -34,7 +32,7 @@ export function AutomationInstructionsField({
         "Process this webhook payload and take the appropriate action.");
 
   const counterTone =
-    value.length >= INSTRUCTIONS_MAX_LENGTH
+    value.length >= MAX_AUTOMATION_INSTRUCTIONS_LENGTH
       ? "text-destructive"
       : value.length >= INSTRUCTIONS_WARNING_THRESHOLD
         ? "text-warning"
@@ -57,7 +55,7 @@ export function AutomationInstructionsField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        maxLength={INSTRUCTIONS_MAX_LENGTH}
+        maxLength={MAX_AUTOMATION_INSTRUCTIONS_LENGTH}
         required
         rows={6}
         aria-describedby="instructions-counter"
@@ -68,8 +66,10 @@ export function AutomationInstructionsField({
         aria-live="polite"
         className={`mt-1 text-xs text-right ${counterTone}`}
       >
-        {value.length >= INSTRUCTIONS_MAX_LENGTH ? <span>Maximum length reached. </span> : null}
-        {value.length.toLocaleString()} / {INSTRUCTIONS_MAX_LENGTH.toLocaleString()}
+        {value.length >= MAX_AUTOMATION_INSTRUCTIONS_LENGTH ? (
+          <span>Maximum length reached. </span>
+        ) : null}
+        {value.length.toLocaleString()} / {MAX_AUTOMATION_INSTRUCTIONS_LENGTH.toLocaleString()}
       </div>
     </div>
   );

@@ -70,6 +70,16 @@ vi.mock("../db/environments", () => ({
   }),
 }));
 
+const mockSlackChannelStore = {
+  bindChannelStatements: vi.fn(),
+  getWatchedSlackChannels: vi.fn(),
+};
+vi.mock("../db/slack-channel-store", () => ({
+  SlackChannelStore: vi.fn().mockImplementation(function () {
+    return mockSlackChannelStore;
+  }),
+}));
+
 vi.mock("../auth/crypto", () => ({
   generateId: vi.fn(() => "generated-id"),
 }));
@@ -205,6 +215,8 @@ describe("automation route handlers", () => {
     mockStore.bindReplaceRepositories.mockReturnValue([{ sql: "replace-repositories" }]);
     mockStore.bindEnvironmentInserts.mockReturnValue([{ sql: "insert-environments" }]);
     mockStore.bindReplaceEnvironments.mockReturnValue([{ sql: "replace-environments" }]);
+    mockSlackChannelStore.bindChannelStatements.mockReturnValue([{ sql: "sync-slack-channels" }]);
+    mockSlackChannelStore.getWatchedSlackChannels.mockResolvedValue([]);
     mockBatch.mockResolvedValue([]);
     mockEnvironmentStore.getById.mockResolvedValue({ id: "env_1", name: "Fullstack" });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
@@ -297,6 +309,50 @@ describe("automation route handlers", () => {
         ],
         expect.any(Number)
       );
+    });
+
+    it("rejects a Slack channel condition with the wrong operator", async () => {
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Slack triage",
+          instructions: "Triage the message",
+          triggerType: "slack_event",
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "exclude", value: ["C1"] }],
+          },
+        },
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Slack Channel operator must be any_of" });
+      expect(mockStore.bindAutomationInsert).not.toHaveBeenCalled();
+    });
+
+    it("normalizes Slack channel IDs before persisting config and index rows", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, trigger_type: "slack_event" });
+
+      const res = await callRoute("POST", "/automations", {
+        body: {
+          name: "Slack triage",
+          instructions: "Triage the message",
+          triggerType: "slack_event",
+          triggerConfig: {
+            conditions: [{ type: "slack_channel", operator: "any_of", value: [" C1 "] }],
+          },
+        },
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          trigger_config: JSON.stringify({
+            conditions: [{ type: "slack_channel", operator: "any_of", value: ["C1"] }],
+          }),
+        })
+      );
+      expect(mockSlackChannelStore.bindChannelStatements).toHaveBeenCalledWith("generated-id", [
+        "C1",
+      ]);
     });
 
     it("does not write partial data when repository resolution fails", async () => {

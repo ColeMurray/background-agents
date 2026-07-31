@@ -9,6 +9,7 @@ import {
 } from "@open-inspect/shared/cron";
 import {
   hasValidSlackChannelCondition,
+  normalizeSlackChannelConditions,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
@@ -20,6 +21,7 @@ import type {
 } from "@open-inspect/shared/types/automations";
 import {
   automationRepositoriesInputSchema,
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   validateAutomationTargetCounts,
 } from "@open-inspect/shared/types/automations";
 import { listChannels } from "@open-inspect/shared/slack";
@@ -59,9 +61,6 @@ const logger = createLogger("router:automations");
 
 /** Maximum name length. */
 const MAX_NAME_LENGTH = 200;
-
-/** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
-const MAX_INSTRUCTIONS_LENGTH = 15_000;
 
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
@@ -313,8 +312,11 @@ async function handleCreateAutomation(
   ) {
     return error("instructions is required", 400);
   }
-  if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
-    return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
+  if (body.instructions.length > MAX_AUTOMATION_INSTRUCTIONS_LENGTH) {
+    return error(
+      `instructions must be at most ${MAX_AUTOMATION_INSTRUCTIONS_LENGTH} characters`,
+      400
+    );
   }
 
   let selection: RepositorySelectionRequest;
@@ -394,6 +396,10 @@ async function handleCreateAutomation(
   if (triggerType === "slack_event") {
     const slackError = validateSlackTriggerConfig(body.triggerConfig);
     if (slackError) return error(slackError, 400);
+    body.triggerConfig = {
+      ...body.triggerConfig!,
+      conditions: normalizeSlackChannelConditions(body.triggerConfig!.conditions),
+    };
   }
 
   // Validate model
@@ -576,8 +582,11 @@ async function handleUpdateAutomation(
     if (typeof body.instructions !== "string" || body.instructions.trim().length === 0) {
       return error("instructions cannot be empty", 400);
     }
-    if (body.instructions.length > MAX_INSTRUCTIONS_LENGTH) {
-      return error(`instructions must be at most ${MAX_INSTRUCTIONS_LENGTH} characters`, 400);
+    if (body.instructions.length > MAX_AUTOMATION_INSTRUCTIONS_LENGTH) {
+      return error(
+        `instructions must be at most ${MAX_AUTOMATION_INSTRUCTIONS_LENGTH} characters`,
+        400
+      );
     }
   }
 
@@ -706,6 +715,10 @@ async function handleUpdateAutomation(
       if (existing.trigger_type === "slack_event") {
         const slackError = validateSlackTriggerConfig(body.triggerConfig);
         if (slackError) return error(slackError, 400);
+        body.triggerConfig = {
+          ...body.triggerConfig,
+          conditions: normalizeSlackChannelConditions(body.triggerConfig.conditions),
+        };
       }
       if (body.triggerConfig.conditions) {
         if (!Array.isArray(body.triggerConfig.conditions)) {

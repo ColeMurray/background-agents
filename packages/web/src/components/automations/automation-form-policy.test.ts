@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createAutomationFormDraft, evaluateAutomationForm } from "./automation-form-policy";
+import {
+  createAutomationFormDraft,
+  evaluateAutomationForm,
+  transitionAutomationTriggerType,
+} from "./automation-form-policy";
 
 describe("automation form policy", () => {
   it("builds a trimmed scheduled automation submission", () => {
@@ -225,7 +229,47 @@ describe("automation form policy", () => {
         resolvedModel: draft.agent.model,
         targets: { repositories: [], environmentIds: [] },
       })
-    ).toEqual({ valid: false, reason: "invalid-conditions" });
+    ).toEqual({
+      valid: false,
+      reason: "invalid-conditions",
+      conditionErrors: ["Slack Channel requires at least one nonblank channel ID"],
+    });
+  });
+
+  it("drops conditions that do not belong to the next trigger source", () => {
+    const draft = createAutomationFormDraft({
+      triggerType: "github_event",
+      eventType: "pull_request.opened",
+      triggerConfig: {
+        conditions: [
+          { type: "branch", operator: "glob_match", value: ["feature/*"] },
+          { type: "label", operator: "any_of", value: ["bug"] },
+        ],
+      },
+    }).trigger;
+
+    expect(transitionAutomationTriggerType(draft, "sentry")).toMatchObject({
+      type: "sentry",
+      eventType: "",
+      conditions: [],
+    });
+  });
+
+  it("preserves conditions that are supported by the next trigger source", () => {
+    const draft = createAutomationFormDraft({
+      triggerType: "github_event",
+      eventType: "pull_request.opened",
+      triggerConfig: {
+        conditions: [
+          { type: "label", operator: "any_of", value: ["bug"] },
+          { type: "branch", operator: "glob_match", value: ["feature/*"] },
+        ],
+      },
+    }).trigger;
+
+    expect(transitionAutomationTriggerType(draft, "linear_event").conditions).toEqual([
+      { type: "label", operator: "any_of", value: ["bug"] },
+    ]);
   });
 
   it("rejects schedules that run more often than every fifteen minutes", () => {

@@ -6,7 +6,7 @@ import {
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationEventSource,
   type AutomationTriggerType,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import {
@@ -22,6 +22,7 @@ import { CronPicker } from "./cron-picker";
 import { FieldDescription } from "./automation-form-field";
 import { TriggerTypeSelector } from "./trigger-type-selector";
 import type { AutomationFormMode, AutomationTriggerDraft } from "./automation-form-policy";
+import { transitionAutomationTriggerType } from "./automation-form-policy";
 
 const COMMON_TIMEZONES = [
   "UTC",
@@ -69,6 +70,7 @@ interface AutomationTriggerFieldsProps {
 
 interface AutomationTriggerConfigurationFieldsProps extends AutomationTriggerFieldsProps {
   eventTypeError: string;
+  conditionErrors: string[];
   onClearEventTypeError: () => void;
 }
 
@@ -86,14 +88,7 @@ export function AutomationTriggerTypeField({
   onChange,
 }: AutomationTriggerFieldsProps) {
   const changeTriggerType = (nextType: AutomationTriggerType) => {
-    const nextSource = triggerSources.find((candidate) => candidate.triggerType === nextType);
-    const eventTypeStillValid = nextSource?.eventTypes.some(
-      (eventType) => eventType.eventType === value.eventType
-    );
-    updateTriggerDraft(value, onChange, {
-      type: nextType,
-      eventType: eventTypeStillValid ? value.eventType : "",
-    });
+    onChange(transitionAutomationTriggerType(value, nextType));
   };
 
   return (
@@ -128,6 +123,7 @@ export function AutomationTriggerConfigurationFields({
   value,
   onChange,
   eventTypeError,
+  conditionErrors,
   onClearEventTypeError,
 }: AutomationTriggerConfigurationFieldsProps) {
   const source = triggerSources.find((candidate) => candidate.triggerType === value.type);
@@ -256,7 +252,12 @@ export function AutomationTriggerConfigurationFields({
             Optional filters on incoming events. When you add conditions, every condition must pass
             before a run starts.
           </FieldDescription>
-          {!slackConditionsValid && (
+          {conditionErrors.map((conditionError, index) => (
+            <p key={`${conditionError}-${index}`} className="mt-1 text-xs text-destructive">
+              {conditionError}
+            </p>
+          ))}
+          {!slackConditionsValid && conditionErrors.length === 0 && (
             <p className="mt-1 text-xs text-destructive">
               Slack triggers require at least one Slack Channel condition.
             </p>

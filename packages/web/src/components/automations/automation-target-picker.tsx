@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { MAX_AUTOMATION_REPOSITORIES, type Environment } from "@open-inspect/shared";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
 import type { Repo } from "@/hooks/use-repos";
 import { useBranches } from "@/hooks/use-branches";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";

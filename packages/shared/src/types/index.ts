@@ -226,6 +226,7 @@ export type {
 export type { AutomationTriggerType } from "../triggers/types";
 
 export {
+  MAX_AUTOMATION_INSTRUCTIONS_LENGTH,
   MAX_AUTOMATION_REPOSITORIES,
   toRepositoryRef,
   automationRepositoryInputSchema,

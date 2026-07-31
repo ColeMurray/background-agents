@@ -1,17 +1,18 @@
+import { isValidTimeZone, validateAutomationCron } from "@open-inspect/shared/cron";
 import {
   conditionRegistry,
   hasValidSlackChannelCondition,
-  isValidTimeZone,
   triggerSources,
   TRIGGER_TYPE_TO_SOURCE,
-  validateAutomationCron,
-  validateAutomationTargetCounts,
   validateConditions,
-  type AutomationRepositoryInput,
   type AutomationTriggerType,
   type TriggerCondition,
   type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import {
+  validateAutomationTargetCounts,
+  type AutomationRepositoryInput,
+} from "@open-inspect/shared/types/automations";
 import { DEFAULT_MODEL, isValidReasoningEffort } from "@open-inspect/shared/models";
 
 export interface AutomationFormValues {
@@ -67,7 +68,12 @@ export type AutomationFormEvaluation =
   | { valid: true; values: AutomationFormValues }
   | {
       valid: false;
-      reason: AutomationFormInvalidReason;
+      reason: Exclude<AutomationFormInvalidReason, "invalid-conditions">;
+    }
+  | {
+      valid: false;
+      reason: "invalid-conditions";
+      conditionErrors: string[];
     };
 
 type InitialAutomationFormValues = Partial<AutomationFormValues>;
@@ -102,6 +108,26 @@ export function requiresEventType(triggerType: AutomationTriggerType): boolean {
   return Boolean(source?.supportsEventTypes && source.eventTypes.length > 0);
 }
 
+export function transitionAutomationTriggerType(
+  trigger: AutomationTriggerDraft,
+  nextType: AutomationTriggerType
+): AutomationTriggerDraft {
+  const nextSource = triggerSources.find((candidate) => candidate.triggerType === nextType);
+  const eventTypeStillValid = nextSource?.eventTypes.some(
+    (eventType) => eventType.eventType === trigger.eventType
+  );
+  const nextEventSource = TRIGGER_TYPE_TO_SOURCE[nextType];
+  return {
+    ...trigger,
+    type: nextType,
+    eventType: eventTypeStillValid ? trigger.eventType : "",
+    conditions: trigger.conditions.filter(
+      (condition) =>
+        nextEventSource && conditionRegistry[condition.type].appliesTo.includes(nextEventSource)
+    ),
+  };
+}
+
 function isValidEventType(triggerType: AutomationTriggerType, eventType: string): boolean {
   const source = triggerSources.find((candidate) => candidate.triggerType === triggerType);
   return Boolean(
@@ -110,21 +136,22 @@ function isValidEventType(triggerType: AutomationTriggerType, eventType: string)
   );
 }
 
-function getConditionError(
-  trigger: AutomationTriggerDraft
-): "invalid-conditions" | "slack-channel-required" | null {
-  if (trigger.type === "schedule") return null;
+function getConditionErrors(trigger: AutomationTriggerDraft): string[] {
+  if (trigger.type === "schedule") return [];
   const source = TRIGGER_TYPE_TO_SOURCE[trigger.type];
-  if (source && validateConditions(trigger.conditions, source, conditionRegistry).length > 0) {
-    return "invalid-conditions";
-  }
+  return source ? validateConditions(trigger.conditions, source, conditionRegistry) : [];
+}
+
+function getConditionRequirementError(
+  trigger: AutomationTriggerDraft
+): "slack-channel-required" | null {
   if (trigger.type === "slack_event" && !hasValidSlackChannelCondition(trigger.conditions)) {
     return "slack-channel-required";
   }
   return null;
 }
 
-function findInvalidReason({
+function findInvalidEvaluation({
   mode,
   draft,
   loadingModels,
@@ -136,15 +163,17 @@ function findInvalidReason({
   loadingModels: boolean;
   repositoryCount: number;
   environmentCount: number;
-}): AutomationFormInvalidReason | null {
-  if (loadingModels) return "models-loading";
-  if (!draft.name.trim() || !draft.instructions.trim()) return "required-fields";
+}): Exclude<AutomationFormEvaluation, { valid: true }> | null {
+  if (loadingModels) return { valid: false, reason: "models-loading" };
+  if (!draft.name.trim() || !draft.instructions.trim()) {
+    return { valid: false, reason: "required-fields" };
+  }
   if (draft.trigger.type === "schedule") {
     if (
       validateAutomationCron(draft.trigger.scheduleCron) ||
       !isValidTimeZone(draft.trigger.scheduleTz)
     ) {
-      return "invalid-schedule";
+      return { valid: false, reason: "invalid-schedule" };
     }
   }
   const targetError = validateAutomationTargetCounts(
@@ -153,24 +182,34 @@ function findInvalidReason({
     environmentCount
   );
   if (targetError) {
-    return requiresRepositoryContext(draft.trigger.type) && repositoryCount === 0
-      ? "repository-required"
-      : "invalid-target-selection";
+    return {
+      valid: false,
+      reason:
+        requiresRepositoryContext(draft.trigger.type) && repositoryCount === 0
+          ? "repository-required"
+          : "invalid-target-selection",
+    };
   }
   if (
     requiresEventType(draft.trigger.type) &&
     !isValidEventType(draft.trigger.type, draft.trigger.eventType)
   ) {
-    return "event-type-required";
+    return { valid: false, reason: "event-type-required" };
   }
-  const conditionError = getConditionError(draft.trigger);
-  if (conditionError) return conditionError;
+  const conditionErrors = getConditionErrors(draft.trigger);
+  if (conditionErrors.length > 0) {
+    return { valid: false, reason: "invalid-conditions", conditionErrors };
+  }
+  const conditionRequirementError = getConditionRequirementError(draft.trigger);
+  if (conditionRequirementError) {
+    return { valid: false, reason: conditionRequirementError };
+  }
   if (
     draft.trigger.type === "sentry" &&
     mode === "create" &&
     !draft.trigger.sentryClientSecret.trim()
   ) {
-    return "sentry-secret-required";
+    return { valid: false, reason: "sentry-secret-required" };
   }
   return null;
 }
@@ -235,14 +274,14 @@ export function evaluateAutomationForm({
     environmentIds: string[];
   };
 }): AutomationFormEvaluation {
-  const invalidReason = findInvalidReason({
+  const invalidEvaluation = findInvalidEvaluation({
     mode,
     draft,
     loadingModels,
     repositoryCount: targets.repositories.length,
     environmentCount: targets.environmentIds.length,
   });
-  if (invalidReason) return { valid: false, reason: invalidReason };
+  if (invalidEvaluation) return invalidEvaluation;
 
   return {
     valid: true,

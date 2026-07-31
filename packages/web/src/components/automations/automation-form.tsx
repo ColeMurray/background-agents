@@ -88,6 +88,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       environmentIds: selectedEnvironmentIds,
     },
   });
+  const conditionErrors =
+    !formEvaluation.valid && formEvaluation.reason === "invalid-conditions"
+      ? formEvaluation.conditionErrors
+      : [];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -155,6 +159,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         value={trigger}
         onChange={setTrigger}
         eventTypeError={eventTypeError}
+        conditionErrors={conditionErrors}
         onClearEventTypeError={() => setEventTypeError("")}
       />
 

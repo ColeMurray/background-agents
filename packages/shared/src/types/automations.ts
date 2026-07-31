@@ -26,6 +26,9 @@ export type AutomationInvocationStatus =
 /** Maximum repositories an automation can fan out across per invocation. */
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 
+/** Maximum length of an automation's instruction prompt. */
+export const MAX_AUTOMATION_INSTRUCTIONS_LENGTH = 15_000;
+
 /**
  * Validate target-count rules shared by automation clients and the API.
  * Repository-scoped triggers bind to exactly one repository and no
