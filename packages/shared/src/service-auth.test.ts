@@ -341,10 +341,10 @@ describe("verifyCallbackFromControlPlane", () => {
 
 describe("isServiceName", () => {
   it("accepts exactly the registered services", () => {
-    for (const name of ["web", "slack-bot", "github-bot", "linear-bot", "modal"]) {
+    for (const name of ["web", "slack-bot", "github-bot", "linear-bot"]) {
       expect(isServiceName(name)).toBe(true);
     }
-    for (const name of ["", "WEB", "sandbox", "slackbot", "unknown"]) {
+    for (const name of ["", "WEB", "modal", "sandbox", "slackbot", "unknown"]) {
       expect(isServiceName(name)).toBe(false);
     }
   });

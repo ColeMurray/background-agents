@@ -191,7 +191,12 @@ describe("createChildSessionsHandler", () => {
 
   it("maps spawn context from session and owner participant", async () => {
     const { handler, getSession, repository } = createHandler();
-    getSession.mockReturnValue(createSession({ reasoning_effort: "high" }));
+    getSession.mockReturnValue(
+      createSession({
+        reasoning_effort: "high",
+        sandbox_settings: '{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000]}',
+      })
+    );
     repository.listParticipants.mockReturnValue([createParticipant()]);
 
     const response = handler.getSpawnContext();
@@ -204,6 +209,7 @@ describe("createChildSessionsHandler", () => {
       model: "anthropic/claude-haiku-4-5",
       reasoningEffort: "high",
       baseBranch: "main",
+      sandboxTimeoutMs: 14_400_000,
       owner: {
         userId: "user-1",
         scmUserId: null,

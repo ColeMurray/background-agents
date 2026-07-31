@@ -120,20 +120,22 @@ e2b_template_id = ""           # e.g., "open-inspect-sandbox"
 # =============================================================================
 # Create GitHub App at: https://github.com/settings/apps
 #
-# One GitHub App handles both OAuth (user authentication) and repository access.
-# See docs/GETTING_STARTED.md for detailed setup instructions.
+# A GitHub App installation is required for repository access in every
+# deployment. Its OAuth client ID and secret are optional together: configure
+# them for GitHub sign-in, or leave both empty for Google-only sign-in.
+# See docs/GETTING_STARTED.md for the supported combinations.
 #
-# Required credentials:
-# - Client ID and Secret: Found in the GitHub App settings page
-# - App ID: Shown at top of the GitHub App settings page
-# - Private Key: Generate and download from GitHub App settings, convert to PKCS#8
-# - Installation ID: Found in URL after installing the app on your account/org
+# Always required for repository access:
+# - App ID, PKCS#8 private key, and installation ID
+#
+# Optional pair for GitHub sign-in:
+# - Client ID and client secret from the GitHub App settings page
 
-# OAuth credentials (from GitHub App -> "Client secrets" section)
+# GitHub OAuth sign-in pair (set both or leave both empty)
 github_client_id = ""      # e.g., "Iv1.abc123..."
 github_client_secret = ""
 
-# App credentials
+# Repository-access App credentials (always required)
 github_app_id = ""
 
 # Private key in PKCS#8 format
@@ -175,7 +177,8 @@ github_bot_username = ""
 #   - Application type: Web application
 #   - Authorized redirect URI: {your-web-app-url}/api/auth/callback/google
 #   - Consent screen scopes: openid, email, profile (non-sensitive — no Google review)
-# Set BOTH values to enable Google login, or leave BOTH empty for GitHub-only.
+# Set BOTH values to enable Google login. GitHub OAuth may be enabled as well or
+# left empty for Google-only sign-in.
 # Pair with allowed_emails / allowed_email_domains below to control who may sign in.
 google_client_id = ""
 google_client_secret = ""

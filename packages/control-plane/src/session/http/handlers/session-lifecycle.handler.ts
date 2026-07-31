@@ -1,11 +1,8 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import {
-  getValidModelOrDefault,
-  isValidModel,
-  type RepositoryRef,
-  type SandboxSettings,
-} from "@open-inspect/shared";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
 import type { SessionStatusService } from "../../session-status-service";
@@ -42,6 +39,7 @@ interface InitRequest {
   model?: string;
   reasoningEffort?: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmLogin?: string;
   scmName?: string;
   scmEmail?: string;
@@ -240,6 +238,7 @@ export function createSessionLifecycleHandler(
       deps.repository.createParticipant({
         id: participantId,
         userId: body.userId,
+        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,

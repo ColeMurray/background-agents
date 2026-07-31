@@ -3,25 +3,23 @@
  *
  * Handles:
  * - Build callbacks from async image builders (build-complete, build-failed)
- * - Build triggers (cron pass, save-hooks, manual rebuild)
+ * - Manual build triggers and the repo-toggle save hook
  * - The repo prebuild toggle (the repo_metadata flag write)
- * - Enabled-scope and status queries for the rebuild cron
- * - Maintenance operations (stale builds, cleanup + superseded-artifact reaping)
+ * - Enabled-scope and status queries
  */
 
-import type { ImageBuildRecordView, RepositoryShaEntry } from "@open-inspect/shared";
+import type {
+  ImageBuildRecordView,
+  RepositoryShaEntry,
+} from "@open-inspect/shared/types/image-builds";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
-import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "../image-builds/maintenance";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  repoImageBuildScope,
-  type ImageBuildScope,
-} from "../image-builds/model";
+import { repoImageBuildScope, type ImageBuildScope } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
+import { decodeRepositoryShas } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
@@ -44,18 +42,15 @@ import {
   extractRepoParams,
   json,
   parseJsonBody,
-  parseMaxAgeMs,
   parsePattern,
 } from "./shared";
 
 const logger = createLogger("router:image-builds");
 const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
-const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
 interface ImageBuildCompleteBody {
   build_id?: unknown;
-  provider_image_id?: unknown;
   provider_session_id?: unknown;
   repository_shas?: unknown;
   runtime_version?: unknown;
@@ -80,28 +75,12 @@ function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
   };
 }
 
-async function workflowResultToResponse(
-  result: ImageBuildWorkflowResult,
-  ctx: RequestContext
-): Promise<Response> {
-  if (result.type === "completion_accepted") {
-    await scheduleWorkflowTask(result.finalization, ctx);
-  } else if (result.cleanup) {
-    await scheduleWorkflowTask(result.cleanup, ctx);
-  }
-
+function workflowResultToResponse(result: ImageBuildWorkflowResult): Response {
   switch (result.type) {
     case "completion_accepted":
-      return json({ ok: true, snapshotPending: true });
-    case "build_ready":
-      return json({
-        ok: true,
-        replacedImageId: result.replacedImages[0]?.image.providerImageId ?? null,
-      });
-    case "build_superseded":
-      return json({ ok: true, superseded: true });
-    case "build_failed":
-      return json({ ok: true });
+      return json({ ok: true, snapshotPending: true }, 202);
+    case "failure_accepted":
+      return json({ ok: true, cleanupPending: true }, 202);
     default: {
       const exhaustive: never = result;
       return error(`Unhandled workflow result: ${String(exhaustive)}`, 500);
@@ -128,23 +107,12 @@ function imageBuildErrorToResponse(errorValue: unknown): Response {
     case "planning_failed":
     case "trigger_failed":
     case "callback_auth_unavailable":
-    case "build_complete_failed":
-    case "build_failed_update_failed":
       return error(errorValue.message, 500);
     default: {
       const exhaustive: never = errorValue.code;
       return error(`Unhandled image build error: ${String(exhaustive)}`, 500);
     }
   }
-}
-
-async function scheduleWorkflowTask(task: Promise<void>, ctx: RequestContext): Promise<void> {
-  if (ctx.executionCtx) {
-    ctx.executionCtx.waitUntil(task);
-    return;
-  }
-
-  await task;
 }
 
 async function parseCallbackBody<T>(request: Request): Promise<T | Response> {
@@ -192,26 +160,10 @@ function optionalStringField(value: unknown, fallback: string): string {
 function parseRepositoryShas(value: unknown): RepositoryShaEntry[] | undefined | Response {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) return error("repository_shas must be an array", 400);
-
-  const shas: RepositoryShaEntry[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      return error("repository_shas entries must be objects", 400);
-    }
-    const { repoOwner, repoName, baseSha } = entry as Record<string, unknown>;
-    if (
-      typeof repoOwner !== "string" ||
-      repoOwner.length === 0 ||
-      typeof repoName !== "string" ||
-      repoName.length === 0 ||
-      typeof baseSha !== "string" ||
-      baseSha.length === 0
-    ) {
-      return error("repository_shas entries require repoOwner, repoName, and baseSha", 400);
-    }
-    shas.push({ repoOwner, repoName, baseSha });
-  }
-  return shas;
+  return (
+    decodeRepositoryShas(value) ??
+    error("repository_shas entries require repoOwner, repoName, and baseSha", 400)
+  );
 }
 
 function buildCompleteCommand(body: ImageBuildCompleteBody): CompleteImageBuildCallback | Response {
@@ -231,10 +183,6 @@ function buildCompleteCommand(body: ImageBuildCompleteBody): CompleteImageBuildC
 
   return {
     buildId,
-    providerImageId:
-      typeof body.provider_image_id === "string" && body.provider_image_id.length > 0
-        ? body.provider_image_id
-        : undefined,
     providerSessionId:
       typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
         ? body.provider_session_id
@@ -284,7 +232,7 @@ async function handleBuildComplete(
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
-    return workflowResultToResponse(result, ctx);
+    return workflowResultToResponse(result);
   } catch (e) {
     return imageBuildErrorToResponse(e);
   }
@@ -312,7 +260,7 @@ async function handleBuildFailed(
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
-    return workflowResultToResponse(result, ctx);
+    return workflowResultToResponse(result);
   } catch (e) {
     return imageBuildErrorToResponse(e);
   }
@@ -346,7 +294,7 @@ async function triggerBuildForScope(
 
 /**
  * POST /image-builds/trigger/environment/:id
- * Trigger a build for an environment scope (cron, save-hooks, manual rebuild).
+ * Trigger a manual rebuild for an environment scope.
  */
 async function handleTriggerEnvironmentBuild(
   _request: Request,
@@ -365,7 +313,7 @@ async function handleTriggerEnvironmentBuild(
 
 /**
  * POST /image-builds/trigger/repo/:owner/:name
- * Trigger a build for a repo scope (cron, save-hooks, manual rebuild).
+ * Trigger a manual rebuild for a repo scope.
  */
 async function handleTriggerRepoBuild(
   _request: Request,
@@ -509,9 +457,8 @@ async function handleGetStatus(
 
 /**
  * GET /image-builds/enabled
- * Prebuild-enabled scopes with their current repositories and fingerprint,
- * plus the runtime floor — everything the cron's trigger checks need, so the
- * fingerprint algorithm never leaves the control plane.
+ * Prebuild-enabled scope identities with their current repository-set
+ * fingerprints for the settings and session-target feeds.
  */
 async function handleGetEnabledUnits(
   _request: Request,
@@ -529,9 +476,7 @@ async function handleGetEnabledUnits(
         scopeKind: unit.scope.kind,
         scopeId: unit.scope.id,
         repositoriesFingerprint: unit.repositoriesFingerprint,
-        repositories: unit.repositories,
       })),
-      minRuntimeVersion: MIN_COMPATIBLE_RUNTIME_VERSION,
     });
   } catch (e) {
     logger.error("image_build.enabled_error", {
@@ -567,93 +512,6 @@ async function handleGetEnabledRepos(
       trace_id: ctx.trace_id,
     });
     return error("Failed to get enabled repos", 500);
-  }
-}
-
-/**
- * POST /image-builds/mark-stale
- * Mark old building rows as failed. Called by scheduler.
- */
-async function handleMarkStale(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const providerError = requireImageBuilds(env);
-  if (providerError) return providerError;
-
-  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
-  if (maxAgeMs instanceof Response) return maxAgeMs;
-
-  const store = new ImageBuildStore(ctx.db);
-
-  try {
-    const count = await store.markStaleBuildsAsFailed(maxAgeMs);
-
-    logger.info("image_build.stale_marked", {
-      count,
-      max_age_seconds: maxAgeMs / MS_PER_SECOND,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ ok: true, markedFailed: count });
-  } catch (e) {
-    logger.error("image_build.mark_stale_error", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to mark stale builds", 500);
-  }
-}
-
-/**
- * POST /image-builds/cleanup
- * Reap provider artifacts from failed and superseded rows, then delete old
- * (artifact-free) failed rows. Called by scheduler.
- */
-async function handleCleanup(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const providerError = requireImageBuilds(env);
-  if (providerError) return providerError;
-
-  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS);
-  if (maxAgeMs instanceof Response) return maxAgeMs;
-
-  try {
-    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).cleanupImages(
-      maxAgeMs,
-      workflowContext(ctx)
-    );
-
-    logger.info("image_build.cleanup", {
-      deleted: result.deletedFailed,
-      reaped_failed: result.reapedFailed,
-      reaped_superseded: result.reapedSuperseded,
-      max_age_seconds: maxAgeMs / MS_PER_SECOND,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({
-      ok: true,
-      deleted: result.deletedFailed,
-      reapedFailed: result.reapedFailed,
-      reapedSuperseded: result.reapedSuperseded,
-    });
-  } catch (e) {
-    logger.error("image_build.cleanup_error", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to clean up old builds", 500);
   }
 }
 
@@ -697,15 +555,5 @@ export const imageBuildRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/image-builds/enabled-repos"),
     handler: handleGetEnabledRepos,
-  },
-  {
-    method: "POST",
-    pattern: parsePattern("/image-builds/mark-stale"),
-    handler: handleMarkStale,
-  },
-  {
-    method: "POST",
-    pattern: parsePattern("/image-builds/cleanup"),
-    handler: handleCleanup,
   },
 ];

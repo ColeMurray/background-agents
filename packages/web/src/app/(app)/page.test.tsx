@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { DEFAULT_MODEL } from "@open-inspect/shared";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import Home from "./page";
 
 expect.extend(matchers);

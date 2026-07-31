@@ -1,4 +1,4 @@
-import type { SlackMessageFile } from "@open-inspect/shared";
+import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
@@ -20,14 +20,7 @@ export interface SlackEventPayload {
     channel_type?: string;
     subtype?: string;
     files?: SlackMessageFile[];
-    attachments?: Array<{
-      text?: string;
-      pretext?: string;
-      author_name?: string;
-      from_url?: string;
-      channel_name?: string;
-      footer?: string;
-    }>;
+    attachments?: SlackMessageAttachment[];
   };
 }
 
@@ -56,6 +49,7 @@ export async function handleSlackEvent(
         thread_ts: event.thread_ts,
         channel_type: event.channel_type,
         files: event.files,
+        attachments: event.attachments,
       },
       env,
       traceId,
@@ -73,6 +67,7 @@ export async function handleSlackEvent(
         ts: event.ts,
         thread_ts: event.thread_ts,
         files: event.files,
+        attachments: event.attachments,
       },
       env,
       traceId,

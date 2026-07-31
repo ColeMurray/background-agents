@@ -224,6 +224,14 @@ export function evaluateSpawnDecision(
 ): SpawnAction {
   const timeSinceLastSpawn = now - state.createdAt;
 
+  // In-memory flag first: it is set synchronously when a spawn/restore starts,
+  // but the persisted "spawning" status lands only after the first await. A
+  // second evaluation in that window must not pick resume/restore again, or
+  // concurrent prompts launch duplicate sandboxes.
+  if (isSpawningInMemory) {
+    return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
+  }
+
   if (
     supportsPersistentResume &&
     state.providerObjectId &&
@@ -279,11 +287,6 @@ export function evaluateSpawnDecision(
       action: "wait",
       reason: `last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago, waiting`,
     };
-  }
-
-  // Check in-memory flag for same-request protection
-  if (isSpawningInMemory) {
-    return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
   }
 
   // All checks passed - spawn a new sandbox

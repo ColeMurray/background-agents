@@ -5,14 +5,19 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   encodeRepositoryPathSegments,
-  MODEL_REASONING_CONFIG,
   parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  GitHubBotSettings,
+  GitHubGlobalConfig,
+} from "@open-inspect/shared/types/integrations";
+import {
+  MODEL_REASONING_CONFIG,
   isValidReasoningEffort,
-  type EnrichedRepository,
-  type GitHubBotSettings,
-  type GitHubGlobalConfig,
+  type ModelCategory,
   type ValidModel,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
@@ -42,6 +47,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CommitSigningSettings } from "./commit-signing-settings";
+import { ModelReasoningDefaultsFields } from "./model-reasoning-defaults-fields";
 
 const GLOBAL_SETTINGS_KEY = "/api/integration-settings/github";
 const REPO_SETTINGS_KEY = "/api/integration-settings/github/repos";
@@ -105,7 +111,11 @@ export function GitHubIntegrationSettings() {
 
       <CommitSigningSettings />
 
-      <GlobalSettingsSection settings={settings} availableRepos={availableRepos} />
+      <GlobalSettingsSection
+        settings={settings}
+        availableRepos={availableRepos}
+        enabledModelOptions={enabledModelOptions}
+      />
 
       <Section
         title="Repository Overrides"
@@ -125,10 +135,14 @@ export function GitHubIntegrationSettings() {
 function GlobalSettingsSection({
   settings,
   availableRepos,
+  enabledModelOptions,
 }: {
   settings: GitHubGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
+  enabledModelOptions: ModelCategory[];
 }) {
+  const [model, setModel] = useState(settings?.defaults?.model ?? "");
+  const [effort, setEffort] = useState(settings?.defaults?.reasoningEffort ?? "");
   const [autoReviewOnOpen, setAutoReviewOnOpen] = useState(
     settings?.defaults?.autoReviewOnOpen ?? true
   );
@@ -158,6 +172,8 @@ function GlobalSettingsSection({
   useEffect(() => {
     if (settings !== undefined && !initialized) {
       if (settings) {
+        setModel(settings.defaults?.model ?? "");
+        setEffort(settings.defaults?.reasoningEffort ?? "");
         setAutoReviewOnOpen(settings.defaults?.autoReviewOnOpen ?? true);
         setEnabledRepos(settings.enabledRepos ?? []);
         setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
@@ -173,7 +189,6 @@ function GlobalSettingsSection({
   }, [settings, initialized]);
 
   const isConfigured = settings !== null && settings !== undefined;
-
   const handleReset = () => {
     setShowResetDialog(true);
   };
@@ -187,6 +202,8 @@ function GlobalSettingsSection({
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
+        setModel("");
+        setEffort("");
         setAutoReviewOnOpen(true);
         setEnabledRepos([]);
         setRepoScopeMode("all");
@@ -215,6 +232,8 @@ function GlobalSettingsSection({
     const body: GitHubGlobalConfig = {
       defaults: {
         autoReviewOnOpen,
+        ...(model ? { model } : {}),
+        ...(effort ? { reasoningEffort: effort } : {}),
         ...(triggerUserMode === "specific" ? { allowedTriggerUsers } : {}),
         ...(codeReviewInstructions ? { codeReviewInstructions } : {}),
         ...(commentActionInstructions ? { commentActionInstructions } : {}),
@@ -269,6 +288,18 @@ function GlobalSettingsSection({
   return (
     <Section title="Defaults & Scope" description="Global behavior and repository scope.">
       {error && <Message tone="error" text={error} />}
+
+      <ModelReasoningDefaultsFields
+        model={model}
+        reasoningEffort={effort}
+        modelOptions={enabledModelOptions}
+        onChange={(nextModel, nextEffort) => {
+          setModel(nextModel);
+          setEffort(nextEffort);
+          setDirty(true);
+          setError("");
+        }}
+      />
 
       <label
         htmlFor="auto-review-toggle"
@@ -526,7 +557,7 @@ function RepoOverridesSection({
 }: {
   overrides: RepoSettingsEntry[];
   availableRepos: EnrichedRepository[];
-  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
 }) {
   const [addingRepo, setAddingRepo] = useState("");
@@ -610,7 +641,7 @@ function RepoOverrideRow({
   defaultAutoReviewOnOpen,
 }: {
   entry: RepoSettingsEntry;
-  enabledModelOptions: { category: string; models: { id: string; name: string }[] }[];
+  enabledModelOptions: ModelCategory[];
   defaultAutoReviewOnOpen: boolean;
 }) {
   const [model, setModel] = useState(entry.settings.model ?? "");

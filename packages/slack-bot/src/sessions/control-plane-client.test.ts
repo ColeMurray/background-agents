@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Environment } from "@open-inspect/shared";
+import type { Environment } from "@open-inspect/shared/types/environments";
 import type { Env } from "../types";
 import { createSession, sendPrompt } from "./control-plane-client";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";

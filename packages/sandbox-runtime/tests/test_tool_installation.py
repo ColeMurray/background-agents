@@ -77,18 +77,18 @@ class TestInstallTools:
         tools_dir = tmp_path / "app" / "sandbox" / "tools"
         tools_dir.mkdir(parents=True)
         (tools_dir / "_bridge-client.js").write_text("// bridge client")
-        (tools_dir / "spawn-task.js").write_text("// spawn task")
-        (tools_dir / "get-task-status.js").write_text("// get status")
-        (tools_dir / "cancel-task.js").write_text("// cancel task")
+        (tools_dir / "spawn-child.js").write_text("// spawn child")
+        (tools_dir / "get-child-status.js").write_text("// get status")
+        (tools_dir / "cancel-child.js").write_text("// cancel child")
 
         with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
             sup._install_tools(workdir)
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "_bridge-client.js").exists()
-        assert (tool_dest / "spawn-task.js").exists()
-        assert (tool_dest / "get-task-status.js").exists()
-        assert (tool_dest / "cancel-task.js").exists()
+        assert (tool_dest / "spawn-child.js").exists()
+        assert (tool_dest / "get-child-status.js").exists()
+        assert (tool_dest / "cancel-child.js").exists()
         assert (tool_dest / "_bridge-client.js").read_text() == "// bridge client"
 
     def test_non_js_files_skipped(self, tmp_path):
@@ -99,7 +99,7 @@ class TestInstallTools:
 
         tools_dir = tmp_path / "app" / "sandbox" / "tools"
         tools_dir.mkdir(parents=True)
-        (tools_dir / "spawn-task.js").write_text("// tool")
+        (tools_dir / "spawn-child.js").write_text("// tool")
         (tools_dir / "README.md").write_text("# docs")
         (tools_dir / "helper.py").write_text("# python")
 
@@ -107,7 +107,7 @@ class TestInstallTools:
             sup._install_tools(workdir)
 
         tool_dest = workdir / ".opencode" / "tool"
-        assert (tool_dest / "spawn-task.js").exists()
+        assert (tool_dest / "spawn-child.js").exists()
         assert not (tool_dest / "README.md").exists()
         assert not (tool_dest / "helper.py").exists()
 
@@ -262,7 +262,7 @@ class TestInstallTools:
 
         tools_dir = tmp_path / "app" / "sandbox" / "tools"
         tools_dir.mkdir(parents=True)
-        (tools_dir / "spawn-task.js").write_text("// spawn")
+        (tools_dir / "spawn-child.js").write_text("// spawn")
         (tools_dir / "_bridge-client.js").write_text("// bridge")
 
         with _patch_paths(legacy=legacy_tool, tools=tools_dir):
@@ -270,7 +270,7 @@ class TestInstallTools:
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "create-pull-request.js").exists()
-        assert (tool_dest / "spawn-task.js").exists()
+        assert (tool_dest / "spawn-child.js").exists()
         assert (tool_dest / "_bridge-client.js").exists()
         js_files = list(tool_dest.glob("*.js"))
         assert len(js_files) == 3
@@ -291,10 +291,10 @@ class TestInstallTools:
         tools_dir = tmp_path / "app" / "sandbox" / "tools"
         tools_dir.mkdir(parents=True)
         (tools_dir / "_bridge-client.js").write_text("// bridge")
-        (tools_dir / "spawn-task.js").write_text("// spawn")
-        (tools_dir / "get-task-status.js").write_text("// get")
-        (tools_dir / "get-task-status-format.js").write_text("// format")
-        (tools_dir / "cancel-task.js").write_text("// cancel")
+        (tools_dir / "spawn-child.js").write_text("// spawn")
+        (tools_dir / "get-child-status.js").write_text("// get")
+        (tools_dir / "get-child-status-format.js").write_text("// format")
+        (tools_dir / "cancel-child.js").write_text("// cancel")
 
         with _patch_paths(legacy=legacy_tool, tools=tools_dir):
             sup._install_tools(workdir)
@@ -302,10 +302,10 @@ class TestInstallTools:
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "_bridge-client.js").exists()
         assert not (tool_dest / "create-pull-request.js").exists()
-        assert (tool_dest / "spawn-task.js").exists()
-        assert (tool_dest / "get-task-status.js").exists()
-        assert (tool_dest / "get-task-status-format.js").exists()
-        assert (tool_dest / "cancel-task.js").exists()
+        assert (tool_dest / "spawn-child.js").exists()
+        assert (tool_dest / "get-child-status.js").exists()
+        assert (tool_dest / "get-child-status-format.js").exists()
+        assert (tool_dest / "cancel-child.js").exists()
 
     def test_slack_notify_installed_when_enabled(self, tmp_path):
         """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""
@@ -316,7 +316,7 @@ class TestInstallTools:
         tools_dir = tmp_path / "app" / "sandbox" / "tools"
         tools_dir.mkdir(parents=True)
         (tools_dir / "slack-notify.js").write_text("// slack-notify")
-        (tools_dir / "spawn-task.js").write_text("// spawn-task")
+        (tools_dir / "spawn-child.js").write_text("// spawn-child")
 
         with (
             patch.dict("os.environ", {"AGENT_SLACK_NOTIFY_ENABLED": "true"}),
@@ -326,7 +326,7 @@ class TestInstallTools:
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "slack-notify.js").exists()
-        assert (tool_dest / "spawn-task.js").exists()
+        assert (tool_dest / "spawn-child.js").exists()
 
 
 class TestInstallBinScripts:

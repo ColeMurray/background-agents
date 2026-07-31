@@ -12,9 +12,11 @@
 import {
   formatRepositoryFullName,
   parseRepositoryFullName,
-  type ImageBuildScopeKind,
-  type ImageBuildStatus,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
+import type {
+  ImageBuildScopeKind,
+  ImageBuildStatus,
+} from "@open-inspect/shared/types/image-builds";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,

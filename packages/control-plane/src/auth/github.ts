@@ -2,7 +2,8 @@
  * GitHub authentication utilities.
  */
 
-import { DEFAULT_APP_NAME, formatGitHubNoreplyEmail } from "@open-inspect/shared";
+import { formatGitHubNoreplyEmail } from "@open-inspect/shared/types/github-identity";
+import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import { z } from "zod";
 import { decryptToken, encryptToken } from "./crypto";
 import { githubTokenResponseSchema, type GitHubUser, type GitHubTokenResponse } from "../types";

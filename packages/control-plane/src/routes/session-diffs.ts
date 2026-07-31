@@ -4,7 +4,7 @@ import {
   SESSION_DIFF_MAX_BUNDLE_BYTES,
   sessionDiffFailureSchema,
   sessionDiffUploadSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import { SessionInternalPaths } from "../session/contracts";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";

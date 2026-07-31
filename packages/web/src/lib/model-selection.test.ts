@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { resolveEnabledModel, resolveModelPreference } from "./model-selection";
 
 describe("resolveEnabledModel", () => {

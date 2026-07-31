@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
 import type { Env } from "./types";
 
@@ -402,6 +402,32 @@ describe("POST /callbacks/complete", () => {
     >;
     expect(queued).not.toHaveProperty("signature");
     expect(queued).not.toHaveProperty("extraTopLevel");
+  });
+
+  it("queues an automation-sourced job when the context carries an automation id", async () => {
+    const env = makeEnv();
+    const payload = await signPayload(
+      completeCallbackData({
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          automationId: "automation-1",
+        },
+      })
+    );
+
+    const { response } = await postCallback("/callbacks/complete", payload, env);
+
+    expect(response.status).toBe(200);
+    // A thread follow-up on an automation completes through this interactive
+    // route; without the marker it would be ineligible to decline a reply.
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "automation" }),
+      { contentType: "json" }
+    );
   });
 
   it("returns 503 when enqueue fails", async () => {

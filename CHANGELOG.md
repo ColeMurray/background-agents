@@ -2,6 +2,12 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## July 30, 2026
+
+**Choose GitHub, Google, or both for sign-in.** Deployments can now enable either provider
+independently, and the sign-in page shows only the methods actually configured. Terraform validates
+the setup. The GitHub App remains required for repository access in Google-only deployments.
+
 ## July 26, 2026
 
 **Better Auth browser authentication.** Browser sign-in now uses control-plane-owned Better Auth
@@ -9,6 +15,9 @@ sessions with GitHub and optional Google providers. The web app forwards an exac
 authentication routes through a signed proxy, and browser resource requests require both that signed
 web-service channel and the browser session. Legacy browser tokens are retired during migration, so
 existing users must sign in again after upgrading.
+
+Note: GitHub sign-in requires the GitHub App `Email addresses: Read-only` account permission —
+without it the callback fails with a misleading `state_mismatch` error.
 
 ## July 24, 2026
 

@@ -164,6 +164,7 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     author: z
       .object({
         participantId: z.string(),
+        userId: z.string().optional(),
         name: z.string(),
         avatar: z.string().optional(),
       })

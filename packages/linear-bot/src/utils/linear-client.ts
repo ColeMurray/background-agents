@@ -9,8 +9,7 @@ import {
   type Env,
   type LinearIssueDetails,
 } from "../types";
-import { timingSafeEqual } from "@open-inspect/shared";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared/auth";
 import { createLogger } from "../logger";
 import {
   getClientCredentialsTokenOrThrow,

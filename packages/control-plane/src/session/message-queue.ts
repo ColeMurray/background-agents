@@ -1,14 +1,16 @@
 import { generateId } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
+import type {
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "@open-inspect/shared/types/session-attachments";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  type SessionAttachmentReference,
-  type ResolvedSessionAttachment,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
@@ -23,7 +25,7 @@ import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
-import type { EnqueuePromptRequest } from "./services/message.service";
+import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
@@ -174,7 +176,26 @@ export class SessionMessageQueue {
         reason: "no_sandbox",
       });
       this.messenger.broadcast({ type: "sandbox_spawning" });
-      await this.sandboxLifecycle.spawnSandbox();
+      // Spawn in the background: a snapshot restore can take tens of seconds,
+      // and awaiting it here holds the prompt HTTP response open past bot
+      // callers' request timeouts. The message is already persisted as
+      // pending and dispatches when the sandbox WebSocket connects.
+      this.ctx.waitUntil(
+        this.sandboxLifecycle.spawnSandbox().catch((error) => {
+          // Expected provider failures broadcast sandbox_error inside the
+          // lifecycle manager; this catch only sees throws from before those
+          // handlers. Surface them the same way so clients aren't left
+          // watching a silent "sandbox_spawning" forever.
+          this.log.error("prompt.spawn.background_error", {
+            message_id: message.id,
+            error: error instanceof Error ? error : String(error),
+          });
+          this.messenger.broadcast({
+            type: "sandbox_error",
+            error: error instanceof Error ? error.message : "Failed to spawn sandbox",
+          });
+        })
+      );
       return;
     }
 
@@ -339,6 +360,7 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
       author: {
         participantId: participant.id,
+        userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },
@@ -359,10 +381,20 @@ export class SessionMessageQueue {
   ): Promise<{ messageId: string; status: "queued" }> {
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
-      participant = this.participantService.create(
-        data.authorId,
-        data.scmEnrichment?.name || data.authorId
-      );
+      const name = data.scmEnrichment?.name || data.authorId;
+      participant = data.canonicalUserId
+        ? this.participantService.create(data.authorId, name, data.canonicalUserId)
+        : this.participantService.create(data.authorId, name);
+    }
+
+    if (data.canonicalUserId) {
+      this.repository.updateParticipantCoalesce(participant.id, {
+        canonicalUserId: data.canonicalUserId,
+      });
+      participant = this.repository.getParticipantById(participant.id) ?? {
+        ...participant,
+        canonical_user_id: data.canonicalUserId,
+      };
     }
 
     if (data.scmEnrichment !== undefined) {
@@ -383,7 +415,7 @@ export class SessionMessageQueue {
       participant,
       userId: data.authorId,
       content: data.content,
-      source: data.source as MessageSource,
+      source: data.source,
       model: data.model,
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,

@@ -5,12 +5,12 @@
 import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type {
   EnrichedRepository,
   InstallationRepository,
   RepoMetadata,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repository-catalog";
 import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
 import {
@@ -252,23 +252,31 @@ async function handleUpdateRepoMetadata(
 
   try {
     await metadataStore.upsert(owner, name, metadata);
-
-    // Invalidate the KV repos cache so next fetch includes updated metadata
-    await createKvCacheStore(env.REPOS_CACHE).delete(REPOS_CACHE_KEY);
-
-    // Return normalized repo identifier
-    const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
-    return json({
-      status: "updated",
-      repo: normalizedRepo,
-      metadata,
-    });
   } catch (e) {
     logger.error("Failed to update repo metadata", {
       error: e instanceof Error ? e : String(e),
     });
     return error("Failed to update metadata", 500);
   }
+
+  try {
+    await createKvCacheStore(env.REPOS_CACHE).delete(REPOS_CACHE_KEY);
+  } catch (e) {
+    logger.warn("Failed to invalidate repos cache", {
+      trace_id: ctx.trace_id,
+      error: e instanceof Error ? e : String(e),
+      repo_owner: owner,
+      repo_name: name,
+    });
+  }
+
+  // Return normalized repo identifier
+  const normalizedRepo = `${owner.toLowerCase()}/${name.toLowerCase()}`;
+  return json({
+    status: "updated",
+    repo: normalizedRepo,
+    metadata,
+  });
 }
 
 /**

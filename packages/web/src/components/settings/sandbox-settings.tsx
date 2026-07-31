@@ -1,13 +1,16 @@
 "use client";
 
 import { useRepos } from "@/hooks/use-repos";
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
+import type {
+  ConfiguredSandboxPort,
+  SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -15,11 +18,16 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
-  encodeRepositoryPathSegments,
   findSandboxPortConflict,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
+import {
+  MIN_SANDBOX_TIMEOUT_MINUTES,
+  sandboxTimeoutMinutesFromMs,
+  sandboxTimeoutMsFromMinutes,
+} from "./sandbox-timeout";
 
 const GLOBAL_SCOPE = "__global__";
 type ResourceField = "cpuCores" | "memoryMib";
@@ -246,6 +254,9 @@ export function SandboxSettingsEditor({
   const currentBuildTimeoutSeconds: number | undefined =
     ownSettings?.buildTimeoutSeconds ?? baseDefaults?.buildTimeoutSeconds;
 
+  const currentSandboxTimeoutMs: number | undefined =
+    ownSettings?.sandboxTimeoutMs ?? baseDefaults?.sandboxTimeoutMs;
+
   const currentMaxConcurrentChildSessions: number =
     ownSettings?.maxConcurrentChildSessions ??
     baseDefaults?.maxConcurrentChildSessions ??
@@ -264,6 +275,7 @@ export function SandboxSettingsEditor({
   const [codeServerPort, setCodeServerPort] = useState<string | null>(null);
   const [terminalPort, setTerminalPort] = useState<string | null>(null);
   const [buildTimeoutSeconds, setBuildTimeoutSeconds] = useState<string | null>(null);
+  const [sandboxTimeoutMinutes, setSandboxTimeoutMinutes] = useState<string | null>(null);
   const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
   const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
   const [cpuCores, setCpuCores] = useState<string | null>(null);
@@ -292,6 +304,8 @@ export function SandboxSettingsEditor({
   const resolvedBuildTimeoutSeconds =
     buildTimeoutSeconds ??
     (currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "");
+  const resolvedSandboxTimeoutMinutes =
+    sandboxTimeoutMinutes ?? sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -309,7 +323,7 @@ export function SandboxSettingsEditor({
     setPortRows(updated);
   };
 
-  const handleSave = useCallback(async () => {
+  const handleSave = async () => {
     setError(null);
     setSuccess(false);
 
@@ -356,6 +370,13 @@ export function SandboxSettingsEditor({
       setError(
         `Build timeout must be a whole number of seconds, at most ${MAX_BUILD_TIMEOUT_SECONDS}.`
       );
+      return;
+    }
+
+    const trimmedSandboxTimeoutMinutes = resolvedSandboxTimeoutMinutes.trim();
+    const editedSandboxTimeoutMs = sandboxTimeoutMsFromMinutes(trimmedSandboxTimeoutMinutes);
+    if (trimmedSandboxTimeoutMinutes !== "" && editedSandboxTimeoutMs === undefined) {
+      setError("Session timeout must be at least one second, in one-second increments.");
       return;
     }
 
@@ -425,6 +446,13 @@ export function SandboxSettingsEditor({
       if (buildTimeoutValue !== undefined) {
         settingsPayload.buildTimeoutSeconds = buildTimeoutValue;
       }
+      const sandboxTimeoutMsValue =
+        isGlobal || sandboxTimeoutMinutes !== null
+          ? editedSandboxTimeoutMs
+          : ownSettings?.sandboxTimeoutMs;
+      if (sandboxTimeoutMsValue !== undefined) {
+        settingsPayload.sandboxTimeoutMs = sandboxTimeoutMsValue;
+      }
       if (
         isGlobal ||
         maxConcurrentChildSessions !== null ||
@@ -473,6 +501,7 @@ export function SandboxSettingsEditor({
       setCodeServerPort(null);
       setTerminalPort(null);
       setBuildTimeoutSeconds(null);
+      setSandboxTimeoutMinutes(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -480,33 +509,7 @@ export function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [
-    rows,
-    isGlobal,
-    apiUrl,
-    mutate,
-    enabledRepos,
-    resolvedTerminalEnabled,
-    resolvedMaxConcurrentChildSessions,
-    resolvedMaxTotalChildSessions,
-    resolvedCpuCores,
-    resolvedMemoryMib,
-    resolvedCodeServerPort,
-    resolvedTerminalPort,
-    resolvedBuildTimeoutSeconds,
-    portRows,
-    terminalEnabled,
-    codeServerPort,
-    terminalPort,
-    buildTimeoutSeconds,
-    cpuCores,
-    memoryMib,
-    maxConcurrentChildSessions,
-    maxTotalChildSessions,
-    ownSettings,
-    baseDefaults?.codeServerPort,
-    baseDefaults?.terminalPort,
-  ]);
+  };
 
   const hasPortChanges =
     portRows !== null &&
@@ -534,6 +537,10 @@ export function SandboxSettingsEditor({
     currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "";
   const hasBuildTimeoutChange =
     buildTimeoutSeconds !== null && buildTimeoutSeconds.trim() !== currentBuildTimeoutSecondsString;
+  const currentSandboxTimeoutMinutesString = sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
+  const hasSandboxTimeoutChange =
+    sandboxTimeoutMinutes !== null &&
+    sandboxTimeoutMinutes.trim() !== currentSandboxTimeoutMinutesString;
   const hasChanges =
     hasPortChanges ||
     hasTerminalChange ||
@@ -543,7 +550,8 @@ export function SandboxSettingsEditor({
     hasMemoryChange ||
     hasCodeServerPortChange ||
     hasTerminalPortChange ||
-    hasBuildTimeoutChange;
+    hasBuildTimeoutChange ||
+    hasSandboxTimeoutChange;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -569,6 +577,7 @@ export function SandboxSettingsEditor({
             id="web-terminal-enabled"
             type="button"
             role="switch"
+            aria-label="Web Terminal"
             aria-checked={resolvedTerminalEnabled}
             onClick={() => setTerminalEnabled(!resolvedTerminalEnabled)}
             className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
@@ -754,6 +763,32 @@ export function SandboxSettingsEditor({
               placeholder="provider default"
             />
           </div>
+        </div>
+      </div>
+
+      <div>
+        <label
+          htmlFor="sandbox-session-timeout"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Session Timeout (minutes)
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Requested lifetime for each sandbox session, in minutes. Leave blank to inherit a parent
+          setting, or use the provider default if none is configured. Provider support and limits
+          vary.
+        </p>
+        <div className="max-w-sm">
+          <Input
+            id="sandbox-session-timeout"
+            type="number"
+            min={MIN_SANDBOX_TIMEOUT_MINUTES}
+            step={MIN_SANDBOX_TIMEOUT_MINUTES}
+            inputMode="decimal"
+            value={resolvedSandboxTimeoutMinutes}
+            onChange={(e) => setSandboxTimeoutMinutes(e.target.value)}
+            placeholder="provider default"
+          />
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared";
+import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { getMigrations } from "better-auth/db/migration";
 import { verifyGoogleIdToken } from "better-auth/social-providers";
 import { describe, expect, it, vi } from "vitest";

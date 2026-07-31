@@ -1,6 +1,7 @@
-import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
+import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
 import { createLogger, type CorrelationContext } from "../logger";
-import { createSourceControlProviderFromEnv } from "../source-control";
+import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
+import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -99,44 +100,15 @@ export class ImageBuildPlanner {
 
     const registration = { tokenHash: callbackAuth.tokenHash, expiresAt: callbackAuth.expiresAt };
 
-    switch (this.provider) {
-      case "modal":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "modal",
-            callbackMode: "provider_image",
-            callbackToken: callbackAuth.token,
-          },
-          callbackAuth: registration,
-        };
-      case "vercel":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "vercel",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      case "opencomputer":
-        return {
-          plan: {
-            ...basePlan,
-            provider: "opencomputer",
-            callbackMode: "provider_session",
-            callbackToken: callbackAuth.token,
-            cloneAuth,
-          },
-          callbackAuth: registration,
-        };
-      default: {
-        const exhaustive: never = this.provider;
-        throw new Error(`Unsupported image build provider: ${String(exhaustive)}`);
-      }
-    }
+    return {
+      plan: {
+        ...basePlan,
+        provider: this.provider,
+        callbackToken: callbackAuth.token,
+        cloneAuth,
+      },
+      callbackAuth: registration,
+    };
   }
 
   private async resolveCloneAuth(scope: ImageBuildScope): Promise<ImageBuildCloneAuth> {
@@ -147,7 +119,12 @@ export class ImageBuildPlanner {
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
       const auth = await provider.generateCredentialHelperAuth();
-      return { type: "credential_helper", token: auth.password };
+      return {
+        type: "credential_helper",
+        host: scmCloneIdentity(resolveScmProviderFromEnv(this.env.SCM_PROVIDER)).host,
+        username: auth.username,
+        token: auth.password,
+      };
     } catch (e) {
       logger.warn("image_build.clone_token_failed", {
         error: e instanceof Error ? e.message : String(e),

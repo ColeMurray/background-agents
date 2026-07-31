@@ -132,6 +132,22 @@ export interface ParticipantPresence {
   lastSeen: number;
 }
 
+export const sessionParticipantProfileSchema = z.object({
+  userId: z.string(),
+  displayName: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+
+export type SessionParticipantProfile = z.infer<typeof sessionParticipantProfileSchema>;
+
+export const sessionParticipantProfilesResponseSchema = z.object({
+  profiles: z.record(z.string(), sessionParticipantProfileSchema),
+});
+
+export type SessionParticipantProfilesResponse = z.infer<
+  typeof sessionParticipantProfilesResponseSchema
+>;
+
 /** Internal runtime schema used by the server-message protocol. */
 export const sessionStateSchema = z.object({
   id: z.string(),

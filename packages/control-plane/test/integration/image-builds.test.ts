@@ -1,7 +1,6 @@
 /**
  * Image-build lifecycle against real D1: store state machine (register →
- * ready → supersede → reap), the cron-facing routes (enabled/status/
- * mark-stale/cleanup), the build callbacks with single-use token auth and
+ * ready → supersede → reap), the internal read/trigger routes, the build callbacks with single-use token auth and
  * their fail-closed registration, and the secret-change supersede save-hook.
  *
  * Builds are seeded via ImageBuildStore (or raw SQL when a test needs to
@@ -9,7 +8,7 @@
  * deployment, and the SCM-less harness split is the same as PR-4/PR-8.
  */
 
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
+import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { ImageBuildStore } from "../../src/db/image-builds";
@@ -17,7 +16,6 @@ import { RepoMetadataStore } from "../../src/db/repo-metadata";
 import { computeRepositoriesFingerprint } from "../../src/image-builds/fingerprint";
 import { hashImageBuildCallbackToken } from "../../src/image-builds/callback-auth";
 import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
   type ImageBuildProvider,
   type ImageBuildScope,
@@ -25,7 +23,7 @@ import {
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
 import { ImageBuildReaper } from "../../src/image-builds/reaper";
 import { resolveScopeEnabled } from "../../src/image-builds/scope";
-import type { AnyImageBuildAdapter, DeleteImageInput } from "../../src/image-builds/types";
+import type { DeleteImageInput, ImageBuildAdapter } from "../../src/image-builds/types";
 import { evaluateImageBuildForSpawn } from "../../src/sandbox/lifecycle/image-selection";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
@@ -64,13 +62,13 @@ const WIRE_KEYS = [
 // only forwards token-shaped bearers to the workflow).
 const MODAL_BUILD_TOKEN = "ab".repeat(32);
 
-/** The cron-facing routes are called by the Modal scheduler under its own sig1 credential. */
-async function modalFetch(url: string, init?: { method?: string; body?: string }) {
+/** Call an internal route with a registered service credential. */
+async function serviceFetch(url: string, init?: { method?: string; body?: string }) {
   const method = init?.method ?? "GET";
   const headers = {
     ...(await buildServiceAuthHeaders({
-      service: "modal",
-      secret: "test-service-secret-modal",
+      service: "linear-bot",
+      secret: "test-service-secret-linear-bot",
       method,
       url,
       body: init?.body,
@@ -221,68 +219,6 @@ describe("Image builds", () => {
       // The late build recorded its artifact so the reaper can reclaim it.
       expect((await getRow("imgb-late"))?.provider_image_id).toBe("im-late");
       expect((await getRow("imgb-winner"))?.status).toBe("ready");
-    });
-
-    it("consumes the callback token atomically with the ready transition (provider_image path)", async () => {
-      const environmentId = await seedEnvironment();
-      const store = new ImageBuildStore(env.DB);
-      const now = Date.now();
-      await store.registerBuild({
-        id: "imgb-atomic",
-        scope: environmentScope(environmentId),
-        provider: "modal",
-        repositoriesFingerprint: "fp-atomic",
-        callbackTokenHash: "cbhash-atomic",
-        callbackTokenExpiresAt: now + 60_000,
-      });
-
-      // Wrong token: because the consume and the ready transition are ONE
-      // conditional UPDATE, a mismatch commits NEITHER — the build stays
-      // 'building' with its single-use token unconsumed and still replayable.
-      // This is the fix's core guarantee (a failed transition never burns the
-      // token, so the provider's retry can still succeed).
-      const rejected = await store.tryMarkImageBuildReady(
-        "imgb-atomic",
-        "modal",
-        "im-atomic",
-        REPOSITORY_SHAS,
-        RUNTIME_VERSION,
-        5_000,
-        { tokenHash: "cbhash-wrong", providerSessionId: null, now }
-      );
-      expect(rejected.type).toBe("not_accepting_completion");
-      let row = await getRow("imgb-atomic");
-      expect(row?.status).toBe("building");
-      expect(row?.callback_token_used_at).toBeNull();
-      expect(row?.provider_image_id).toBeNull();
-
-      // Correct token: ready and consume land together.
-      const ok = await store.tryMarkImageBuildReady(
-        "imgb-atomic",
-        "modal",
-        "im-atomic",
-        REPOSITORY_SHAS,
-        RUNTIME_VERSION,
-        5_000,
-        { tokenHash: "cbhash-atomic", providerSessionId: null, now }
-      );
-      expect(ok.type).toBe("marked_ready");
-      row = await getRow("imgb-atomic");
-      expect(row?.status).toBe("ready");
-      expect(row?.provider_image_id).toBe("im-atomic");
-      expect(row?.callback_token_used_at).toBe(now);
-
-      // The now-consumed token cannot re-fire the terminal transition.
-      const replay = await store.tryMarkImageBuildReady(
-        "imgb-atomic",
-        "modal",
-        "im-atomic",
-        REPOSITORY_SHAS,
-        RUNTIME_VERSION,
-        5_000,
-        { tokenHash: "cbhash-atomic", providerSessionId: null, now: now + 1 }
-      );
-      expect(replay.type).toBe("not_accepting_completion");
     });
 
     it("registerBuild admits exactly one in-flight build per scope/provider", async () => {
@@ -453,8 +389,12 @@ describe("Image builds", () => {
     });
   });
 
-  describe("cron-facing routes", () => {
-    it("GET /image-builds/enabled returns prebuild-enabled units with fingerprints", async () => {
+  describe("settings and status routes", () => {
+    it("GET /image-builds/enabled returns only enabled scope identities and fingerprints", async () => {
+      const repositories = [
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+      ];
       const enabledId = await seedEnvironment({
         prebuildEnabled: true,
         repositories: [
@@ -464,7 +404,7 @@ describe("Image builds", () => {
       });
       await seedEnvironment({ prebuildEnabled: false });
 
-      const response = await modalFetch(`${BASE}/image-builds/enabled`);
+      const response = await serviceFetch(`${BASE}/image-builds/enabled`);
 
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
@@ -472,21 +412,17 @@ describe("Image builds", () => {
           scopeKind: string;
           scopeId: string;
           repositoriesFingerprint: string;
-          repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
         }>;
-        minRuntimeVersion: number;
       };
-      expect(body.minRuntimeVersion).toBe(MIN_COMPATIBLE_RUNTIME_VERSION);
-      expect(body.units).toHaveLength(1);
-      expect(body.units[0].scopeKind).toBe("environment");
-      expect(body.units[0].scopeId).toBe(enabledId);
-      expect(body.units[0].repositories).toEqual([
-        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
-        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
-      ]);
-      expect(body.units[0].repositoriesFingerprint).toBe(
-        await computeRepositoriesFingerprint(body.units[0].repositories)
-      );
+      expect(body).toEqual({
+        units: [
+          {
+            scopeKind: "environment",
+            scopeId: enabledId,
+            repositoriesFingerprint: await computeRepositoriesFingerprint(repositories),
+          },
+        ],
+      });
     });
 
     it("GET /image-builds/status serves the cross-scope view and the per-scope debug view", async () => {
@@ -513,7 +449,7 @@ describe("Image builds", () => {
       // scopes — failed builds are visible in the aggregate feed (they were
       // silently filtered before the unification); disabled scopes never
       // crowd it.
-      const all = await modalFetch(`${BASE}/image-builds/status`);
+      const all = await serviceFetch(`${BASE}/image-builds/status`);
       const allBody = (await all.json()) as {
         images: Array<{ id: string; scope_kind: string; scope_id: string }>;
       };
@@ -521,7 +457,7 @@ describe("Image builds", () => {
       expect(allBody.images.every((i) => i.scope_kind === "environment")).toBe(true);
 
       // Per-scope debug view keeps failed rows, drops only superseded.
-      const filtered = await modalFetch(
+      const filtered = await serviceFetch(
         `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`
       );
       const filteredBody = (await filtered.json()) as { images: Array<{ id: string }> };
@@ -547,12 +483,12 @@ describe("Image builds", () => {
         }
       };
 
-      const cross = await modalFetch(`${BASE}/image-builds/status`);
+      const cross = await serviceFetch(`${BASE}/image-builds/status`);
       assertWireKeysOnly(
         ((await cross.json()) as { images: Array<Record<string, unknown>> }).images
       );
 
-      const perScope = await modalFetch(
+      const perScope = await serviceFetch(
         `${BASE}/image-builds/status?scope_kind=environment&scope_id=${environmentId}`
       );
       assertWireKeysOnly(
@@ -566,84 +502,9 @@ describe("Image builds", () => {
         "?scope_id=env_x",
         "?scope_kind=bogus&scope_id=x",
       ]) {
-        const response = await modalFetch(`${BASE}/image-builds/status${query}`);
+        const response = await serviceFetch(`${BASE}/image-builds/status${query}`);
         expect(response.status, query).toBe(400);
       }
-    });
-
-    it("POST /image-builds/mark-stale fails old building rows", async () => {
-      const environmentId = await seedEnvironment();
-      await seedImageRow({
-        id: "stale-build",
-        environmentId,
-        status: "building",
-        createdAt: Date.now() - 10_000_000,
-      });
-      await seedImageRow({ id: "fresh-build", environmentId, status: "building" });
-
-      const response = await modalFetch(`${BASE}/image-builds/mark-stale`, {
-        method: "POST",
-        body: JSON.stringify({ max_age_seconds: 3600 }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(((await response.json()) as { markedFailed: number }).markedFailed).toBe(1);
-      expect((await getRow("stale-build"))?.status).toBe("failed");
-      expect((await getRow("fresh-build"))?.status).toBe("building");
-    });
-
-    it("POST /image-builds/cleanup deletes old failed rows and reaps artifact-less superseded rows", async () => {
-      const environmentId = await seedEnvironment();
-      await seedImageRow({
-        id: "old-failed",
-        environmentId,
-        status: "failed",
-        createdAt: Date.now() - 100_000_000,
-      });
-      // Superseded before any artifact was recorded (entity delete or secret
-      // change mid-build) — reaped directly.
-      await seedImageRow({ id: "bare-superseded", environmentId, status: "superseded" });
-      // Superseded with an artifact: reclaiming it needs the provider adapter,
-      // which is unconfigured in the test env (no MODAL_WORKSPACE) — the row
-      // must survive for a later pass instead of leaking the artifact.
-      await seedImageRow({
-        id: "artifact-superseded",
-        environmentId,
-        status: "superseded",
-        providerImageId: "im-artifact",
-      });
-      // Restore-failed row carrying a live artifact and old enough to age out:
-      // with the adapter unconfigured the artifact can't be reaped, so the row
-      // must NOT be hard-deleted (that was the leak — the snapshot would be
-      // orphaned forever). It survives, artifact intact, for a later pass.
-      await seedImageRow({
-        id: "old-failed-with-artifact",
-        environmentId,
-        status: "failed",
-        providerImageId: "im-restore-orphan",
-        createdAt: Date.now() - 100_000_000,
-      });
-
-      const response = await modalFetch(`${BASE}/image-builds/cleanup`, {
-        method: "POST",
-        body: JSON.stringify({ max_age_seconds: 86400 }),
-      });
-
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as {
-        deleted: number;
-        reapedFailed: number;
-        reapedSuperseded: number;
-      };
-      expect(body.deleted).toBe(1);
-      expect(body.reapedFailed).toBe(0);
-      expect(body.reapedSuperseded).toBe(1);
-      expect(await getRow("old-failed")).toBeNull();
-      expect(await getRow("bare-superseded")).toBeNull();
-      expect((await getRow("artifact-superseded"))?.status).toBe("superseded");
-      const survivor = await getRow("old-failed-with-artifact");
-      expect(survivor?.status).toBe("failed");
-      expect(survivor?.provider_image_id).toBe("im-restore-orphan");
     });
 
     it("deleteOldFailedBuilds ages out only artifact-free failed rows", async () => {
@@ -669,7 +530,7 @@ describe("Image builds", () => {
       expect((await getRow("artifact-old"))?.status).toBe("failed");
 
       // getFailedImagesWithArtifacts exposes exactly the artifact-bearing row.
-      const reapable = await store.getFailedImagesWithArtifacts(25);
+      const reapable = await store.getFailedImagesWithArtifacts();
       expect(reapable.map((r) => r.id)).toEqual(["artifact-old"]);
 
       // A stale artifact id (not the one on the row) clears nothing, so a
@@ -683,38 +544,37 @@ describe("Image builds", () => {
       const cleared = await getRow("artifact-old");
       expect(cleared?.status).toBe("failed");
       expect(cleared?.provider_image_id).toBeNull();
-      expect(await store.getFailedImagesWithArtifacts(25)).toEqual([]);
+      expect(await store.getFailedImagesWithArtifacts()).toEqual([]);
 
       // Now artifact-free and old — the age sweep removes it.
       expect(await store.deleteOldFailedBuilds(86_400_000)).toBe(1);
       expect(await getRow("artifact-old")).toBeNull();
     });
 
-    it("rejects non-numeric max_age_seconds instead of treating it as 0", async () => {
+    it("deletes every eligible failed-history row in one maintenance scan", async () => {
       const environmentId = await seedEnvironment();
-      await seedImageRow({ id: "guard-building", environmentId, status: "building" });
-      await seedImageRow({ id: "guard-failed", environmentId, status: "failed" });
-
-      for (const path of ["mark-stale", "cleanup"]) {
-        const response = await modalFetch(`${BASE}/image-builds/${path}`, {
-          method: "POST",
-          body: JSON.stringify({ max_age_seconds: null }),
+      const store = new ImageBuildStore(env.DB);
+      for (let index = 0; index < 30; index += 1) {
+        await seedImageRow({
+          id: `old-failed-${String(index).padStart(2, "0")}`,
+          environmentId,
+          status: "failed",
+          createdAt: index + 1,
         });
-        // A null that fell through to 0 would fail every building row or
-        // delete every failed row.
-        expect(response.status, path).toBe(400);
       }
-      expect((await getRow("guard-building"))?.status).toBe("building");
-      expect((await getRow("guard-failed"))?.status).toBe("failed");
+
+      expect(await store.deleteOldFailedBuilds(1)).toBe(30);
+      const remaining = await env.DB.prepare(
+        "SELECT id FROM image_builds WHERE status = 'failed' ORDER BY created_at, id"
+      ).all<{ id: string }>();
+      expect(remaining.results).toEqual([]);
     });
 
-    it("requires internal auth on cron-facing routes", async () => {
+    it("requires internal auth on image-build routes", async () => {
       for (const [method, path] of [
         ["GET", "/image-builds/enabled"],
         ["GET", "/image-builds/enabled-repos"],
         ["GET", "/image-builds/status"],
-        ["POST", "/image-builds/mark-stale"],
-        ["POST", "/image-builds/cleanup"],
         ["POST", "/image-builds/trigger/environment/env_x"],
         ["POST", "/image-builds/trigger/repo/acme/web"],
         ["PUT", "/image-builds/toggle/repo/acme/web"],
@@ -730,7 +590,7 @@ describe("Image builds", () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       await seedImageRow({ id: "only-failed", environmentId, status: "failed" });
 
-      const response = await modalFetch(`${BASE}/image-builds/status`);
+      const response = await serviceFetch(`${BASE}/image-builds/status`);
       const body = (await response.json()) as {
         images: Array<{ id: string; status: string; scope_id: string }>;
       };
@@ -760,7 +620,7 @@ describe("Image builds", () => {
           if (image.providerImageId === opts?.stuckImageId) throw new Error("provider 500");
           deleted.push(image.providerImageId);
         },
-      } as unknown as AnyImageBuildAdapter;
+      } as unknown as ImageBuildAdapter;
       const factory: ImageBuildAdapterFactory = {
         create: (_provider: ImageBuildProvider) => adapter,
       } as ImageBuildAdapterFactory;
@@ -856,7 +716,8 @@ describe("Image builds", () => {
 
   describe("build callbacks", () => {
     async function registerBuild(environmentId: string, buildId: string): Promise<void> {
-      await new ImageBuildStore(env.DB).registerBuild({
+      const store = new ImageBuildStore(env.DB);
+      await store.registerBuild({
         id: buildId,
         scope: environmentScope(environmentId),
         provider: "modal",
@@ -864,9 +725,10 @@ describe("Image builds", () => {
         callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
         callbackTokenExpiresAt: Date.now() + 60_000,
       });
+      await store.bindProviderSession(buildId, "modal", `session-${buildId}`);
     }
 
-    it("POST /image-builds/build-complete registers the image", async () => {
+    it("POST /image-builds/build-complete durably accepts provider-session finalization", async () => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-build");
 
@@ -875,17 +737,19 @@ describe("Image builds", () => {
         headers: tokenHeaders(MODAL_BUILD_TOKEN),
         body: JSON.stringify({
           build_id: "cb-build",
-          provider_image_id: "im-cb",
+          provider_session_id: "session-cb-build",
           repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 42.5,
         }),
       });
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(202);
       const row = await getRow("cb-build");
-      expect(row?.status).toBe("ready");
-      expect(row?.provider_image_id).toBe("im-cb");
+      expect(row?.status).toBe("building");
+      expect(row?.provider_image_id).toBeNull();
+      expect(row?.completion_hash).toMatch(/^[a-f0-9]{64}$/);
+      expect(row?.callback_token_used_at).not.toBeNull();
       expect(row?.runtime_version).toBe(RUNTIME_VERSION);
       expect(JSON.parse(row?.repository_shas as string)).toEqual(REPOSITORY_SHAS);
     });
@@ -899,7 +763,7 @@ describe("Image builds", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           build_id: "cb-noauth",
-          provider_image_id: "im",
+          provider_session_id: "session-cb-noauth",
           repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 1,
@@ -908,6 +772,74 @@ describe("Image builds", () => {
 
       expect(response.status).toBe(401);
       expect((await getRow("cb-noauth"))?.status).toBe("building");
+    });
+
+    it("does not consume callback authorization for the wrong provider session", async () => {
+      const environmentId = await seedEnvironment();
+      await registerBuild(environmentId, "cb-wrong-session");
+
+      const wrongSession = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-wrong-session",
+          provider_session_id: "session-other",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(wrongSession.status).toBe(401);
+      expect((await getRow("cb-wrong-session"))?.callback_token_used_at).toBeNull();
+
+      const boundSession = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-wrong-session",
+          provider_session_id: "session-cb-wrong-session",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(boundSession.status).toBe(202);
+      expect((await getRow("cb-wrong-session"))?.callback_token_used_at).not.toBeNull();
+    });
+
+    it("rejects an expired callback token without changing build state", async () => {
+      const environmentId = await seedEnvironment();
+      const store = new ImageBuildStore(env.DB);
+      await store.registerBuild({
+        id: "cb-expired",
+        scope: environmentScope(environmentId),
+        provider: "modal",
+        repositoriesFingerprint: "fp-cb",
+        callbackTokenHash: await hashImageBuildCallbackToken(MODAL_BUILD_TOKEN, env as Env),
+        callbackTokenExpiresAt: Date.now() - 1,
+      });
+      await store.bindProviderSession("cb-expired", "modal", "session-cb-expired");
+
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-expired",
+          provider_session_id: "session-cb-expired",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(response.status).toBe(401);
+      expect(await getRow("cb-expired")).toMatchObject({
+        status: "building",
+        callback_token_used_at: null,
+        completion_hash: null,
+      });
     });
 
     it.each([
@@ -927,7 +859,7 @@ describe("Image builds", () => {
         headers: tokenHeaders(MODAL_BUILD_TOKEN),
         body: JSON.stringify({
           build_id: "cb-invalid",
-          provider_image_id: "im",
+          provider_session_id: "session-cb-invalid",
           repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 1,
@@ -946,112 +878,38 @@ describe("Image builds", () => {
       const response = await SELF.fetch(`${BASE}/image-builds/build-failed`, {
         method: "POST",
         headers: tokenHeaders(MODAL_BUILD_TOKEN),
-        body: JSON.stringify({ build_id: "cb-failed", error: "setup.failed: boom" }),
+        body: JSON.stringify({
+          build_id: "cb-failed",
+          provider_session_id: "session-cb-failed",
+          error: "setup.failed: boom",
+        }),
       });
 
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(202);
       const row = await getRow("cb-failed");
       expect(row?.status).toBe("failed");
       expect(row?.error_message).toBe("setup.failed: boom");
     });
 
-    it("records the artifact when a secret change superseded the build mid-flight", async () => {
-      const environmentId = await seedEnvironment();
-      await registerBuild(environmentId, "cb-late");
-      // Secret-change save-hook flips the in-flight build to superseded.
-      await new ImageBuildStore(env.DB).supersedeActiveImages(environmentScope(environmentId));
-
-      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
-        method: "POST",
-        headers: tokenHeaders(MODAL_BUILD_TOKEN),
-        body: JSON.stringify({
-          build_id: "cb-late",
-          provider_image_id: "im-late-orphan",
-          repository_shas: REPOSITORY_SHAS,
-          runtime_version: RUNTIME_VERSION,
-          build_duration_seconds: 30,
-        }),
-      });
-
-      // Rejected — but the already-created provider artifact is recorded on
-      // the superseded row so the cleanup reaper reclaims it instead of
-      // leaking it (Modal snapshots never expire).
-      expect(response.status).toBe(409);
-      const row = await getRow("cb-late");
-      expect(row?.status).toBe("superseded");
-      expect(row?.provider_image_id).toBe("im-late-orphan");
-    });
-
-    it("rejects completion for unknown builds with 409", async () => {
+    it("rejects completion for unknown builds without disclosing existence", async () => {
       const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
         method: "POST",
         headers: tokenHeaders(MODAL_BUILD_TOKEN),
         body: JSON.stringify({
           build_id: "cb-unknown",
-          provider_image_id: "im",
+          provider_session_id: "session-unknown",
           repository_shas: REPOSITORY_SHAS,
           runtime_version: RUNTIME_VERSION,
           build_duration_seconds: 1,
         }),
       });
 
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(401);
     });
   });
 
-  describe("callback-token auth on the unified store (provider_session builds)", () => {
-    // Folded from the deleted repo-images store suite: the single-use,
-    // session-bound, expiring token semantics survive unchanged on the
-    // unified table.
+  describe("provider-session callback auth", () => {
     const TOKEN_SCOPE = repoImageBuildScope("acme", "web");
-
-    async function seedTokenBuild(
-      id: string,
-      opts?: { expiresAt?: number }
-    ): Promise<ImageBuildStore> {
-      const store = new ImageBuildStore(env.DB);
-      await store.registerBuild({
-        id,
-        scope: TOKEN_SCOPE,
-        provider: "vercel",
-        repositoriesFingerprint: "fp-token",
-        callbackTokenHash: "hash-1",
-        callbackTokenExpiresAt: opts?.expiresAt ?? Date.now() + 60_000,
-      });
-      await store.bindProviderSession(id, "vercel", "vercel-session-1");
-      return store;
-    }
-
-    it("consumes a valid token exactly once and rejects replays", async () => {
-      const store = await seedTokenBuild("tok-once");
-      const params = {
-        buildId: "tok-once",
-        provider: "vercel" as const,
-        tokenHash: "hash-1",
-        providerSessionId: "vercel-session-1",
-        now: Date.now(),
-      };
-
-      const consumed = await store.consumeCallbackToken(params);
-      expect(consumed).toMatchObject({ id: "tok-once", scope: TOKEN_SCOPE, provider: "vercel" });
-
-      expect(await store.consumeCallbackToken(params)).toBeNull();
-    });
-
-    it("verifies a callback token without consuming it", async () => {
-      const store = await seedTokenBuild("tok-verify");
-
-      expect(
-        await store.verifyCallbackToken({
-          buildId: "tok-verify",
-          provider: "vercel",
-          tokenHash: "hash-1",
-          providerSessionId: "vercel-session-1",
-          now: Date.now(),
-        })
-      ).toBe(true);
-      expect((await getRow("tok-verify"))?.callback_token_used_at).toBeNull();
-    });
 
     it("allows failure reporting after an authenticated malformed completion", async () => {
       const token = "a".repeat(64);
@@ -1090,70 +948,10 @@ describe("Image builds", () => {
         }),
       });
 
-      expect(failure.status).toBe(200);
+      expect(failure.status).toBe(202);
       const row = await getRow("tok-malformed");
       expect(row?.status).toBe("failed");
       expect(row?.callback_token_used_at).not.toBeNull();
-    });
-
-    it("rejects a mismatched provider session without consuming the token", async () => {
-      const store = await seedTokenBuild("tok-session");
-
-      const consumed = await store.consumeCallbackToken({
-        buildId: "tok-session",
-        provider: "vercel",
-        tokenHash: "hash-1",
-        providerSessionId: "vercel-session-other",
-        now: Date.now(),
-      });
-
-      expect(consumed).toBeNull();
-      expect((await getRow("tok-session"))?.callback_token_used_at).toBeNull();
-    });
-
-    it("rejects an expired token without marking it used", async () => {
-      const store = await seedTokenBuild("tok-expired", { expiresAt: Date.now() - 1000 });
-
-      const consumed = await store.consumeCallbackToken({
-        buildId: "tok-expired",
-        provider: "vercel",
-        tokenHash: "hash-1",
-        providerSessionId: "vercel-session-1",
-        now: Date.now(),
-      });
-
-      expect(consumed).toBeNull();
-      expect((await getRow("tok-expired"))?.callback_token_used_at).toBeNull();
-    });
-
-    it("marks the build failed and consumes the token in one transition", async () => {
-      const store = await seedTokenBuild("tok-fail");
-
-      const failed = await store.markBuildFailedWithCallbackToken({
-        buildId: "tok-fail",
-        provider: "vercel",
-        tokenHash: "hash-1",
-        providerSessionId: "vercel-session-1",
-        error: "setup.failed: boom",
-        now: Date.now(),
-      });
-
-      expect(failed).toBe(true);
-      const row = await getRow("tok-fail");
-      expect(row?.status).toBe("failed");
-      expect(row?.error_message).toBe("setup.failed: boom");
-      expect(row?.callback_token_used_at).not.toBeNull();
-
-      // The consumed token authorizes nothing further.
-      expect(
-        await store.consumeCallbackToken({
-          buildId: "tok-fail",
-          provider: "vercel",
-          tokenHash: "hash-1",
-          providerSessionId: "vercel-session-1",
-          now: Date.now(),
-        })
-      ).toBeNull();
     });
   });
 
@@ -1299,7 +1097,7 @@ describe("Image builds", () => {
         providerImageId: "im-disabled",
       });
 
-      const response = await modalFetch(`${BASE}/image-builds/status`);
+      const response = await serviceFetch(`${BASE}/image-builds/status`);
       const body = (await response.json()) as {
         images: Array<{ id: string; scope_kind: string; scope_id: string }>;
       };
@@ -1324,7 +1122,7 @@ describe("Image builds", () => {
       });
       await seedImageRowForScope(REPO_SCOPE, { id: "ps-superseded", status: "superseded" });
 
-      const response = await modalFetch(
+      const response = await serviceFetch(
         `${BASE}/image-builds/status?scope_kind=repo&scope_id=acme/web`
       );
       const body = (await response.json()) as { images: Array<{ id: string }> };
@@ -1339,7 +1137,7 @@ describe("Image builds", () => {
       const environmentId = await seedEnvironment({ prebuildEnabled: true });
       await enableRepo();
 
-      const response = await modalFetch(`${BASE}/image-builds/enabled`);
+      const response = await serviceFetch(`${BASE}/image-builds/enabled`);
 
       expect(response.status).toBe(200);
       const body = (await response.json()) as {
@@ -1356,7 +1154,7 @@ describe("Image builds", () => {
       // state never flickers off on a transient resolution failure.
       await enableRepo();
 
-      const response = await modalFetch(`${BASE}/image-builds/enabled-repos`);
+      const response = await serviceFetch(`${BASE}/image-builds/enabled-repos`);
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({
@@ -1370,7 +1168,7 @@ describe("Image builds", () => {
       // The integration harness has no source-control provider configured, so
       // enabling — which resolves the repo through the trigger path's
       // canonical resolver first — fails without persisting the flag.
-      const enable = await modalFetch(`${BASE}/image-builds/toggle/repo/Acme/Web`, {
+      const enable = await serviceFetch(`${BASE}/image-builds/toggle/repo/Acme/Web`, {
         method: "PUT",
         body: JSON.stringify({ enabled: true }),
       });
@@ -1380,7 +1178,7 @@ describe("Image builds", () => {
       // Disabling never resolves — a repo that became unresolvable must
       // remain disableable.
       await enableRepo();
-      const disable = await modalFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
+      const disable = await serviceFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
         method: "PUT",
         body: JSON.stringify({ enabled: false }),
       });
@@ -1390,7 +1188,7 @@ describe("Image builds", () => {
     });
 
     it("rejects a non-boolean toggle body", async () => {
-      const response = await modalFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
+      const response = await serviceFetch(`${BASE}/image-builds/toggle/repo/acme/web`, {
         method: "PUT",
         body: JSON.stringify({ enabled: "yes" }),
       });
@@ -1411,7 +1209,7 @@ describe("Image builds", () => {
       });
       await seedImageRow({ id: "sec-building", environmentId, status: "building" });
 
-      const response = await modalFetch(`${BASE}/environments/${environmentId}/secrets`, {
+      const response = await serviceFetch(`${BASE}/environments/${environmentId}/secrets`, {
         method: "PUT",
         body: JSON.stringify({ secrets: { API_KEY: "rotated-value" } }),
       });
@@ -1431,7 +1229,7 @@ describe("Image builds", () => {
         status: "ready",
         providerImageId: "im-del",
       });
-      await modalFetch(`${BASE}/environments/${environmentId}/secrets`, {
+      await serviceFetch(`${BASE}/environments/${environmentId}/secrets`, {
         method: "PUT",
         body: JSON.stringify({ secrets: { API_KEY: "v" } }),
       });
@@ -1444,7 +1242,7 @@ describe("Image builds", () => {
         providerImageId: "im-del-2",
       });
 
-      const response = await modalFetch(`${BASE}/environments/${environmentId}/secrets/API_KEY`, {
+      const response = await serviceFetch(`${BASE}/environments/${environmentId}/secrets/API_KEY`, {
         method: "DELETE",
       });
 

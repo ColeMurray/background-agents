@@ -34,6 +34,7 @@ export type SlackButtonElement = {
   action_id: string;
   text: SlackPlainText;
   value?: string;
+  url?: string;
   style?: "danger";
   confirm?: SlackConfirmation;
 };
@@ -69,6 +70,7 @@ export type SlackHeaderBlock = { type: "header"; text: SlackPlainText };
 export type SlackSectionBlock = {
   type: "section";
   text: SlackText;
+  expand?: boolean;
   // A section accessory may be a button or a select (the repo clarification
   // picker uses an external_select), not only a button.
   accessory?: SlackBlockElement;

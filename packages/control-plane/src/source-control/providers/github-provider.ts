@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { InstallationRepository } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,
@@ -472,6 +472,57 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  async getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot resolve branch head",
+        "permanent"
+      );
+    }
+    try {
+      const token = await getCachedInstallationToken(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
+      const response = await fetchWithTimeout(
+        `${GITHUB_API_BASE}/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/git/ref/heads/${encodeURIComponent(config.branch)}`,
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "User-Agent": this.userAgent,
+          },
+        }
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const error = await response.text();
+        throw SourceControlProviderError.fromFetchError(
+          `Failed to resolve branch head: ${response.status} ${error}`,
+          new Error(error),
+          response.status
+        );
+      }
+      const data = (await response.json()) as { object?: { sha?: unknown } };
+      if (typeof data.object?.sha !== "string" || !data.object.sha) {
+        throw new SourceControlProviderError(
+          "Failed to resolve branch head: malformed response",
+          "transient"
+        );
+      }
+      return data.object.sha;
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve branch head: ${error instanceof Error ? error.message : String(error)}`,
         error,
         extractHttpStatus(error)
       );

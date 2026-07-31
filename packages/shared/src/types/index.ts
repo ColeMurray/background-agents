@@ -25,7 +25,7 @@ export type {
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
-export { sessionStatusSchema } from "./statuses";
+export { messageSourceSchema, sessionStatusSchema } from "./statuses";
 export type {
   SessionStatus,
   SandboxStatus,
@@ -108,6 +108,12 @@ export type {
   SessionState,
   ParticipantPresence,
   PullRequestSummary,
+  SessionParticipantProfile,
+  SessionParticipantProfilesResponse,
+} from "./sessions";
+export {
+  sessionParticipantProfileSchema,
+  sessionParticipantProfilesResponseSchema,
 } from "./sessions";
 
 export { serverMessageSchema } from "./server-messages";
@@ -213,11 +219,11 @@ export type {
 } from "./environments";
 
 export type {
-  AutomationTriggerType,
   AutomationRunStatus,
   AutomationInvocationSource,
   AutomationInvocationStatus,
 } from "./automations";
+export type { AutomationTriggerType } from "../triggers/types";
 
 export {
   MAX_AUTOMATION_REPOSITORIES,

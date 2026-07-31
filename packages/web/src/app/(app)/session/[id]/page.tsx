@@ -27,11 +27,8 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  type SessionAttachmentReference,
-} from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
@@ -41,7 +38,10 @@ import {
 import type { ComboboxGroup } from "@/components/ui/combobox";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
-import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import type {
+  SessionDiffFile,
+  SessionDiffRepository,
+} from "@open-inspect/shared/types/session-diffs";
 import { SessionChangesPanel } from "@/components/session-changes-panel";
 import {
   SESSION_CHANGES_LAYOUT_ID,
@@ -50,6 +50,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
+import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -85,6 +86,11 @@ function SessionPageContent() {
     reconnect,
     loadOlderEvents,
   } = useSessionSocket(sessionId);
+  const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
+    sessionId,
+    participants,
+    events
+  );
 
   const fallbackSessionInfo = useMemo(
     () => ({
@@ -236,6 +242,7 @@ function SessionPageContent() {
             events={events}
             sessionId={sessionId}
             currentParticipantId={currentParticipantId}
+            participantProfiles={profiles}
             isProcessing={isProcessing}
             loadingHistory={loadingHistory}
             showSkeleton={showTimelineSkeleton}
@@ -301,7 +308,7 @@ function SessionPageContent() {
               <SessionRightSidebar
                 sessionId={sessionId}
                 sessionState={sessionState}
-                participants={participants}
+                participants={profiledParticipants}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -333,7 +340,7 @@ function SessionPageContent() {
             <SessionRightSidebar
               sessionId={sessionId}
               sessionState={sessionState}
-              participants={participants}
+              participants={profiledParticipants}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -356,7 +363,7 @@ function SessionPageContent() {
           onReturnFocus={focusDetailsTrigger}
           sessionId={sessionId}
           sessionState={sessionState}
-          participants={participants}
+          participants={profiledParticipants}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}

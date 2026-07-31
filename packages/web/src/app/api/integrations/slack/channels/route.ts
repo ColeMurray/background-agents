@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import type { SlackChannelListing } from "@open-inspect/shared";
+import type { SlackChannelListing } from "@open-inspect/shared/slack";
 
 interface ControlPlaneChannelsResponse {
   channels: SlackChannelListing[];

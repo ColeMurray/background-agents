@@ -214,7 +214,7 @@ export function SessionListItem({
             <input
               ref={renameInputRef}
               autoFocus
-              aria-label="Rename session"
+              aria-label="Session title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onFocus={(e) => e.currentTarget.select()}

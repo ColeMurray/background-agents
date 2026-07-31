@@ -14,7 +14,7 @@ import {
 } from "./utils/linear-client";
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
-import { resolveAppName } from "@open-inspect/shared";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
 import { isDuplicateEvent } from "./kv-store";
 

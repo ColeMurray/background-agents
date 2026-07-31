@@ -1,17 +1,20 @@
 import {
-  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   callbackContextSchema,
   sendPromptRequestSchema,
-  sessionAttachmentReferencesSchema,
   type CallbackContext,
-  type SessionAttachmentReference,
 } from "@open-inspect/shared";
+import {
+  MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
+  sessionAttachmentReferencesSchema,
+  type SessionAttachmentReference,
+} from "@open-inspect/shared/types/session-attachments";
 import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import {
   parseAuthorId,
   resolveGitHubEnrichmentForRequest,
@@ -80,6 +83,7 @@ async function handleSessionPrompt(
   // anonymous. callbackContext is a completion notification channel — only
   // the bots that own callbacks may attach one.
   const authorId = enforcement.enforced.participantUserId ?? "anonymous";
+  let canonicalUserId = enforcement.enforced.canonicalUserId ?? undefined;
   if (callbackContext === undefined && body.callbackContext !== undefined) {
     logger.warn("Dropped callbackContext from unauthorized principal", {
       event: "identity.callback_context_dropped",
@@ -101,6 +105,7 @@ async function handleSessionPrompt(
         userId = (await userStore.getUserById(authorId))?.id;
       }
       if (userId) {
+        canonicalUserId = userId;
         enrichment =
           (await resolveGitHubEnrichmentForRequest(
             env,
@@ -118,29 +123,32 @@ async function handleSessionPrompt(
     }
   }
 
+  const promptRequest = {
+    content: body.content,
+    authorId,
+    canonicalUserId,
+    source: body.source || "web",
+    model: body.model,
+    reasoningEffort: body.reasoningEffort,
+    attachments,
+    callbackContext,
+    scmEnrichment: enrichment
+      ? {
+          userId: enrichment.scmUserId,
+          login: enrichment.scmLogin ?? null,
+          name: enrichment.displayName ?? null,
+          email: enrichment.email ?? null,
+          accessTokenEncrypted: enrichment.accessTokenEncrypted ?? null,
+          refreshTokenEncrypted: enrichment.refreshTokenEncrypted ?? null,
+          tokenExpiresAt: enrichment.tokenExpiresAt ?? null,
+        }
+      : undefined,
+  } satisfies EnqueuePromptRequest;
+
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.prompt, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      content: body.content,
-      authorId,
-      source: body.source || "web",
-      model: body.model,
-      reasoningEffort: body.reasoningEffort,
-      attachments,
-      callbackContext,
-      scmEnrichment: enrichment
-        ? {
-            userId: enrichment.scmUserId,
-            login: enrichment.scmLogin ?? null,
-            name: enrichment.displayName ?? null,
-            email: enrichment.email ?? null,
-            accessTokenEncrypted: enrichment.accessTokenEncrypted ?? null,
-            refreshTokenEncrypted: enrichment.refreshTokenEncrypted ?? null,
-            tokenExpiresAt: enrichment.tokenExpiresAt ?? null,
-          }
-        : undefined,
-    }),
+    body: JSON.stringify(promptRequest),
   });
 
   const store = new SessionIndexStore(ctx.db);

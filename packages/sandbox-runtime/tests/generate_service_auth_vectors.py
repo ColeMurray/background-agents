@@ -85,9 +85,9 @@ VECTOR_INPUTS: list[dict[str, Any]] = [
         "actor": "linear:usr_42",
     },
     {
-        "name": "modal POST, JSON body, no actor",
-        "service": "modal",
-        "secret": "modal-secret-0005",
+        "name": "web POST, JSON body, no actor",
+        "service": "web",
+        "secret": "web-secret-0001",
         "timestampMs": 1753142400004,
         "nonce": "deadbeefdeadbeef",
         "method": "POST",
@@ -132,8 +132,8 @@ VECTOR_INPUTS: list[dict[str, Any]] = [
     },
     {
         "name": "binary body",
-        "service": "modal",
-        "secret": "modal-secret-0005",
+        "service": "github-bot",
+        "secret": "github-secret-0003",
         "timestampMs": 1753142400008,
         "nonce": "0000000000000004",
         "method": "POST",

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { timingSafeEqual } from "@open-inspect/shared";
+import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { encryptToken, decryptToken, generateEncryptionKey, generateId, hashToken } from "./crypto";
 
 describe("crypto", () => {
