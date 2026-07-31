@@ -30,6 +30,9 @@ const scmProvider = vi.hoisted(() => ({
 
 const modalClient = vi.hoisted(() => ({
   buildImage: vi.fn(),
+  createImageBuildSandbox: vi.fn(),
+  startImageBuildSandbox: vi.fn(),
+  terminateImageBuildSandbox: vi.fn(),
 }));
 
 const vercelProvider = vi.hoisted(() => ({
@@ -210,6 +213,7 @@ const REPO_REPOSITORIES = [{ repoOwner: "acme", repoName: "repo", baseBranch: "d
 // Spy the store boundary so the tests assert the typed contracts rather than
 // the store's SQL text or bound-argument order.
 const registerBuildSpy = vi.spyOn(ImageBuildStore.prototype, "registerBuild");
+const bindProviderSessionSpy = vi.spyOn(ImageBuildStore.prototype, "bindProviderSession");
 const getActiveBuildSpy = vi.spyOn(ImageBuildStore.prototype, "getActiveBuild");
 const hasReadyImageSpy = vi.spyOn(ImageBuildStore.prototype, "hasReadyImageForFingerprint");
 const markBuildFailedSpy = vi.spyOn(ImageBuildStore.prototype, "markBuildFailed");
@@ -218,11 +222,17 @@ const setImageBuildEnabledSpy = vi.spyOn(RepoMetadataStore.prototype, "setImageB
 beforeEach(() => {
   vi.clearAllMocks();
   registerBuildSpy.mockResolvedValue(true);
+  bindProviderSessionSpy.mockResolvedValue(true);
   getActiveBuildSpy.mockResolvedValue(null);
   hasReadyImageSpy.mockResolvedValue(false);
   markBuildFailedSpy.mockResolvedValue(true);
   setImageBuildEnabledSpy.mockResolvedValue(undefined);
   modalClient.buildImage.mockResolvedValue({ buildId: "build-1", status: "building" });
+  modalClient.createImageBuildSandbox.mockResolvedValue({
+    providerSessionId: "modal-session-1",
+  });
+  modalClient.startImageBuildSandbox.mockResolvedValue(undefined);
+  modalClient.terminateImageBuildSandbox.mockResolvedValue(undefined);
   vercelProvider.triggerEnvironmentImageBuild.mockResolvedValue(undefined);
   openComputerProvider.triggerEnvironmentImageBuild.mockResolvedValue(undefined);
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
@@ -253,17 +263,24 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
 
     // The resolved branch — not "main" — reaches the Modal backend as the
     // one-element repository set...
-    expect(modalClient.buildImage).toHaveBeenCalledTimes(1);
-    expect(modalClient.buildImage).toHaveBeenCalledWith(
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledTimes(1);
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledWith(
       expect.objectContaining({
         scopeKind: "repo",
         scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
+        cloneToken: "clone-token",
+        cloneHost: "github.com",
+        cloneUsername: "x-access-token",
         buildTimeoutSeconds: 1800,
       }),
       expect.any(Object)
     );
-    expect(scmProvider.generateCredentialHelperAuth).not.toHaveBeenCalled();
+    expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
+    expect(modalClient.startImageBuildSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ providerSessionId: "modal-session-1" }),
+      expect.any(Object)
+    );
 
     // ...and is baked into the persisted fingerprint.
     expect(registerBuildSpy).toHaveBeenCalledWith(
@@ -330,7 +347,7 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
       "acme",
       "repo"
     );
-    expect(modalClient.buildImage).toHaveBeenCalledWith(
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ buildTimeoutSeconds: 3600 }),
       expect.any(Object)
     );
@@ -391,7 +408,7 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
     expect(registerBuildSpy).toHaveBeenCalledWith(
       expect.objectContaining({ scope: { kind: "repo", id: "acme/repo" } })
     );
-    expect(modalClient.buildImage).toHaveBeenCalledTimes(1);
+    expect(modalClient.createImageBuildSandbox).toHaveBeenCalledTimes(1);
   });
 
   it("skips the build when a ready image already matches the repository set", async () => {
@@ -404,7 +421,7 @@ describe("PUT /image-builds/toggle/repo/:owner/:name", () => {
     expect(response.status).toBe(200);
     await Promise.all(waitUntilTasks);
     expect(registerBuildSpy).not.toHaveBeenCalled();
-    expect(modalClient.buildImage).not.toHaveBeenCalled();
+    expect(modalClient.createImageBuildSandbox).not.toHaveBeenCalled();
   });
 
   it("writes the flag without triggering on toggle-off", async () => {

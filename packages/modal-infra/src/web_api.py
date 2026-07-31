@@ -601,6 +601,8 @@ async def api_create_build_sandbox(
             scope_id=scope_id,
             repositories=repositories,
             clone_token=request.get("clone_token") or "",
+            clone_host=request.get("clone_host") or None,
+            clone_username=request.get("clone_username") or None,
             user_env_vars=request.get("user_env_vars") or None,
             timeout_seconds=timeout_seconds,
         )

@@ -21,13 +21,16 @@ export type ImageBuildCallbackMode = "provider_image" | "provider_session";
 export type ImageBuildCloneAuthMode = "credential_helper" | "none";
 
 const IMAGE_BUILD_CALLBACK_MODES = {
+  // Unbound rows belong to legacy builds started before the provider-session
+  // cutover. New Modal builds bind a provider session, which the workflow
+  // treats as provider_session mode independently of this compatibility value.
   modal: "provider_image",
   vercel: "provider_session",
   opencomputer: "provider_session",
 } satisfies Record<ImageBuildProvider, ImageBuildCallbackMode>;
 
 const IMAGE_BUILD_CLONE_AUTH_MODES = {
-  modal: "none",
+  modal: "credential_helper",
   vercel: "credential_helper",
   opencomputer: "credential_helper",
 } satisfies Record<ImageBuildProvider, ImageBuildCloneAuthMode>;

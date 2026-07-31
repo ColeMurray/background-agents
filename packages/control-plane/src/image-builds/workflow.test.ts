@@ -85,8 +85,9 @@ function plannedBuild(overrides: Record<string, unknown> = {}): PlannedImageBuil
       buildTimeoutMs: 1800_000,
       correlation: { trace_id: "t", request_id: "r" },
       provider: "modal",
-      callbackMode: "provider_image",
+      callbackMode: "provider_session",
       callbackToken: MODAL_CALLBACK_TOKEN,
+      cloneAuth: { type: "unavailable" },
       ...overrides,
     },
     callbackAuth: { tokenHash: "hash-modal", expiresAt: 9_999_999_999_999 },
@@ -940,6 +941,48 @@ describe("ImageBuildWorkflow", () => {
         12_500
       );
       expect(adapter.cleanupCompletedBuild).toHaveBeenCalled();
+    });
+
+    it("uses provider-session finalization for newly bound Modal builds", async () => {
+      const store = sessionBuildStore();
+      const modalBuild = {
+        id: "imgb-env_1-1-abcd",
+        scope: ENV_SCOPE,
+        provider: "modal" as const,
+        providerSessionId: "modal-session-1",
+        status: "building" as const,
+      };
+      store.getCallbackBuild.mockResolvedValue(modalBuild);
+      store.consumeCallbackToken.mockResolvedValue(modalBuild);
+      store.tryMarkImageBuildReady.mockResolvedValue({
+        type: "marked_ready",
+        supersededImages: [],
+      });
+      const adapter = createAdapter();
+      const { workflow } = createWorkflow({ store, adapter, provider: "modal" });
+
+      const result = await workflow.acceptBuildComplete({
+        completion: validCompletion({
+          providerImageId: undefined,
+          providerSessionId: "modal-session-1",
+        }),
+        callbackToken: "callback-token",
+        context: ctx,
+      });
+      if (result.type !== "completion_accepted") throw new Error("unreachable");
+      await result.finalization;
+
+      expect(adapter.finalizeSuccessfulBuild).toHaveBeenCalledWith(
+        expect.objectContaining({ providerSessionId: "modal-session-1" })
+      );
+      expect(store.tryMarkImageBuildReady).toHaveBeenCalledWith(
+        "imgb-env_1-1-abcd",
+        "modal",
+        "im-finalized",
+        expect.any(Array),
+        expect.any(String),
+        expect.any(Number)
+      );
     });
 
     it("rejects completion when the callback token does not consume", async () => {

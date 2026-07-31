@@ -7,11 +7,16 @@ def inject_vcs_env_vars(
     env_vars: dict[str, str],
     clone_token: str | None,
     *,
+    clone_host: str | None = None,
+    clone_username: str | None = None,
     include_github_cli_aliases: bool = False,
 ) -> None:
     """Inject provider metadata and optional one-shot clone credentials."""
     scm_provider = os.environ.get("SCM_PROVIDER", "github")
-    if scm_provider == "bitbucket":
+    if clone_host and clone_username:
+        env_vars["VCS_HOST"] = clone_host
+        env_vars["VCS_CLONE_USERNAME"] = clone_username
+    elif scm_provider == "bitbucket":
         env_vars["VCS_HOST"] = "bitbucket.org"
         env_vars["VCS_CLONE_USERNAME"] = "x-token-auth"
     elif scm_provider == "gitlab":

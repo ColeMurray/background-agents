@@ -6,6 +6,11 @@ import type { ModalImageBuildPlan } from "./types";
 function createProvider(): ModalImageBuildProvider {
   return {
     triggerImageBuild: vi.fn(async () => ({ buildId: "build-1", status: "building" })),
+    triggerEnvironmentImageBuild: vi.fn(async () => ({
+      buildId: "build-1",
+      status: "building",
+    })),
+    terminateImageBuildSandbox: vi.fn(async () => undefined),
     snapshotImageBuildSandbox: vi.fn(async () => ({ success: true, imageId: "modal-image-1" })),
     deleteProviderImage: vi.fn(async () => undefined),
   };
@@ -14,7 +19,7 @@ function createProvider(): ModalImageBuildProvider {
 function createPlan(): ModalImageBuildPlan {
   return {
     provider: "modal",
-    callbackMode: "provider_image",
+    callbackMode: "provider_session",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
@@ -22,6 +27,12 @@ function createPlan(): ModalImageBuildPlan {
     callbackUrl: "https://worker.test/image-builds/build-complete",
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     callbackToken: "modal-callback-token",
+    cloneAuth: {
+      type: "credential_helper",
+      host: "github.com",
+      username: "x-access-token",
+      token: "clone-token",
+    },
     buildTimeoutMs: 1_800_000,
     userEnvVars: { FOO: "bar" },
     correlation: {
@@ -37,9 +48,10 @@ describe("ModalImageBuildAdapter", () => {
     const adapter = new ModalImageBuildAdapter(provider);
     const plan = createPlan();
 
-    await adapter.startBuild(plan, { bindProviderSession: vi.fn() });
+    const bindProviderSession = vi.fn(async () => undefined);
+    await adapter.startBuild(plan, { bindProviderSession });
 
-    expect(provider.triggerImageBuild).toHaveBeenCalledWith({
+    expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
       scopeKind: "repo",
       scopeId: "acme/repo",
       buildId: "build-1",
@@ -47,12 +59,51 @@ describe("ModalImageBuildAdapter", () => {
       callbackUrl: "https://worker.test/image-builds/build-complete",
       failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       callbackToken: "modal-callback-token",
+      cloneToken: "clone-token",
+      cloneHost: "github.com",
+      cloneUsername: "x-access-token",
       buildTimeoutMs: 1_800_000,
       userEnvVars: { FOO: "bar" },
       correlation: {
         request_id: "request-1",
         trace_id: "trace-1",
       },
+      onProviderSessionCreated: bindProviderSession,
+    });
+  });
+
+  it("snapshots the bound Modal build sandbox on completion", async () => {
+    const provider = createProvider();
+    const adapter = new ModalImageBuildAdapter(provider);
+
+    await expect(
+      adapter.finalizeSuccessfulBuild({
+        buildId: "build-1",
+        providerSessionId: "modal-session-1",
+        correlation: { request_id: "request-1", trace_id: "trace-1" },
+      })
+    ).resolves.toEqual({
+      providerImageId: "modal-image-1",
+      providerSessionId: "modal-session-1",
+    });
+  });
+
+  it("terminates failed Modal build sandboxes", async () => {
+    const provider = createProvider();
+    const adapter = new ModalImageBuildAdapter(provider);
+
+    await adapter.cleanupFailedBuild({
+      buildId: "build-1",
+      providerSessionId: "modal-session-1",
+      errorMessage: "setup failed",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
+    });
+
+    expect(provider.terminateImageBuildSandbox).toHaveBeenCalledWith({
+      buildId: "build-1",
+      providerSessionId: "modal-session-1",
+      reason: "image_build_failed",
+      correlation: { request_id: "request-1", trace_id: "trace-1" },
     });
   });
 

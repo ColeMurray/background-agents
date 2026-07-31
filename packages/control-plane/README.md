@@ -163,11 +163,11 @@ statuses are `building | ready | failed | superseded`.
 | `/image-builds/mark-stale`                   | POST   | Mark old `building` rows failed (called by the scheduler)                                                                                                            |
 | `/image-builds/cleanup`                      | POST   | Delete old failed rows and reap superseded rows' provider artifacts                                                                                                  |
 
-Build callbacks authenticate in one of two modes, decided per provider: Modal builders call back
-with the deployment-wide internal HMAC token, while Vercel/OpenComputer build sandboxes use a
-single-use bearer token minted at trigger time — only its HMAC hash is stored on the build row and
+New Modal, Vercel, and OpenComputer builds run in provider sessions. Their sandboxes use a
+single-use bearer token minted at trigger time; only its HMAC hash is stored on the build row and
 bound to the provider session. Success callbacks verify it before payload validation and consume it
-atomically when accepted; failure callbacks consume it while marking the build failed.
+when accepted; failure callbacks consume it while marking the build failed. Unbound Modal rows
+retain the legacy provider-image callback path so builds started before the rollout can finish.
 
 ### Automations
 

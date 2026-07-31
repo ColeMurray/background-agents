@@ -19,6 +19,10 @@ import type {
   SnapshotSandboxResponse,
   BuildImageRequest,
   BuildImageResponse,
+  CreateImageBuildSandboxRequest,
+  CreateImageBuildSandboxResponse,
+  StartImageBuildSandboxRequest,
+  TerminateImageBuildSandboxRequest,
   DeleteProviderImageRequest,
   DeleteProviderImageResponse,
 } from "../client";
@@ -32,6 +36,11 @@ function createMockModalClient(
     snapshotSandbox: (req: SnapshotSandboxRequest) => Promise<SnapshotSandboxResponse>;
     snapshotBuildSandbox: (req: SnapshotBuildSandboxRequest) => Promise<SnapshotSandboxResponse>;
     buildImage: (req: BuildImageRequest) => Promise<BuildImageResponse>;
+    createImageBuildSandbox: (
+      req: CreateImageBuildSandboxRequest
+    ) => Promise<CreateImageBuildSandboxResponse>;
+    startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
+    terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
     deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
@@ -69,6 +78,13 @@ function createMockModalClient(
         status: "building",
       })
     ),
+    createImageBuildSandbox: vi.fn(
+      async (): Promise<CreateImageBuildSandboxResponse> => ({
+        providerSessionId: "modal-session-123",
+      })
+    ),
+    startImageBuildSandbox: vi.fn(async () => undefined),
+    terminateImageBuildSandbox: vi.fn(async () => undefined),
     deleteProviderImage: vi.fn(
       async (req: DeleteProviderImageRequest): Promise<DeleteProviderImageResponse> => ({
         providerImageId: req.providerImageId,
@@ -492,6 +508,51 @@ describe("ModalSandboxProvider", () => {
   });
 
   describe("image builds", () => {
+    it("creates, binds, then starts a provider-session build", async () => {
+      const client = createMockModalClient();
+      const provider = new ModalSandboxProvider(client);
+      const bindProviderSession = vi.fn(async () => undefined);
+
+      await expect(
+        provider.triggerEnvironmentImageBuild({
+          buildId: "build-123",
+          scopeKind: "repo",
+          scopeId: "acme/repo",
+          repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+          cloneToken: "clone-token",
+          cloneHost: "gitlab.com",
+          cloneUsername: "oauth2",
+          callbackUrl: "https://worker.test/image-builds/build-complete",
+          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+          callbackToken: "cb-token-1",
+          buildTimeoutMs: 1_800_000,
+          onProviderSessionCreated: bindProviderSession,
+        })
+      ).resolves.toEqual({ buildId: "build-123", status: "building" });
+
+      expect(client.createImageBuildSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildId: "build-123",
+          cloneToken: "clone-token",
+          cloneHost: "gitlab.com",
+          cloneUsername: "oauth2",
+          buildTimeoutSeconds: 1800,
+        }),
+        undefined
+      );
+      expect(bindProviderSession).toHaveBeenCalledWith("modal-session-123");
+      expect(client.startImageBuildSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buildId: "build-123",
+          providerSessionId: "modal-session-123",
+        }),
+        undefined
+      );
+      expect(bindProviderSession.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(client.startImageBuildSandbox).mock.invocationCallOrder[0]
+      );
+    });
+
     it("triggers image builds through the Modal client with scope fields", async () => {
       const client = createMockModalClient();
       const provider = new ModalSandboxProvider(client);

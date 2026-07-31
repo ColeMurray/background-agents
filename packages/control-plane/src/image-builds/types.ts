@@ -50,16 +50,17 @@ interface BaseImageBuildPlan {
   correlation: CorrelationContext;
 }
 
-/** Modal's data-plane builder returns the provider image id directly in its callback. */
+/** Modal builds inside a sandbox; the control plane snapshots it after callback success. */
 export interface ModalImageBuildPlan extends BaseImageBuildPlan {
   provider: "modal";
-  callbackMode: "provider_image";
+  callbackMode: "provider_session";
   callbackToken: string;
+  cloneAuth: ImageBuildCloneAuth;
 }
 
 /** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
 export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; token: string }
+  | { type: "credential_helper"; host: string; username: string; token: string }
   | { type: "unavailable" };
 
 /** Vercel builds inside a sandbox; the control plane snapshots it after callback success. */
@@ -138,8 +139,7 @@ export interface FailedImageBuildInput {
  * Provider-facing operations for image builds. The workflow owns state
  * transitions; adapters own translating lifecycle steps into provider API
  * calls (start build, snapshot/checkpoint, teardown, artifact deletion).
- * The finalize/cleanup hooks apply to provider_session builds only — Modal's
- * callback already carries the artifact id.
+ * The finalize/cleanup hooks apply to provider_session builds.
  */
 export type ImageBuildAdapter<Plan extends ImageBuildPlan> = {
   startBuild(plan: Plan, callbacks: ImageBuildStartCallbacks): Promise<void>;

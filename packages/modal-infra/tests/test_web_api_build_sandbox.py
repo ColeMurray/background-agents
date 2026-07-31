@@ -55,11 +55,24 @@ async def test_create_returns_provider_session_without_removing_legacy_endpoint(
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
             "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            "clone_token": "clone-token",
+            "clone_host": "gitlab.com",
+            "clone_username": "oauth2",
         },
     )
 
     assert result["data"]["provider_session_id"] == "modal-session-1"
-    service.create.assert_awaited_once()
+    service.create.assert_awaited_once_with(
+        build_id="imgb-1",
+        scope_kind="repo",
+        scope_id="acme/repo",
+        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        clone_token="clone-token",
+        clone_host="gitlab.com",
+        clone_username="oauth2",
+        user_env_vars=None,
+        timeout_seconds=1800,
+    )
     assert hasattr(web_api, "api_build_image")
 
 

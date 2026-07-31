@@ -397,7 +397,10 @@ export class ImageBuildWorkflow {
 
     const provider = build.provider;
 
-    if (getImageBuildCallbackMode(provider) === "provider_session") {
+    if (
+      build.providerSessionId !== null ||
+      getImageBuildCallbackMode(provider) === "provider_session"
+    ) {
       // Authenticate before revealing anything about the payload's validity —
       // same ordering as the internal-HMAC path below. A missing
       // provider_session_id can never match the token's stored binding, so it
@@ -723,7 +726,10 @@ export class ImageBuildWorkflow {
       throw new ImageBuildFailureNotAcceptedError("Build is not accepting failure");
     }
 
-    if (getImageBuildCallbackMode(build.provider) === "provider_session") {
+    if (
+      build.providerSessionId !== null ||
+      getImageBuildCallbackMode(build.provider) === "provider_session"
+    ) {
       // Token auth runs (inside the mark helper) before any payload check —
       // a missing provider_session_id can never match the token's stored
       // binding, so it fails as an auth error, indistinguishable from a bad

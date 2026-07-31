@@ -26,6 +26,9 @@ async def test_create_provider_session_build_is_dormant_tagged_and_scrubs_callba
         scope_kind="repo",
         scope_id="acme/repo",
         repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        clone_token="clone-token",
+        clone_host="gitlab.com",
+        clone_username="oauth2",
         user_env_vars={"OI_REPO_IMAGE_CALLBACK_TOKEN": "attacker-token"},
     )
 
@@ -33,6 +36,9 @@ async def test_create_provider_session_build_is_dormant_tagged_and_scrubs_callba
     assert create.aio.await_args.args[:2] == ("python", "-c")
     assert create.aio.await_args.kwargs["tags"]["openinspect_build_id"] == "build-1"
     assert create.aio.await_args.kwargs["env"]["OI_REPO_IMAGE_CALLBACK_TOKEN"] == ""
+    assert create.aio.await_args.kwargs["env"]["VCS_HOST"] == "gitlab.com"
+    assert create.aio.await_args.kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
+    assert create.aio.await_args.kwargs["env"]["VCS_CLONE_TOKEN"] == "clone-token"
 
 
 @pytest.mark.asyncio

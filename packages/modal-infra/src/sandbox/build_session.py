@@ -38,6 +38,8 @@ class ModalBuildSessionService:
         scope_id: str,
         repositories: list[dict],
         clone_token: str = "",
+        clone_host: str | None = None,
+        clone_username: str | None = None,
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
     ) -> str:
@@ -64,7 +66,12 @@ class ModalBuildSessionService:
                 PROVIDER_SESSION_ID_ENV: "",
             }
         )
-        inject_vcs_env_vars(env_vars, clone_token or None)
+        inject_vcs_env_vars(
+            env_vars,
+            clone_token or None,
+            clone_host=clone_host,
+            clone_username=clone_username,
+        )
 
         sandbox = await modal.Sandbox.create.aio(
             "python",

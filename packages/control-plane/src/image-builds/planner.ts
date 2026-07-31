@@ -1,6 +1,7 @@
 import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
 import { createLogger, type CorrelationContext } from "../logger";
-import { createSourceControlProviderFromEnv } from "../source-control";
+import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
+import { scmCloneIdentity } from "../sandbox/sandbox-env";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -105,8 +106,9 @@ export class ImageBuildPlanner {
           plan: {
             ...basePlan,
             provider: "modal",
-            callbackMode: "provider_image",
+            callbackMode: "provider_session",
             callbackToken: callbackAuth.token,
+            cloneAuth,
           },
           callbackAuth: registration,
         };
@@ -147,7 +149,12 @@ export class ImageBuildPlanner {
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
       const auth = await provider.generateCredentialHelperAuth();
-      return { type: "credential_helper", token: auth.password };
+      return {
+        type: "credential_helper",
+        host: scmCloneIdentity(resolveScmProviderFromEnv(this.env.SCM_PROVIDER)).host,
+        username: auth.username,
+        token: auth.password,
+      };
     } catch (e) {
       logger.warn("image_build.clone_token_failed", {
         error: e instanceof Error ? e.message : String(e),

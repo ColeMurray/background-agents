@@ -23,7 +23,12 @@ function createPlan(): OpenComputerImageBuildPlan {
     callbackUrl: "https://worker.test/image-builds/build-complete",
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     callbackToken: "callback-token",
-    cloneAuth: { type: "credential_helper", token: "clone-token" },
+    cloneAuth: {
+      type: "credential_helper",
+      host: "github.com",
+      username: "x-access-token",
+      token: "clone-token",
+    },
     buildTimeoutMs: 1_800_001,
     userEnvVars: { FOO: "bar" },
     correlation: {

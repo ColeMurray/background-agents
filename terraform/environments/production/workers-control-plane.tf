@@ -204,5 +204,6 @@ module "control_plane_worker" {
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.e2b_infra,
+    module.modal_app,
   ]
 }

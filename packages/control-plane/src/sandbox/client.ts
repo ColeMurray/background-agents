@@ -223,6 +223,36 @@ export interface BuildImageResponse {
   status: string;
 }
 
+export interface CreateImageBuildSandboxRequest {
+  scopeKind: ImageBuildScopeKind;
+  scopeId: string;
+  buildId: string;
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  cloneToken?: string;
+  cloneHost?: string;
+  cloneUsername?: string;
+  userEnvVars?: Record<string, string>;
+  buildTimeoutSeconds?: number;
+}
+
+export interface CreateImageBuildSandboxResponse {
+  providerSessionId: string;
+}
+
+export interface StartImageBuildSandboxRequest {
+  buildId: string;
+  providerSessionId: string;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  callbackToken: string;
+}
+
+export interface TerminateImageBuildSandboxRequest {
+  buildId: string;
+  providerSessionId: string;
+  reason: string;
+}
+
 export interface DeleteProviderImageRequest {
   providerImageId: string;
 }
@@ -263,6 +293,9 @@ export class ModalClient {
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
   private buildImageUrl: string;
+  private createImageBuildSandboxUrl: string;
+  private startImageBuildSandboxUrl: string;
+  private terminateImageBuildSandboxUrl: string;
   private deleteProviderImageUrl: string;
   private secret: string;
 
@@ -280,6 +313,9 @@ export class ModalClient {
     this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
     this.buildImageUrl = `${baseUrl}-api-build-image.modal.run`;
+    this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
+    this.startImageBuildSandboxUrl = `${baseUrl}-api-start-build-sandbox.modal.run`;
+    this.terminateImageBuildSandboxUrl = `${baseUrl}-api-terminate-build-sandbox.modal.run`;
     this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
   }
 
@@ -558,6 +594,144 @@ export class ModalClient {
 
       outcome = "success";
       return { success: true, imageId: result.data.image_id };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        build_id: request.buildId,
+        sandbox_id: request.providerSessionId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  async createImageBuildSandbox(
+    request: CreateImageBuildSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<CreateImageBuildSandboxResponse> {
+    const startTime = Date.now();
+    const endpoint = "createImageBuildSandbox";
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+
+    try {
+      const response = await fetch(this.createImageBuildSandboxUrl, {
+        method: "POST",
+        headers: await this.getPostHeaders(correlation),
+        body: JSON.stringify({
+          scope_kind: request.scopeKind,
+          scope_id: request.scopeId,
+          build_id: request.buildId,
+          repositories: request.repositories.map(toRepositoryConfigPayload),
+          clone_token: request.cloneToken,
+          clone_host: request.cloneHost,
+          clone_username: request.cloneUsername,
+          user_env_vars: request.userEnvVars,
+          build_timeout_seconds: request.buildTimeoutSeconds ?? null,
+        }),
+      });
+
+      httpStatus = response.status;
+      if (!response.ok) {
+        throw new ModalApiError(
+          `Modal API error: ${response.status} ${await response.text()}`,
+          response.status
+        );
+      }
+
+      const result = (await response.json()) as ModalApiResponse<{
+        provider_session_id: string;
+      }>;
+      if (!result.success || !result.data?.provider_session_id) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+
+      outcome = "success";
+      return { providerSessionId: result.data.provider_session_id };
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        build_id: request.buildId,
+        scope_kind: request.scopeKind,
+        scope_id: request.scopeId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  async startImageBuildSandbox(
+    request: StartImageBuildSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    await this.postImageBuildOperation(
+      this.startImageBuildSandboxUrl,
+      "startImageBuildSandbox",
+      request,
+      {
+        build_id: request.buildId,
+        provider_session_id: request.providerSessionId,
+        callback_url: request.callbackUrl,
+        failure_callback_url: request.failureCallbackUrl,
+        callback_token: request.callbackToken,
+      },
+      correlation
+    );
+  }
+
+  async terminateImageBuildSandbox(
+    request: TerminateImageBuildSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    await this.postImageBuildOperation(
+      this.terminateImageBuildSandboxUrl,
+      "terminateImageBuildSandbox",
+      request,
+      {
+        build_id: request.buildId,
+        provider_session_id: request.providerSessionId,
+        reason: request.reason,
+      },
+      correlation
+    );
+  }
+
+  private async postImageBuildOperation(
+    url: string,
+    endpoint: string,
+    request: { buildId: string; providerSessionId: string },
+    body: Record<string, unknown>,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    const startTime = Date.now();
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: await this.getPostHeaders(correlation),
+        body: JSON.stringify(body),
+      });
+      httpStatus = response.status;
+      if (!response.ok) {
+        throw new ModalApiError(
+          `Modal API error: ${response.status} ${await response.text()}`,
+          response.status
+        );
+      }
+      const result = (await response.json()) as ModalApiResponse<Record<string, unknown>>;
+      if (!result.success) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+      outcome = "success";
     } finally {
       log.info("modal.request", {
         event: "modal.request",
