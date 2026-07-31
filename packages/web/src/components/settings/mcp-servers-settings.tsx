@@ -267,6 +267,8 @@ function McpServerForm({
   radioPrefix,
   hasExistingCredentials,
 }: McpServerFormProps) {
+  const selectedRepoScopes = new Set(form.repoScopes);
+
   return (
     <>
       <div>
@@ -369,7 +371,7 @@ function McpServerForm({
               <div className="border border-border max-h-40 overflow-y-auto rounded-sm">
                 {repos.map((repo) => {
                   const fullName = repo.fullName.toLowerCase();
-                  const isChecked = form.repoScopes.includes(fullName);
+                  const isChecked = selectedRepoScopes.has(fullName);
                   return (
                     <label
                       key={repo.fullName}
