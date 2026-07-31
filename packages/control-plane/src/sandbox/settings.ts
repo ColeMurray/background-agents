@@ -1,5 +1,6 @@
 import {
   findSandboxPortConflict,
+  MIN_SANDBOX_TIMEOUT_MS,
   MAX_TUNNEL_PORTS,
   type ConfiguredSandboxPort,
   type SandboxSettings,
@@ -126,8 +127,8 @@ export function normalizeSandboxSettings(
     if (
       typeof settings.sandboxTimeoutMs !== "number" ||
       !Number.isSafeInteger(settings.sandboxTimeoutMs) ||
-      settings.sandboxTimeoutMs < 1000 ||
-      settings.sandboxTimeoutMs % 1000 !== 0
+      settings.sandboxTimeoutMs < MIN_SANDBOX_TIMEOUT_MS ||
+      settings.sandboxTimeoutMs % MIN_SANDBOX_TIMEOUT_MS !== 0
     ) {
       reject("sandboxTimeoutMs must be a positive whole number of seconds");
     } else {

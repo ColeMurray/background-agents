@@ -58,6 +58,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout"]);
 
   readonly capabilities: SandboxProviderCapabilities = {
+    supportsSandboxTimeout: true,
     supportsSnapshots: false,
     supportsRestore: false,
     // Stop is a resumable pause; the manager treats it as provider-managed state.

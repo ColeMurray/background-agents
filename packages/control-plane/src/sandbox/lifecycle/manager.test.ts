@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   SandboxLifecycleManager,
+  CHILD_SANDBOX_TIMEOUT_MS,
   DEFAULT_LIFECYCLE_CONFIG,
   type SandboxStorage,
   type SandboxBroadcaster,
@@ -290,6 +291,7 @@ function createMockProvider(
   const provider: SandboxProvider = {
     name: "mock",
     capabilities: {
+      supportsSandboxTimeout: true,
       supportsSnapshots: true,
       supportsRestore: true,
       ...overrides.capabilities,
@@ -1257,7 +1259,11 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider: SandboxProvider = {
         name: "no-snapshot",
-        capabilities: { supportsSnapshots: false, supportsRestore: false },
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: false,
+          supportsRestore: false,
+        },
         createSandbox: vi.fn(),
         // No takeSnapshot method
       };
@@ -2597,7 +2603,58 @@ describe("SandboxLifecycleManager", () => {
       await manager.spawnSandbox();
 
       expect(provider.createSandbox).toHaveBeenCalledWith(
-        expect.objectContaining({ timeoutSeconds: 3600 })
+        expect.objectContaining({ timeoutSeconds: CHILD_SANDBOX_TIMEOUT_MS / 1000 })
+      );
+    });
+
+    it("rejects configured timeouts when the provider cannot enforce them", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"sandboxTimeoutMs":14400000}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider({
+        capabilities: { supportsSandboxTimeout: false },
+      });
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(broadcaster.messages).toContainEqual({
+        type: "sandbox_error",
+        error: "mock does not support configurable sandbox timeouts",
+      });
+    });
+
+    it("does not pass the implicit child timeout to unsupported providers", async () => {
+      const session = createMockSession({ spawn_source: "agent", sandbox_settings: null });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider({
+        capabilities: { supportsSandboxTimeout: false },
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: undefined })
       );
     });
 

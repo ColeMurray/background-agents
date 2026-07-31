@@ -204,7 +204,7 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
 };
 
 /** Default sandbox lifetime for agent-spawned child sessions. */
-const CHILD_SANDBOX_TIMEOUT_MS = 3_600_000;
+export const CHILD_SANDBOX_TIMEOUT_MS = 3_600_000;
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -1391,6 +1391,15 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     session: SessionRow,
     sandboxSettings: SandboxSettings
   ): number | undefined {
+    if (!this.provider.capabilities.supportsSandboxTimeout) {
+      if (sandboxSettings.sandboxTimeoutMs !== undefined) {
+        throw new SandboxProviderError(
+          `${this.provider.name} does not support configurable sandbox timeouts`,
+          "permanent"
+        );
+      }
+      return undefined;
+    }
     const timeoutMs =
       sandboxSettings.sandboxTimeoutMs ??
       (session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_MS : undefined);

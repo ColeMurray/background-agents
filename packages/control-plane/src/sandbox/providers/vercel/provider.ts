@@ -114,6 +114,7 @@ export class VercelSandboxProvider implements SandboxProvider {
   private baseSnapshotIdPromise?: Promise<string>;
 
   readonly capabilities: SandboxProviderCapabilities = {
+    supportsSandboxTimeout: true,
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,

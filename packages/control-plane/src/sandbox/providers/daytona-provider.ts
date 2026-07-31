@@ -51,6 +51,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
   readonly name = "daytona";
 
   readonly capabilities: SandboxProviderCapabilities = {
+    supportsSandboxTimeout: false,
     supportsSnapshots: false,
     supportsRestore: false,
     supportsPersistentResume: true,

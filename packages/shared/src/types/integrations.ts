@@ -110,6 +110,9 @@ export const DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS = 5;
 /** Default maximum agent-spawned child sessions per parent session. */
 export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 
+/** Minimum configurable sandbox session lifetime, in milliseconds. */
+export const MIN_SANDBOX_TIMEOUT_MS = 1000;
+
 /**
  * Default repo-image build timeout (the build sandbox lifetime), in seconds.
  * Mirrors `DEFAULT_BUILD_TIMEOUT_SECONDS` in the Modal data plane

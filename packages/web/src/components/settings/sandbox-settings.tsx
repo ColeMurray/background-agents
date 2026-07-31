@@ -1,7 +1,7 @@
 "use client";
 
 import { useRepos } from "@/hooks/use-repos";
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
@@ -20,9 +20,13 @@ import {
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared";
+import {
+  MIN_SANDBOX_TIMEOUT_MINUTES,
+  sandboxTimeoutMinutesFromMs,
+  sandboxTimeoutMsFromMinutes,
+} from "./sandbox-timeout";
 
 const GLOBAL_SCOPE = "__global__";
-const MILLISECONDS_PER_MINUTE = 60_000;
 type ResourceField = "cpuCores" | "memoryMib";
 
 interface GlobalSettingsResponse {
@@ -67,15 +71,6 @@ function isValidBuildTimeout(value: string): boolean {
   if (!/^\d+$/.test(value)) return false;
   const n = Number(value);
   return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
-}
-
-function sandboxTimeoutMsFromMinutes(value: string): number | undefined {
-  if (value === "") return undefined;
-  if (!/^\d+(?:\.\d+)?$/.test(value)) return undefined;
-  const timeoutMs = Number(value) * MILLISECONDS_PER_MINUTE;
-  return Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs % 1000 === 0
-    ? timeoutMs
-    : undefined;
 }
 
 /** Trim, filter empty, validate, parse to number, dedupe. */
@@ -307,10 +302,7 @@ export function SandboxSettingsEditor({
     buildTimeoutSeconds ??
     (currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "");
   const resolvedSandboxTimeoutMinutes =
-    sandboxTimeoutMinutes ??
-    (currentSandboxTimeoutMs !== undefined
-      ? String(currentSandboxTimeoutMs / MILLISECONDS_PER_MINUTE)
-      : "");
+    sandboxTimeoutMinutes ?? sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -328,7 +320,7 @@ export function SandboxSettingsEditor({
     setPortRows(updated);
   };
 
-  const handleSave = useCallback(async () => {
+  const handleSave = async () => {
     setError(null);
     setSuccess(false);
 
@@ -514,35 +506,7 @@ export function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [
-    rows,
-    isGlobal,
-    apiUrl,
-    mutate,
-    enabledRepos,
-    resolvedTerminalEnabled,
-    resolvedMaxConcurrentChildSessions,
-    resolvedMaxTotalChildSessions,
-    resolvedCpuCores,
-    resolvedMemoryMib,
-    resolvedCodeServerPort,
-    resolvedTerminalPort,
-    resolvedBuildTimeoutSeconds,
-    resolvedSandboxTimeoutMinutes,
-    portRows,
-    terminalEnabled,
-    codeServerPort,
-    terminalPort,
-    buildTimeoutSeconds,
-    sandboxTimeoutMinutes,
-    cpuCores,
-    memoryMib,
-    maxConcurrentChildSessions,
-    maxTotalChildSessions,
-    ownSettings,
-    baseDefaults?.codeServerPort,
-    baseDefaults?.terminalPort,
-  ]);
+  };
 
   const hasPortChanges =
     portRows !== null &&
@@ -570,10 +534,7 @@ export function SandboxSettingsEditor({
     currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "";
   const hasBuildTimeoutChange =
     buildTimeoutSeconds !== null && buildTimeoutSeconds.trim() !== currentBuildTimeoutSecondsString;
-  const currentSandboxTimeoutMinutesString =
-    currentSandboxTimeoutMs !== undefined
-      ? String(currentSandboxTimeoutMs / MILLISECONDS_PER_MINUTE)
-      : "";
+  const currentSandboxTimeoutMinutesString = sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
   const hasSandboxTimeoutChange =
     sandboxTimeoutMinutes !== null &&
     sandboxTimeoutMinutes.trim() !== currentSandboxTimeoutMinutesString;
@@ -818,8 +779,8 @@ export function SandboxSettingsEditor({
           <Input
             id="sandbox-session-timeout"
             type="number"
-            min={1 / 60}
-            step={1 / 60}
+            min={MIN_SANDBOX_TIMEOUT_MINUTES}
+            step={MIN_SANDBOX_TIMEOUT_MINUTES}
             inputMode="decimal"
             value={resolvedSandboxTimeoutMinutes}
             onChange={(e) => setSandboxTimeoutMinutes(e.target.value)}
