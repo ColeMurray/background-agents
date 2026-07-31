@@ -35,12 +35,14 @@ interface AutofixIngressInput {
   event: string | undefined;
   payload: unknown;
   deliveryId: string;
-  botUsername: string;
+  botUsername: string | undefined;
   receivedAt: Date;
 }
 
-function mentionsBot(body: string, botUsername: string): boolean {
-  return body.toLowerCase().includes(`@${botUsername.toLowerCase()}`);
+function mentionsBot(body: string, botUsername: string | undefined): boolean {
+  if (!botUsername) return false;
+  const escapedUsername = botUsername.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`@${escapedUsername}(?![A-Za-z0-9-])`, "i").test(body);
 }
 
 function repositoryFrom(

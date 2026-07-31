@@ -182,6 +182,10 @@ export class SessionMessageQueue {
     if (this.repository.getMessageStatus(messageId) !== "pending") {
       return;
     }
+    const session = this.repository.getSession();
+    if (!session || session.status === "archived" || session.status === "cancelled") {
+      return;
+    }
     await this.sessionStatus.transition("active");
     await this.processMessageQueue();
   }

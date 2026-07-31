@@ -335,6 +335,35 @@ describe("AutofixService", () => {
     expect(h.sessions.fetch).not.toHaveBeenCalled();
   });
 
+  it("rejects feedback whose serialized prompt exceeds the byte budget", async () => {
+    const h = buildService();
+    h.github.getPullRequestFeedback.mockResolvedValueOnce({
+      kind: "pr_comment",
+      id: "1234",
+      body: "é".repeat(100_000),
+      url: "https://github.com/acme/widgets/pull/42#issuecomment-1234",
+      author: { id: "7", login: "alice", type: "User" },
+    });
+
+    const error = await h.service
+      .process({
+        version: 1,
+        eventType: "issue_comment",
+        action: "created",
+        deliveryId: "delivery-1",
+        providerObject: { kind: "pr_comment", id: "1234" },
+        repository: { id: "99", owner: "acme", name: "widgets" },
+        pullRequestNumber: 42,
+        receivedAt: "2026-07-30T05:00:00.000Z",
+      })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(SourceControlProviderError);
+    expect((error as Error).message).toContain("prompt limit of 200000 bytes");
+    expect((error as SourceControlProviderError).errorType).toBe("permanent");
+    expect(h.sessions.fetch).not.toHaveBeenCalled();
+  });
+
   it("fails closed on unattributed reviews from the Open Inspect App", async () => {
     const h = buildService();
     h.github.getPullRequestFeedback.mockResolvedValueOnce({

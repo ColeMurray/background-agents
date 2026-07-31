@@ -115,6 +115,7 @@ function buildQueue() {
     admitAutofixMessage: vi.fn(
       (): AutofixMessageAdmission => ({ kind: "enqueued", messageId: "msg-autofix" })
     ),
+    getAutofixMessageId: vi.fn(() => null as string | null),
     getMessageStatus: vi.fn(() => "pending" as const),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
@@ -269,6 +270,46 @@ describe("SessionMessageQueue", () => {
 
     expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+  });
+
+  it("does not re-drive a duplicate pending Autofix message into an archived session", async () => {
+    const h = buildQueue();
+    h.repository.admitAutofixMessage.mockReturnValue({
+      kind: "duplicate",
+      messageId: "msg-existing",
+    });
+    h.repository.getMessageStatus.mockReturnValue("pending");
+    h.repository.getSession.mockReturnValue(createSession({ status: "archived" }));
+
+    await h.queue.enqueueAutofix({
+      type: "enqueue_feedback",
+      feedbackKey: "github:review:1234",
+      pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
+      prompt: "Address the submitted review feedback.",
+      author: { id: "7", login: "alice" },
+      origin: {
+        kind: "review",
+        authorType: "human",
+        feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
+      },
+      attemptLimit: 10,
+    });
+
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not re-drive looked-up Autofix work into a cancelled session", async () => {
+    const h = buildQueue();
+    h.repository.getAutofixMessageId.mockReturnValue("msg-existing");
+    h.repository.getMessageStatus.mockReturnValue("pending");
+    h.repository.getSession.mockReturnValue(createSession({ status: "cancelled" }));
+
+    const result = await h.queue.lookupAutofix("github:review:1234");
+
+    expect(result).toEqual({ kind: "found", messageId: "msg-existing" });
+    expect(h.sessionStatus.transition).not.toHaveBeenCalled();
+    expect(h.repository.getNextPendingMessage).not.toHaveBeenCalled();
   });
 
   it("spawns sandbox when queue has work but no sandbox socket", async () => {
