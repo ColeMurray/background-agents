@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "lint": "eslint .",
+    "lint:complexity": "node scripts/lint-complexity.mjs",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
