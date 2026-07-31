@@ -6,6 +6,7 @@ import {
 import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
+import { SessionNotPromptableError } from "../../message-queue";
 
 /**
  * Valid event types for filtering.
@@ -60,6 +61,9 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
       } catch (error) {
         if (error instanceof SessionAttachmentError) {
           return Response.json({ error: error.message }, { status: 400 });
+        }
+        if (error instanceof SessionNotPromptableError) {
+          return Response.json({ error: error.message }, { status: error.status });
         }
         log.error("handleEnqueuePrompt error", {
           error: error instanceof Error ? error : String(error),

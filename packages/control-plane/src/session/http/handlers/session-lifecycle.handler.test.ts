@@ -85,6 +85,7 @@ function createHandler() {
     replaceSessionRepositories: vi.fn(),
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
+    getPendingOrProcessingCount: vi.fn(() => 0),
   };
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
@@ -700,6 +701,39 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
+  it("returns 409 when archiving a session with queued work", async () => {
+    const { handler, getSession, getParticipantByUserId, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getParticipantByUserId.mockReturnValue(createParticipant());
+    repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when archiving a cancelled session", async () => {
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "cancelled" }));
+    getParticipantByUserId.mockReturnValue(createParticipant());
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("unarchives successfully for participant", async () => {
     const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
@@ -717,6 +751,22 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "active" });
     expect(transition).toHaveBeenCalledWith("active");
+  });
+
+  it("returns 409 when unarchiving a session that is not archived", async () => {
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "cancelled" }));
+    getParticipantByUserId.mockReturnValue(createParticipant());
+
+    const response = await handler.unarchive(
+      new Request("http://internal/internal/unarchive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("returns 409 when cancelling terminal session", async () => {
@@ -751,7 +801,15 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
-    expect(stopExecution).toHaveBeenCalledWith({ suppressStatusReconcile: true });
+    expect(stopExecution).toHaveBeenCalledWith({
+      suppressStatusReconcile: true,
+      failPending: true,
+    });
+    expect(transition.mock.invocationCallOrder[0]).toBeLessThan(
+      stopExecution.mock.invocationCallOrder[0]
+    );
+    expect(transition).toHaveBeenLastCalledWith("cancelled");
+    expect(transition).toHaveBeenCalledTimes(2);
     expect(transition).toHaveBeenCalledWith("cancelled");
     expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");

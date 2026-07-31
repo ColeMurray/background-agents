@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createChildSessionsHandler } from "./child-sessions.handler";
+import { SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
   FINAL_RESPONSE_MAX_EVENTS,
@@ -137,6 +138,7 @@ function createHandler() {
     listEventPage: vi.fn(),
     getLatestTerminalMessage: vi.fn(),
     getEventTimelinePage: vi.fn(),
+    getPendingOrProcessingCount: vi.fn(() => 0),
   };
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
@@ -146,6 +148,12 @@ function createHandler() {
   );
   const broadcast = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const enqueuePrompt = vi.fn(async () => ({
+    messageId: "message-follow-up",
+    status: "queued" as const,
+  }));
+  const messageService = { enqueuePrompt };
+  const countActiveSiblingSessions = vi.fn(async () => 0);
 
   const handler = createChildSessionsHandler({
     repository,
@@ -154,6 +162,8 @@ function createHandler() {
     getPublicSessionId,
     parseArtifactMetadata,
     messenger,
+    messageService,
+    countActiveSiblingSessions,
   });
 
   return {
@@ -164,10 +174,173 @@ function createHandler() {
     getPublicSessionId,
     parseArtifactMetadata,
     broadcast,
+    enqueuePrompt,
+    countActiveSiblingSessions,
   };
 }
 
 describe("createChildSessionsHandler", () => {
+  describe("parentPrompt", () => {
+    function request(body: unknown): Request {
+      return new Request("http://internal/internal/parent-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+
+    it("queues a parent follow-up as the child owner", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([
+        createParticipant({ user_id: "owner-1", canonical_user_id: "canonical-1" }),
+      ]);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue with the edge cases" })
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        messageId: "message-follow-up",
+        status: "queued",
+      });
+      expect(enqueuePrompt).toHaveBeenCalledWith({
+        content: "Continue with the edge cases",
+        authorId: "owner-1",
+        canonicalUserId: "canonical-1",
+        source: "agent",
+      });
+    });
+
+    it("returns 404 when the authoritative parent does not match", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "actual-parent" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "wrong-parent", content: "Continue" })
+      );
+
+      expect(response.status).toBe(404);
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+    });
+
+    it.each(["cancelled", "archived"] as const)(
+      "rejects a %s child without storing a prompt",
+      async (status) => {
+        const { handler, getSession, repository, enqueuePrompt } = createHandler();
+        getSession.mockReturnValue(createSession({ parent_session_id: "parent-1", status }));
+        repository.listParticipants.mockReturnValue([createParticipant()]);
+
+        const response = await handler.parentPrompt(
+          request({ parentSessionId: "parent-1", content: "Continue" })
+        );
+
+        expect(response.status).toBe(409);
+        expect(enqueuePrompt).not.toHaveBeenCalled();
+      }
+    );
+
+    it("rejects a follow-up when the child queue is full", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      repository.getPendingOrProcessingCount.mockReturnValue(10);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(429);
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+    });
+
+    it("enforces concurrent child admission when resuming a terminal child", async () => {
+      const {
+        handler,
+        getSession,
+        getPublicSessionId,
+        repository,
+        enqueuePrompt,
+        countActiveSiblingSessions,
+      } = createHandler();
+      getSession.mockReturnValue(
+        createSession({
+          session_name: "child-1",
+          parent_session_id: "parent-1",
+          status: "completed",
+          sandbox_settings: JSON.stringify({ maxConcurrentChildSessions: 2 }),
+        })
+      );
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      getPublicSessionId.mockReturnValue("child-1");
+      countActiveSiblingSessions.mockResolvedValue(2);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(429);
+      expect(countActiveSiblingSessions).toHaveBeenCalledWith("parent-1", "child-1");
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+    });
+
+    it("rechecks queue depth after asynchronous resume admission", async () => {
+      const {
+        handler,
+        getSession,
+        getPublicSessionId,
+        repository,
+        enqueuePrompt,
+        countActiveSiblingSessions,
+      } = createHandler();
+      getSession.mockReturnValue(
+        createSession({
+          parent_session_id: "parent-1",
+          status: "completed",
+        })
+      );
+      getPublicSessionId.mockReturnValue("child-1");
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      repository.getPendingOrProcessingCount.mockReturnValueOnce(9).mockReturnValueOnce(10);
+      countActiveSiblingSessions.mockResolvedValue(0);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(429);
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+    });
+
+    it("maps a promptability race to 409", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant()]);
+      enqueuePrompt.mockRejectedValue(new SessionNotPromptableError("archived"));
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(409);
+    });
+
+    it("returns 500 when the child owner invariant is broken", async () => {
+      const { handler, getSession, repository, enqueuePrompt } = createHandler();
+      getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
+      repository.listParticipants.mockReturnValue([createParticipant({ role: "member" })]);
+
+      const response = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "Continue" })
+      );
+
+      expect(response.status).toBe(500);
+      expect(enqueuePrompt).not.toHaveBeenCalled();
+    });
+  });
+
   it("returns 404 when session is missing for spawn context", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(null);
@@ -315,6 +488,7 @@ describe("createChildSessionsHandler", () => {
         updatedAt: 2000,
       },
       sandbox: { status: "running" },
+      hasUnfinishedPrompt: false,
       artifacts: [
         {
           type: "pr",

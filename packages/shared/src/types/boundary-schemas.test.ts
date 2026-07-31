@@ -3,9 +3,11 @@ import {
   automationRepositoriesInputSchema,
   automationRepositoryInputSchema,
   clientMessageSchema,
+  childFollowUpPromptRequestSchema,
   createSessionResponseSchema,
   createSessionRequestSchema,
   callbackContextSchema,
+  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -158,6 +160,44 @@ describe("boundary schemas", () => {
       expect(
         sendPromptRequestSchema.safeParse({ content: "hello", source: "unknown" }).success
       ).toBe(false);
+    });
+  });
+
+  describe("childFollowUpPromptRequestSchema", () => {
+    it("accepts non-empty content through the documented limit", () => {
+      expect(
+        childFollowUpPromptRequestSchema.safeParse({ content: "Continue with the failing tests" })
+          .success
+      ).toBe(true);
+      expect(
+        childFollowUpPromptRequestSchema.safeParse({
+          content: "x".repeat(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS),
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects empty, whitespace-only, and oversized content", () => {
+      expect(childFollowUpPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+      expect(childFollowUpPromptRequestSchema.safeParse({ content: " \n\t " }).success).toBe(false);
+      expect(
+        childFollowUpPromptRequestSchema.safeParse({
+          content: "x".repeat(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS + 1),
+        }).success
+      ).toBe(false);
+    });
+
+    it("rejects fields that expand the parent sandbox authority", () => {
+      for (const extra of [
+        { source: "web" },
+        { authorId: "forged" },
+        { model: "openai/gpt-5.4" },
+        { attachments: [] },
+        { callbackContext: {} },
+      ]) {
+        expect(
+          childFollowUpPromptRequestSchema.safeParse({ content: "Continue", ...extra }).success
+        ).toBe(false);
+      }
     });
   });
 

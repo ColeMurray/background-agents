@@ -99,6 +99,40 @@ describe("SCM credentials router provider gate", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects service authentication for parent-to-child prompts", async () => {
+    const { env } = createEnv();
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/sessions/parent-1/children/child-1/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("allows GitLab parent sandboxes to reach the child prompt route", async () => {
+    const { env, fetch } = createEnv();
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/parent-1/children/child-1/prompt", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(404);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
+  });
+
   it("continues blocking unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
 

@@ -553,6 +553,14 @@ describe("D1 SessionIndexStore", () => {
       expect(count).toBe(1); // child1 is "created" (active), child2 is "completed" (excluded)
     });
 
+    it("countActiveChildrenExcluding omits the child being resumed", async () => {
+      const withoutActiveChild = await store.countActiveChildrenExcluding(parentId, childId1);
+      const withoutCompletedChild = await store.countActiveChildrenExcluding(parentId, childId2);
+
+      expect(withoutActiveChild).toBe(0);
+      expect(withoutCompletedChild).toBe(1);
+    });
+
     it("countTotalChildren counts all children regardless of status", async () => {
       const count = await store.countTotalChildren(parentId);
       expect(count).toBe(2);

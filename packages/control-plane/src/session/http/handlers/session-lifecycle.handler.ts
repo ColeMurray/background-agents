@@ -57,7 +57,11 @@ interface InitRequest {
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "upsertSession" | "replaceSessionRepositories" | "createSandbox" | "createParticipant"
+    | "upsertSession"
+    | "replaceSessionRepositories"
+    | "createSandbox"
+    | "createParticipant"
+    | "getPendingOrProcessingCount"
   >;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -75,7 +79,10 @@ export interface SessionLifecycleHandlerDeps {
     title: string,
     options?: SessionTitleUpdateOptions
   ) => SessionTitleUpdateResult;
-  stopExecution: (options?: { suppressStatusReconcile?: boolean }) => Promise<void>;
+  stopExecution: (options?: {
+    suppressStatusReconcile?: boolean;
+    failPending?: boolean;
+  }) => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
@@ -357,6 +364,17 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
+      if (session.status === "cancelled") {
+        return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
+      }
+
+      if (deps.repository.getPendingOrProcessingCount() > 0) {
+        return Response.json(
+          { error: "Cannot archive a session with queued work" },
+          { status: 409 }
+        );
+      }
+
       await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
@@ -387,6 +405,10 @@ export function createSessionLifecycleHandler(
         );
       }
 
+      if (session.status !== "archived") {
+        return Response.json({ error: "Session is not archived" }, { status: 409 });
+      }
+
       await deps.statusService.transition("active");
 
       return Response.json({ status: "active" });
@@ -402,7 +424,11 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
       }
 
-      await deps.stopExecution({ suppressStatusReconcile: true });
+      const transition = deps.statusService.transition("cancelled");
+      const stop = deps.stopExecution({ suppressStatusReconcile: true, failPending: true });
+      await Promise.all([transition, stop]);
+      // A completion event that was already in flight may have reconciled the
+      // status while the first projection awaited D1. Cancellation wins.
       await deps.statusService.transition("cancelled");
 
       const sandbox = deps.getSandbox();

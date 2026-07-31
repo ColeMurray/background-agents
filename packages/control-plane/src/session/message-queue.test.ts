@@ -105,6 +105,7 @@ function buildQueue() {
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
+    failPendingMessages: vi.fn((): Array<{ id: string }> => []),
     upsertExecutionCompleteEvent: vi.fn(),
   };
 
@@ -191,6 +192,21 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
+
+  it.each(["cancelled", "archived"] as const)(
+    "does not dispatch queued work for a %s session",
+    async (status) => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ status }));
+      h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+
+      await h.queue.processMessageQueue();
+
+      expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
+      expect(h.sandboxLifecycle.spawnSandbox).not.toHaveBeenCalled();
+      expect(h.wsManager.send).not.toHaveBeenCalled();
+    }
+  );
 
   it("does not block queue processing on the sandbox spawn", async () => {
     const h = buildQueue();
@@ -591,13 +607,14 @@ describe("SessionMessageQueue", () => {
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-9" });
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    await h.queue.stopExecution();
+    await h.queue.stopExecution({ failPending: true });
 
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-9",
       "failed",
       expect.any(Number)
     );
+    expect(h.repository.failPendingMessages).toHaveBeenCalledWith(expect.any(Number));
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-9",
       expect.objectContaining({ type: "execution_complete", success: false }),
@@ -618,6 +635,29 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
   });
 
+  it("emits completion events and callbacks for prompts cancelled before dispatch", async () => {
+    const h = buildQueue();
+    h.repository.failPendingMessages.mockReturnValue([{ id: "msg-pending" }]);
+
+    await h.queue.stopExecution({ failPending: true, suppressStatusReconcile: true });
+
+    expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
+      "msg-pending",
+      expect.objectContaining({
+        type: "execution_complete",
+        messageId: "msg-pending",
+        success: false,
+        error: "Execution was cancelled before it started",
+      }),
+      expect.any(Number)
+    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
+      "msg-pending",
+      false,
+      "Execution was cancelled before it started"
+    );
+  });
+
   it("reconciles session status when failing a stuck processing message", async () => {
     const h = buildQueue();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
@@ -628,6 +668,43 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it.each(["cancelled", "archived"] as const)(
+      "rejects prompts for a %s session before inserting a message",
+      async (status) => {
+        const h = buildQueue();
+        h.repository.getSession.mockReturnValue(createSession({ status }));
+        h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+        await expect(
+          h.queue.enqueuePromptFromApi({
+            content: "Continue",
+            authorId: "user-1",
+            source: "agent",
+          })
+        ).rejects.toMatchObject({ status: 409 });
+
+        expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+        expect(h.participantService.create).not.toHaveBeenCalled();
+        expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();
+      }
+    );
+
+    it("rejects a websocket prompt before creating a participant", async () => {
+      const h = buildQueue();
+      h.repository.getSession.mockReturnValue(createSession({ status: "cancelled" }));
+      h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);
+
+      await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+        content: "Continue",
+      });
+
+      expect(h.participantService.create).not.toHaveBeenCalled();
+      expect(h.wsManager.send).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: "SESSION_NOT_PROMPTABLE" })
+      );
+    });
+
     it("creates participant with the enriched identity name when new", async () => {
       const h = buildQueue();
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);

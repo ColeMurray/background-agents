@@ -769,7 +769,7 @@ export class SessionRepository {
 
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`
+      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
@@ -829,6 +829,14 @@ export class SessionRepository {
       completedAt,
       messageId
     );
+  }
+
+  failPendingMessages(completedAt: number): Array<{ id: string }> {
+    const result = this.sql.exec(
+      `UPDATE messages SET status = 'failed', completed_at = ? WHERE status = 'pending' RETURNING id`,
+      completedAt
+    );
+    return result.toArray() as Array<{ id: string }>;
   }
 
   getMessageTimestamps(

@@ -507,6 +507,21 @@ export class SessionIndexStore {
     return result?.count ?? 0;
   }
 
+  /** Count non-terminal siblings while excluding a child that may be resumed. */
+  async countActiveChildrenExcluding(
+    parentSessionId: string,
+    excludedChildId: string
+  ): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM sessions
+         WHERE parent_session_id = ? AND id != ? AND status NOT IN (${TERMINAL_STATUS_SQL})`
+      )
+      .bind(parentSessionId, excludedChildId)
+      .first<{ count: number }>();
+    return result?.count ?? 0;
+  }
+
   /** Count total children ever spawned for rate-limit enforcement. */
   async countTotalChildren(parentSessionId: string): Promise<number> {
     const result = await this.db

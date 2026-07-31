@@ -241,6 +241,7 @@ export class SessionDO extends DurableObject<Env> {
     tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
+    parentPrompt: (request) => this.childSessionsHandler.parentPrompt(request),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
     diffState: () => this.diffsHandler.state(),
@@ -430,6 +431,14 @@ export class SessionDO extends DurableObject<Env> {
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
         messenger: this.messenger,
+        messageService: this.messageService,
+        countActiveSiblingSessions: (parentSessionId, childSessionId) =>
+          this.db
+            ? new SessionIndexStore(this.db).countActiveChildrenExcluding(
+                parentSessionId,
+                childSessionId
+              )
+            : Promise.resolve(0),
       });
     }
 
@@ -1527,7 +1536,10 @@ export class SessionDO extends DurableObject<Env> {
    * broadcasts synthetic execution_complete
    * so all clients flush buffered tokens, and forwards stop to the sandbox.
    */
-  private async stopExecution(options?: { suppressStatusReconcile?: boolean }): Promise<void> {
+  private async stopExecution(options?: {
+    suppressStatusReconcile?: boolean;
+    failPending?: boolean;
+  }): Promise<void> {
     await this.messageQueue.stopExecution(options);
   }
 

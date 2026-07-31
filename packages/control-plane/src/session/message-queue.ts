@@ -11,7 +11,7 @@ import {
 import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
-import type { ParticipantRow, PromptGitIdentity, SandboxCommand } from "./types";
+import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
 import {
   AttachmentClaimConflictError,
@@ -42,6 +42,7 @@ interface PromptMessageData {
 
 interface StopExecutionOptions {
   suppressStatusReconcile?: boolean;
+  failPending?: boolean;
 }
 
 interface EnqueuePromptCoreData {
@@ -58,6 +59,28 @@ interface EnqueuePromptCoreData {
 interface EnqueuedPrompt {
   messageId: string;
   position: number;
+}
+
+export class SessionNotPromptableError extends Error {
+  readonly status = 409;
+
+  constructor(readonly sessionStatus: "archived" | "cancelled") {
+    super(`Cannot prompt a ${sessionStatus} session`);
+    this.name = "SessionNotPromptableError";
+  }
+}
+
+function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
+  switch (status) {
+    case "created":
+    case "active":
+    case "completed":
+    case "failed":
+      return true;
+    case "archived":
+    case "cancelled":
+      return false;
+  }
 }
 
 function resolveParticipantGitIdentity(
@@ -104,6 +127,7 @@ export class SessionMessageQueue {
   ): Promise<void> {
     let enqueued: EnqueuedPrompt;
     try {
+      this.assertPromptableSession();
       let participant = this.participantService.getByUserId(client.userId);
       if (!participant) {
         participant = this.participantService.create(client.userId, client.name);
@@ -118,13 +142,23 @@ export class SessionMessageQueue {
         attachments: data.attachments,
       });
     } catch (error) {
-      if (!(error instanceof SessionAttachmentError)) throw error;
-      this.wsManager.send(ws, {
-        type: "error",
-        code: "INVALID_ATTACHMENTS",
-        message: error.message,
-      });
-      return;
+      if (error instanceof SessionAttachmentError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "INVALID_ATTACHMENTS",
+          message: error.message,
+        });
+        return;
+      }
+      if (error instanceof SessionNotPromptableError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "SESSION_NOT_PROMPTABLE",
+          message: error.message,
+        });
+        return;
+      }
+      throw error;
     }
 
     const sessionIndex = this.sessionIndex;
@@ -153,6 +187,10 @@ export class SessionMessageQueue {
   }
 
   async processMessageQueue(): Promise<void> {
+    const currentSession = this.repository.getSession();
+    if (!currentSession || !isPromptableSessionStatus(currentSession.status)) {
+      return;
+    }
     if (this.repository.getProcessingMessage()) {
       this.log.debug("processMessageQueue: already processing, returning");
       return;
@@ -263,6 +301,28 @@ export class SessionMessageQueue {
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
+    if (options.failPending) {
+      const cancelledMessages = this.repository.failPendingMessages(now);
+      const cancellationError = "Execution was cancelled before it started";
+      for (const message of cancelledMessages) {
+        const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
+          type: "execution_complete",
+          messageId: message.id,
+          success: false,
+          error: cancellationError,
+          sandboxId: "",
+          timestamp: now / 1000,
+        };
+        this.repository.upsertExecutionCompleteEvent(message.id, syntheticExecutionComplete, now);
+        this.messenger.broadcast({
+          type: "sandbox_event",
+          event: syntheticExecutionComplete,
+        });
+        this.ctx.waitUntil(
+          this.callbackService.notifyComplete(message.id, false, cancellationError)
+        );
+      }
+    }
     const processingMessage = this.repository.getProcessingMessage();
 
     if (processingMessage) {
@@ -376,6 +436,7 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
+    this.assertPromptableSession();
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;
@@ -425,6 +486,7 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+    this.assertPromptableSession();
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
       this.attachmentRepository
@@ -494,5 +556,12 @@ export class SessionMessageQueue {
     });
 
     return { messageId, position };
+  }
+
+  private assertPromptableSession(): void {
+    const session = this.repository.getSession();
+    if (session && (session.status === "archived" || session.status === "cancelled")) {
+      throw new SessionNotPromptableError(session.status);
+    }
   }
 }

@@ -1,12 +1,16 @@
 import {
   cancelChildSessionRequestSchema,
+  childFollowUpPromptRequestSchema,
   type CancelChildSessionRequest,
 } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
+import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+
+const logger = createLogger("router:session-children");
 
 async function handleListChildren(
   _request: Request,
@@ -46,6 +50,77 @@ async function handleGetChild(
     undefined,
     url.search
   );
+}
+
+async function handlePromptChild(
+  request: Request,
+  env: Env,
+  match: RegExpMatchArray,
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const parentId = match.groups?.id;
+  const childId = match.groups?.childId;
+  if (!parentId || !childId) return error("Parent and child session IDs required");
+
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return error("Invalid prompt body", 400);
+  }
+  const parsed = childFollowUpPromptRequestSchema.safeParse(rawBody);
+  if (!parsed.success) return error("Invalid prompt body", 400);
+
+  const sessionStore = new SessionIndexStore(ctx.db);
+  if (!(await sessionStore.isChildOf(childId, parentId))) {
+    return error("Child session not found", 404);
+  }
+
+  const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parentSessionId: parentId, content: parsed.data.content }),
+  });
+  if (response.ok) {
+    let messageId: string | undefined;
+    try {
+      const payload = (await response.clone().json()) as { messageId?: unknown };
+      if (typeof payload.messageId === "string") messageId = payload.messageId;
+    } catch {
+      // The child response remains authoritative; logging is best-effort.
+    }
+    logger.info("session.child_prompt", {
+      event: "session.child_prompt",
+      outcome: "accepted",
+      parent_id: parentId,
+      child_id: childId,
+      message_id: messageId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    ctx.executionCtx?.waitUntil(
+      sessionStore.touchUpdatedAt(childId).catch((error) => {
+        logger.error("session_index.touch_updated_at.background_error", {
+          parent_id: parentId,
+          child_id: childId,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+          error,
+        });
+      })
+    );
+  } else {
+    logger.warn("session.child_prompt", {
+      event: "session.child_prompt",
+      outcome: "rejected",
+      parent_id: parentId,
+      child_id: childId,
+      http_status: response.status,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
+  return response;
 }
 
 export async function handleCancelChild(
@@ -138,5 +213,10 @@ export const sessionChildRoutes: Route[] = [
     method: "POST",
     pattern: parsePattern("/sessions/:id/children/:childId/cancel"),
     handler: handleCancelChild,
+  }),
+  sessionRoute({
+    method: "POST",
+    pattern: parsePattern("/sessions/:id/children/:childId/prompt"),
+    handler: handlePromptChild,
   }),
 ];
