@@ -359,10 +359,10 @@ function UserMessageAttachments({
 }) {
   return (
     <div className="min-w-0 max-w-full flex flex-wrap gap-2 mt-3">
-      {attachments.map((attachment, index) => {
+      {attachments.map((attachment) => {
         return (
           <img
-            key={`${attachment.attachmentId}-${index}`}
+            key={attachment.attachmentId}
             src={`/api/sessions/${sessionId}/attachments/${attachment.attachmentId}`}
             alt={attachment.name}
             title={attachment.name}

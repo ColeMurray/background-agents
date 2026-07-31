@@ -33,7 +33,6 @@ function ToolIcon({ toolName }: { toolName: string }) {
 export const ToolCallGroup = memo(
   function ToolCallGroup({
     events,
-    groupId,
   }: {
     events: Array<Extract<SandboxEvent, { type: "tool_call" }>>;
     groupId: string;
@@ -62,8 +61,8 @@ export const ToolCallGroup = memo(
       return (
         <ToolCallItem
           event={firstEvent}
-          isExpanded={expandedItems.has(`${groupId}-0`)}
-          onToggle={() => toggleItem(`${groupId}-0`)}
+          isExpanded={expandedItems.has(firstEvent.callId)}
+          onToggle={() => toggleItem(firstEvent.callId)}
         />
       );
     }
@@ -88,12 +87,12 @@ export const ToolCallGroup = memo(
 
         {isExpanded && (
           <div className="ml-4 mt-1 pl-2 border-l-2 border-border">
-            {events.map((event, index) => (
+            {events.map((event) => (
               <ToolCallItem
-                key={`${groupId}-${index}`}
+                key={event.callId}
                 event={event}
-                isExpanded={expandedItems.has(`${groupId}-${index}`)}
-                onToggle={() => toggleItem(`${groupId}-${index}`)}
+                isExpanded={expandedItems.has(event.callId)}
+                onToggle={() => toggleItem(event.callId)}
                 showTime={false}
               />
             ))}
