@@ -380,9 +380,28 @@ class FakeD1Database {
         rows = rows.filter((r) => r.status !== statusVal);
       }
 
-      if (conditions.includes("spawn_source != ?")) {
+      if (conditions.includes("WITH RECURSIVE excluded_sessions")) {
         const spawnSource = args[argIdx++] as string;
-        rows = rows.filter((r) => r.spawn_source !== spawnSource);
+        const excludedIds = new Set(
+          Array.from(this.rows.values())
+            .filter((row) => row.spawn_source === spawnSource)
+            .map((row) => row.id)
+        );
+        let addedDescendant = true;
+        while (addedDescendant) {
+          addedDescendant = false;
+          for (const row of this.rows.values()) {
+            if (
+              row.parent_session_id &&
+              excludedIds.has(row.parent_session_id) &&
+              !excludedIds.has(row.id)
+            ) {
+              excludedIds.add(row.id);
+              addedDescendant = true;
+            }
+          }
+        }
+        rows = rows.filter((row) => !excludedIds.has(row.id));
       }
 
       if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
@@ -620,10 +639,18 @@ describe("SessionIndexStore", () => {
       expect(result.hasMore).toBe(false);
     });
 
-    it("filters by excluded spawn source before pagination", async () => {
+    it("filters excluded spawn-source trees before pagination", async () => {
       await store.create(makeSession({ id: "manual-new", spawnSource: "user", updatedAt: 4000 }));
       await store.create(
         makeSession({ id: "automation", spawnSource: "automation", updatedAt: 3000 })
+      );
+      await store.create(
+        makeSession({
+          id: "automation-child",
+          parentSessionId: "automation",
+          spawnSource: "agent",
+          updatedAt: 3500,
+        })
       );
       await store.create(makeSession({ id: "manual-old", spawnSource: "user", updatedAt: 2000 }));
 

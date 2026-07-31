@@ -1,4 +1,4 @@
-import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
+import { spawnSourceSchema, type SessionStatus, type SpawnSource } from "@open-inspect/shared";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
@@ -12,15 +12,6 @@ const SESSION_STATUSES: SessionStatus[] = [
   "archived",
   "cancelled",
 ];
-const SPAWN_SOURCES: SpawnSource[] = [
-  "user",
-  "agent",
-  "automation",
-  "github-bot",
-  "linear-bot",
-  "slack-bot",
-];
-
 function parseSessionStatus(value: string | null): SessionStatus | undefined {
   if (!value) return undefined;
   return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
@@ -28,7 +19,8 @@ function parseSessionStatus(value: string | null): SessionStatus | undefined {
 
 function parseSpawnSource(value: string | null): SpawnSource | undefined {
   if (!value) return undefined;
-  return SPAWN_SOURCES.includes(value as SpawnSource) ? (value as SpawnSource) : undefined;
+  const result = spawnSourceSchema.safeParse(value);
+  return result.success ? result.data : undefined;
 }
 
 function parseCreatedByFilters(

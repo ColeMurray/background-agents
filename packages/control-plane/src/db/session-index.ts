@@ -295,7 +295,15 @@ export class SessionIndexStore {
     }
 
     if (excludeSpawnSource) {
-      conditions.push("spawn_source != ?");
+      conditions.push(`id NOT IN (
+        WITH RECURSIVE excluded_sessions(id) AS (
+          SELECT id FROM sessions WHERE spawn_source = ?
+          UNION
+          SELECT child.id FROM sessions child
+          JOIN excluded_sessions parent ON child.parent_session_id = parent.id
+        )
+        SELECT id FROM excluded_sessions
+      )`);
       params.push(excludeSpawnSource);
     }
 
