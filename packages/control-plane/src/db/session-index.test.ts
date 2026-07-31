@@ -380,6 +380,11 @@ class FakeD1Database {
         rows = rows.filter((r) => r.status !== statusVal);
       }
 
+      if (conditions.includes("spawn_source != ?")) {
+        const spawnSource = args[argIdx++] as string;
+        rows = rows.filter((r) => r.spawn_source !== spawnSource);
+      }
+
       if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
         // Combined member/scalar repo filter: params are the member arm's
         // owner/name followed by the scalar arm's identical owner/name.
@@ -612,6 +617,19 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ createdByUserIds: ["alice"] });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("filters by excluded spawn source before pagination", async () => {
+      await store.create(makeSession({ id: "manual-new", spawnSource: "user", updatedAt: 4000 }));
+      await store.create(
+        makeSession({ id: "automation", spawnSource: "automation", updatedAt: 3000 })
+      );
+      await store.create(makeSession({ id: "manual-old", spawnSource: "user", updatedAt: 2000 }));
+
+      const result = await store.list({ excludeSpawnSource: "automation", limit: 2 });
+
+      expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);
     });
 

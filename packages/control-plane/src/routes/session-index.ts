@@ -1,4 +1,4 @@
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus, SpawnSource } from "@open-inspect/shared";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
@@ -12,10 +12,23 @@ const SESSION_STATUSES: SessionStatus[] = [
   "archived",
   "cancelled",
 ];
+const SPAWN_SOURCES: SpawnSource[] = [
+  "user",
+  "agent",
+  "automation",
+  "github-bot",
+  "linear-bot",
+  "slack-bot",
+];
 
 function parseSessionStatus(value: string | null): SessionStatus | undefined {
   if (!value) return undefined;
   return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
+}
+
+function parseSpawnSource(value: string | null): SpawnSource | undefined {
+  if (!value) return undefined;
+  return SPAWN_SOURCES.includes(value as SpawnSource) ? (value as SpawnSource) : undefined;
 }
 
 function parseCreatedByFilters(
@@ -65,8 +78,10 @@ async function handleListSessions(
   const offset = parsePaginationOffset(url.searchParams.get("offset"));
   const statusParam = url.searchParams.get("status");
   const excludeStatusParam = url.searchParams.get("excludeStatus");
+  const excludeSpawnSourceParam = url.searchParams.get("excludeSpawnSource");
   const status = parseSessionStatus(statusParam);
   const excludeStatus = parseSessionStatus(excludeStatusParam);
+  const excludeSpawnSource = parseSpawnSource(excludeSpawnSourceParam);
   const createdByUserIds = parseCreatedByFilters(url.searchParams, ctx.principal);
 
   if (statusParam && !status) {
@@ -77,12 +92,23 @@ async function handleListSessions(
     return error("Invalid excludeStatus", 400);
   }
 
+  if (excludeSpawnSourceParam && !excludeSpawnSource) {
+    return error("Invalid excludeSpawnSource", 400);
+  }
+
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
   }
 
   const store = new SessionIndexStore(ctx.db);
-  const result = await store.list({ status, excludeStatus, createdByUserIds, limit, offset });
+  const result = await store.list({
+    status,
+    excludeStatus,
+    excludeSpawnSource,
+    createdByUserIds,
+    limit,
+    offset,
+  });
 
   return json({
     sessions: result.sessions,

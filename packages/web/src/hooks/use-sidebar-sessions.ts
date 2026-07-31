@@ -42,6 +42,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
 
     return buildSessionsPageKey({
       excludeStatus: "archived",
+      excludeSpawnSource: sessionCreatorFilter === "mine" ? "automation" : undefined,
       createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
     });
   }, [authSession, sessionCreatorFilter]);
@@ -87,6 +88,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
       const response = await browserApiFetch(
         buildSessionsPageKey({
           excludeStatus: "archived",
+          excludeSpawnSource: sessionCreatorFilter === "mine" ? "automation" : undefined,
           createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
           offset: offsetRef.current,
         })

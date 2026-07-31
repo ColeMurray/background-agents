@@ -72,6 +72,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeSpawnSource: undefined,
       createdByUserIds: [],
       limit: 50,
       offset: 0,
@@ -85,6 +86,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeSpawnSource: undefined,
       createdByUserIds: [],
       limit: 100,
       offset: 0,
@@ -100,6 +102,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeSpawnSource: undefined,
       createdByUserIds: ["0123456789abcdef0123456789abcdef"],
       limit: 50,
       offset: 0,
@@ -116,10 +119,28 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeSpawnSource: undefined,
       createdByUserIds: ["0123456789abcdef0123456789abcdef"],
       limit: 50,
       offset: 0,
     });
+  });
+
+  it("passes a validated excluded spawn source through to the store", async () => {
+    const response = await listSessions("?excludeSpawnSource=automation");
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeSpawnSource: "automation" })
+    );
+  });
+
+  it("rejects an invalid excluded spawn source before querying the store", async () => {
+    const response = await listSessions("?excludeSpawnSource=unknown");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid excludeSpawnSource" });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 
   it("preserves mixed creator filters as OR inputs", async () => {
