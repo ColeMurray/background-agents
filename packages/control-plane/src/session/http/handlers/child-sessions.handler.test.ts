@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared";
 import { createChildSessionsHandler } from "./child-sessions.handler";
-import { ChildFollowUpService } from "../../services/child-follow-up.service";
+import {
+  ChildFollowUpService,
+  MAX_PENDING_CHILD_PROMPTS,
+} from "../../services/child-follow-up.service";
 import { SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
@@ -220,6 +224,28 @@ describe("createChildSessionsHandler", () => {
       });
     });
 
+    it("returns distinct validation reasons for blank and oversized prompts", async () => {
+      const { handler } = createHandler();
+
+      const blank = await handler.parentPrompt(
+        request({ parentSessionId: "parent-1", content: "" })
+      );
+      const oversized = await handler.parentPrompt(
+        request({
+          parentSessionId: "parent-1",
+          content: "x".repeat(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS + 1),
+        })
+      );
+      const blankBody = (await blank.json()) as { error: string };
+      const oversizedBody = (await oversized.json()) as { error: string };
+
+      expect(blank.status).toBe(400);
+      expect(oversized.status).toBe(400);
+      expect(blankBody.error).toMatch(/^Invalid prompt body: .+/);
+      expect(oversizedBody.error).toMatch(/^Invalid prompt body: .+/);
+      expect(blankBody.error).not.toBe(oversizedBody.error);
+    });
+
     it("returns 404 when the authoritative parent does not match", async () => {
       const { handler, getSession, repository, enqueuePrompt } = createHandler();
       getSession.mockReturnValue(createSession({ parent_session_id: "actual-parent" }));
@@ -253,7 +279,7 @@ describe("createChildSessionsHandler", () => {
       const { handler, getSession, repository, enqueuePrompt } = createHandler();
       getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
       repository.listParticipants.mockReturnValue([createParticipant()]);
-      repository.getPendingOrProcessingCount.mockReturnValue(10);
+      repository.getPendingOrProcessingCount.mockReturnValue(MAX_PENDING_CHILD_PROMPTS);
 
       const response = await handler.parentPrompt(
         request({ parentSessionId: "parent-1", content: "Continue" })
@@ -310,7 +336,10 @@ describe("createChildSessionsHandler", () => {
       );
       getPublicSessionId.mockReturnValue("child-1");
       repository.listParticipants.mockReturnValue([createParticipant()]);
-      repository.getPendingOrProcessingCount.mockReturnValueOnce(9).mockReturnValueOnce(10);
+      // The service checks queue depth both before and after asynchronous sibling admission.
+      repository.getPendingOrProcessingCount
+        .mockReturnValueOnce(MAX_PENDING_CHILD_PROMPTS - 1)
+        .mockReturnValueOnce(MAX_PENDING_CHILD_PROMPTS);
       countActiveSiblingSessions.mockResolvedValue(0);
 
       const response = await handler.parentPrompt(

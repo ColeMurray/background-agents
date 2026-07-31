@@ -128,6 +128,7 @@ describe("SCM credentials router provider gate", () => {
       env as never
     );
 
+    // The null DB lookup rejects the unknown child after sandbox auth and SCM classification.
     expect(response.status).toBe(404);
     expect(fetch).toHaveBeenCalledOnce();
     expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");

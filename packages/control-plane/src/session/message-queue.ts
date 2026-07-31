@@ -69,7 +69,7 @@ export class SessionNotPromptableError extends Error {
   }
 }
 
-function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
+export function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
   switch (status) {
     case "created":
     case "active":

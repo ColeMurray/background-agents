@@ -1,6 +1,6 @@
 import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared";
 import { parsePersistedSandboxSettings } from "../../sandbox/settings";
-import { SessionNotPromptableError } from "../message-queue";
+import { isPromptableSessionStatus, SessionNotPromptableError } from "../message-queue";
 import type { SessionRepository } from "../repository";
 import type { SessionRow } from "../types";
 import type { MessageService } from "./message.service";
@@ -22,6 +22,10 @@ interface ChildFollowUpServiceDeps {
 export class ChildFollowUpService {
   constructor(private readonly deps: ChildFollowUpServiceDeps) {}
 
+  private isPendingQueueFull(): boolean {
+    return this.deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS;
+  }
+
   async enqueue(request: {
     parentSessionId: string;
     content: string;
@@ -30,14 +34,14 @@ export class ChildFollowUpService {
     if (!session || session.parent_session_id !== request.parentSessionId) {
       return { ok: false, status: 404, error: "Child session not found" };
     }
-    if (session.status === "cancelled" || session.status === "archived") {
+    if (!isPromptableSessionStatus(session.status)) {
       return {
         ok: false,
         status: 409,
         error: `Cannot prompt a ${session.status} session`,
       };
     }
-    if (this.deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
+    if (this.isPendingQueueFull()) {
       return { ok: false, status: 429, error: "Child prompt queue is full" };
     }
 
@@ -61,7 +65,7 @@ export class ChildFollowUpService {
           error: `Maximum concurrent children (${maxConcurrentChildren}) reached`,
         };
       }
-      if (this.deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
+      if (this.isPendingQueueFull()) {
         return { ok: false, status: 429, error: "Child prompt queue is full" };
       }
     }

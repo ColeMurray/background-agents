@@ -154,7 +154,11 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       }
       const parsed = parentPromptRequestSchema.safeParse(raw);
       if (!parsed.success) {
-        return Response.json({ error: "Invalid prompt body" }, { status: 400 });
+        const reason = parsed.error.issues[0]?.message;
+        return Response.json(
+          { error: reason ? `Invalid prompt body: ${reason}` : "Invalid prompt body" },
+          { status: 400 }
+        );
       }
 
       const result = await deps.childFollowUpService.enqueue(parsed.data);

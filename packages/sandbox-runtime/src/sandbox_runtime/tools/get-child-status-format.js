@@ -85,12 +85,12 @@ export function formatArtifacts(artifacts = []) {
   return lines;
 }
 
-export function formatFinalResponse(finalResponse, includeResponse, currentPromptRunning = false) {
+export function formatFinalResponse(finalResponse, includeResponse, hasUnfinishedPrompt = false) {
   if (!finalResponse) {
     return includeResponse ? ["", "  Final response: not available yet"] : [];
   }
 
-  const label = currentPromptRunning
+  const label = hasUnfinishedPrompt
     ? "  Latest completed response (newer prompt queued or running):"
     : "  Final response:";
   const lines = ["", label];
@@ -171,12 +171,12 @@ export function formatChildDetail(detail, childId, options = {}) {
   }
 
   lines.push(...formatArtifacts(detail.artifacts));
-  const currentPromptRunning = detail.hasUnfinishedPrompt === true;
+  const hasUnfinishedPrompt = detail.hasUnfinishedPrompt === true;
   lines.push(
     ...formatFinalResponse(
       detail.finalResponse,
       Boolean(options.includeResponse),
-      currentPromptRunning
+      hasUnfinishedPrompt
     )
   );
   lines.push(...formatTrajectory(detail.trajectory, options));
