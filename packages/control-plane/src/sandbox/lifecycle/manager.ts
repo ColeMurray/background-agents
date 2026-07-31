@@ -44,7 +44,7 @@ import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
-import { normalizeSandboxSettings } from "../settings";
+import { parsePersistedSandboxSettings } from "../settings";
 import {
   evaluateImageBuildForSpawn,
   type ImageBuildLookup,
@@ -1374,10 +1374,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
-    if (!session.sandbox_settings) return {};
     try {
-      const parsed: unknown = JSON.parse(session.sandbox_settings);
-      return normalizeSandboxSettings(parsed, { invalid: "omit" });
+      return parsePersistedSandboxSettings(session.sandbox_settings);
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};

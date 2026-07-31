@@ -1,8 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { INTERNAL_TTYD_PORT } from "@open-inspect/shared";
-import { normalizeSandboxSettings, SandboxSettingsValidationError } from "./settings";
+import {
+  normalizeSandboxSettings,
+  parsePersistedSandboxSettings,
+  SandboxSettingsValidationError,
+} from "./settings";
 
 class CustomSettingsValidationError extends Error {}
+
+describe("parsePersistedSandboxSettings", () => {
+  it("returns empty settings when no snapshot is stored", () => {
+    expect(parsePersistedSandboxSettings(null)).toEqual({});
+  });
+
+  it("parses and normalizes persisted settings", () => {
+    expect(
+      parsePersistedSandboxSettings('{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000,"bad"]}')
+    ).toEqual({ sandboxTimeoutMs: 14_400_000, tunnelPorts: [3000] });
+  });
+
+  it("throws when the persisted blob is not valid JSON", () => {
+    expect(() => parsePersistedSandboxSettings("not-json")).toThrow(SyntaxError);
+  });
+});
 
 describe("normalizeSandboxSettings", () => {
   it("throws for invalid settings by default", () => {

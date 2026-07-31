@@ -113,6 +113,16 @@ export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 /** Minimum configurable sandbox session lifetime, in milliseconds. */
 export const MIN_SANDBOX_TIMEOUT_MS = 1000;
 
+/** Whether a sandbox lifetime is a safe positive whole-second millisecond value. */
+export function isValidSandboxTimeoutMs(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= MIN_SANDBOX_TIMEOUT_MS &&
+    value % MIN_SANDBOX_TIMEOUT_MS === 0
+  );
+}
+
 /**
  * Default repo-image build timeout (the build sandbox lifetime), in seconds.
  * Mirrors `DEFAULT_BUILD_TIMEOUT_SECONDS` in the Modal data plane
