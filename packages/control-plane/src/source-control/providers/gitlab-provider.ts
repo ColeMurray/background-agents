@@ -525,6 +525,41 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
     }
   }
 
+  async getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null> {
+    const projectPath = encodeProjectPath(config.owner, config.name);
+    try {
+      const response = await fetchWithTimeout(
+        `${GITLAB_API_BASE}/projects/${projectPath}/repository/branches/${encodeURIComponent(
+          config.branch
+        )}`,
+        { headers: this.headers(this.accessToken) }
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const error = await response.text();
+        throw SourceControlProviderError.fromFetchError(
+          `Failed to resolve branch head: ${response.status} ${error}`,
+          new Error(error),
+          response.status
+        );
+      }
+      const data = (await response.json()) as { commit?: { id?: unknown } };
+      if (typeof data.commit?.id !== "string" || !data.commit.id) {
+        throw new SourceControlProviderError(
+          "Failed to resolve branch head: malformed response",
+          "transient"
+        );
+      }
+      return data.commit.id;
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve branch head: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /**
    * Generate authentication for git push operations using the provider PAT.
    */

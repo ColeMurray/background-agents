@@ -24,6 +24,7 @@ import {
   applyScmCloneEnv,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
   scmCloneIdentity,
   SESSION_CONFIG_ENV_VAR,
@@ -58,6 +59,7 @@ const REPO_IMAGE_CALLBACK_ENV_KEYS = [
 const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
   "OI_REPO_IMAGE_CALLBACK_SECRET",
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
 ] as const;
 
 export interface TriggerOpenComputerEnvironmentImageBuildConfig {
@@ -70,7 +72,9 @@ export interface TriggerOpenComputerEnvironmentImageBuildConfig {
   callbackToken: string;
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
-  buildTimeoutSeconds?: number;
+  buildExecutionTimeoutSeconds: number;
+  /** Provider-session lifetime, including deferred finalization headroom. */
+  providerSessionTimeoutSeconds?: number;
   onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
 }
 
@@ -109,6 +113,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   ) {}
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
+    const template = config.prebuiltImageId ? undefined : this.requireTemplate();
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
@@ -130,7 +135,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
           })
         : await this.client.createSandbox({
             name: config.sandboxId,
-            template: this.client.config.template,
+            template: template ?? this.requireTemplate(),
             env: environment.envVars,
             labels,
             ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
@@ -243,7 +248,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         {
           kind: OPENCOMPUTER_CHECKPOINT_KIND,
           retentionPolicy: OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
-        }
+        },
+        ...(config.signal ? [config.signal] : [])
       );
 
       if (
@@ -352,10 +358,11 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
    */
   async deleteSandbox(
     providerObjectId: string,
-    options?: OpenComputerDeleteSandboxOptions
+    options?: OpenComputerDeleteSandboxOptions,
+    signal?: AbortSignal
   ): Promise<void> {
     try {
-      await this.client.deleteSandbox(providerObjectId, options);
+      await this.client.deleteSandbox(providerObjectId, options, ...(signal ? [signal] : []));
     } catch (error) {
       if (error instanceof OpenComputerNotFoundError) return;
       throw this.classifyError("Failed to delete OpenComputer sandbox", error);
@@ -370,6 +377,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   async triggerEnvironmentImageBuild(
     config: TriggerOpenComputerEnvironmentImageBuildConfig
   ): Promise<TriggerOpenComputerEnvironmentImageBuildResult> {
+    const template = this.requireTemplate();
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
@@ -393,11 +401,12 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         callbackUrl: config.callbackUrl,
         failureCallbackUrl: config.failureCallbackUrl,
         callbackToken: config.callbackToken,
+        buildExecutionTimeoutSeconds: config.buildExecutionTimeoutSeconds,
       });
       secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
       const sandbox = await this.client.createSandbox({
         name: sandboxName,
-        template: this.client.config.template,
+        template,
         env: environment.envVars,
         labels: {
           openinspect_framework: "open-inspect",
@@ -406,7 +415,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
           openinspect_build_id: config.buildId,
           openinspect_environment: config.environmentId,
         },
-        timeoutSeconds: config.buildTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
+        timeoutSeconds: config.providerSessionTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
@@ -447,11 +456,16 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
   async deleteProviderImage(
     providerImageId: string,
-    providerSessionId?: string | null
+    providerSessionId?: string | null,
+    signal?: AbortSignal
   ): Promise<void> {
     if (!providerSessionId) return;
     try {
-      await this.client.deleteCheckpoint(providerSessionId, providerImageId);
+      await this.client.deleteCheckpoint(
+        providerSessionId,
+        providerImageId,
+        ...(signal ? [signal] : [])
+      );
     } catch (error) {
       if (error instanceof OpenComputerNotFoundError) return;
       throw this.classifyError("Failed to delete OpenComputer checkpoint", error);
@@ -514,6 +528,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     callbackUrl: string;
     failureCallbackUrl: string;
     callbackToken: string;
+    buildExecutionTimeoutSeconds: number;
   }): PreparedOpenComputerEnvironment {
     const environment = this.prepareEnvironment(config.userEnvVars, {
       scrubReservedRepoImageEnv: true,
@@ -531,6 +546,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
       [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
+      [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
     });
 
     applyScmCloneEnv(envVars, scmCloneIdentity(this.providerConfig.scmProvider), config.cloneToken);
@@ -729,6 +745,17 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       );
     }
     return SandboxProviderError.fromFetchError(message, error);
+  }
+
+  private requireTemplate(): string {
+    const template = this.client.config.template;
+    if (!template) {
+      throw new SandboxProviderError(
+        "OPENCOMPUTER_TEMPLATE is required to create OpenComputer sandboxes",
+        "permanent"
+      );
+    }
+    return template;
   }
 }
 

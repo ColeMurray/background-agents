@@ -96,6 +96,7 @@ export function toRepositoryConfigPayload(
 export const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
 /** Build-mode marker checked as `=== "true"` by the runtime entrypoint. */
 export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
+export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
 /** One-shot clone token used only by image-build sandboxes. */
 export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 

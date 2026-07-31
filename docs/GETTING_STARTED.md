@@ -108,7 +108,7 @@ cd packages/modal-infra && uv sync --frozen && cd -
      - Account | Workers KV Storage | Edit (should be included with template)
      - Account | Workers R2 Storage | Edit (should be included with template)
      - Account | D1 | Edit
-     - Account | Queues | Edit (required when `enable_slack_bot = true`)
+     - Account | Queues | Edit (required for durable image-build finalization)
    - Set "Account Resources" to include your account
    - Set "Zone Resources" to include all zones from your account
    - Click "Continue to summary" and "Update token"
@@ -393,8 +393,8 @@ Queued delivery applies to every Slack completion, including text-only replies. 
    a generated-media attachment. If the token lacks Queue access, the apply fails while provisioning
    the new resources; grant the permission and rerun the apply.
 
-No individual Slack user needs to reauthorize the app. Teams with `enable_slack_bot = false` do not
-create the Queue resources.
+No individual Slack user needs to reauthorize the app. Deployments with `enable_slack_bot = false`
+still create the image-build finalization Queue and dead-letter Queue.
 
 ### Get Signing Secret
 

@@ -10,6 +10,7 @@ import type {
   SessionStatus,
 } from "@open-inspect/shared";
 import { z } from "zod";
+import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 export type {
   ArtifactType,
@@ -52,6 +53,9 @@ export interface Env {
 
   // D1 database
   DB: D1Database;
+
+  // Durable callback-to-finalizer handoff for provider-session image builds.
+  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
 
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;

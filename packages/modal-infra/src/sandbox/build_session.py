@@ -6,6 +6,7 @@ import time
 import modal
 from modal.stream_type import StreamType
 
+from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
@@ -41,6 +42,7 @@ class ModalBuildSessionService:
         clone_host: str | None = None,
         clone_username: str | None = None,
         user_env_vars: dict[str, str] | None = None,
+        build_execution_timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
         timeout_seconds: int = DEFAULT_BUILD_TIMEOUT_SECONDS,
     ) -> str:
         start_time = time.time()
@@ -64,6 +66,7 @@ class ModalBuildSessionService:
                 FAILURE_CALLBACK_URL_ENV: "",
                 CALLBACK_TOKEN_ENV: "",
                 PROVIDER_SESSION_ID_ENV: "",
+                IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR: str(build_execution_timeout_seconds),
             }
         )
         inject_vcs_env_vars(

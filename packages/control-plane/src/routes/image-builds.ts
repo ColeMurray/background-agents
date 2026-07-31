@@ -55,7 +55,6 @@ const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
 interface ImageBuildCompleteBody {
   build_id?: unknown;
-  provider_image_id?: unknown;
   provider_session_id?: unknown;
   repository_shas?: unknown;
   runtime_version?: unknown;
@@ -80,28 +79,12 @@ function workflowContext(ctx: RequestContext): ImageBuildWorkflowContext {
   };
 }
 
-async function workflowResultToResponse(
-  result: ImageBuildWorkflowResult,
-  ctx: RequestContext
-): Promise<Response> {
-  if (result.type === "completion_accepted") {
-    await scheduleWorkflowTask(result.finalization, ctx);
-  } else if (result.cleanup) {
-    await scheduleWorkflowTask(result.cleanup, ctx);
-  }
-
+function workflowResultToResponse(result: ImageBuildWorkflowResult): Response {
   switch (result.type) {
     case "completion_accepted":
-      return json({ ok: true, snapshotPending: true });
-    case "build_ready":
-      return json({
-        ok: true,
-        replacedImageId: result.replacedImages[0]?.image.providerImageId ?? null,
-      });
-    case "build_superseded":
-      return json({ ok: true, superseded: true });
-    case "build_failed":
-      return json({ ok: true });
+      return json({ ok: true, snapshotPending: true }, 202);
+    case "failure_accepted":
+      return json({ ok: true, cleanupPending: true }, 202);
     default: {
       const exhaustive: never = result;
       return error(`Unhandled workflow result: ${String(exhaustive)}`, 500);
@@ -128,23 +111,12 @@ function imageBuildErrorToResponse(errorValue: unknown): Response {
     case "planning_failed":
     case "trigger_failed":
     case "callback_auth_unavailable":
-    case "build_complete_failed":
-    case "build_failed_update_failed":
       return error(errorValue.message, 500);
     default: {
       const exhaustive: never = errorValue.code;
       return error(`Unhandled image build error: ${String(exhaustive)}`, 500);
     }
   }
-}
-
-async function scheduleWorkflowTask(task: Promise<void>, ctx: RequestContext): Promise<void> {
-  if (ctx.executionCtx) {
-    ctx.executionCtx.waitUntil(task);
-    return;
-  }
-
-  await task;
 }
 
 async function parseCallbackBody<T>(request: Request): Promise<T | Response> {
@@ -231,10 +203,6 @@ function buildCompleteCommand(body: ImageBuildCompleteBody): CompleteImageBuildC
 
   return {
     buildId,
-    providerImageId:
-      typeof body.provider_image_id === "string" && body.provider_image_id.length > 0
-        ? body.provider_image_id
-        : undefined,
     providerSessionId:
       typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
         ? body.provider_session_id
@@ -284,7 +252,7 @@ async function handleBuildComplete(
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
-    return workflowResultToResponse(result, ctx);
+    return workflowResultToResponse(result);
   } catch (e) {
     return imageBuildErrorToResponse(e);
   }
@@ -312,7 +280,7 @@ async function handleBuildFailed(
       callbackToken: getImageBuildCallbackBearerToken(request),
       context: workflowContext(ctx),
     });
-    return workflowResultToResponse(result, ctx);
+    return workflowResultToResponse(result);
   } catch (e) {
     return imageBuildErrorToResponse(e);
   }

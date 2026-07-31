@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenComputerSandboxProvider } from "../sandbox/providers/opencomputer-provider";
 import { OpenComputerImageBuildAdapter } from "./opencomputer-adapter";
-import type { OpenComputerImageBuildPlan } from "./types";
+import type { ImageBuildPlan } from "./types";
 
 function createProvider(): OpenComputerSandboxProvider {
   return {
@@ -12,10 +12,9 @@ function createProvider(): OpenComputerSandboxProvider {
   } as unknown as OpenComputerSandboxProvider;
 }
 
-function createPlan(): OpenComputerImageBuildPlan {
+function createPlan(): ImageBuildPlan {
   return {
     provider: "opencomputer",
-    callbackMode: "provider_session",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
@@ -54,7 +53,8 @@ describe("OpenComputerImageBuildAdapter", () => {
       failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       callbackToken: "callback-token",
       cloneToken: "clone-token",
-      buildTimeoutSeconds: 1801,
+      buildExecutionTimeoutSeconds: 1801,
+      providerSessionTimeoutSeconds: 2401,
       userEnvVars: { FOO: "bar" },
       onProviderSessionCreated: bindProviderSession,
     });

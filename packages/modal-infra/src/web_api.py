@@ -32,6 +32,7 @@ from .log_config import configure_logging, get_logger
 
 configure_logging()
 log = get_logger("web_api")
+IMAGE_BUILD_FINALIZATION_GRACE_SECONDS = 10 * 60
 
 
 def require_auth(authorization: str | None) -> None:
@@ -588,11 +589,17 @@ async def api_create_build_sandbox(
         if scope_kind not in {"repo", "environment"}:
             raise HTTPException(status_code=400, detail="scope_kind must be repo or environment")
         repositories = _validated_build_repositories(request.get("repositories"))
+        build_execution_timeout_seconds = _validated_timeout_seconds(
+            request,
+            "build_execution_timeout_seconds",
+            default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
+            max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
+        )
         timeout_seconds = _validated_timeout_seconds(
             request,
             "build_timeout_seconds",
             default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
-            max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
+            max_seconds=MAX_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS,
         )
 
         provider_session_id = await ModalBuildSessionService().create(
@@ -604,6 +611,7 @@ async def api_create_build_sandbox(
             clone_host=request.get("clone_host") or None,
             clone_username=request.get("clone_username") or None,
             user_env_vars=request.get("user_env_vars") or None,
+            build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=timeout_seconds,
         )
         return {

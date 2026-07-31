@@ -183,6 +183,7 @@ export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
   reason: string;
+  signal?: AbortSignal;
 }
 
 export interface SnapshotSandboxResponse {
@@ -194,45 +195,24 @@ export interface SnapshotSandboxResponse {
 export interface SnapshotBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
+  signal?: AbortSignal;
 }
 
-export interface BuildImageRequest {
+export interface CreateImageBuildSandboxRequest {
   /** Scope kind ("repo" | "environment") — accepted by Modal for logging only. */
   scopeKind: ImageBuildScopeKind;
   /** Scope id (lowercase owner/name or environment id) — logging only. */
   scopeId: string;
   buildId: string;
-  callbackUrl: string;
-  /** Failure callback URL, sent explicitly so the worker never derives it from callbackUrl. */
-  failureCallbackUrl: string;
-  /** Single-use token the builder presents as the bearer on both callbacks. */
-  callbackToken: string;
   /** Repositories in position order ([0] = primary), cloned at their base branches. */
-  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
-  userEnvVars?: Record<string, string>;
-  /**
-   * Build sandbox lifetime, in seconds. Already capped at
-   * MAX_BUILD_TIMEOUT_SECONDS by the trigger.
-   * Omitted → Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
-   */
-  buildTimeoutSeconds?: number;
-}
-
-export interface BuildImageResponse {
-  buildId: string;
-  status: string;
-}
-
-export interface CreateImageBuildSandboxRequest {
-  scopeKind: ImageBuildScopeKind;
-  scopeId: string;
-  buildId: string;
   repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
   cloneToken?: string;
   cloneHost?: string;
   cloneUsername?: string;
   userEnvVars?: Record<string, string>;
-  buildTimeoutSeconds?: number;
+  buildExecutionTimeoutSeconds: number;
+  /** Provider-session lifetime, including deferred Queue finalization headroom. */
+  providerSessionTimeoutSeconds?: number;
 }
 
 export interface CreateImageBuildSandboxResponse {
@@ -251,10 +231,12 @@ export interface TerminateImageBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
   reason: string;
+  signal?: AbortSignal;
 }
 
 export interface DeleteProviderImageRequest {
   providerImageId: string;
+  signal?: AbortSignal;
 }
 
 export interface DeleteProviderImageResponse {
@@ -292,7 +274,6 @@ export class ModalClient {
   private snapshotSandboxUrl: string;
   private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
-  private buildImageUrl: string;
   private createImageBuildSandboxUrl: string;
   private startImageBuildSandboxUrl: string;
   private terminateImageBuildSandboxUrl: string;
@@ -312,7 +293,6 @@ export class ModalClient {
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
     this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
-    this.buildImageUrl = `${baseUrl}-api-build-image.modal.run`;
     this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
     this.startImageBuildSandboxUrl = `${baseUrl}-api-start-build-sandbox.modal.run`;
     this.terminateImageBuildSandboxUrl = `${baseUrl}-api-terminate-build-sandbox.modal.run`;
@@ -509,6 +489,7 @@ export class ModalClient {
       const response = await fetch(this.snapshotSandboxUrl, {
         method: "POST",
         headers,
+        signal: request.signal,
         body: JSON.stringify({
           sandbox_id: request.providerObjectId,
           session_id: request.sessionId,
@@ -569,6 +550,7 @@ export class ModalClient {
       const response = await fetch(this.snapshotBuildSandboxUrl, {
         method: "POST",
         headers,
+        signal: request.signal,
         body: JSON.stringify({
           build_id: request.buildId,
           provider_session_id: request.providerSessionId,
@@ -619,9 +601,10 @@ export class ModalClient {
     let outcome: "success" | "error" = "error";
 
     try {
+      const headers = await this.getPostHeaders(correlation);
       const response = await fetch(this.createImageBuildSandboxUrl, {
         method: "POST",
-        headers: await this.getPostHeaders(correlation),
+        headers,
         body: JSON.stringify({
           scope_kind: request.scopeKind,
           scope_id: request.scopeId,
@@ -631,27 +614,30 @@ export class ModalClient {
           clone_host: request.cloneHost,
           clone_username: request.cloneUsername,
           user_env_vars: request.userEnvVars,
-          build_timeout_seconds: request.buildTimeoutSeconds ?? null,
+          build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
+          build_timeout_seconds: request.providerSessionTimeoutSeconds ?? null,
         }),
       });
 
       httpStatus = response.status;
+
       if (!response.ok) {
-        throw new ModalApiError(
-          `Modal API error: ${response.status} ${await response.text()}`,
-          response.status
-        );
+        const text = await response.text();
+        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
       const result = (await response.json()) as ModalApiResponse<{
         provider_session_id: string;
       }>;
+
       if (!result.success || !result.data?.provider_session_id) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
       outcome = "success";
-      return { providerSessionId: result.data.provider_session_id };
+      return {
+        providerSessionId: result.data.provider_session_id,
+      };
     } finally {
       log.info("modal.request", {
         event: "modal.request",
@@ -707,7 +693,7 @@ export class ModalClient {
   private async postImageBuildOperation(
     url: string,
     endpoint: string,
-    request: { buildId: string; providerSessionId: string },
+    request: { buildId: string; providerSessionId: string; signal?: AbortSignal },
     body: Record<string, unknown>,
     correlation?: CorrelationContext
   ): Promise<void> {
@@ -718,6 +704,7 @@ export class ModalClient {
       const response = await fetch(url, {
         method: "POST",
         headers: await this.getPostHeaders(correlation),
+        signal: request.signal,
         body: JSON.stringify(body),
       });
       httpStatus = response.status;
@@ -748,73 +735,6 @@ export class ModalClient {
   }
 
   /**
-   * Trigger an async scope image build on Modal (design §4).
-   */
-  async buildImage(
-    request: BuildImageRequest,
-    correlation?: CorrelationContext
-  ): Promise<BuildImageResponse> {
-    const startTime = Date.now();
-    const endpoint = "buildImage";
-    let httpStatus: number | undefined;
-    let outcome: "success" | "error" = "error";
-
-    try {
-      const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.buildImageUrl, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          scope_kind: request.scopeKind,
-          scope_id: request.scopeId,
-          build_id: request.buildId,
-          callback_url: request.callbackUrl,
-          failure_callback_url: request.failureCallbackUrl,
-          callback_token: request.callbackToken,
-          repositories: request.repositories.map(toRepositoryConfigPayload),
-          user_env_vars: request.userEnvVars,
-          build_timeout_seconds: request.buildTimeoutSeconds ?? null,
-        }),
-      });
-
-      httpStatus = response.status;
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
-      }
-
-      const result = (await response.json()) as ModalApiResponse<{
-        build_id: string;
-        status: string;
-      }>;
-
-      if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-      }
-
-      outcome = "success";
-      return {
-        buildId: result.data.build_id,
-        status: result.data.status,
-      };
-    } finally {
-      log.info("modal.request", {
-        event: "modal.request",
-        endpoint,
-        build_id: request.buildId,
-        scope_kind: request.scopeKind,
-        scope_id: request.scopeId,
-        trace_id: correlation?.trace_id,
-        request_id: correlation?.request_id,
-        http_status: httpStatus,
-        duration_ms: Date.now() - startTime,
-        outcome,
-      });
-    }
-  }
-
-  /**
    * Delete a provider image (best-effort).
    */
   async deleteProviderImage(
@@ -831,6 +751,7 @@ export class ModalClient {
       const response = await fetch(this.deleteProviderImageUrl, {
         method: "POST",
         headers,
+        signal: request.signal,
         body: JSON.stringify({
           provider_image_id: request.providerImageId,
         }),
