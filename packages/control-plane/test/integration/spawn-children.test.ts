@@ -198,6 +198,56 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(session.environment_id).toBe("env_parent");
   });
 
+  it("persists inherited reasoning effort for children and grandchildren", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({ reasoningEffort: "high" });
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Spawn another child" }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = await childRes.json<{ sessionId: string }>();
+    expect((await store.get(child.sessionId))?.reasoningEffort).toBe("high");
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(child.sessionId));
+    const [childSession] = await queryDO<{ reasoning_effort: string | null }>(
+      childStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(childSession.reasoning_effort).toBe("high");
+
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${child.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({ title: "Grandchild", prompt: "Verify inherited reasoning" }),
+      }
+    );
+    expect(grandchildRes.status).toBe(201);
+    const grandchild = await grandchildRes.json<{ sessionId: string }>();
+    expect((await store.get(grandchild.sessionId))?.reasoningEffort).toBe("high");
+
+    const grandchildStub = env.SESSION.get(env.SESSION.idFromName(grandchild.sessionId));
+    const [grandchildSession] = await queryDO<{ reasoning_effort: string | null }>(
+      grandchildStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(grandchildSession.reasoning_effort).toBe("high");
+  });
+
   it("rejects a disabled model override for grandchildren", async () => {
     const { parentName, sandboxToken } = await setupParent();
 
