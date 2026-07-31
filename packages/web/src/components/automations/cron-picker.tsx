@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { isValidCron, nextCronOccurrence, describeCron } from "@open-inspect/shared";
+import { isValidCron, nextCronOccurrence, describeCron } from "@open-inspect/shared/cron";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import {

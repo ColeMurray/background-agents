@@ -61,6 +61,62 @@
     "./types/integrations": {
       "import": "./dist/types/integrations.js",
       "types": "./dist/types/integrations.d.ts"
+    },
+    "./sign-in-provider": {
+      "import": "./dist/sign-in-provider.js",
+      "types": "./dist/sign-in-provider.d.ts"
+    },
+    "./git": {
+      "import": "./dist/git.js",
+      "types": "./dist/git.d.ts"
+    },
+    "./cron": {
+      "import": "./dist/cron.js",
+      "types": "./dist/cron.d.ts"
+    },
+    "./triggers": {
+      "import": "./dist/triggers/index.js",
+      "types": "./dist/triggers/index.d.ts"
+    },
+    "./slack": {
+      "import": "./dist/slack/index.js",
+      "types": "./dist/slack/index.d.ts"
+    },
+    "./completion/extractor": {
+      "import": "./dist/completion/extractor.js",
+      "types": "./dist/completion/extractor.d.ts"
+    },
+    "./types/repositories": {
+      "import": "./dist/types/repositories.js",
+      "types": "./dist/types/repositories.d.ts"
+    },
+    "./types/repository-catalog": {
+      "import": "./dist/types/repository-catalog.js",
+      "types": "./dist/types/repository-catalog.d.ts"
+    },
+    "./types/automations": {
+      "import": "./dist/types/automations.js",
+      "types": "./dist/types/automations.d.ts"
+    },
+    "./types/websocket": {
+      "import": "./dist/types/websocket.js",
+      "types": "./dist/types/websocket.d.ts"
+    },
+    "./types/server-messages": {
+      "import": "./dist/types/server-messages.js",
+      "types": "./dist/types/server-messages.d.ts"
+    },
+    "./types/session-attachments": {
+      "import": "./dist/types/session-attachments.js",
+      "types": "./dist/types/session-attachments.d.ts"
+    },
+    "./types/session-diffs": {
+      "import": "./dist/types/session-diffs.js",
+      "types": "./dist/types/session-diffs.d.ts"
+    },
+    "./types/analytics": {
+      "import": "./dist/types/analytics.js",
+      "types": "./dist/types/analytics.d.ts"
     }
   },
   "scripts": {

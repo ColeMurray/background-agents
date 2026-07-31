@@ -9,7 +9,7 @@
  * 3. Token valid for 1 hour
  */
 
-import type { InstallationRepository } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import type { CacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
