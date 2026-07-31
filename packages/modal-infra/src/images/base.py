@@ -20,15 +20,6 @@ import sandbox_runtime
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 
-
-def overlay_sandbox_runtime(image: modal.Image) -> modal.Image:
-    """Overlay the deployed runtime onto an existing image or snapshot."""
-    return image.add_local_dir(
-        str(SANDBOX_RUNTIME_DIR),
-        remote_path="/app/sandbox_runtime",
-    )
-
-
 # OpenCode version to install.
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
@@ -214,7 +205,9 @@ base_image = (
             "NODE_PATH": "/usr/lib/node_modules",
         }
     )
+    # Add sandbox runtime code to the image (provider-agnostic bridge, entrypoint, tools, plugins)
+    .add_local_dir(
+        str(SANDBOX_RUNTIME_DIR),
+        remote_path="/app/sandbox_runtime",
+    )
 )
-
-# Add sandbox runtime code to the image (provider-agnostic bridge, entrypoint, tools, plugins).
-base_image = overlay_sandbox_runtime(base_image)
