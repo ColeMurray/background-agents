@@ -5,8 +5,7 @@
  * - Build callbacks from async image builders (build-complete, build-failed)
  * - Build triggers (cron pass, save-hooks, manual rebuild)
  * - The repo prebuild toggle (the repo_metadata flag write)
- * - Enabled-scope and status queries for the rebuild cron
- * - Maintenance operations (stale builds, cleanup + superseded-artifact reaping)
+ * - Enabled-scope and status queries
  */
 
 import type { ImageBuildRecordView, RepositoryShaEntry } from "@open-inspect/shared";
@@ -15,7 +14,6 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
-import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "../image-builds/maintenance";
 import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   repoImageBuildScope,
@@ -44,14 +42,12 @@ import {
   extractRepoParams,
   json,
   parseJsonBody,
-  parseMaxAgeMs,
   parsePattern,
 } from "./shared";
 
 const logger = createLogger("router:image-builds");
 const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
-const DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS = 86400 * MS_PER_SECOND;
 
 interface ImageBuildCompleteBody {
   build_id?: unknown;
@@ -538,93 +534,6 @@ async function handleGetEnabledRepos(
   }
 }
 
-/**
- * POST /image-builds/mark-stale
- * Mark old building rows as failed. Called by scheduler.
- */
-async function handleMarkStale(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const providerError = requireImageBuilds(env);
-  if (providerError) return providerError;
-
-  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_STALE_BUILD_MAX_AGE_MS);
-  if (maxAgeMs instanceof Response) return maxAgeMs;
-
-  const store = new ImageBuildStore(ctx.db);
-
-  try {
-    const count = await store.markStaleBuildsAsFailed(maxAgeMs);
-
-    logger.info("image_build.stale_marked", {
-      count,
-      max_age_seconds: maxAgeMs / MS_PER_SECOND,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({ ok: true, markedFailed: count });
-  } catch (e) {
-    logger.error("image_build.mark_stale_error", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to mark stale builds", 500);
-  }
-}
-
-/**
- * POST /image-builds/cleanup
- * Reap provider artifacts from failed and superseded rows, then delete old
- * (artifact-free) failed rows. Called by scheduler.
- */
-async function handleCleanup(
-  request: Request,
-  env: Env,
-  _match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const providerError = requireImageBuilds(env);
-  if (providerError) return providerError;
-
-  const maxAgeMs = await parseMaxAgeMs(request, DEFAULT_FAILED_BUILD_CLEANUP_MAX_AGE_MS);
-  if (maxAgeMs instanceof Response) return maxAgeMs;
-
-  try {
-    const result = await createImageBuildWorkflowFromEnv(env, ctx.db).cleanupImages(
-      maxAgeMs,
-      workflowContext(ctx)
-    );
-
-    logger.info("image_build.cleanup", {
-      deleted: result.deletedFailed,
-      reaped_failed: result.reapedFailed,
-      reaped_superseded: result.reapedSuperseded,
-      max_age_seconds: maxAgeMs / MS_PER_SECOND,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-
-    return json({
-      ok: true,
-      deleted: result.deletedFailed,
-      reapedFailed: result.reapedFailed,
-      reapedSuperseded: result.reapedSuperseded,
-    });
-  } catch (e) {
-    logger.error("image_build.cleanup_error", {
-      error: e instanceof Error ? e.message : String(e),
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Failed to clean up old builds", 500);
-  }
-}
-
 export const imageBuildRoutes: Route[] = [
   {
     method: "POST",
@@ -665,15 +574,5 @@ export const imageBuildRoutes: Route[] = [
     method: "GET",
     pattern: parsePattern("/image-builds/enabled-repos"),
     handler: handleGetEnabledRepos,
-  },
-  {
-    method: "POST",
-    pattern: parsePattern("/image-builds/mark-stale"),
-    handler: handleMarkStale,
-  },
-  {
-    method: "POST",
-    pattern: parsePattern("/image-builds/cleanup"),
-    handler: handleCleanup,
   },
 ];

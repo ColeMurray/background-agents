@@ -1,4 +1,4 @@
-"""Tests for the additive Modal provider-session image-build APIs."""
+"""Tests for the Modal provider-session image-build APIs."""
 
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -6,6 +6,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 
 from src import web_api
+
+REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 
 
 def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
@@ -45,7 +47,7 @@ async def _call_generic_snapshot(request: dict) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_create_returns_provider_session_without_removing_legacy_endpoint(monkeypatch):
+async def test_create_build_sandbox_is_dormant_and_returns_provider_session(monkeypatch):
     service = _patch_dependencies(monkeypatch)
 
     result = await _call(
@@ -54,27 +56,29 @@ async def test_create_returns_provider_session_without_removing_legacy_endpoint(
             "scope_kind": "repo",
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
-            "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            "repositories": REPOSITORIES,
             "clone_token": "clone-token",
-            "clone_host": "gitlab.com",
-            "clone_username": "oauth2",
+            "user_env_vars": {"FOO": "bar"},
+            "build_timeout_seconds": 2400,
         },
     )
 
-    assert result["data"]["provider_session_id"] == "modal-session-1"
+    assert result == {
+        "success": True,
+        "data": {"provider_session_id": "modal-session-1"},
+    }
     service.create.assert_awaited_once_with(
         build_id="imgb-1",
         scope_kind="repo",
         scope_id="acme/repo",
-        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        repositories=REPOSITORIES,
         clone_token="clone-token",
-        clone_host="gitlab.com",
-        clone_username="oauth2",
-        user_env_vars=None,
+        clone_host=None,
+        clone_username=None,
+        user_env_vars={"FOO": "bar"},
         build_execution_timeout_seconds=1800,
-        timeout_seconds=1800,
+        timeout_seconds=2400,
     )
-    assert hasattr(web_api, "api_build_image")
 
 
 @pytest.mark.asyncio
@@ -185,7 +189,7 @@ async def test_create_rejects_case_insensitive_repository_path_collisions(monkey
 async def test_start_passes_bound_identity_and_callbacks(monkeypatch):
     service = _patch_dependencies(monkeypatch)
 
-    await _call(
+    result = await _call(
         web_api.api_start_build_sandbox,
         {
             "build_id": "imgb-1",
@@ -196,6 +200,7 @@ async def test_start_passes_bound_identity_and_callbacks(monkeypatch):
         },
     )
 
+    assert result["success"] is True
     service.start.assert_awaited_once_with(
         build_id="imgb-1",
         provider_session_id="modal-session-1",
@@ -249,6 +254,29 @@ async def test_terminate_passes_bound_identity_and_reason(monkeypatch):
         provider_session_id="modal-session-1",
         reason="image_build_failed",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint_name", "payload"),
+    [
+        ("api_create_build_sandbox", {"build_id": "imgb-1", "repositories": []}),
+        (
+            "api_start_build_sandbox",
+            {"build_id": "imgb-1", "provider_session_id": "modal-session-1"},
+        ),
+        ("api_terminate_build_sandbox", {"build_id": "imgb-1"}),
+    ],
+)
+async def test_build_session_endpoints_reject_missing_core_fields(
+    monkeypatch, endpoint_name, payload
+):
+    _patch_dependencies(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc_info:
+        await _call(getattr(web_api, endpoint_name), payload)
+
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio

@@ -90,7 +90,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
         body: JSON.stringify({ title: "Child task", prompt: "Do the thing" }),
-        service: "modal",
+        service: "linear-bot",
       }),
       env as never
     );
@@ -218,7 +218,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const response = await handleRequest(
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        service: "modal",
+        service: "linear-bot",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",
@@ -280,7 +280,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const response = await handleRequest(
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        service: "modal",
+        service: "linear-bot",
         body: JSON.stringify({ title: "Child task" }),
       }),
       env as never
@@ -417,7 +417,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     const response = await handleRequest(
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        service: "modal",
+        service: "linear-bot",
         body: JSON.stringify({
           title: "Child task",
           prompt: "Do the thing",

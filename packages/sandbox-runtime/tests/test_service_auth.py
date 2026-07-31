@@ -215,7 +215,7 @@ def test_verify_rejects_tampered_components():
 
     for overrides in [
         {"secret": "wrong"},
-        {"service": "modal"},
+        {"service": "github-bot"},
         {"method": "GET"},
         {"url": "https://cp.example.com/sessions?a=2"},
         {"body_sha256_hex": sha256_hex('{"x":2}')},
