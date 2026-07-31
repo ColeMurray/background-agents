@@ -18,7 +18,6 @@ describe("Worker fetch handler", () => {
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
     expect(response.headers.get("Access-Control-Allow-Methods")).toContain("GET");
     expect(response.headers.get("Access-Control-Allow-Methods")).toContain("POST");
-    expect(response.headers.get("Access-Control-Allow-Methods")).toContain("PATCH");
   });
 
   it("returns healthy on GET /health", async () => {

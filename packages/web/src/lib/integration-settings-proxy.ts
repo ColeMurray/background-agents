@@ -3,12 +3,11 @@ import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-type ProxyMethod = "GET" | "PUT" | "PATCH" | "DELETE";
+type ProxyMethod = "GET" | "PUT" | "DELETE";
 
 const METHOD_VERBS: Record<ProxyMethod, string> = {
   GET: "fetch",
   PUT: "update",
-  PATCH: "update",
   DELETE: "delete",
 };
 
@@ -18,7 +17,7 @@ type RouteHandler<P> = (
 ) => Promise<NextResponse>;
 
 /**
- * The GET/PUT/PATCH/DELETE handlers for a BFF route that proxies an
+ * The GET/PUT/DELETE handler trio for a BFF route that proxies an
  * integration-settings scope (global, per-repo, per-environment) to the
  * control plane. Each scope's route file only supplies its control-plane path
  * (from already-decoded segments — encode them) and a label for error
@@ -28,12 +27,7 @@ type RouteHandler<P> = (
 export function integrationSettingsProxy<P>(
   buildPath: (params: P) => string,
   label: string
-): {
-  GET: RouteHandler<P>;
-  PUT: RouteHandler<P>;
-  PATCH: RouteHandler<P>;
-  DELETE: RouteHandler<P>;
-} {
+): { GET: RouteHandler<P>; PUT: RouteHandler<P>; DELETE: RouteHandler<P> } {
   const proxy = async (
     request: NextRequest,
     context: { params: Promise<P> },
@@ -53,9 +47,7 @@ export function integrationSettingsProxy<P>(
           ? undefined
           : {
               method,
-              ...(["PUT", "PATCH"].includes(method)
-                ? { body: JSON.stringify(await request.json()) }
-                : {}),
+              ...(method === "PUT" ? { body: JSON.stringify(await request.json()) } : {}),
             }
       );
       const data = await response.json();
@@ -72,7 +64,6 @@ export function integrationSettingsProxy<P>(
   return {
     GET: (request, context) => proxy(request, context, "GET"),
     PUT: (request, context) => proxy(request, context, "PUT"),
-    PATCH: (request, context) => proxy(request, context, "PATCH"),
     DELETE: (request, context) => proxy(request, context, "DELETE"),
   };
 }

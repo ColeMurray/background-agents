@@ -10,13 +10,11 @@ import {
   parseRepositoryFullName,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
-  type SlackGlobalDefaultsPatch,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
   type SlackGlobalSettings,
-  type SlackGlobalConfig,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
 } from "@open-inspect/shared";
@@ -27,14 +25,6 @@ import type { SqlDatabase } from "./sql-database";
 type SettingsLevel = "global" | "repo";
 
 const SLACK_MENTIONS_POLICIES = ["allow", "escape", "strip"] as const;
-const SLACK_GLOBAL_SETTING_KEYS = new Set([
-  "agentNotificationsEnabled",
-  "model",
-  "mentionsPolicy",
-  "routingRules",
-  "sessionInstructions",
-]);
-const SLACK_REPO_SETTING_KEYS = new Set(["agentNotificationsEnabled"]);
 
 export class IntegrationSettingsValidationError extends Error {
   constructor(message: string) {
@@ -109,42 +99,6 @@ export class IntegrationSettingsStore {
       )
       .bind(integrationId, JSON.stringify(settings), now, now)
       .run();
-  }
-
-  async patchSlackGlobalDefaults(patch: SlackGlobalDefaultsPatch): Promise<SlackGlobalConfig> {
-    for (const key of Object.keys(patch)) {
-      if (!SLACK_GLOBAL_SETTING_KEYS.has(key)) {
-        throw new IntegrationSettingsValidationError(`Unknown slack setting: ${key}`);
-      }
-    }
-    const values = Object.fromEntries(
-      Object.entries(patch).filter(([, value]) => value !== null)
-    ) as SlackGlobalSettings;
-    const normalized = this.validateSlackSettings(values, "global") as Record<string, unknown>;
-    const normalizedPatch = Object.fromEntries(
-      Object.entries(patch).map(([key, value]) => [
-        key,
-        value === null ||
-        (key === "sessionInstructions" && typeof value === "string" && !value.trim())
-          ? null
-          : normalized[key],
-      ])
-    );
-    const mergePatch = JSON.stringify({ defaults: normalizedPatch });
-    const now = Date.now();
-
-    await this.db
-      .prepare(
-        `INSERT INTO integration_settings (integration_id, settings, created_at, updated_at)
-         VALUES (?, json_patch('{}', ?), ?, ?)
-         ON CONFLICT(integration_id) DO UPDATE SET
-           settings = json_patch(integration_settings.settings, ?),
-           updated_at = excluded.updated_at`
-      )
-      .bind("slack", mergePatch, now, now, mergePatch)
-      .run();
-
-    return (await this.getGlobal("slack")) ?? { defaults: {} };
   }
 
   async deleteGlobal<K extends IntegrationId>(integrationId: K): Promise<void> {
@@ -469,7 +423,16 @@ export class IntegrationSettingsStore {
     settings: SlackGlobalSettings,
     level: SettingsLevel
   ): SlackGlobalSettings {
-    const allowedKeys = level === "global" ? SLACK_GLOBAL_SETTING_KEYS : SLACK_REPO_SETTING_KEYS;
+    const allowedKeys =
+      level === "global"
+        ? new Set([
+            "agentNotificationsEnabled",
+            "model",
+            "mentionsPolicy",
+            "routingRules",
+            "sessionInstructions",
+          ])
+        : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
       if (!allowedKeys.has(key)) {
@@ -511,23 +474,15 @@ export class IntegrationSettingsStore {
       );
     }
 
-    const normalizedSettings = { ...settings };
-    if (
-      typeof normalizedSettings.sessionInstructions === "string" &&
-      !normalizedSettings.sessionInstructions.trim()
-    ) {
-      delete normalizedSettings.sessionInstructions;
-    }
-
     // Routing rules are workspace-wide (the allowedKeys gate above already
     // rejects them at the per-repo level). Validate structure here; normalize
     // for storage. Target existence is not checked (the repo list isn't
     // available at this layer) — the bot skips stale targets at match time.
     if (settings.routingRules !== undefined) {
-      normalizedSettings.routingRules = this.validateRoutingRules(settings.routingRules);
+      return { ...settings, routingRules: this.validateRoutingRules(settings.routingRules) };
     }
 
-    return normalizedSettings;
+    return settings;
   }
 
   private validateRoutingRules(rules: unknown): SlackRoutingRule[] {
