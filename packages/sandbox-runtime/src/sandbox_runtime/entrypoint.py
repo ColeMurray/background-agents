@@ -76,13 +76,6 @@ AGENT_TOOLS_GATED_ON_ENV: dict[str, str] = {
 
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
-LEGACY_CHILD_TOOL_FILENAMES = (
-    "spawn-task.js",
-    "get-task-status.js",
-    "get-task-status-format.js",
-    "cancel-task.js",
-)
-
 # Wrapper installed at /usr/local/bin/gh (ahead of the real /usr/bin/gh in
 # PATH). The git credential helper can't authenticate the GitHub CLI — gh
 # reads GH_TOKEN/GITHUB_TOKEN from the environment, not git's protocol. This
@@ -717,10 +710,6 @@ class SandboxSupervisor:
             return installed
 
         tool_dest.mkdir(parents=True, exist_ok=True)
-
-        # Snapshot restores can retain tools installed by an older runtime.
-        for legacy_filename in LEGACY_CHILD_TOOL_FILENAMES:
-            (tool_dest / legacy_filename).unlink(missing_ok=True)
 
         if legacy_tool.exists() and self.has_repository:
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")

@@ -111,33 +111,6 @@ class TestInstallTools:
         assert not (tool_dest / "README.md").exists()
         assert not (tool_dest / "helper.py").exists()
 
-    def test_legacy_child_tools_removed_from_restored_workspace(self, tmp_path):
-        """Renamed child tools should not coexist with stale task-named tools."""
-        sup = _make_supervisor()
-        workdir = tmp_path / "workspace"
-        tool_dest = workdir / ".opencode" / "tool"
-        tool_dest.mkdir(parents=True)
-        for filename in (
-            "spawn-task.js",
-            "get-task-status.js",
-            "get-task-status-format.js",
-            "cancel-task.js",
-        ):
-            (tool_dest / filename).write_text("// stale")
-
-        tools_dir = tmp_path / "app" / "sandbox" / "tools"
-        tools_dir.mkdir(parents=True)
-        (tools_dir / "spawn-child.js").write_text("// current")
-
-        with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
-            sup._install_tools(workdir)
-
-        assert (tool_dest / "spawn-child.js").exists()
-        assert not (tool_dest / "spawn-task.js").exists()
-        assert not (tool_dest / "get-task-status.js").exists()
-        assert not (tool_dest / "get-task-status-format.js").exists()
-        assert not (tool_dest / "cancel-task.js").exists()
-
     def test_graceful_without_tools_dir(self, tmp_path):
         """Only legacy tool should be copied when tools/ doesn't exist."""
         sup = _make_supervisor()
