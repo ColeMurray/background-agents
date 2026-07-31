@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { normalizeSlackEvent, SLACK_TEXT_MAX_LENGTH } from "./normalizer";
+import {
+  normalizeSlackEvent,
+  buildSlackContextBlock,
+  slackChannelLabel,
+  SLACK_TEXT_MAX_LENGTH,
+} from "./normalizer";
 
 const baseInput = {
   channel: "C123",
@@ -78,5 +83,34 @@ describe("normalizeSlackEvent", () => {
     const event = normalizeSlackEvent(baseInput, "UBOT");
     expect(event!.channelName).toBeUndefined();
     expect(event!.contextBlock).toContain("C123");
+  });
+
+  describe("context block composition", () => {
+    it("omits thread history at ingress", () => {
+      // History is fetched lazily, after a run is admitted — never here.
+      const event = normalizeSlackEvent({ ...baseInput, thread_ts: "1699999999.000001" }, "UBOT");
+      expect(event!.contextBlock).not.toContain("thread_context");
+    });
+
+    it("places supplied thread context ahead of the triggering message", () => {
+      const block = buildSlackContextBlock({
+        channelLabel: "#ops",
+        actorUserId: "U999",
+        text: "can we do it?",
+        threadContext: "<thread_context>[]</thread_context>",
+      });
+      expect(block.indexOf("<thread_context>")).toBeLessThan(block.indexOf("<user_content>"));
+    });
+
+    it("reproduces the ingress layout when no thread context is supplied", () => {
+      const event = normalizeSlackEvent(baseInput, "UBOT", { channelName: "ops" });
+      const recomposed = buildSlackContextBlock({
+        channelLabel: slackChannelLabel("C123", "ops"),
+        actorUserId: "U999",
+        text: "please deploy the api",
+      });
+      // The scheduler rebuilds the block from event fields; the two must agree.
+      expect(recomposed).toBe(event!.contextBlock);
+    });
   });
 });
