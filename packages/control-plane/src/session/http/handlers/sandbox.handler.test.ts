@@ -15,6 +15,7 @@ function createHandler() {
   const isValidSandboxToken = vi.fn();
   const getSession = vi.fn<() => SessionRow | null>();
   const refreshOpenAIToken = vi.fn();
+  const refreshXaiToken = vi.fn();
   const isOpenAISecretsConfigured = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
@@ -37,6 +38,7 @@ function createHandler() {
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,
+    refreshXaiToken,
     isOpenAISecretsConfigured,
     getScmCredentials,
     messenger,
@@ -50,6 +52,7 @@ function createHandler() {
     ...sandboxHandler,
     verifySandboxToken: (request: Request) => sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: () => sandboxHandler.openaiTokenRefresh(log),
+    xaiTokenRefresh: () => sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: () => sandboxHandler.scmCredentials(log),
     tunnelUrls: () => sandboxHandler.tunnelUrls(log),
   };
@@ -62,6 +65,7 @@ function createHandler() {
     isValidSandboxToken,
     getSession,
     refreshOpenAIToken,
+    refreshXaiToken,
     isOpenAISecretsConfigured,
     getScmCredentials,
     broadcast,
@@ -522,6 +526,21 @@ describe("createSandboxHandler", () => {
       account_id: "acct_123",
     });
     expect(refreshOpenAIToken).toHaveBeenCalledWith(session, log);
+  });
+
+  it("returns xAI access token payload on success", async () => {
+    const { handler, getSession, isOpenAISecretsConfigured, refreshXaiToken, log } =
+      createHandler();
+    const session = { id: "session-1" } as SessionRow;
+    getSession.mockReturnValue(session);
+    isOpenAISecretsConfigured.mockReturnValue(true);
+    refreshXaiToken.mockResolvedValue({ ok: true, accessToken: "xai-access", expiresIn: 3600 });
+
+    const response = await handler.xaiTokenRefresh();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ access_token: "xai-access", expires_in: 3600 });
+    expect(refreshXaiToken).toHaveBeenCalledWith(session, log);
   });
 
   it("returns 404 when scm credentials have no session", async () => {

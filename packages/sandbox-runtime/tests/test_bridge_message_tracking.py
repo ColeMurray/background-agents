@@ -289,6 +289,16 @@ class TestBuildPromptRequestBody:
             "outputConfig": {"effort": "high"},
         }
 
+    def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "xai/grok-build-0.1",
+            reasoning_effort="high",
+        )
+
+        assert body["variant"] == "high"
+        assert "options" not in body["model"]
+
 
 class TestOpenCodeIdentifier:
     """Tests for OpenCode-compatible ascending ID generation."""

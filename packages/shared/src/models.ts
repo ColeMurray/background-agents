@@ -189,6 +189,18 @@ export const MODEL_CATALOG = [
     ],
   },
   {
+    category: "xAI / SuperGrok",
+    enabledByDefault: false,
+    models: [
+      {
+        id: "xai/grok-build-0.1",
+        name: "Grok Build 0.1",
+        description: "Coding model for SuperGrok subscribers",
+        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+      },
+    ],
+  },
+  {
     category: "Z.AI Coding Plan",
     enabledByDefault: false,
     models: [{ id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" }],

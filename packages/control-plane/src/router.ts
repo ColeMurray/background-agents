@@ -76,7 +76,6 @@ const PUBLIC_ROUTES: RegExp[] = [
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
-  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
@@ -90,6 +89,8 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
 /** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
 const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/commit-signing$/, // Public signing configuration and remote signer
+  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
+  /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
 ];
 
 /** Diff endpoints the sandbox needs, constrained by both path and method. */
@@ -170,7 +171,9 @@ function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
+      path
+    ) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
 }

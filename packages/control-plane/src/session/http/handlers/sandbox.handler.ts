@@ -8,6 +8,7 @@ import {
 import type { ParticipantRole, SandboxEvent } from "../../../types";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
+import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
@@ -36,6 +37,7 @@ export interface SandboxHandlerDeps {
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
   refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
+  refreshXaiToken: (session: SessionRow, log: Logger) => Promise<XaiTokenRefreshResult>;
   isOpenAISecretsConfigured: () => boolean;
   getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
   messenger: SessionMessenger;
@@ -49,6 +51,7 @@ export interface SandboxHandler {
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request, log: Logger) => Promise<Response>;
   openaiTokenRefresh: (log: Logger) => Promise<Response>;
+  xaiTokenRefresh: (log: Logger) => Promise<Response>;
   scmCredentials: (log: Logger) => Promise<Response>;
   /** Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map. */
   tunnelUrls: (log: Logger) => Promise<Response>;
@@ -240,6 +243,24 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
           expires_in: result.expiresIn,
           account_id: result.accountId,
         },
+        { status: 200 }
+      );
+    },
+
+    async xaiTokenRefresh(log: Logger): Promise<Response> {
+      const session = deps.getSession();
+      if (!session) {
+        return Response.json({ error: "No session" }, { status: 404 });
+      }
+      if (!deps.isOpenAISecretsConfigured()) {
+        return Response.json({ error: "Secrets not configured" }, { status: 500 });
+      }
+      const result = await deps.refreshXaiToken(session, log);
+      if (!result.ok) {
+        return Response.json({ error: result.error }, { status: result.status });
+      }
+      return Response.json(
+        { access_token: result.accessToken, expires_in: result.expiresIn },
         { status: 200 }
       );
     },
