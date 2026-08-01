@@ -109,10 +109,14 @@ export type {
   ParticipantPresence,
   PullRequestSummary,
   SessionNavigationState,
+  SessionReadStateAction,
+  SessionReadStateResult,
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
 } from "./sessions";
 export {
+  sessionReadStateActionSchema,
+  sessionReadStateResultSchema,
   sessionParticipantProfileSchema,
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";

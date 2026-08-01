@@ -1,4 +1,4 @@
-import type { SessionStatus } from "@open-inspect/shared";
+import { sessionReadStateActionSchema, type SessionStatus } from "@open-inspect/shared";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
@@ -93,15 +93,16 @@ async function handleListSessions(
 
   const store = new SessionIndexStore(ctx.db);
   const listStartedAt = Date.now();
+  const viewerUserId = ctx.principal?.kind === "user" ? ctx.principal.userId : undefined;
   const result = await store.list({
     status,
     excludeStatus,
     createdByUserIds,
     limit,
     offset,
-    viewerUserId: ctx.principal?.kind === "user" ? ctx.principal.userId : undefined,
+    viewerUserId,
   });
-  if (ctx.principal?.kind === "user") {
+  if (viewerUserId) {
     log.info("session_navigation.decorated", {
       event: "session_navigation.decorated",
       session_count: result.sessions.length,
@@ -115,31 +116,10 @@ async function handleListSessions(
     sessions: result.sessions,
     hasMore: result.hasMore,
   });
-  if (ctx.principal?.kind === "user") {
+  if (viewerUserId) {
     response.headers.set("Cache-Control", "private, no-store");
   }
   return response;
-}
-
-type ReadStatePatchBody =
-  | { action: "acknowledge"; observedAttentionId: string }
-  | { action: "mark_read" };
-
-function parseReadStatePatchBody(value: unknown): ReadStatePatchBody | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (record.action === "mark_read" && Object.keys(record).length === 1) {
-    return { action: "mark_read" };
-  }
-  if (
-    record.action === "acknowledge" &&
-    typeof record.observedAttentionId === "string" &&
-    record.observedAttentionId.length > 0 &&
-    Object.keys(record).length === 2
-  ) {
-    return { action: "acknowledge", observedAttentionId: record.observedAttentionId };
-  }
-  return null;
 }
 
 async function handlePatchReadState(
@@ -156,8 +136,9 @@ async function handlePatchReadState(
 
   const unparsedBody = await parseJsonBody<unknown>(request);
   if (unparsedBody instanceof Response) return unparsedBody;
-  const body = parseReadStatePatchBody(unparsedBody);
-  if (!body) return error("Invalid read-state action", 400);
+  const parsedBody = sessionReadStateActionSchema.safeParse(unparsedBody);
+  if (!parsedBody.success) return error("Invalid read-state action", 400);
+  const body = parsedBody.data;
 
   const store = new SessionIndexStore(ctx.db);
   const visibleSession = await store.getVisibleForUser(sessionId, ctx.principal.userId);
@@ -177,7 +158,6 @@ async function handlePatchReadState(
   log.info("session_read_state.updated", {
     event: "session_read_state.updated",
     session_id: sessionId,
-    user_id: ctx.principal.userId,
     action: body.action,
     accepted: result.accepted,
     unread: result.unread,

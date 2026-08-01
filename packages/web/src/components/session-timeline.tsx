@@ -18,14 +18,14 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
+import { TerminalOutcomeVisibilityBoundary } from "./terminal-outcome-visibility-boundary";
+import type { TerminalOutcomeAcknowledgement } from "@/lib/session-read-state";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
 export type EventGroup =
   | { type: "tool_group"; events: ToolCallEvent[]; id: string }
   | { type: "single"; event: SandboxEvent; id: string };
-
-export type TerminalOutcomeAcknowledgement = "acknowledged" | "retry" | "not_applicable";
 
 function groupEvents(events: SandboxEvent[]): EventGroup[] {
   const groups: EventGroup[] = [];
@@ -261,119 +261,6 @@ export function SessionTimeline({
 
         <div ref={messagesEndRef} />
       </div>
-    </div>
-  );
-}
-
-const TERMINAL_ACK_RETRY_MS = 2_000;
-const TERMINAL_ACK_MAX_ATTEMPTS = 4;
-
-function TerminalOutcomeVisibilityBoundary({
-  messageId,
-  enabled,
-  onVisible,
-  children,
-}: {
-  messageId: string;
-  enabled: boolean;
-  onVisible: (messageId: string) => Promise<TerminalOutcomeAcknowledgement>;
-  children: ReactNode;
-}) {
-  const elementRef = useRef<HTMLDivElement>(null);
-  const intersectingRef = useRef(false);
-  const acknowledgedRef = useRef(false);
-  const requestInFlightRef = useRef(false);
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const attemptCountRef = useRef(0);
-  const cancelledRef = useRef(false);
-
-  const attemptAcknowledgement = useCallback(async () => {
-    if (
-      !enabled ||
-      acknowledgedRef.current ||
-      requestInFlightRef.current ||
-      attemptCountRef.current >= TERMINAL_ACK_MAX_ATTEMPTS ||
-      !intersectingRef.current ||
-      document.visibilityState !== "visible" ||
-      !document.hasFocus()
-    ) {
-      return;
-    }
-
-    requestInFlightRef.current = true;
-    attemptCountRef.current += 1;
-    let result: TerminalOutcomeAcknowledgement;
-    try {
-      result = await onVisible(messageId);
-    } catch (error) {
-      console.error("Failed to acknowledge visible terminal outcome", error);
-      result = "retry";
-    } finally {
-      requestInFlightRef.current = false;
-    }
-    if (cancelledRef.current) return;
-
-    acknowledgedRef.current = result !== "retry";
-
-    if (
-      result === "retry" &&
-      intersectingRef.current &&
-      attemptCountRef.current < TERMINAL_ACK_MAX_ATTEMPTS
-    ) {
-      const retryDelayMs = TERMINAL_ACK_RETRY_MS * 2 ** (attemptCountRef.current - 1);
-      retryTimerRef.current = setTimeout(() => {
-        retryTimerRef.current = null;
-        void attemptAcknowledgement();
-      }, retryDelayMs);
-    }
-  }, [enabled, messageId, onVisible]);
-
-  useEffect(() => {
-    cancelledRef.current = false;
-    const element = elementRef.current;
-    if (!element) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        const visibleHeight = entry.intersectionRect?.height ?? 48;
-        const requiredHeight = Math.min(entry.boundingClientRect?.height ?? 48, 48);
-        const meaningfullyVisible = entry.isIntersecting && visibleHeight >= requiredHeight;
-        intersectingRef.current = meaningfullyVisible;
-        if (meaningfullyVisible) {
-          void attemptAcknowledgement();
-        } else {
-          attemptCountRef.current = 0;
-          if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-          retryTimerRef.current = null;
-        }
-      },
-      { threshold: 0 }
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [attemptAcknowledgement]);
-
-  useEffect(() => {
-    cancelledRef.current = false;
-    const attempt = () => {
-      if (attemptCountRef.current >= TERMINAL_ACK_MAX_ATTEMPTS) {
-        attemptCountRef.current = 0;
-      }
-      void attemptAcknowledgement();
-    };
-    document.addEventListener("visibilitychange", attempt);
-    window.addEventListener("focus", attempt);
-    return () => {
-      cancelledRef.current = true;
-      intersectingRef.current = false;
-      document.removeEventListener("visibilitychange", attempt);
-      window.removeEventListener("focus", attempt);
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-    };
-  }, [attemptAcknowledgement]);
-
-  return (
-    <div ref={elementRef} data-terminal-message-id={messageId}>
-      {children}
     </div>
   );
 }

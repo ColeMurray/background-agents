@@ -5,7 +5,7 @@ vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { PATCH, parseSessionReadStatePatchBody } from "./route";
+import { PATCH } from "./route";
 
 describe("session read-state BFF", () => {
   beforeEach(() => {
@@ -13,20 +13,28 @@ describe("session read-state BFF", () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
   });
 
-  it("accepts only the two named actions", () => {
-    expect(
-      parseSessionReadStatePatchBody({ action: "acknowledge", observedAttentionId: "message-1" })
-    ).toEqual({ action: "acknowledge", observedAttentionId: "message-1" });
-    expect(parseSessionReadStatePatchBody({ action: "mark_read" })).toEqual({
-      action: "mark_read",
+  it("rejects actions outside the shared request contract", async () => {
+    const request = new Request("http://localhost/api/sessions/session-1/read-state", {
+      method: "PATCH",
+      body: JSON.stringify({ action: "mark_read", userId: "user-2" }),
     });
-    expect(parseSessionReadStatePatchBody({ action: "mark_read", userId: "user-2" })).toBeNull();
-    expect(parseSessionReadStatePatchBody({ action: "acknowledge" })).toBeNull();
+
+    const response = await PATCH(request as never, {
+      params: Promise.resolve({ id: "session-1" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
   it("forwards the authenticated action without a caller-selected identity", async () => {
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ sessionId: "session-1", accepted: true, unread: false })
+      Response.json({
+        sessionId: "session-1",
+        accepted: true,
+        unread: false,
+        attentionId: null,
+      })
     );
     const request = new Request("http://localhost/api/sessions/session-1/read-state", {
       method: "PATCH",

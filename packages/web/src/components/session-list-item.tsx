@@ -114,10 +114,13 @@ export function SessionListItem({
   };
 
   const handleMarkRead = async () => {
+    if (isMarkingRead) return;
     setIsActionsOpen(false);
     setIsMarkingRead(true);
     try {
       await onMarkRead(session.id);
+    } catch (error) {
+      console.error("Failed to mark session read", error);
     } finally {
       setIsMarkingRead(false);
     }
@@ -388,11 +391,23 @@ export function ChildSessionListItem({
   depth: number;
   onMarkRead: (sessionId: string) => Promise<void>;
 }) {
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
   const displayTitle = session.title || "Sub-task";
   const paddingLeftRem = 1.75 + Math.max(depth - 1, 0) * 1;
+  const handleMarkRead = async () => {
+    if (isMarkingRead) return;
+    setIsMarkingRead(true);
+    try {
+      await onMarkRead(session.id);
+    } catch (error) {
+      console.error("Failed to mark session read", error);
+    } finally {
+      setIsMarkingRead(false);
+    }
+  };
   return (
     <div className="group relative">
       <Link
@@ -437,7 +452,7 @@ export function ChildSessionListItem({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => onMarkRead(session.id)}>
+            <DropdownMenuItem onSelect={handleMarkRead} disabled={isMarkingRead}>
               Mark as read
             </DropdownMenuItem>
           </DropdownMenuContent>

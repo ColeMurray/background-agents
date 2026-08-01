@@ -44,6 +44,22 @@ export interface SessionNavigationState {
   attentionId?: string | null;
 }
 
+export const sessionReadStateActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("acknowledge"), observedAttentionId: z.string().min(1) }).strict(),
+  z.object({ action: z.literal("mark_read") }).strict(),
+]);
+export type SessionReadStateAction = z.infer<typeof sessionReadStateActionSchema>;
+
+export const sessionReadStateResultSchema = z
+  .object({
+    sessionId: z.string(),
+    accepted: z.boolean(),
+    unread: z.boolean(),
+    attentionId: z.string().nullable(),
+  })
+  .strict();
+export type SessionReadStateResult = z.infer<typeof sessionReadStateResultSchema>;
+
 export interface Session {
   id: string;
   title: string | null;

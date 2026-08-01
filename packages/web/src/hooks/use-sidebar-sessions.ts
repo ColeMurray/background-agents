@@ -14,6 +14,7 @@ import {
   isUnarchivedSessionListKey,
   mergeUniqueSessions,
   removeSessionFromList,
+  SESSIONS_PAGE_SIZE,
   type SessionListResponse,
 } from "@/lib/session-list";
 import type { Session } from "@open-inspect/shared";
@@ -70,7 +71,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
       return buildSessionsPageKey({
         excludeStatus: "archived",
         createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-        offset: (pageIndex + 1) * 50,
+        offset: (pageIndex + 1) * SESSIONS_PAGE_SIZE,
       });
     },
     [authSession, firstPage?.hasMore, requestedExtraPages, sessionCreatorFilter]

@@ -10,10 +10,19 @@ import { EventItem, SessionTimeline } from "./session-timeline";
 expect.extend(matchers);
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView;
   Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
 });
+
+function mockScrollIntoView() {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+}
 
 function event(userId?: string): SandboxEvent {
   return {
@@ -96,7 +105,7 @@ describe("user message authors", () => {
 
 describe("terminal outcome visibility", () => {
   it("acknowledges only after the latest completion is visible in the active tab", async () => {
-    Element.prototype.scrollIntoView = vi.fn();
+    mockScrollIntoView();
     const observations: Array<{
       callback: IntersectionObserverCallback;
       target?: Element;
@@ -174,7 +183,7 @@ describe("terminal outcome visibility", () => {
 
   it("retries a rejected acknowledgement while the same outcome remains visible", async () => {
     vi.useFakeTimers();
-    Element.prototype.scrollIntoView = vi.fn();
+    mockScrollIntoView();
     const observations: Array<{
       callback: IntersectionObserverCallback;
       target?: Element;
@@ -242,7 +251,7 @@ describe("terminal outcome visibility", () => {
   });
 
   it("observes the assistant output instead of the completion badge", () => {
-    Element.prototype.scrollIntoView = vi.fn();
+    mockScrollIntoView();
     const observedTargets: Element[] = [];
     class TestIntersectionObserver {
       readonly root = null;
@@ -300,7 +309,7 @@ describe("terminal outcome visibility", () => {
 
   it("does not retry after the visible outcome unmounts during acknowledgement", async () => {
     vi.useFakeTimers();
-    Element.prototype.scrollIntoView = vi.fn();
+    mockScrollIntoView();
     let resolveAcknowledgement!: (value: "retry") => void;
     const acknowledgement = new Promise<"retry">((resolve) => {
       resolveAcknowledgement = resolve;

@@ -1,6 +1,7 @@
 import type {
   PullRequestSummary,
   SessionNavigationState,
+  SessionReadStateResult,
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared";
@@ -126,21 +127,10 @@ export type SessionReadAction =
   | { kind: "acknowledge"; observedAttentionId: string }
   | { kind: "mark_read" };
 
-export interface SessionReadStateResult {
-  sessionId: string;
-  accepted: boolean;
-  unread: boolean;
-  attentionId: string | null;
-}
-
 interface SessionNavigationRow {
   session_id: string;
   unread: number;
   attention_message_id: string | null;
-}
-
-interface LatestAttentionRow {
-  latest_attention_message_id: string | null;
 }
 
 export function sessionNavigationQuery(sessionCount: number): string {
@@ -497,16 +487,6 @@ export class SessionIndexStore {
     sessionId: string,
     action: SessionReadAction
   ): Promise<SessionReadStateResult | null> {
-    const current = await this.db
-      .prepare(
-        `SELECT latest_attention_message_id
-         FROM sessions
-         WHERE id = ?`
-      )
-      .bind(sessionId)
-      .first<LatestAttentionRow>();
-    if (!current) return null;
-
     let accepted: boolean;
     if (action.kind === "acknowledge") {
       const result = await this.db
@@ -523,8 +503,6 @@ export class SessionIndexStore {
         .bind(userId, Date.now(), sessionId, action.observedAttentionId)
         .run();
       accepted = (result.meta.changes ?? 0) > 0;
-    } else if (current.latest_attention_message_id === null) {
-      accepted = true;
     } else {
       const result = await this.db
         .prepare(
@@ -545,6 +523,9 @@ export class SessionIndexStore {
     const navigation = await this.navigationForSessions(userId, [sessionId]);
     const currentNavigation = navigation.get(sessionId);
     if (!currentNavigation) return null;
+    if (action.kind === "mark_read") {
+      accepted = accepted || !currentNavigation.unread;
+    }
     return {
       sessionId,
       accepted,

@@ -1,13 +1,13 @@
 import { mutate } from "swr";
 import { browserApiFetch } from "./browser-api-fetch";
 import { applySessionUnread, isSessionListKey, type SessionListResponse } from "./session-list";
+import {
+  sessionReadStateResultSchema,
+  type SessionReadStateAction,
+  type SessionReadStateResult,
+} from "@open-inspect/shared";
 
-export interface SessionReadStateResult {
-  sessionId: string;
-  accepted: boolean;
-  unread: boolean;
-  attentionId: string | null;
-}
+export type TerminalOutcomeAcknowledgement = "acknowledged" | "retry" | "not_applicable";
 
 export class SessionReadStateRequestError extends Error {
   constructor(readonly status: number) {
@@ -15,10 +15,6 @@ export class SessionReadStateRequestError extends Error {
     this.name = "SessionReadStateRequestError";
   }
 }
-
-type SessionReadStateAction =
-  | { action: "acknowledge"; observedAttentionId: string }
-  | { action: "mark_read" };
 
 async function patchSessionReadState(
   sessionId: string,
@@ -30,7 +26,16 @@ async function patchSessionReadState(
     body: JSON.stringify(action),
   });
   if (!response.ok) throw new SessionReadStateRequestError(response.status);
-  return response.json();
+  return sessionReadStateResultSchema.parse(await response.json());
+}
+
+export function classifyTerminalAcknowledgement(
+  result: SessionReadStateResult,
+  observedAttentionId: string
+): TerminalOutcomeAcknowledgement {
+  if (result.accepted) return "acknowledged";
+  // A different cursor may only reflect projection lag, so keep the bounded retry alive.
+  return result.attentionId === observedAttentionId ? "not_applicable" : "retry";
 }
 
 export function acknowledgeSessionAttention(

@@ -224,6 +224,7 @@ User-authenticated session-list rows add an optional named object:
 ```ts
 interface SessionNavigationState {
   unread: boolean;
+  attentionId?: string | null;
 }
 
 interface Session {
@@ -252,7 +253,8 @@ Response:
 {
   "sessionId": "session-id",
   "accepted": true,
-  "unread": false
+  "unread": false,
+  "attentionId": "message-id"
 }
 ```
 

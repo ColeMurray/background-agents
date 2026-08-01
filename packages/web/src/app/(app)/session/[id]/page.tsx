@@ -53,6 +53,7 @@ import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import {
   acknowledgeSessionAttention,
+  classifyTerminalAcknowledgement,
   reconcileSessionUnread,
   SessionReadStateRequestError,
 } from "@/lib/session-read-state";
@@ -222,14 +223,11 @@ function SessionPageContent() {
       try {
         const result = await acknowledgeSessionAttention(sessionId, messageId);
         await reconcileSessionUnread(result);
-        if (result.accepted) return "acknowledged" as const;
-        if (result.unread) return "not_applicable" as const;
-
-        return "retry" as const;
+        return classifyTerminalAcknowledgement(result, messageId);
       } catch (error) {
         if (
           error instanceof SessionReadStateRequestError &&
-          (error.status === 404 || error.status === 405)
+          [400, 401, 403, 404, 405].includes(error.status)
         ) {
           return "not_applicable" as const;
         }
