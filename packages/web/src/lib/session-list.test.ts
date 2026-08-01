@@ -35,8 +35,14 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
 describe("buildSessionsPageKey", () => {
   it("adds the current-user creator filter", () => {
     expect(
-      buildSessionsPageKey({ excludeStatus: "archived", createdBy: [CURRENT_USER_CREATED_BY] })
-    ).toBe("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me");
+      buildSessionsPageKey({
+        excludeStatus: "archived",
+        excludeAutomationLineage: true,
+        createdBy: [CURRENT_USER_CREATED_BY],
+      })
+    ).toBe(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+    );
   });
 
   it("adds repeated creator filters", () => {

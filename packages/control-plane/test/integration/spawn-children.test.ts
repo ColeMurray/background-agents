@@ -16,7 +16,9 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     scmLogin?: string;
     spawnDepth?: number;
     parentSessionId?: string;
-    spawnSource?: "user" | "agent";
+    spawnSource?: "user" | "agent" | "automation";
+    automationId?: string;
+    automationRunId?: string;
     environmentId?: string | null;
     model?: string;
     reasoningEffort?: string | null;
@@ -49,6 +51,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       parentSessionId: opts?.parentSessionId ?? null,
       spawnSource: opts?.spawnSource ?? "user",
       spawnDepth: opts?.spawnDepth ?? 0,
+      automationId: opts?.automationId ?? null,
+      automationRunId: opts?.automationRunId ?? null,
       environmentId: opts?.environmentId ?? null,
       userId: opts?.canonicalUserId ?? null,
       createdAt: now,
@@ -102,6 +106,31 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("inherits automation lineage from the parent", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      userId: "user-1",
+      canonicalUserId: "canonical-abc123",
+      spawnSource: "automation",
+      automationId: "automation-1",
+      automationRunId: "run-1",
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Investigate", prompt: "Investigate the failure" }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+    const child = await store.get(body.sessionId);
+    expect(child?.automationId).toBe("automation-1");
+    expect(child?.automationRunId).toBe("run-1");
   });
 
   it("persists environment provenance for spawned children", async () => {

@@ -119,7 +119,7 @@ base_image = (
         f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
     )
     # Pre-build OpenCode plugin deps into a staging directory.
-    # At boot, _install_tools() copies these into the external runtime config so that
+    # At boot, _prepare_opencode_filesystem() copies these into the runtime config so that
     # OpenCode's Npm.install() finds package-lock.json in sync and skips
     # the slow arborist reify() call (2-22s) that would otherwise block
     # the first prompt and exceed the bridge's HTTP timeout.

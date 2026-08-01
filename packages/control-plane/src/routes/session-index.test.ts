@@ -72,6 +72,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeAutomationLineage: false,
       createdByUserIds: [],
       limit: 50,
       offset: 0,
@@ -85,6 +86,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeAutomationLineage: false,
       createdByUserIds: [],
       limit: 100,
       offset: 0,
@@ -100,6 +102,7 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeAutomationLineage: false,
       createdByUserIds: ["0123456789abcdef0123456789abcdef"],
       limit: 50,
       offset: 0,
@@ -116,10 +119,28 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
+      excludeAutomationLineage: false,
       createdByUserIds: ["0123456789abcdef0123456789abcdef"],
       limit: 50,
       offset: 0,
     });
+  });
+
+  it("passes the automation-lineage exclusion through to the store", async () => {
+    const response = await listSessions("?excludeAutomationLineage=true");
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeAutomationLineage: true })
+    );
+  });
+
+  it("rejects an invalid automation-lineage exclusion before querying the store", async () => {
+    const response = await listSessions("?excludeAutomationLineage=unknown");
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid excludeAutomationLineage" });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 
   it("preserves mixed creator filters as OR inputs", async () => {

@@ -12,7 +12,6 @@ const SESSION_STATUSES: SessionStatus[] = [
   "archived",
   "cancelled",
 ];
-
 function parseSessionStatus(value: string | null): SessionStatus | undefined {
   if (!value) return undefined;
   return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
@@ -65,8 +64,10 @@ async function handleListSessions(
   const offset = parsePaginationOffset(url.searchParams.get("offset"));
   const statusParam = url.searchParams.get("status");
   const excludeStatusParam = url.searchParams.get("excludeStatus");
+  const excludeAutomationLineageParam = url.searchParams.get("excludeAutomationLineage");
   const status = parseSessionStatus(statusParam);
   const excludeStatus = parseSessionStatus(excludeStatusParam);
+  const excludeAutomationLineage = excludeAutomationLineageParam === "true";
   const createdByUserIds = parseCreatedByFilters(url.searchParams, ctx.principal);
 
   if (statusParam && !status) {
@@ -77,12 +78,27 @@ async function handleListSessions(
     return error("Invalid excludeStatus", 400);
   }
 
+  if (
+    excludeAutomationLineageParam !== null &&
+    excludeAutomationLineageParam !== "true" &&
+    excludeAutomationLineageParam !== "false"
+  ) {
+    return error("Invalid excludeAutomationLineage", 400);
+  }
+
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;
   }
 
   const store = new SessionIndexStore(ctx.db);
-  const result = await store.list({ status, excludeStatus, createdByUserIds, limit, offset });
+  const result = await store.list({
+    status,
+    excludeStatus,
+    excludeAutomationLineage,
+    createdByUserIds,
+    limit,
+    offset,
+  });
 
   return json({
     sessions: result.sessions,

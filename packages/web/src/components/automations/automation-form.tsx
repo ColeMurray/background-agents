@@ -627,8 +627,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Branch (single-repository selections only; multi-repo runs use each repo's default) */}
       {usesSingleRepository && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
+          <label
+            htmlFor="automation-branch"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Branch
+          </label>
           <Combobox
+            id="automation-branch"
             value={baseBranch}
             onChange={setBaseBranch}
             items={branches.map((b) => ({
@@ -658,8 +664,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Model */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Model</label>
+        <label
+          htmlFor="automation-model"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Model
+        </label>
         <Combobox
+          id="automation-model"
           value={resolvedModel}
           onChange={(nextModel) => {
             setModel(nextModel);

@@ -108,7 +108,7 @@ class TestCodexAuthPluginSetup:
         plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "codex-auth-plugin.js"
         plugin_source.parent.mkdir(parents=True)
         plugin_source.write_text("export const CodexAuthProxy = async () => ({});")
-        runtime_root = tmp_path / "runtime"
+        runtime_config = tmp_path / "runtime-config"
 
         fake_proc = MagicMock()
         fake_proc.stdout = None
@@ -124,7 +124,7 @@ class TestCodexAuthPluginSetup:
                 },
                 clear=False,
             ),
-            patch("sandbox_runtime.entrypoint.OPENCODE_RUNTIME_ROOT", str(runtime_root)),
+            patch("sandbox_runtime.entrypoint.OPENCODE_RUNTIME_CONFIG_DIR", str(runtime_config)),
             patch("sandbox_runtime.entrypoint.Path") as mock_path,
             patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
             patch(
@@ -149,10 +149,8 @@ class TestCodexAuthPluginSetup:
 
         mock_copy.assert_called_once_with(
             plugin_source,
-            runtime_root / ".opencode" / "plugins" / "codex-auth-plugin.js",
+            runtime_config / "plugins" / "codex-auth-plugin.js",
         )
-        sup._prepare_opencode_filesystem.assert_called_once_with(runtime_root)
+        sup._prepare_opencode_filesystem.assert_called_once_with(runtime_config)
         assert not (sup.workspace_path / ".opencode").exists()
-        assert mock_exec.await_args.kwargs["env"]["OPENCODE_CONFIG_DIR"] == str(
-            runtime_root / ".opencode"
-        )
+        assert mock_exec.await_args.kwargs["env"]["OPENCODE_CONFIG_DIR"] == str(runtime_config)

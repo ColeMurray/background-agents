@@ -130,10 +130,14 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async createSandbox(config: CreateSandboxConfig): Promise<CreateSandboxResult> {
     try {
-      const env = await this.buildEnvVars(config, {
-        fromPrebuiltImage: !!config.prebuiltImageId,
-        prebuiltImageSha: config.prebuiltImageSha ?? undefined,
-      });
+      const timeoutMs = resolveVercelTimeoutMs(config.timeoutSeconds);
+      const env = await this.buildEnvVars(
+        { ...config, timeoutSeconds: timeoutMs / 1000 },
+        {
+          fromPrebuiltImage: !!config.prebuiltImageId,
+          prebuiltImageSha: config.prebuiltImageSha ?? undefined,
+        }
+      );
       const ports = collectExposedPorts(
         config.codeServerEnabled,
         config.sandboxSettings
@@ -150,7 +154,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         {
           name: config.sandboxId,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: resolveVercelTimeoutMs(config.timeoutSeconds),
+          timeoutMs,
           resources: resolveVercelResources(config.sandboxSettings),
           ports,
           env,
@@ -187,7 +191,11 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async restoreFromSnapshot(config: RestoreConfig): Promise<RestoreResult> {
     try {
-      const env = await this.buildEnvVars(config, { restoredFromSnapshot: true });
+      const timeoutMs = resolveVercelTimeoutMs(config.timeoutSeconds);
+      const env = await this.buildEnvVars(
+        { ...config, timeoutSeconds: timeoutMs / 1000 },
+        { restoredFromSnapshot: true }
+      );
       const ports = collectExposedPorts(
         config.codeServerEnabled,
         config.sandboxSettings
@@ -197,7 +205,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         {
           name: config.sandboxId,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: resolveVercelTimeoutMs(config.timeoutSeconds),
+          timeoutMs,
           resources: resolveVercelResources(config.sandboxSettings),
           ports,
           env,

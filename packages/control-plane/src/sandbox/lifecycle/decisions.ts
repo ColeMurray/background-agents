@@ -601,10 +601,7 @@ export interface ExecutionTimeoutConfig {
 }
 
 /**
- * Default: 90 minutes — matches the bridge's PROMPT_MAX_DURATION.
- * The control plane timeout should never preempt the bridge's own timeout for
- * legitimate long-running prompts. It fires only when the bridge is dead and
- * can't enforce its own timeout.
+ * Legacy fallback for sessions without a configured sandbox timeout.
  */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 

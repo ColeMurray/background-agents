@@ -37,14 +37,24 @@ export function useSidebarSessions(currentSessionId: string | null) {
   const loadingMoreRef = useRef(false);
   const sessionListVersionRef = useRef(0);
 
+  const sidebarSessionListOptions = useMemo(
+    () => ({
+      excludeStatus: "archived",
+      ...(sessionCreatorFilter === "mine"
+        ? {
+            excludeAutomationLineage: true,
+            createdBy: [CURRENT_USER_CREATED_BY],
+          }
+        : {}),
+    }),
+    [sessionCreatorFilter]
+  );
+
   const sidebarSessionsKey = useMemo(() => {
     if (!authSession) return null;
 
-    return buildSessionsPageKey({
-      excludeStatus: "archived",
-      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-    });
-  }, [authSession, sessionCreatorFilter]);
+    return buildSessionsPageKey(sidebarSessionListOptions);
+  }, [authSession, sidebarSessionListOptions]);
 
   const {
     data,
@@ -86,8 +96,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
     try {
       const response = await browserApiFetch(
         buildSessionsPageKey({
-          excludeStatus: "archived",
-          createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
+          ...sidebarSessionListOptions,
           offset: offsetRef.current,
         })
       );
@@ -118,7 +127,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
         setLoadingMore(false);
       }
     }
-  }, [authSession, data, sessionCreatorFilter, sidebarSessionsKey]);
+  }, [authSession, data, sidebarSessionListOptions, sidebarSessionsKey]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;

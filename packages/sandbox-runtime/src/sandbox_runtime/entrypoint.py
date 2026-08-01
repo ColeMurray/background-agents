@@ -34,7 +34,7 @@ from .constants import (
     DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
-    OPENCODE_RUNTIME_ROOT,
+    OPENCODE_RUNTIME_CONFIG_DIR,
     REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
@@ -730,11 +730,9 @@ class SandboxSupervisor:
         except Exception as e:
             self.log.warn("workspace.manifest_write_failed", exc=e)
 
-    def _install_tools(self, workdir: Path) -> set[str]:
-        """Copy custom tools into the .opencode/tool directory for OpenCode to discover."""
-        installed: set[str] = set()
-        opencode_dir = workdir / ".opencode"
-        tool_dest = opencode_dir / "tool"
+    def _install_tools(self, config_dir: Path) -> None:
+        """Copy custom tools into the runtime config directory."""
+        tool_dest = config_dir / "tool"
 
         # Legacy tool (inspect-plugin.js → create-pull-request.js)
         legacy_tool = Path("/app/sandbox_runtime/plugins/inspect-plugin.js")
@@ -743,13 +741,12 @@ class SandboxSupervisor:
 
         has_tools = legacy_tool.exists() or tools_dir.exists()
         if not has_tools:
-            return installed
+            return
 
         tool_dest.mkdir(parents=True, exist_ok=True)
 
         if legacy_tool.exists() and self.has_repository:
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
-            installed.add(".opencode/tool/create-pull-request.js")
 
         # Copy all .js files from tools/ — these must export tool() for OpenCode.
         # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate
@@ -764,36 +761,34 @@ class SandboxSupervisor:
                 if tool_file.name in AGENT_TOOLS_REQUIRING_REPOSITORY and not self.has_repository:
                     continue
                 shutil.copy(tool_file, tool_dest / tool_file.name)
-                installed.add(f".opencode/tool/{tool_file.name}")
-
-        # Copy pre-built deps (package.json, package-lock.json, node_modules) from the image
-        # staging directory so OpenCode's Npm.install() finds the tree in sync and skips the
-        # arborist reify() that would otherwise block the first request.
-        staged_at = time.monotonic()
-        installed.update(
-            f".opencode/{path}"
-            for path in self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
-        )
-        self.log.info(
-            "opencode.runtime_deps_staged",
-            dir=str(opencode_dir),
-            duration_ms=round((time.monotonic() - staged_at) * 1000),
-        )
-        return installed
 
     @staticmethod
-    def _reset_runtime_opencode_config(runtime_root: Path) -> None:
-        """Rebuild runtime-owned config while retaining the staged module cache."""
-        if runtime_root.is_symlink() or (runtime_root.exists() and not runtime_root.is_dir()):
-            runtime_root.unlink()
-        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-
-        config_dir = runtime_root / ".opencode"
+    def _reset_runtime_opencode_config(config_dir: Path, deps_cache: Path) -> None:
+        """Rebuild runtime config while retaining only coherent dependency state."""
         if config_dir.is_symlink() or (config_dir.exists() and not config_dir.is_dir()):
             config_dir.unlink()
-        elif config_dir.is_dir():
+        preserve_dependencies = False
+        if config_dir.is_dir():
+            local_modules = config_dir / "node_modules"
+            valid_modules = local_modules.is_dir() and not local_modules.is_symlink()
+            if deps_cache.is_dir():
+                preserve_dependencies = valid_modules and all(
+                    (deps_cache / name).is_file()
+                    and (config_dir / name).is_file()
+                    and filecmp.cmp(deps_cache / name, config_dir / name, shallow=False)
+                    for name in ("package.json", "package-lock.json")
+                )
+            else:
+                preserve_dependencies = valid_modules and (config_dir / "package.json").is_file()
+
+        if config_dir.is_dir():
             for child in config_dir.iterdir():
-                if child.name == "node_modules" and child.is_dir() and not child.is_symlink():
+                if preserve_dependencies and child.name in {
+                    "node_modules",
+                    "package.json",
+                    "package-lock.json",
+                    "bun.lock",
+                }:
                     continue
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child)
@@ -802,7 +797,7 @@ class SandboxSupervisor:
         config_dir.mkdir(mode=0o700, exist_ok=True)
 
     @staticmethod
-    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> set[str]:
+    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> None:
         """Copy the pre-staged OpenCode plugin deps into dest_dir.
 
         Copies package.json, package-lock.json and node_modules from the image staging
@@ -811,24 +806,15 @@ class SandboxSupervisor:
         Npm.install() finds @opencode-ai/plugin in sync and skips the arborist reify() that
         would otherwise block the first request.
         """
-        installed: set[str] = set()
         for name in ("package.json", "package-lock.json"):
             src = deps_cache / name
             dest = dest_dir / name
             if src.exists() and not dest.exists():
                 shutil.copy2(src, dest)
-                installed.add(name)
-            elif src.is_file() and dest.is_file() and filecmp.cmp(src, dest, shallow=False):
-                installed.add(name)
         cached_modules = deps_cache / "node_modules"
         local_modules = dest_dir / "node_modules"
-        copied_modules = False
         if cached_modules.is_dir() and not local_modules.exists():
             shutil.copytree(cached_modules, local_modules, symlinks=True)
-            copied_modules = True
-        if copied_modules:
-            installed.add("node_modules/")
-        return installed
 
     @staticmethod
     def _resolve_opencode_global_config_dir() -> Path:
@@ -872,19 +858,27 @@ class SandboxSupervisor:
             duration_ms=round((time.monotonic() - seeded_at) * 1000),
         )
 
-    def _prepare_opencode_filesystem(self, runtime_root: Path) -> None:
+    def _prepare_opencode_filesystem(self, config_dir: Path) -> None:
         """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
 
         The global seed is best-effort (degrades to a slower reify); the rest fail fast.
         """
         self._assemble_workspace_opencode()
-        self._reset_runtime_opencode_config(runtime_root)
-        self._install_tools(runtime_root)
+        deps_cache = Path("/app/opencode-deps")
+        self._reset_runtime_opencode_config(config_dir, deps_cache)
+        self._install_tools(config_dir)
+        staged_at = time.monotonic()
+        self._stage_opencode_deps(deps_cache, config_dir)
+        self.log.info(
+            "opencode.runtime_deps_staged",
+            dir=str(config_dir),
+            duration_ms=round((time.monotonic() - staged_at) * 1000),
+        )
         try:
             self._seed_global_opencode_deps()
         except Exception as e:
             self.log.warn("opencode.global_deps_seed_failed", exc=e)
-        self._install_skills(runtime_root)
+        self._install_skills(config_dir)
         self._install_bin_scripts()
 
     def _install_bin_scripts(self) -> None:
@@ -909,14 +903,13 @@ class SandboxSupervisor:
             dest.chmod(0o755)
             self.log.info("bin.installed", script=command_name)
 
-    def _install_skills(self, workdir: Path) -> set[str]:
-        """Copy bundled Skills into the .opencode/skills directory."""
-        installed: set[str] = set()
+    def _install_skills(self, config_dir: Path) -> None:
+        """Copy bundled skills into the runtime config directory."""
         skills_dir = Path("/app/sandbox_runtime/skills")
         if not skills_dir.is_dir():
-            return installed
+            return
 
-        skills_dest = workdir / ".opencode" / "skills"
+        skills_dest = config_dir / "skills"
         installed_any = False
 
         for skill_dir in skills_dir.iterdir():
@@ -933,19 +926,10 @@ class SandboxSupervisor:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
                 symlinks=True,
             )
-            for source in skill_dir.rglob("*"):
-                relative = source.relative_to(skill_dir)
-                if any(part == "__pycache__" for part in relative.parts):
-                    continue
-                if source.name == ".DS_Store" or source.suffix == ".pyc":
-                    continue
-                if source.is_file() or source.is_symlink():
-                    installed.add((Path(".opencode/skills") / skill_dir.name / relative).as_posix())
             installed_any = True
 
         if installed_any:
             self.log.info("opencode.skills_installed", skills_path=str(skills_dest))
-        return installed
 
     def _setup_openai_oauth(self) -> None:
         """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
@@ -1274,14 +1258,13 @@ class SandboxSupervisor:
         # for multi-repo (every member visible) and repo-less sessions.
         workdir = self._opencode_workdir()
 
-        runtime_root = Path(OPENCODE_RUNTIME_ROOT)
-        self._prepare_opencode_filesystem(runtime_root)
+        config_dir = Path(OPENCODE_RUNTIME_CONFIG_DIR)
+        self._prepare_opencode_filesystem(config_dir)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
-        opencode_dir = runtime_root / ".opencode"
         plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.js")
         if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
-            plugin_dir = opencode_dir / "plugins"
+            plugin_dir = config_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
             self.log.info("openai_oauth.plugin_deployed")
@@ -1290,7 +1273,7 @@ class SandboxSupervisor:
             **os.environ,
             # OpenCode scans this after project config, so runtime assets stay
             # available without writing generated files into the checkout.
-            "OPENCODE_CONFIG_DIR": str(opencode_dir),
+            "OPENCODE_CONFIG_DIR": str(config_dir),
             "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
             # Disable OpenCode's question tool in headless mode. The tool blocks
             # on a Promise waiting for user input via the HTTP API, but the bridge
