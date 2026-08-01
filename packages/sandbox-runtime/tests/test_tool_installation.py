@@ -3,7 +3,7 @@
 import json
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sandbox_runtime.entrypoint import SandboxSupervisor
 
@@ -329,6 +329,99 @@ class TestInstallTools:
         assert (tool_dest / "spawn-child.js").exists()
 
 
+class TestPrepareOpencodeFilesystem:
+    def test_installs_runtime_assets_outside_checkout_and_reconciles_stale_files(self, tmp_path):
+        sup = _make_supervisor()
+        checkout = tmp_path / "checkout"
+        project_config = checkout / ".opencode"
+        project_config.mkdir(parents=True)
+        project_tool = project_config / "tool" / "project.js"
+        project_tool.parent.mkdir()
+        project_tool.write_text("project tool")
+
+        runtime_root = tmp_path / "runtime"
+        runtime_config = runtime_root / ".opencode"
+        stale_tool = runtime_config / "tool" / "stale.js"
+        stale_tool.parent.mkdir(parents=True)
+        stale_tool.write_text("stale")
+        stale_plugin = runtime_config / "plugins" / "codex-auth-plugin.js"
+        stale_plugin.parent.mkdir()
+        stale_plugin.write_text("stale plugin")
+        cached_module = runtime_config / "node_modules" / "cached" / "index.js"
+        cached_module.parent.mkdir(parents=True)
+        cached_module.write_text("cached")
+
+        tools_dir = tmp_path / "app" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "spawn-child.js").write_text("runtime tool")
+        skills_dir = tmp_path / "app" / "skills" / "record-video"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text("runtime skill")
+
+        sup._assemble_workspace_opencode = MagicMock()
+        sup._seed_global_opencode_deps = MagicMock()
+        sup._install_bin_scripts = MagicMock()
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tools_dir,
+            skills=skills_dir.parent,
+        ):
+            sup._prepare_opencode_filesystem(runtime_root)
+
+        assert not stale_tool.exists()
+        assert not stale_plugin.exists()
+        assert cached_module.read_text() == "cached"
+        assert (runtime_config / "tool" / "spawn-child.js").read_text() == "runtime tool"
+        assert (
+            runtime_config / "skills" / "record-video" / "SKILL.md"
+        ).read_text() == "runtime skill"
+        assert project_tool.read_text() == "project tool"
+        sup._assemble_workspace_opencode.assert_called_once_with()
+
+    def test_replaces_symlinked_runtime_config_without_touching_target(self, tmp_path):
+        target = tmp_path / "checkout" / ".opencode"
+        target.mkdir(parents=True)
+        project_file = target / "project.json"
+        project_file.write_text("project config")
+        runtime_root = tmp_path / "runtime"
+        runtime_root.mkdir()
+        (runtime_root / ".opencode").symlink_to(target, target_is_directory=True)
+
+        SandboxSupervisor._reset_runtime_opencode_config(runtime_root)
+
+        assert project_file.read_text() == "project config"
+        assert not (runtime_root / ".opencode").is_symlink()
+        assert (runtime_root / ".opencode").is_dir()
+
+    def test_replaces_symlinked_runtime_root_without_touching_target(self, tmp_path):
+        target = tmp_path / "checkout"
+        target.mkdir()
+        project_file = target / "project.json"
+        project_file.write_text("project config")
+        runtime_root = tmp_path / "runtime"
+        runtime_root.symlink_to(target, target_is_directory=True)
+
+        SandboxSupervisor._reset_runtime_opencode_config(runtime_root)
+
+        assert project_file.read_text() == "project config"
+        assert not runtime_root.is_symlink()
+        assert (runtime_root / ".opencode").is_dir()
+
+    def test_removes_symlinked_module_cache_without_touching_target(self, tmp_path):
+        target = tmp_path / "modules"
+        target.mkdir()
+        cached_file = target / "index.js"
+        cached_file.write_text("external cache")
+        runtime_config = tmp_path / "runtime" / ".opencode"
+        runtime_config.mkdir(parents=True)
+        (runtime_config / "node_modules").symlink_to(target, target_is_directory=True)
+
+        SandboxSupervisor._reset_runtime_opencode_config(tmp_path / "runtime")
+
+        assert cached_file.read_text() == "external cache"
+        assert not (runtime_config / "node_modules").exists()
+
+
 class TestInstallBinScripts:
     """Cases for _install_bin_scripts() standalone CLI installation."""
 
@@ -520,11 +613,13 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
 class TestResolveGlobalConfigDir:
     """Cases for _resolve_opencode_global_config_dir() — OpenCode's xdg-basedir resolution."""
 
-    def test_uses_opencode_config_dir_override(self, tmp_path, monkeypatch):
-        """OPENCODE_CONFIG_DIR wins over XDG_CONFIG_HOME and is used verbatim."""
+    def test_ignores_opencode_config_dir_override(self, tmp_path, monkeypatch):
+        """OPENCODE_CONFIG_DIR is an additional directory, not the XDG global directory."""
         monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "custom"
+        assert (
+            SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
+        )
 
     def test_uses_xdg_config_home(self, tmp_path, monkeypatch):
         """Without the override, $XDG_CONFIG_HOME/opencode is used."""

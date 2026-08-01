@@ -97,8 +97,8 @@ class TestCodexAuthPluginSetup:
         assert data["openai"]["refresh"] == "managed-by-control-plane"
         assert data["openai"]["accountId"] == "acct_xyz"
 
-    async def test_start_opencode_copies_js_plugin(self, tmp_path):
-        """start_opencode() should deploy the precompiled JS plugin into .opencode/plugins."""
+    async def test_start_opencode_copies_js_plugin_outside_checkout(self, tmp_path):
+        """start_opencode() should deploy the JS plugin into runtime-owned config."""
         sup = _make_supervisor()
         sup.workspace_path = tmp_path / "workspace"
         sup.workspace_path.mkdir()
@@ -108,6 +108,7 @@ class TestCodexAuthPluginSetup:
         plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "codex-auth-plugin.js"
         plugin_source.parent.mkdir(parents=True)
         plugin_source.write_text("export const CodexAuthProxy = async () => ({});")
+        runtime_root = tmp_path / "runtime"
 
         fake_proc = MagicMock()
         fake_proc.stdout = None
@@ -115,14 +116,21 @@ class TestCodexAuthPluginSetup:
         original_path = Path
 
         with (
-            patch.dict("os.environ", {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret"}, clear=False),
+            patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret",
+                    "OPENCODE_CONFIG_DIR": "/user/supplied",
+                },
+                clear=False,
+            ),
+            patch("sandbox_runtime.entrypoint.OPENCODE_RUNTIME_ROOT", str(runtime_root)),
             patch("sandbox_runtime.entrypoint.Path") as mock_path,
             patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
-            patch("sandbox_runtime.entrypoint.install_runtime_git_excludes") as mock_excludes,
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
                 AsyncMock(return_value=fake_proc),
-            ),
+            ) as mock_exec,
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_task",
                 side_effect=lambda coro: coro.close(),
@@ -134,18 +142,17 @@ class TestCodexAuthPluginSetup:
                 else original_path(p)
             )
             sup._setup_openai_oauth = MagicMock()
-            sup._install_tools = MagicMock()
-            sup._install_skills = MagicMock()
-            sup._install_bin_scripts = MagicMock()
+            sup._prepare_opencode_filesystem = MagicMock()
             sup._wait_for_health = AsyncMock()
 
             await sup.start_opencode()
 
         mock_copy.assert_called_once_with(
             plugin_source,
-            sup.workspace_path / ".opencode" / "plugins" / "codex-auth-plugin.js",
+            runtime_root / ".opencode" / "plugins" / "codex-auth-plugin.js",
         )
-        mock_excludes.assert_called_once_with(
-            sup.workspace_path,
-            {".opencode/plugins/codex-auth-plugin.js"},
+        sup._prepare_opencode_filesystem.assert_called_once_with(runtime_root)
+        assert not (sup.workspace_path / ".opencode").exists()
+        assert mock_exec.await_args.kwargs["env"]["OPENCODE_CONFIG_DIR"] == str(
+            runtime_root / ".opencode"
         )

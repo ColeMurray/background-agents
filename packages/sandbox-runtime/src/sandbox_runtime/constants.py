@@ -5,6 +5,10 @@
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
 DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
 
+# Runtime-owned OpenCode configuration. Keeping this outside /workspace prevents
+# repository linters and formatters from discovering generated tools and skills.
+OPENCODE_RUNTIME_ROOT = "/tmp/open-inspect-opencode"
+
 # Default service ports. The control plane may override the externally-exposed
 # ones per session via the *_ENV_VAR env vars below; the entrypoint and ttyd
 # proxy fall back to these defaults. TTYD_PORT is localhost-only and fixed — it

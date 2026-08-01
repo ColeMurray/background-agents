@@ -34,6 +34,7 @@ from .constants import (
     DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+    OPENCODE_RUNTIME_ROOT,
     REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
@@ -42,7 +43,6 @@ from .constants import (
     TUNNEL_ENV_SANDBOX_ID_KEY,
 )
 from .diff_baseline import resolve_session_diff_baselines
-from .git_excludes import install_runtime_git_excludes
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
@@ -616,8 +616,8 @@ class SandboxSupervisor:
         OpenCode discovers config relative to its cwd — /workspace for
         multi-repo sessions — so per-repo custom tools/skills/commands would
         never load. Files are copied in position order, last write wins with a
-        warning naming both members; the system tools installed afterwards
-        still override on filename collision (same as single-repo today).
+        warning naming both members. Runtime-owned assets are loaded separately
+        from the external config directory after project config.
         """
         if not self.is_multi_repo:
             return
@@ -625,16 +625,10 @@ class SandboxSupervisor:
         dest_root = self.workspace_path / ".opencode"
         # The merged tree is generated state: rebuild it from scratch so
         # entries removed from a member (or a removed member) don't survive
-        # snapshot/repo-image boots. System tools and staged deps are
-        # re-installed after assembly on every boot. node_modules is spared:
-        # assembly never writes into it (member node_modules are skipped), so
-        # it's purely image-managed — deleting it would force
-        # _stage_opencode_deps to re-copy the whole module tree on every
-        # snapshot restore instead of taking its skip-if-present fast path.
+        # snapshot/repo-image boots. Runtime tools and dependencies live in a
+        # separate external config directory and are never assembled here.
         if dest_root.is_dir():
             for child in dest_root.iterdir():
-                if child.name == "node_modules":
-                    continue
                 if child.is_dir() and not child.is_symlink():
                     shutil.rmtree(child, ignore_errors=True)
                 else:
@@ -781,11 +775,31 @@ class SandboxSupervisor:
             for path in self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
         )
         self.log.info(
-            "opencode.repo_deps_staged",
+            "opencode.runtime_deps_staged",
             dir=str(opencode_dir),
             duration_ms=round((time.monotonic() - staged_at) * 1000),
         )
         return installed
+
+    @staticmethod
+    def _reset_runtime_opencode_config(runtime_root: Path) -> None:
+        """Rebuild runtime-owned config while retaining the staged module cache."""
+        if runtime_root.is_symlink() or (runtime_root.exists() and not runtime_root.is_dir()):
+            runtime_root.unlink()
+        runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+
+        config_dir = runtime_root / ".opencode"
+        if config_dir.is_symlink() or (config_dir.exists() and not config_dir.is_dir()):
+            config_dir.unlink()
+        elif config_dir.is_dir():
+            for child in config_dir.iterdir():
+                if child.name == "node_modules" and child.is_dir() and not child.is_symlink():
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink(missing_ok=True)
+        config_dir.mkdir(mode=0o700, exist_ok=True)
 
     @staticmethod
     def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> set[str]:
@@ -818,14 +832,7 @@ class SandboxSupervisor:
 
     @staticmethod
     def _resolve_opencode_global_config_dir() -> Path:
-        """Resolve OpenCode's global config directory the way OpenCode does.
-
-        OpenCode (via xdg-basedir) uses OPENCODE_CONFIG_DIR when set, otherwise
-        $XDG_CONFIG_HOME/opencode, otherwise ~/.config/opencode.
-        """
-        override = os.environ.get("OPENCODE_CONFIG_DIR")
-        if override:
-            return Path(override)
+        """Resolve OpenCode's XDG global config directory."""
         xdg = os.environ.get("XDG_CONFIG_HOME")
         base = Path(xdg) if xdg else Path.home() / ".config"
         return base / "opencode"
@@ -835,7 +842,7 @@ class SandboxSupervisor:
 
         OpenCode bootstraps every directory in its config search path and forks
         ``npm install @opencode-ai/plugin`` for each. The global config dir is created empty and
-        is never seeded by _install_tools (which only covers the repo's .opencode/), so with a
+        is never seeded by _install_tools (which only covers the runtime config), so with a
         plugin configured the first POST /session would block on an arborist reify() of it.
 
         The image bakes this tree into the global dir at build time (base.py), so this is
@@ -865,21 +872,20 @@ class SandboxSupervisor:
             duration_ms=round((time.monotonic() - seeded_at) * 1000),
         )
 
-    def _prepare_opencode_filesystem(self, workdir: Path) -> set[str]:
+    def _prepare_opencode_filesystem(self, runtime_root: Path) -> None:
         """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
 
         The global seed is best-effort (degrades to a slower reify); the rest fail fast.
         """
-        installed: set[str] = set()
         self._assemble_workspace_opencode()
-        installed.update(self._install_tools(workdir))
+        self._reset_runtime_opencode_config(runtime_root)
+        self._install_tools(runtime_root)
         try:
             self._seed_global_opencode_deps()
         except Exception as e:
             self.log.warn("opencode.global_deps_seed_failed", exc=e)
-        installed.update(self._install_skills(workdir))
+        self._install_skills(runtime_root)
         self._install_bin_scripts()
-        return installed
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into the sandbox bin directory.
@@ -1268,26 +1274,23 @@ class SandboxSupervisor:
         # for multi-repo (every member visible) and repo-less sessions.
         workdir = self._opencode_workdir()
 
-        installed_runtime_paths = self._prepare_opencode_filesystem(workdir)
+        runtime_root = Path(OPENCODE_RUNTIME_ROOT)
+        self._prepare_opencode_filesystem(runtime_root)
 
         # Deploy codex auth proxy plugin if OpenAI OAuth is configured
-        opencode_dir = workdir / ".opencode"
+        opencode_dir = runtime_root / ".opencode"
         plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.js")
         if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
-            installed_runtime_paths.add(".opencode/plugins/codex-auth-plugin.js")
             self.log.info("openai_oauth.plugin_deployed")
-
-        if installed_runtime_paths and (workdir / ".git").exists():
-            try:
-                install_runtime_git_excludes(workdir, installed_runtime_paths)
-            except Exception as error:
-                self.log.warn("opencode.git_excludes_failed", exc=error)
 
         env = {
             **os.environ,
+            # OpenCode scans this after project config, so runtime assets stay
+            # available without writing generated files into the checkout.
+            "OPENCODE_CONFIG_DIR": str(opencode_dir),
             "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_config),
             # Disable OpenCode's question tool in headless mode. The tool blocks
             # on a Promise waiting for user input via the HTTP API, but the bridge
