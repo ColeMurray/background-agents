@@ -283,6 +283,10 @@ describe("model utilities", () => {
       efforts: ["none", "low", "medium", "high", "xhigh"],
       default: undefined,
     });
+    expect(getReasoningConfig("openai/gpt-5.6-luna")).toEqual({
+      efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      default: undefined,
+    });
     expect(getReasoningConfig("openai/gpt-5.3-codex")).toEqual({
       efforts: ["low", "medium", "high", "xhigh"],
       default: "high",
@@ -302,6 +306,7 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("openai/gpt-5.4", "none")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.6-sol", "xhigh")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.6-sol", "max")).toBe(false);
+    expect(isValidReasoningEffort("openai/gpt-5.6-luna", "max")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "high")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "xhigh")).toBe(false);

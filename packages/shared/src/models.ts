@@ -10,7 +10,7 @@
  *
  * - "none": No reasoning (OpenAI only)
  * - "low"/"medium"/"high"/"xhigh": Progressive reasoning depth
- * - "max": Maximum reasoning budget (Anthropic extended thinking)
+ * - "max": Maximum reasoning effort for models that support it
  */
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -158,7 +158,7 @@ export const MODEL_CATALOG = [
         name: "GPT 5.6 Luna",
         description: "Fast, cost-efficient high-volume workloads",
         reasoning: {
-          efforts: ["none", "low", "medium", "high", "xhigh"],
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
           default: undefined,
         },
       },
