@@ -210,6 +210,7 @@ describe("terminal outcome visibility", () => {
     const onMarkTerminalOutcomeRead = vi
       .fn()
       .mockResolvedValueOnce("retry")
+      .mockResolvedValueOnce("retry")
       .mockResolvedValueOnce("complete");
 
     const { container } = render(
@@ -246,8 +247,14 @@ describe("terminal outcome visibility", () => {
     });
     expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(1);
 
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(2);
+
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
     expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(2_000));
+    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(3);
   });
 
   it("observes the assistant output instead of the completion badge", () => {

@@ -88,6 +88,7 @@ export function TerminalOutcomeReadObserver({
       attemptCountRef.current < TERMINAL_OUTCOME_READ_MAX_ATTEMPTS
     ) {
       const retryDelayMs = TERMINAL_OUTCOME_READ_RETRY_MS * 2 ** (attemptCountRef.current - 1);
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       retryTimerRef.current = setTimeout(() => {
         retryTimerRef.current = null;
         void attemptMarkTerminalOutcomeRead();

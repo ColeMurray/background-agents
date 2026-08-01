@@ -598,6 +598,7 @@ describe("SessionMessageQueue", () => {
       createMessage({ id: "msg-9", status: "processing", created_at: 900 })
     );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.recordTerminalOutcome.mockReturnValue(new Promise<void>(() => {}));
 
     await h.queue.stopExecution();
 
@@ -618,7 +619,7 @@ describe("SessionMessageQueue", () => {
     });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    expect(h.waitUntil).toHaveBeenCalledTimes(2);
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 
@@ -639,6 +640,7 @@ describe("SessionMessageQueue", () => {
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
       createMessage({ id: "msg-timeout", status: "processing", created_at: 800 })
     );
+    h.recordTerminalOutcome.mockReturnValue(new Promise<void>(() => {}));
 
     await h.queue.failStuckProcessingMessage();
 
@@ -648,6 +650,7 @@ describe("SessionMessageQueue", () => {
       messageCreatedAt: 800,
       terminalOutcomeCompletedAt: expect.any(Number),
     });
+    expect(h.waitUntil).toHaveBeenCalledTimes(2);
   });
 
   describe("enqueuePromptFromApi", () => {

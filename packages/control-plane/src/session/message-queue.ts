@@ -291,11 +291,13 @@ export class SessionMessageQueue {
         syntheticExecutionComplete,
         now
       );
-      await this.recordTerminalOutcome({
-        messageId: processingMessage.id,
-        messageCreatedAt: processingMessage.created_at,
-        terminalOutcomeCompletedAt: now,
-      });
+      this.ctx.waitUntil(
+        this.recordTerminalOutcome({
+          messageId: processingMessage.id,
+          messageCreatedAt: processingMessage.created_at,
+          terminalOutcomeCompletedAt: now,
+        })
+      );
 
       this.messenger.broadcast({
         type: "sandbox_event",
@@ -343,11 +345,13 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
     };
     this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
-    await this.recordTerminalOutcome({
-      messageId: processingMessage.id,
-      messageCreatedAt: processingMessage.created_at,
-      terminalOutcomeCompletedAt: now,
-    });
+    this.ctx.waitUntil(
+      this.recordTerminalOutcome({
+        messageId: processingMessage.id,
+        messageCreatedAt: processingMessage.created_at,
+        terminalOutcomeCompletedAt: now,
+      })
+    );
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.ctx.waitUntil(
