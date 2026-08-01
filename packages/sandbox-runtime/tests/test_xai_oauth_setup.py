@@ -113,6 +113,7 @@ def test_xai_plugin_uses_broker_without_refresh_token_environment():
     assert 'provider: "xai"' in plugin
     assert "/xai-token-refresh" in plugin
     assert "XAI_OAUTH_REFRESH_TOKEN" not in plugin
+    assert "reasoningEffort" not in plugin
 
 
 async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):

@@ -43,7 +43,7 @@ Grok models require a SuperGrok OAuth refresh token and are disabled by default.
 | Model ID             | Display name   | Description                                     | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------------------------------------- | ----------------- | -------------- |
 | `xai/grok-4.5`       | Grok 4.5       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
-| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | low, medium, high | high           |
+| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | Not configurable  | N/A            |
 
 ## OpenCode Zen
 

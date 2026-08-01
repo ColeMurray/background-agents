@@ -428,6 +428,26 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
   });
 
+  it("drops a persisted reasoning effort that the session model does not support", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.repository.getSession.mockReturnValue(
+      createSession({ model: "xai/grok-build-0.1", reasoning_effort: "high" })
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      sandboxWs,
+      expect.objectContaining({
+        model: "xai/grok-build-0.1",
+        reasoningEffort: undefined,
+      })
+    );
+  });
+
   it("falls back atomically when GitHub author mapping is incomplete", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;

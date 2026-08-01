@@ -13,7 +13,9 @@ the durable OAuth refresh token and gives each sandbox only a short-lived access
 | Model ID             | Display name   | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------- | -------------- |
 | `xai/grok-4.5`       | Grok 4.5       | low, medium, high | high           |
-| `xai/grok-build-0.1` | Grok Build 0.1 | low, medium, high | high           |
+| `xai/grok-build-0.1` | Grok Build 0.1 | Not configurable  | N/A            |
+
+Grok Build performs reasoning internally but does not accept a configurable reasoning effort.
 
 The **xAI / SuperGrok** group is disabled by default. An administrator must enable it under
 **Settings > Models** before it appears in session and integration model selectors.

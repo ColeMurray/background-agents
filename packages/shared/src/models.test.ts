@@ -243,7 +243,7 @@ describe("model utilities", () => {
     expect(supportsReasoning("openai/gpt-5.4")).toBe(true);
     expect(supportsReasoning("openai/gpt-5.6-terra")).toBe(true);
     expect(supportsReasoning("xai/grok-4.5")).toBe(true);
-    expect(supportsReasoning("xai/grok-build-0.1")).toBe(true);
+    expect(supportsReasoning("xai/grok-build-0.1")).toBe(false);
     expect(supportsReasoning("deepseek/deepseek-v4-flash")).toBe(false);
     expect(supportsReasoning("invalid")).toBe(false);
 
@@ -256,7 +256,7 @@ describe("model utilities", () => {
     expect(getDefaultReasoningEffort("openai/gpt-5.5")).toBeUndefined();
     expect(getDefaultReasoningEffort("openai/gpt-5.6-luna")).toBeUndefined();
     expect(getDefaultReasoningEffort("xai/grok-4.5")).toBe("high");
-    expect(getDefaultReasoningEffort("xai/grok-build-0.1")).toBe("high");
+    expect(getDefaultReasoningEffort("xai/grok-build-0.1")).toBeUndefined();
     expect(getDefaultReasoningEffort("deepseek/deepseek-v4-pro")).toBeUndefined();
   });
 
@@ -293,10 +293,7 @@ describe("model utilities", () => {
       efforts: ["low", "medium", "high"],
       default: "high",
     });
-    expect(getReasoningConfig("xai/grok-build-0.1")).toEqual({
-      efforts: ["low", "medium", "high"],
-      default: "high",
-    });
+    expect(getReasoningConfig("xai/grok-build-0.1")).toBeUndefined();
     expect(getReasoningConfig("deepseek/deepseek-v4-flash")).toBeUndefined();
   });
 
@@ -314,7 +311,7 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-4.5", "medium")).toBe(true);
     expect(isValidReasoningEffort("xai/grok-4.5", "xhigh")).toBe(false);
-    expect(isValidReasoningEffort("xai/grok-build-0.1", "high")).toBe(true);
+    expect(isValidReasoningEffort("xai/grok-build-0.1", "high")).toBe(false);
     expect(isValidReasoningEffort("xai/grok-build-0.1", "xhigh")).toBe(false);
     expect(isValidReasoningEffort("deepseek/deepseek-v4-pro", "high")).toBe(false);
     expect(isValidReasoningEffort("invalid", "high")).toBe(false);

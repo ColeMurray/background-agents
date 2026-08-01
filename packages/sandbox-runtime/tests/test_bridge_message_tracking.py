@@ -292,7 +292,7 @@ class TestBuildPromptRequestBody:
     def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
-            "xai/grok-build-0.1",
+            "xai/grok-4.5",
             reasoning_effort="high",
         )
 

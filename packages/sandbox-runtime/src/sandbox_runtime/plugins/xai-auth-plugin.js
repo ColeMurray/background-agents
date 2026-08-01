@@ -103,11 +103,7 @@ export const XaiAuthProxy = async () => ({
           cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
           limit: { context: 256000, output: 256000 },
           release_date: "2026-04-16",
-          variants: {
-            low: { reasoningEffort: "low" },
-            medium: { reasoningEffort: "medium" },
-            high: { reasoningEffort: "high" },
-          },
+          variants: {},
         },
       };
     },

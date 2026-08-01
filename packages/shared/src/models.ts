@@ -202,7 +202,6 @@ export const MODEL_CATALOG = [
         id: "xai/grok-build-0.1",
         name: "Grok Build 0.1",
         description: "Coding model for SuperGrok subscribers",
-        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
       },
     ],
   },

@@ -215,10 +215,12 @@ export class SessionMessageQueue {
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
-    const resolvedEffort =
+    const requestedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??
       getDefaultReasoningEffort(resolvedModel);
+    const resolvedEffort =
+      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log) ?? undefined;
 
     const command: SandboxCommand = {
       type: "prompt",
