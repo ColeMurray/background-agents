@@ -421,9 +421,10 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Session 51")).toBeInTheDocument();
   });
 
-  it("filters sessions to the current user when Mine is selected", async () => {
+  it("filters sessions to the current user and excludes automations when Mine is selected", async () => {
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
+      excludeAutomationLineage: true,
       createdBy: [CURRENT_USER_CREATED_BY],
     });
 
@@ -507,6 +508,7 @@ describe("SessionSidebar", () => {
     const allNextPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
+      excludeAutomationLineage: true,
       createdBy: [CURRENT_USER_CREATED_BY],
     });
     let resolveAllNextPage!: (response: Response) => void;

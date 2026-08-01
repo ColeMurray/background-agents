@@ -36,13 +36,24 @@ export function useSidebarSessions(currentSessionId: string | null) {
   });
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
+  const sidebarSessionListOptions = useMemo(
+    () => ({
+      excludeStatus: "archived",
+      ...(sessionCreatorFilter === "mine"
+        ? {
+            excludeAutomationLineage: true,
+            createdBy: [CURRENT_USER_CREATED_BY],
+          }
+        : {}),
+    }),
+    [sessionCreatorFilter]
+  );
+
   const sidebarSessionsKey = useMemo(() => {
     if (!authSession) return null;
-    return buildSessionsPageKey({
-      excludeStatus: "archived",
-      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-    });
-  }, [authSession, sessionCreatorFilter]);
+
+    return buildSessionsPageKey(sidebarSessionListOptions);
+  }, [authSession, sidebarSessionListOptions]);
   const {
     data: firstPage,
     error: sessionsError,
@@ -69,12 +80,11 @@ export function useSidebarSessions(currentSessionId: string | null) {
         return null;
       }
       return buildSessionsPageKey({
-        excludeStatus: "archived",
-        createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
+        ...sidebarSessionListOptions,
         offset: (pageIndex + 1) * SESSIONS_PAGE_SIZE,
       });
     },
-    [authSession, firstPage?.hasMore, requestedExtraPages, sessionCreatorFilter]
+    [authSession, firstPage?.hasMore, requestedExtraPages, sidebarSessionListOptions]
   );
 
   const {

@@ -26,12 +26,14 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
+  excludeAutomationLineage,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
+  excludeAutomationLineage?: boolean;
   createdBy?: readonly string[];
 }): BrowserApiPath {
   const searchParams = new URLSearchParams({
@@ -45,6 +47,10 @@ export function buildSessionsPageKey({
 
   if (excludeStatus) {
     searchParams.set("excludeStatus", excludeStatus);
+  }
+
+  if (excludeAutomationLineage) {
+    searchParams.set("excludeAutomationLineage", "true");
   }
 
   for (const userId of createdBy ?? []) {

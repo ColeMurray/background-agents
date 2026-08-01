@@ -643,4 +643,52 @@ describe("D1 SessionIndexStore", () => {
       expect(session!.userId).toBeNull();
     });
   });
+
+  it("excludes automation descendants after their root is deleted", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    const baseSession = {
+      title: null,
+      repoOwner: "acme",
+      repoName: "web-app",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: "main",
+      status: "completed" as const,
+      userId: "user-1",
+      createdAt: now,
+    };
+
+    await store.create({
+      ...baseSession,
+      id: "automation-root",
+      spawnSource: "automation",
+      automationId: "automation-1",
+      automationRunId: "run-1",
+      updatedAt: now - 1,
+    });
+    await store.create({
+      ...baseSession,
+      id: "automation-child",
+      parentSessionId: "automation-root",
+      spawnSource: "agent",
+      automationId: "automation-1",
+      automationRunId: "run-1",
+      updatedAt: now,
+    });
+    await store.create({
+      ...baseSession,
+      id: "manual-session",
+      spawnSource: "user",
+      updatedAt: now - 2,
+    });
+    await store.delete("automation-root");
+
+    const result = await store.list({
+      createdByUserIds: ["user-1"],
+      excludeAutomationLineage: true,
+    });
+
+    expect(result.sessions.map((session) => session.id)).toEqual(["manual-session"]);
+  });
 });
