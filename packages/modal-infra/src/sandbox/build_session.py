@@ -7,6 +7,13 @@ import modal
 from modal.stream_type import StreamType
 
 from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from sandbox_runtime.image_build_launch import (
+    IMAGE_BUILD_ID_ENV,
+    IMAGE_BUILD_LAUNCH_ARGUMENT,
+    IMAGE_BUILD_LAUNCH_PROTOCOL,
+    LAUNCH_PROTOCOL_VERSION,
+    MAX_LAUNCH_PAYLOAD_BYTES,
+)
 from sandbox_runtime.log_config import get_logger
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
@@ -26,6 +33,7 @@ log = get_logger("build_session")
 # Mirrors packages/shared/src/types/integrations.ts; guarded by a contract test.
 DEFAULT_BUILD_TIMEOUT_SECONDS = 1800
 MAX_BUILD_TIMEOUT_SECONDS = 3600
+LAUNCH_PROTOCOL_TAG = "openinspect_launch_protocol"
 
 
 class BuildSessionNotFoundError(LookupError):
@@ -52,6 +60,14 @@ class ModalBuildSessionService:
         start_time = time.time()
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
+        for name in (
+            BUILD_ID_ENV,
+            CALLBACK_URL_ENV,
+            FAILURE_CALLBACK_URL_ENV,
+            CALLBACK_TOKEN_ENV,
+            PROVIDER_SESSION_ID_ENV,
+        ):
+            env_vars.pop(name, None)
         env_vars.update(
             {
                 "PYTHONUNBUFFERED": "1",
@@ -65,11 +81,7 @@ class ModalBuildSessionService:
                         "repositories": repositories,
                     }
                 ),
-                BUILD_ID_ENV: "",
-                CALLBACK_URL_ENV: "",
-                FAILURE_CALLBACK_URL_ENV: "",
-                CALLBACK_TOKEN_ENV: "",
-                PROVIDER_SESSION_ID_ENV: "",
+                IMAGE_BUILD_ID_ENV: build_id,
                 IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR: str(build_execution_timeout_seconds),
             }
         )
@@ -82,8 +94,9 @@ class ModalBuildSessionService:
 
         sandbox = await modal.Sandbox.create.aio(
             "python",
-            "-c",
-            "import signal; signal.pause()",
+            "-m",
+            "sandbox_runtime.entrypoint",
+            IMAGE_BUILD_LAUNCH_ARGUMENT,
             image=base_image,
             app=app,
             secrets=[],
@@ -95,6 +108,7 @@ class ModalBuildSessionService:
                 "openinspect_build_id": build_id,
                 "openinspect_scope_kind": scope_kind,
                 "openinspect_scope_id": scope_id,
+                LAUNCH_PROTOCOL_TAG: IMAGE_BUILD_LAUNCH_PROTOCOL,
             },
         )
         log.info(
@@ -117,26 +131,50 @@ class ModalBuildSessionService:
         failure_callback_url: str,
         callback_token: str,
     ) -> None:
-        sandbox = await self._resolve(build_id, provider_session_id)
-        await sandbox.exec.aio(
-            "python",
-            "-m",
-            "sandbox_runtime.entrypoint",
-            workdir="/workspace",
-            env={
-                BUILD_ID_ENV: build_id,
-                CALLBACK_URL_ENV: callback_url,
-                FAILURE_CALLBACK_URL_ENV: failure_callback_url,
-                CALLBACK_TOKEN_ENV: callback_token,
-                PROVIDER_SESSION_ID_ENV: provider_session_id,
-            },
-            stdout=StreamType.DEVNULL,
-            stderr=StreamType.DEVNULL,
-        )
+        sandbox, tags = await self._resolve(build_id, provider_session_id)
+        launch_protocol = tags.get(LAUNCH_PROTOCOL_TAG)
+        if launch_protocol == IMAGE_BUILD_LAUNCH_PROTOCOL:
+            payload = (
+                json.dumps(
+                    {
+                        "version": LAUNCH_PROTOCOL_VERSION,
+                        "build_id": build_id,
+                        "provider_session_id": provider_session_id,
+                        "callback_url": callback_url,
+                        "failure_callback_url": failure_callback_url,
+                        "callback_token": callback_token,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+            if len(payload.encode()) > MAX_LAUNCH_PAYLOAD_BYTES:
+                raise ValueError("image-build start payload exceeds size limit")
+            sandbox.stdin.write(payload)
+            await sandbox.stdin.drain.aio()
+        elif launch_protocol is None:
+            await sandbox.exec.aio(
+                "python",
+                "-m",
+                "sandbox_runtime.entrypoint",
+                workdir="/workspace",
+                env={
+                    BUILD_ID_ENV: build_id,
+                    CALLBACK_URL_ENV: callback_url,
+                    FAILURE_CALLBACK_URL_ENV: failure_callback_url,
+                    CALLBACK_TOKEN_ENV: callback_token,
+                    PROVIDER_SESSION_ID_ENV: provider_session_id,
+                },
+                stdout=StreamType.DEVNULL,
+                stderr=StreamType.DEVNULL,
+            )
+        else:
+            raise ValueError(f"unsupported image-build launch protocol: {launch_protocol}")
         log.info(
             "sandbox.start_build",
             build_id=build_id,
             modal_object_id=provider_session_id,
+            launch_protocol=launch_protocol or "legacy-exec",
         )
 
     async def terminate(
@@ -147,8 +185,9 @@ class ModalBuildSessionService:
         reason: str,
     ) -> None:
         try:
-            sandbox = await self._resolve(build_id, provider_session_id)
-            await sandbox.terminate.aio()
+            sandbox, _tags = await self._resolve(build_id, provider_session_id)
+            termination_start = time.time()
+            exit_code = await sandbox.terminate.aio(wait=True)
         except BuildSessionNotFoundError:
             log.info(
                 "sandbox.terminate_build_not_found",
@@ -162,10 +201,12 @@ class ModalBuildSessionService:
             build_id=build_id,
             modal_object_id=provider_session_id,
             reason=reason,
+            exit_code=exit_code,
+            duration_ms=int((time.time() - termination_start) * 1000),
         )
 
     async def snapshot(self, *, build_id: str, provider_session_id: str) -> str:
-        sandbox = await self._resolve(build_id, provider_session_id)
+        sandbox, _tags = await self._resolve(build_id, provider_session_id)
         image = await sandbox.snapshot_filesystem.aio(timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS)
         log.info(
             "sandbox.snapshot_build",
@@ -176,7 +217,9 @@ class ModalBuildSessionService:
         return image.object_id
 
     @staticmethod
-    async def _resolve(build_id: str, provider_session_id: str):
+    async def _resolve(
+        build_id: str, provider_session_id: str
+    ) -> tuple[modal.Sandbox, dict[str, str]]:
         try:
             sandbox = await modal.Sandbox.from_id.aio(provider_session_id)
             tags = await sandbox.get_tags.aio()
@@ -187,4 +230,4 @@ class ModalBuildSessionService:
             or tags.get("openinspect_build_id") != build_id
         ):
             raise BuildSessionNotFoundError("build session not found")
-        return sandbox
+        return sandbox, tags

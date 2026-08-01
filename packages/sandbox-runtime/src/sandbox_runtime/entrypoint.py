@@ -2,7 +2,7 @@
 """
 Sandbox entrypoint - manages OpenCode server and bridge lifecycle.
 
-Runs as PID 1 inside the sandbox. Responsibilities:
+Runs as the sandbox's configured main command. Responsibilities:
 1. Perform git sync with latest code
 2. Run repo hooks (setup/start) based on boot mode
 3. Start OpenCode server
@@ -11,6 +11,7 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 6. Handle graceful shutdown on SIGTERM/SIGINT
 """
 
+import argparse
 import asyncio
 import contextlib
 import filecmp
@@ -20,9 +21,10 @@ import re
 import shutil
 import signal
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import httpx
 
@@ -43,6 +45,11 @@ from .constants import (
 )
 from .diff_baseline import resolve_session_diff_baselines
 from .git_excludes import install_runtime_git_excludes
+from .image_build_launch import (
+    IMAGE_BUILD_LAUNCH_ARGUMENT,
+    install_signal_handlers,
+    run_gated_image_build,
+)
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
@@ -59,6 +66,7 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 # Substituted for a single log line too large to forward intact, so the gap is
 # visible instead of silently dropped.
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
+_ResultT = TypeVar("_ResultT")
 
 
 @dataclass(frozen=True)
@@ -70,6 +78,10 @@ class RepositoryBootResult:
     repository_shas: list[dict[str, str]]
     setup_success: bool | None
     start_success: bool | None
+
+
+class ImageBuildExecutionCancelled(Exception):
+    """A handled process signal interrupted image-build work."""
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -128,13 +140,13 @@ class SandboxSupervisor:
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
 
-    def __init__(self):
+    def __init__(self, shutdown_event: asyncio.Event | None = None):
         self.opencode_process: asyncio.subprocess.Process | None = None
         self.bridge_process: asyncio.subprocess.Process | None = None
         self.code_server_process: asyncio.subprocess.Process | None = None
         self.ttyd_process: asyncio.subprocess.Process | None = None
         self.ttyd_proxy_process: asyncio.subprocess.Process | None = None
-        self.shutdown_event = asyncio.Event()
+        self.shutdown_event = shutdown_event or asyncio.Event()
         self.git_sync_complete = asyncio.Event()
         self.opencode_ready = asyncio.Event()
         self.boot_mode = "unknown"
@@ -1688,14 +1700,23 @@ class SandboxSupervisor:
                 stdout = await process.stdout.read() if process.stdout else b""
                 output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 duration_ms = int((time.time() - start_time) * 1000)
-                self.log.error(
-                    f"{hook_name}.timeout",
-                    timeout_seconds=timeout_seconds,
-                    output_tail=output_tail,
-                    script=str(script_path),
-                    duration_ms=duration_ms,
-                    boot_mode=self.boot_mode,
-                )
+                if self.boot_mode == "build":
+                    self.log.error(
+                        f"{hook_name}.timeout",
+                        timeout_seconds=timeout_seconds,
+                        script=str(script_path),
+                        duration_ms=duration_ms,
+                        boot_mode=self.boot_mode,
+                    )
+                else:
+                    self.log.error(
+                        f"{hook_name}.timeout",
+                        timeout_seconds=timeout_seconds,
+                        output_tail=output_tail,
+                        script=str(script_path),
+                        duration_ms=duration_ms,
+                        boot_mode=self.boot_mode,
+                    )
                 return False
 
             output_tail = "\n".join(
@@ -1714,14 +1735,23 @@ class SandboxSupervisor:
                 )
                 return True
 
-            self.log.error(
-                f"{hook_name}.failed",
-                exit_code=process.returncode,
-                output_tail=output_tail,
-                script=str(script_path),
-                duration_ms=duration_ms,
-                boot_mode=self.boot_mode,
-            )
+            if self.boot_mode == "build":
+                self.log.error(
+                    f"{hook_name}.failed",
+                    exit_code=process.returncode,
+                    script=str(script_path),
+                    duration_ms=duration_ms,
+                    boot_mode=self.boot_mode,
+                )
+            else:
+                self.log.error(
+                    f"{hook_name}.failed",
+                    exit_code=process.returncode,
+                    output_tail=output_tail,
+                    script=str(script_path),
+                    duration_ms=duration_ms,
+                    boot_mode=self.boot_mode,
+                )
             return False
 
         except Exception as e:
@@ -1987,13 +2017,31 @@ class SandboxSupervisor:
         timeout_seconds = self._image_build_execution_timeout_seconds()
         try:
             async with asyncio.timeout(timeout_seconds):
-                return await self._run_repository_boot(expected_tunnel_ports)
+                return await self._run_until_shutdown(
+                    self._run_repository_boot(expected_tunnel_ports)
+                )
         except TimeoutError as error:
             raise RuntimeError(
                 f"image build exceeded its {timeout_seconds}-second execution timeout"
             ) from error
 
-    async def run(self) -> None:
+    async def _run_until_shutdown(self, operation: Awaitable[_ResultT]) -> _ResultT:
+        """Cancel one lifecycle operation when a handled shutdown signal wins."""
+        operation_task = asyncio.ensure_future(operation)
+        shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+        tasks = {operation_task, shutdown_task}
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if shutdown_task in done and self.shutdown_event.is_set():
+                raise ImageBuildExecutionCancelled
+            return operation_task.result()
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> None:
         """Main supervisor loop."""
         startup_start = time.time()
 
@@ -2029,9 +2077,8 @@ class SandboxSupervisor:
         elif from_repo_image:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
-        repo_image_callback = (
-            RepoImageBuildCallback.from_env(self.log) if image_build_mode else None
-        )
+        if image_build_mode and repo_image_callback is None:
+            repo_image_callback = RepoImageBuildCallback.from_env(self.log)
 
         # Clear stale tunnel file on every restore: a snapshot taken with
         # tunnels configured retains the previous session's URLs even if this
@@ -2044,15 +2091,12 @@ class SandboxSupervisor:
         # boot's file, so always start clean.
         Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
 
-        # Set up signal handlers
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
-
         opencode_ready = False
         try:
             if image_build_mode:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
+                if self.shutdown_event.is_set():
+                    raise ImageBuildExecutionCancelled
                 duration_ms = int((time.time() - startup_start) * 1000)
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
@@ -2061,11 +2105,13 @@ class SandboxSupervisor:
                     runtime_version=runtime_version,
                 )
                 if repo_image_callback:
-                    reported = await repo_image_callback.report_success(
-                        base_sha=boot_result.head_sha,
-                        build_duration_seconds=time.time() - startup_start,
-                        repository_shas=boot_result.repository_shas,
-                        runtime_version=runtime_version,
+                    reported = await self._run_until_shutdown(
+                        repo_image_callback.report_success(
+                            base_sha=boot_result.head_sha,
+                            build_duration_seconds=time.time() - startup_start,
+                            repository_shas=boot_result.repository_shas,
+                            runtime_version=runtime_version,
+                        )
                     )
                     if not reported:
                         raise RuntimeError("repo image build-complete callback failed")
@@ -2124,17 +2170,26 @@ class SandboxSupervisor:
             # Phase 6: Monitor processes
             await self.monitor_processes()
 
+        except ImageBuildExecutionCancelled:
+            self.log.info("image_build.cancelled", reason="shutdown_requested")
         except Exception as e:
             self.log.error("supervisor.error", exc=e)
+            if image_build_mode and self.shutdown_event.is_set():
+                self.log.info("image_build.cancelled", reason="shutdown_requested")
+                return
             if image_build_mode and repo_image_callback:
-                await repo_image_callback.report_failure(str(e))
+                try:
+                    await self._run_until_shutdown(repo_image_callback.report_failure(str(e)))
+                except ImageBuildExecutionCancelled:
+                    self.log.info("image_build.cancelled", reason="shutdown_requested")
+                    return
             await self._report_fatal_error(str(e))
 
         finally:
             await self.shutdown()
 
-    async def _handle_signal(self, sig: signal.Signals) -> None:
-        """Handle shutdown signal."""
+    def request_shutdown(self, sig: signal.Signals) -> None:
+        """Record a process shutdown signal for the current lifecycle phase."""
         self.log.info("supervisor.signal", signal_name=sig.name)
         self.shutdown_event.set()
 
@@ -2191,11 +2246,25 @@ class SandboxSupervisor:
         self.log.info("supervisor.shutdown_complete")
 
 
-async def main():
-    """Entry point for the sandbox supervisor."""
-    supervisor = SandboxSupervisor()
-    await supervisor.run()
+async def main(argv: list[str] | None = None) -> int:
+    """Run an interactive supervisor or a gated provider-session image build."""
+    parser = argparse.ArgumentParser(description="Open-Inspect sandbox supervisor")
+    parser.add_argument(
+        IMAGE_BUILD_LAUNCH_ARGUMENT,
+        dest="await_image_build_start",
+        action="store_true",
+    )
+    args = parser.parse_args(argv)
+
+    shutdown_event = asyncio.Event()
+    supervisor = SandboxSupervisor(shutdown_event=shutdown_event)
+    install_signal_handlers(supervisor)
+
+    if not args.await_image_build_start:
+        await supervisor.run()
+        return 0
+    return await run_gated_image_build(supervisor)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))
