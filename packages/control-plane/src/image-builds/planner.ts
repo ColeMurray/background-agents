@@ -2,6 +2,7 @@ import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrati
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
+import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -91,7 +92,9 @@ export class ImageBuildPlanner {
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
-      userEnvVars,
+      userEnvVars: userEnvVars
+        ? prepareManagedProviderEnv({ exposedSecrets: userEnvVars, brokerSecrets: userEnvVars })
+        : undefined,
       correlation: {
         trace_id: params.correlation.trace_id,
         request_id: params.correlation.request_id,

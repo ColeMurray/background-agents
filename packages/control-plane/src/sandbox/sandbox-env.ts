@@ -1,7 +1,12 @@
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
-import type { CreateSandboxConfig, RestoreConfig, SessionRepositoryInfo } from "./provider";
+import {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  type CreateSandboxConfig,
+  type RestoreConfig,
+  type SessionRepositoryInfo,
+} from "./provider";
 import { resolveServicePorts } from "./providers/port-resolution";
 
 /**
@@ -196,6 +201,7 @@ export function buildSandboxEnvVars(
     SANDBOX_ID: config.sandboxId,
     CONTROL_PLANE_URL: config.controlPlaneUrl,
     SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
+    SANDBOX_TIMEOUT_SECONDS: String(config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS),
     REPO_OWNER: config.repoOwner ?? "",
     REPO_NAME: config.repoName ?? "",
     [SESSION_CONFIG_ENV_VAR]: JSON.stringify(sessionConfig),

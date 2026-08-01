@@ -236,6 +236,11 @@ describe("E2BSandboxProvider", () => {
     expect(client.createSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutSeconds: 1800 })
     );
+    expect(client.writeSessionEnv).toHaveBeenCalledWith(
+      "e2b-id",
+      expect.objectContaining({ SANDBOX_TIMEOUT_SECONDS: "1800" }),
+      expect.any(Object)
+    );
   });
 
   it("kills the created sandbox when writeSessionEnv fails (no leak)", async () => {

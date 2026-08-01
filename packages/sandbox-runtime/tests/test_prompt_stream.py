@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
 from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _Disposition,
@@ -28,6 +29,7 @@ def make_stream() -> OpenCodePromptStream:
         log=MagicMock(),
         sse_inactivity_timeout_seconds=120.0,
         prompt_max_duration_seconds=5400.0,
+        prompt_cleanup_timeout_seconds=MAX_SNAPSHOT_RESERVE_SECONDS,
     )
 
 
