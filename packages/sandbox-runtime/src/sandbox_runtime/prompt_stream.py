@@ -230,7 +230,8 @@ class OpenCodePromptStream:
                     await self._client.request_stop(
                         opencode_session_id, reason="prompt_max_duration_timeout"
                     )
-                    final_events = [event async for event in self._fetch_final_message_state(state)]
+                    async for event in self._fetch_final_message_state(state):
+                        final_events.append(event)
             except TimeoutError:
                 self._log.error(
                     "bridge.prompt_timeout_cleanup_timeout",
