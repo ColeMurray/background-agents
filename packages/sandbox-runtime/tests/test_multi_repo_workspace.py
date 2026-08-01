@@ -412,10 +412,8 @@ class TestOpencodeAssembly:
         assert not stale_manifest.exists()
         assert (tmp_path / ".opencode" / "command" / "deploy.md").read_text() == "current"
 
-    def test_rebuild_preserves_staged_node_modules(self, tmp_path):
-        """The image-managed module tree survives the clean rebuild so
-        snapshot restores keep _stage_opencode_deps' skip-if-present fast
-        path instead of re-copying it every boot."""
+    def test_rebuild_removes_runtime_node_modules(self, tmp_path):
+        """The assembled project tree must not retain old runtime dependencies."""
         sup = _make_supervisor(tmp_path)
         staged = tmp_path / ".opencode" / "node_modules" / "@opencode-ai" / "plugin"
         staged.mkdir(parents=True)
@@ -426,7 +424,7 @@ class TestOpencodeAssembly:
 
         sup._assemble_workspace_opencode()
 
-        assert (staged / "index.js").read_text() == "plugin"
+        assert not staged.exists()
         assert not stale.exists()
 
     def test_skips_node_modules(self, tmp_path):

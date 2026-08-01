@@ -5,6 +5,10 @@
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
 DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
 
+# Runtime-owned OpenCode configuration. Keeping this outside /workspace prevents
+# repository linters and formatters from discovering generated tools and skills.
+OPENCODE_RUNTIME_CONFIG_DIR = "/tmp/open-inspect-opencode"
+
 # Sandbox lifetime and the env contract used to pass it to the bridge.
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200
 SANDBOX_TIMEOUT_ENV_VAR = "SANDBOX_TIMEOUT_SECONDS"

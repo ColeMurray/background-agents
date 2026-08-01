@@ -1,9 +1,10 @@
 """Tests for _install_tools() and _install_bin_scripts() in SandboxSupervisor."""
 
 import json
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sandbox_runtime.entrypoint import SandboxSupervisor
 
@@ -61,12 +62,11 @@ class TestInstallTools:
         legacy_tool.write_text("// legacy tool")
 
         with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools"):
-            installed = sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         dest = workdir / ".opencode" / "tool" / "create-pull-request.js"
         assert dest.exists()
         assert dest.read_text() == "// legacy tool"
-        assert installed == {".opencode/tool/create-pull-request.js"}
 
     def test_tools_dir_files_copied(self, tmp_path):
         """All .js files from tools/ directory should be copied."""
@@ -82,7 +82,7 @@ class TestInstallTools:
         (tools_dir / "cancel-child.js").write_text("// cancel child")
 
         with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "_bridge-client.js").exists()
@@ -104,7 +104,7 @@ class TestInstallTools:
         (tools_dir / "helper.py").write_text("# python")
 
         with _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "spawn-child.js").exists()
@@ -122,7 +122,7 @@ class TestInstallTools:
         legacy_tool.write_text("// legacy")
 
         with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools"):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "create-pull-request.js").exists()
@@ -136,19 +136,14 @@ class TestInstallTools:
         workdir.mkdir()
 
         with _patch_paths(legacy=tmp_path / "no-legacy", tools=tmp_path / "no-tools"):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         assert not (workdir / ".opencode").exists()
 
     def test_copies_prebuilt_deps_from_cache(self, tmp_path):
         """Should copy package.json, package-lock.json, and node_modules from image cache."""
-        sup = _make_supervisor()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
-
-        legacy_tool = tmp_path / "app" / "sandbox" / "inspect-plugin.js"
-        legacy_tool.parent.mkdir(parents=True)
-        legacy_tool.write_text("// tool")
 
         # Build a fake deps cache mimicking /app/opencode-deps
         deps_cache = tmp_path / "opencode-deps"
@@ -164,10 +159,9 @@ class TestInstallTools:
         nm.mkdir(parents=True)
         (nm / "index.js").write_text("module.exports = {}")
 
-        with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", deps_cache=deps_cache):
-            installed = sup._install_tools(workdir)
-
         opencode_dir = workdir / ".opencode"
+        opencode_dir.mkdir()
+        SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
         # All three artefacts should be present
         assert (opencode_dir / "package.json").exists()
         assert (opencode_dir / "package-lock.json").exists()
@@ -175,22 +169,11 @@ class TestInstallTools:
 
         pkg = json.loads((opencode_dir / "package.json").read_text())
         assert "@opencode-ai/plugin" in pkg["dependencies"]
-        assert installed == {
-            ".opencode/tool/create-pull-request.js",
-            ".opencode/package.json",
-            ".opencode/package-lock.json",
-            ".opencode/node_modules/",
-        }
 
     def test_does_not_overwrite_existing_files(self, tmp_path):
         """Pre-existing package.json or node_modules in .opencode/ should not be overwritten."""
-        sup = _make_supervisor()
         workdir = tmp_path / "workspace"
         workdir.mkdir()
-
-        legacy_tool = tmp_path / "app" / "sandbox" / "inspect-plugin.js"
-        legacy_tool.parent.mkdir(parents=True)
-        legacy_tool.write_text("// tool")
 
         # Build a fake deps cache
         deps_cache = tmp_path / "opencode-deps"
@@ -205,14 +188,10 @@ class TestInstallTools:
         existing_pkg = workdir / ".opencode" / "package.json"
         existing_pkg.write_text('{"name": "existing"}')
 
-        with _patch_paths(legacy=legacy_tool, tools=tmp_path / "no-tools", deps_cache=deps_cache):
-            installed = sup._install_tools(workdir)
+        SandboxSupervisor._stage_opencode_deps(deps_cache, workdir / ".opencode")
 
         # Existing package.json should be preserved, not overwritten by cache
         assert existing_pkg.read_text() == '{"name": "existing"}'
-        assert ".opencode/package.json" not in installed
-        assert ".opencode/package-lock.json" in installed
-        assert ".opencode/node_modules/" in installed
 
     def test_does_not_claim_a_divergent_existing_lockfile(self, tmp_path):
         """A user lockfile is not runtime-owned merely because package.json matches."""
@@ -227,9 +206,8 @@ class TestInstallTools:
         user_lock = opencode_dir / "package-lock.json"
         user_lock.write_text('{"user": true}')
 
-        installed = SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
+        SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
 
-        assert installed == {"package.json"}
         assert user_lock.read_text() == '{"user": true}'
 
     def test_does_not_claim_preexisting_modules_from_a_matching_package(self, tmp_path):
@@ -245,9 +223,8 @@ class TestInstallTools:
         user_module = user_modules / "user-package.js"
         user_module.write_text("user module\n")
 
-        installed = SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
+        SandboxSupervisor._stage_opencode_deps(deps_cache, opencode_dir)
 
-        assert installed == {"package.json"}
         assert user_module.read_text() == "user module\n"
 
     def test_legacy_and_tools_dir_combined(self, tmp_path):
@@ -266,7 +243,7 @@ class TestInstallTools:
         (tools_dir / "_bridge-client.js").write_text("// bridge")
 
         with _patch_paths(legacy=legacy_tool, tools=tools_dir):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "create-pull-request.js").exists()
@@ -297,7 +274,7 @@ class TestInstallTools:
         (tools_dir / "cancel-child.js").write_text("// cancel")
 
         with _patch_paths(legacy=legacy_tool, tools=tools_dir):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "_bridge-client.js").exists()
@@ -322,11 +299,125 @@ class TestInstallTools:
             patch.dict("os.environ", {"AGENT_SLACK_NOTIFY_ENABLED": "true"}),
             _patch_paths(legacy=tmp_path / "no-legacy", tools=tools_dir),
         ):
-            sup._install_tools(workdir)
+            sup._install_tools(workdir / ".opencode")
 
         tool_dest = workdir / ".opencode" / "tool"
         assert (tool_dest / "slack-notify.js").exists()
         assert (tool_dest / "spawn-child.js").exists()
+
+
+class TestPrepareOpencodeFilesystem:
+    def test_installs_runtime_assets_outside_checkout_and_reconciles_stale_files(self, tmp_path):
+        sup = _make_supervisor()
+        checkout = tmp_path / "checkout"
+        project_config = checkout / ".opencode"
+        project_config.mkdir(parents=True)
+        project_tool = project_config / "tool" / "project.js"
+        project_tool.parent.mkdir()
+        project_tool.write_text("project tool")
+
+        runtime_config = tmp_path / "runtime-config"
+        stale_tool = runtime_config / "tool" / "stale.js"
+        stale_tool.parent.mkdir(parents=True)
+        stale_tool.write_text("stale")
+        stale_plugin = runtime_config / "plugins" / "codex-auth-plugin.js"
+        stale_plugin.parent.mkdir()
+        stale_plugin.write_text("stale plugin")
+        cached_module = runtime_config / "node_modules" / "cached" / "index.js"
+        cached_module.parent.mkdir(parents=True)
+        cached_module.write_text("cached")
+        (runtime_config / "package.json").write_text('{"runtime": true}')
+
+        tools_dir = tmp_path / "app" / "tools"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "spawn-child.js").write_text("runtime tool")
+        skills_dir = tmp_path / "app" / "skills" / "record-video"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text("runtime skill")
+
+        sup._assemble_workspace_opencode = MagicMock()
+        sup._seed_global_opencode_deps = MagicMock()
+        sup._install_bin_scripts = MagicMock()
+        with _patch_paths(
+            legacy=tmp_path / "no-legacy",
+            tools=tools_dir,
+            skills=skills_dir.parent,
+        ):
+            sup._prepare_opencode_filesystem(runtime_config)
+
+        assert not stale_tool.exists()
+        assert not stale_plugin.exists()
+        assert cached_module.read_text() == "cached"
+        assert (runtime_config / "tool" / "spawn-child.js").read_text() == "runtime tool"
+        assert (
+            runtime_config / "skills" / "record-video" / "SKILL.md"
+        ).read_text() == "runtime skill"
+        assert project_tool.read_text() == "project tool"
+        sup._assemble_workspace_opencode.assert_called_once_with()
+
+    def test_replaces_symlinked_runtime_config_without_touching_target(self, tmp_path):
+        target = tmp_path / "checkout" / ".opencode"
+        target.mkdir(parents=True)
+        project_file = target / "project.json"
+        project_file.write_text("project config")
+        runtime_config = tmp_path / "runtime-config"
+        runtime_config.symlink_to(target, target_is_directory=True)
+
+        SandboxSupervisor._reset_runtime_opencode_config(runtime_config, tmp_path / "no-cache")
+
+        assert project_file.read_text() == "project config"
+        assert not runtime_config.is_symlink()
+        assert runtime_config.is_dir()
+
+    def test_removes_symlinked_module_cache_without_touching_target(self, tmp_path):
+        target = tmp_path / "modules"
+        target.mkdir()
+        cached_file = target / "index.js"
+        cached_file.write_text("external cache")
+        runtime_config = tmp_path / "runtime-config"
+        runtime_config.mkdir()
+        (runtime_config / "node_modules").symlink_to(target, target_is_directory=True)
+
+        SandboxSupervisor._reset_runtime_opencode_config(runtime_config, tmp_path / "no-cache")
+
+        assert cached_file.read_text() == "external cache"
+        assert not (runtime_config / "node_modules").exists()
+
+    def test_replaces_stale_dependency_cache_as_one_unit(self, tmp_path):
+        deps_cache = _make_opencode_deps_staging(tmp_path)
+        (deps_cache / "package-lock.json").write_text('{"runtime": "current"}')
+        runtime_config = tmp_path / "runtime-config"
+        stale_module = runtime_config / "node_modules" / "stale" / "index.js"
+        stale_module.parent.mkdir(parents=True)
+        stale_module.write_text("stale")
+        (runtime_config / "package.json").write_text('{"runtime": "old"}')
+        (runtime_config / "package-lock.json").write_text('{"runtime": "old"}')
+
+        SandboxSupervisor._reset_runtime_opencode_config(runtime_config, deps_cache)
+        SandboxSupervisor._stage_opencode_deps(deps_cache, runtime_config)
+
+        assert not stale_module.exists()
+        assert (runtime_config / "package.json").read_text() == (
+            deps_cache / "package.json"
+        ).read_text()
+        assert (runtime_config / "package-lock.json").read_text() == (
+            deps_cache / "package-lock.json"
+        ).read_text()
+        assert (runtime_config / "node_modules" / "@opencode-ai" / "plugin" / "index.js").exists()
+
+    def test_preserves_dependency_cache_when_staged_manifests_match(self, tmp_path):
+        deps_cache = _make_opencode_deps_staging(tmp_path)
+        runtime_config = tmp_path / "runtime-config"
+        shutil.copytree(deps_cache, runtime_config)
+        cached_module = runtime_config / "node_modules" / "@opencode-ai" / "plugin" / "index.js"
+        stale_tool = runtime_config / "tool" / "stale.js"
+        stale_tool.parent.mkdir()
+        stale_tool.write_text("stale")
+
+        SandboxSupervisor._reset_runtime_opencode_config(runtime_config, deps_cache)
+
+        assert cached_module.read_text() == "module.exports = {}"
+        assert not stale_tool.exists()
 
 
 class TestInstallBinScripts:
@@ -463,7 +554,7 @@ class TestInstallSkills:
             tools=tmp_path / "no-tools",
             skills=skills_dir,
         ):
-            installed = sup._install_skills(workdir)
+            sup._install_skills(workdir / ".opencode")
 
         skill_dest = workdir / ".opencode" / "skills" / "agent-browser"
         assert (skill_dest / "SKILL.md").read_text() == "# agent-browser"
@@ -476,14 +567,6 @@ class TestInstallSkills:
         assert (fresh_skill_dest / "helper.txt").read_text() == "fresh install"
         assert not (workdir / ".opencode" / "skills" / "README.md").exists()
         assert not (workdir / ".opencode" / "skills" / "not-a-skill").exists()
-        assert installed == {
-            ".opencode/skills/agent-browser/SKILL.md",
-            ".opencode/skills/agent-browser/references/notes.md",
-            ".opencode/skills/agent-browser/scripts/helper.py",
-            ".opencode/skills/record-video/SKILL.md",
-            ".opencode/skills/record-video/helper.txt",
-        }
-        assert ".opencode/skills/agent-browser/local.txt" not in installed
 
     def test_skills_dir_non_directory_is_ignored(self, tmp_path):
         """A non-directory skills path should not raise or copy files."""
@@ -500,7 +583,7 @@ class TestInstallSkills:
             tools=tmp_path / "no-tools",
             skills=skills_file,
         ):
-            sup._install_skills(workdir)
+            sup._install_skills(workdir / ".opencode")
 
         assert not (workdir / ".opencode" / "skills").exists()
 
@@ -520,11 +603,13 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
 class TestResolveGlobalConfigDir:
     """Cases for _resolve_opencode_global_config_dir() — OpenCode's xdg-basedir resolution."""
 
-    def test_uses_opencode_config_dir_override(self, tmp_path, monkeypatch):
-        """OPENCODE_CONFIG_DIR wins over XDG_CONFIG_HOME and is used verbatim."""
+    def test_ignores_opencode_config_dir_override(self, tmp_path, monkeypatch):
+        """OPENCODE_CONFIG_DIR is an additional directory, not the XDG global directory."""
         monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "custom"))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "custom"
+        assert (
+            SandboxSupervisor._resolve_opencode_global_config_dir() == tmp_path / "xdg" / "opencode"
+        )
 
     def test_uses_xdg_config_home(self, tmp_path, monkeypatch):
         """Without the override, $XDG_CONFIG_HOME/opencode is used."""
