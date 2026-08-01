@@ -222,6 +222,7 @@ class AgentBridge:
             MAX_SNAPSHOT_RESERVE_SECONDS,
             sandbox_timeout_seconds * SNAPSHOT_RESERVE_FRACTION,
         )
+        self.prompt_cleanup_timeout_seconds = snapshot_reserve_seconds
         self.prompt_max_duration_seconds = sandbox_timeout_seconds - snapshot_reserve_seconds
         self.log.info(
             "bridge.prompt_timeout_config",
@@ -783,6 +784,7 @@ class AgentBridge:
                 log=self.log,
                 sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
                 prompt_max_duration_seconds=self.prompt_max_duration_seconds,
+                prompt_cleanup_timeout_seconds=self.prompt_cleanup_timeout_seconds,
             )
         return self._prompt_stream
 

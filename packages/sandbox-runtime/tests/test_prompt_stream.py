@@ -28,6 +28,7 @@ def make_stream() -> OpenCodePromptStream:
         log=MagicMock(),
         sse_inactivity_timeout_seconds=120.0,
         prompt_max_duration_seconds=5400.0,
+        prompt_cleanup_timeout_seconds=900.0,
     )
 
 

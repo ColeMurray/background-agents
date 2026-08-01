@@ -137,12 +137,14 @@ class OpenCodePromptStream:
         log: StructuredLogger,
         sse_inactivity_timeout_seconds: float,
         prompt_max_duration_seconds: float,
+        prompt_cleanup_timeout_seconds: float,
     ) -> None:
         self._client = client
         self._attachment_processor = attachment_processor
         self._log = log
         self._sse_inactivity_timeout_seconds = sse_inactivity_timeout_seconds
         self._prompt_max_duration_seconds = prompt_max_duration_seconds
+        self._prompt_cleanup_timeout_seconds = prompt_cleanup_timeout_seconds
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
@@ -222,10 +224,20 @@ class OpenCodePromptStream:
                 elapsed_ms=int(elapsed * 1000),
                 message_id=message_id,
             )
-            await self._client.request_stop(
-                opencode_session_id, reason="prompt_max_duration_timeout"
-            )
-            async for final_event in self._fetch_final_message_state(state):
+            final_events: list[dict[str, Any]] = []
+            try:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    await self._client.request_stop(
+                        opencode_session_id, reason="prompt_max_duration_timeout"
+                    )
+                    final_events = [event async for event in self._fetch_final_message_state(state)]
+            except TimeoutError:
+                self._log.error(
+                    "bridge.prompt_timeout_cleanup_timeout",
+                    timeout_ms=int(self._prompt_cleanup_timeout_seconds * 1000),
+                    message_id=message_id,
+                )
+            for final_event in final_events:
                 yield final_event
             raise RuntimeError(
                 f"Prompt exceeded max duration of {self._prompt_max_duration_seconds:.0f}s."

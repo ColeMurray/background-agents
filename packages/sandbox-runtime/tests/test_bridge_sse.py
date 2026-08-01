@@ -1345,6 +1345,14 @@ class HangingPromptPostHttpClient(DelayedMockHttpClient):
         return await super().post(url, json=json, timeout=timeout)
 
 
+class HangingAbortHttpClient(DelayedMockHttpClient):
+    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+        if url.endswith("/abort"):
+            self.post_urls.append(url)
+            await asyncio.sleep(3600)
+        return await super().post(url, json=json, timeout=timeout)
+
+
 class TestInactivityTimeout:
     """Tests for SSE inactivity timeout behavior."""
 
@@ -1594,6 +1602,31 @@ class TestPromptMaxDuration:
                 pass
 
         assert time.monotonic() - started_at < 0.5
+
+    @pytest.mark.asyncio
+    async def test_prompt_timeout_bounds_cleanup(self):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.prompt_max_duration_seconds = 0.1
+        bridge.prompt_cleanup_timeout_seconds = 0.1
+
+        http_client = HangingAbortHttpClient(
+            DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
+        )
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert time.monotonic() - started_at < 0.5
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
 
     @pytest.mark.asyncio
     async def test_prompt_timeout_does_not_cancel_suspended_consumer(
