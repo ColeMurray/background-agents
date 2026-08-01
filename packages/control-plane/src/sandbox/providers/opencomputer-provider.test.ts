@@ -112,6 +112,7 @@ describe("OpenComputerSandboxProvider", () => {
       userEnvVars: {
         ANTHROPIC_API_KEY: "sk-test",
         SANDBOX_VERSION: "v999-user-controlled",
+        IMAGE_BUILD_MODE: "true",
       },
       codeServerEnabled: true,
       sandboxSettings: { codeServerPort: 3000, tunnelPorts: [5173] },
@@ -162,8 +163,12 @@ describe("OpenComputerSandboxProvider", () => {
       allowedHosts: ["api.anthropic.com"],
     });
     expect(createCall.env).toHaveProperty("SANDBOX_VERSION", "");
+    expect(createCall.env).toHaveProperty("IMAGE_BUILD_MODE", "false");
     expect(client.setSecret).not.toHaveBeenCalledWith(
       expect.objectContaining({ name: "SANDBOX_VERSION" })
+    );
+    expect(client.setSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "IMAGE_BUILD_MODE" })
     );
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toMatchObject({
       session_id: "session-1",
@@ -682,6 +687,7 @@ describe("OpenComputerSandboxProvider", () => {
       userEnvVars: {
         ANTHROPIC_API_KEY: "sk-repo",
         SANDBOX_VERSION: "v999-user-controlled",
+        IMAGE_BUILD_MODE: "false",
         OI_REPO_IMAGE_PROVIDER_SESSION_ID: "user-controlled",
         OI_REPO_IMAGE_CALLBACK_TOKEN: "user-controlled",
         OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
@@ -729,6 +735,9 @@ describe("OpenComputerSandboxProvider", () => {
     );
     expect(client.setSecret).not.toHaveBeenCalledWith(
       expect.objectContaining({ name: "SANDBOX_VERSION" })
+    );
+    expect(client.setSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "IMAGE_BUILD_MODE" })
     );
     expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1", {
