@@ -975,6 +975,15 @@ class SandboxSupervisor:
                         existing_entries = existing
                 except (OSError, json.JSONDecodeError):
                     self.log.warn("managed_oauth.existing_auth_invalid")
+            existing_entries = {
+                key: value
+                for key, value in existing_entries.items()
+                if not (
+                    isinstance(value, dict)
+                    and value.get("refresh") == "managed-by-control-plane"
+                    and key not in entries
+                )
+            }
             entries = {**existing_entries, **entries}
 
             # Write to a temp file created with 0o600 from the start, then

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import type { Env } from "../types";
 import type { SessionRow } from "./types";
 import { XaiTokenRefreshError } from "../auth/xai";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
@@ -110,7 +110,7 @@ const logger = (): Logger =>
   }) as unknown as Logger;
 
 function service() {
-  return new XaiTokenRefreshService({} as Env["DB"], "key", async () => 123, logger());
+  return new XaiTokenRefreshService({} as SqlDatabase, "key", async () => 123, logger());
 }
 
 describe("XaiTokenRefreshService", () => {
@@ -154,6 +154,23 @@ describe("XaiTokenRefreshService", () => {
       XAI_OAUTH_REFRESH_TOKEN: "refresh-old",
       XAI_OAUTH_ACCESS_TOKEN: "access-new",
     });
+  });
+
+  it("returns and persists the default lifetime when xAI omits expires_in", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    state.repo.set(123, { XAI_OAUTH_REFRESH_TOKEN: "refresh-old" });
+    state.refresh.mockResolvedValue({
+      access_token: "access-new",
+      refresh_token: "refresh-new",
+    });
+
+    await expect(service().refresh(session())).resolves.toEqual({
+      ok: true,
+      accessToken: "access-new",
+      expiresIn: 3600,
+    });
+    expect(state.repoWrites[0].XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT).toBe("4600000");
   });
 
   it("rotates an environment token back to the environment scope", async () => {

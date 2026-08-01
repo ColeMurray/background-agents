@@ -27,6 +27,7 @@ describe("refreshXaiToken", () => {
     expect(String(init?.body)).toContain("grant_type=refresh_token");
     expect(String(init?.body)).toContain("refresh_token=refresh-old");
     expect(String(init?.body)).toContain("client_id=b1a00492-073a-47ea-816f-4c329264a828");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("accepts responses without a replacement refresh token", async () => {
@@ -65,5 +66,15 @@ describe("refreshXaiToken", () => {
     } as Response);
 
     await expect(refreshXaiToken("refresh")).rejects.toBeInstanceOf(XaiTokenRefreshError);
+  });
+
+  it("accepts provider lifetimes longer than one day", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve('{"access_token":"access","expires_in":172800}'),
+    } as Response);
+
+    await expect(refreshXaiToken("refresh")).resolves.toMatchObject({ expires_in: 172_800 });
   });
 });

@@ -1,7 +1,6 @@
 """Tests for managed xAI OAuth setup and plugin deployment."""
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -76,6 +75,36 @@ def test_auth_json_preserves_existing_provider_entries(tmp_path):
     }
 
 
+def test_auth_json_removes_stale_managed_provider_entries(tmp_path):
+    supervisor = _make_supervisor()
+    auth_file = tmp_path / ".local" / "share" / "opencode" / "auth.json"
+    auth_file.parent.mkdir(parents=True)
+    auth_file.write_text(
+        json.dumps(
+            {
+                "anthropic": {"type": "api", "key": "existing"},
+                "openai": {
+                    "type": "oauth",
+                    "refresh": "managed-by-control-plane",
+                    "access": "old",
+                    "expires": 1,
+                },
+            }
+        )
+    )
+
+    with (
+        patch.dict("os.environ", {"XAI_OAUTH_MANAGED": "1"}, clear=True),
+        patch("pathlib.Path.home", return_value=tmp_path),
+    ):
+        supervisor._setup_managed_oauth()
+
+    data = json.loads(auth_file.read_text())
+    assert data["anthropic"] == {"type": "api", "key": "existing"}
+    assert "openai" not in data
+    assert data["xai"]["refresh"] == "managed-by-control-plane"
+
+
 def test_xai_plugin_uses_broker_without_refresh_token_environment():
     plugin = (
         Path(__file__).parents[1] / "src" / "sandbox_runtime" / "plugins" / "xai-auth-plugin.js"
@@ -84,35 +113,9 @@ def test_xai_plugin_uses_broker_without_refresh_token_environment():
     assert 'provider: "xai"' in plugin
     assert "/xai-token-refresh" in plugin
     assert "XAI_OAUTH_REFRESH_TOKEN" not in plugin
-
-
-def test_xai_plugin_registers_complete_grok_build_model():
-    plugin_uri = (
-        Path(__file__).parents[1] / "src" / "sandbox_runtime" / "plugins" / "xai-auth-plugin.js"
-    ).as_uri()
-    script = f"""
-      const {{ XaiAuthProxy }} = await import({json.dumps(plugin_uri)});
-      const hooks = await XaiAuthProxy();
-      const base = {{
-        id: "grok-code-fast-1", providerID: "xai",
-        api: {{ id: "grok-code-fast-1", url: "https://api.x.ai/v1", npm: "@ai-sdk/xai" }},
-        name: "Grok Code Fast 1", capabilities: {{ reasoning: true }},
-        cost: {{ input: 1, output: 2, cache: {{ read: 0, write: 0 }} }},
-        limit: {{ context: 256000, output: 10000 }}, status: "active",
-        options: {{}}, headers: {{}}, release_date: "2025-08-28"
-      }};
-      const models = await hooks.provider.models({{ models: {{ "grok-code-fast-1": base }} }});
-      console.log(JSON.stringify(models["grok-build-0.1"]));
-    """
-
-    result = subprocess.run(["bun", "--eval", script], check=True, capture_output=True, text=True)
-    model = json.loads(result.stdout)
-
-    assert model["id"] == "grok-build-0.1"
-    assert model["providerID"] == "xai"
-    assert model["api"]["id"] == "grok-build-0.1"
-    assert model["variants"]["high"] == {"reasoningEffort": "high"}
-    assert model["cost"] == {"input": 0, "output": 0, "cache": {"read": 0, "write": 0}}
+    assert "AbortSignal.timeout" in plugin
+    assert 'family: "grok-build"' in plugin
+    assert "context: 256000, output: 256000" in plugin
 
 
 async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):

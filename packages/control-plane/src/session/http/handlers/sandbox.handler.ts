@@ -38,7 +38,7 @@ export interface SandboxHandlerDeps {
   getSession: () => SessionRow | null;
   refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
   refreshXaiToken: (session: SessionRow, log: Logger) => Promise<XaiTokenRefreshResult>;
-  isOpenAISecretsConfigured: () => boolean;
+  isManagedSecretsConfigured: () => boolean;
   getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
   messenger: SessionMessenger;
   generateId: () => string;
@@ -228,7 +228,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "No session" }, { status: 404 });
       }
 
-      if (!deps.isOpenAISecretsConfigured()) {
+      if (!deps.isManagedSecretsConfigured()) {
         return Response.json({ error: "Secrets not configured" }, { status: 500 });
       }
 
@@ -243,7 +243,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
           expires_in: result.expiresIn,
           account_id: result.accountId,
         },
-        { status: 200 }
+        { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     },
 
@@ -252,7 +252,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       if (!session) {
         return Response.json({ error: "No session" }, { status: 404 });
       }
-      if (!deps.isOpenAISecretsConfigured()) {
+      if (!deps.isManagedSecretsConfigured()) {
         return Response.json({ error: "Secrets not configured" }, { status: 500 });
       }
       const result = await deps.refreshXaiToken(session, log);
@@ -261,7 +261,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       }
       return Response.json(
         { access_token: result.accessToken, expires_in: result.expiresIn },
-        { status: 200 }
+        { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     },
 

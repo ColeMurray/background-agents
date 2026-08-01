@@ -7,6 +7,8 @@
 
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 
 let cachedAccessToken = null;
 let cachedExpiresAt = 0;
@@ -32,6 +34,7 @@ async function refreshViaControlPlane() {
   const response = await fetch(`${controlPlaneUrl}/sessions/${sessionId}/xai-token-refresh`, {
     method: "POST",
     headers: { Authorization: `Bearer ${authToken}` },
+    signal: AbortSignal.timeout(CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
     const body = (await response.text()).slice(0, 200);
@@ -48,7 +51,9 @@ async function ensureAccessToken() {
     refreshPromise = refreshViaControlPlane()
       .then((result) => {
         cachedAccessToken = result.access_token;
-        cachedExpiresAt = Date.now() + (result.expires_in ?? 3600) * 1000;
+        cachedExpiresAt =
+          Date.now() +
+          (result.expires_in ? result.expires_in * 1000 : DEFAULT_ACCESS_TOKEN_LIFETIME_MS);
         return cachedAccessToken;
       })
       .finally(() => {
@@ -63,22 +68,33 @@ export const XaiAuthProxy = async () => ({
     id: "xai",
     async models(provider) {
       if (provider.models["grok-build-0.1"]) return provider.models;
-      const base =
-        provider.models["grok-code-fast-1"] ||
-        Object.values(provider.models).find((model) => model.capabilities.reasoning);
-      if (!base) throw new Error("xAI catalog has no reasoning model to seed Grok Build metadata");
+      const api =
+        provider.models["grok-code-fast-1"]?.api ??
+        Object.values(provider.models).find((model) => model.api?.npm === "@ai-sdk/xai")?.api;
+      if (!api) throw new Error("xAI catalog has no API metadata for Grok Build");
       return {
         ...provider.models,
         "grok-build-0.1": {
-          ...base,
           id: "grok-build-0.1",
           providerID: "xai",
-          api: { ...base.api, id: "grok-build-0.1" },
+          api: { ...api, id: "grok-build-0.1" },
           name: "Grok Build 0.1",
+          family: "grok-build",
+          capabilities: {
+            temperature: true,
+            reasoning: true,
+            attachment: true,
+            toolcall: true,
+            input: { text: true, audio: false, image: true, video: false, pdf: true },
+            output: { text: true, audio: false, image: false, video: false, pdf: false },
+            interleaved: false,
+          },
           status: "active",
           options: {},
           headers: {},
           cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: { context: 256000, output: 256000 },
+          release_date: "2026-04-16",
           variants: {
             low: { reasoningEffort: "low" },
             medium: { reasoningEffort: "medium" },

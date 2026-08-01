@@ -2,11 +2,12 @@ import { z } from "zod";
 
 const XAI_TOKEN_URL = "https://auth.x.ai/oauth2/token";
 const XAI_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const XAI_TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 
 export const xaiTokenResponseSchema = z.object({
   access_token: z.string().min(1),
   refresh_token: z.string().optional(),
-  expires_in: z.number().int().positive().max(86_400).optional(),
+  expires_in: z.number().int().positive().optional(),
 });
 
 export type XaiTokenResponse = z.infer<typeof xaiTokenResponseSchema>;
@@ -24,6 +25,7 @@ export class XaiTokenRefreshError extends Error {
 export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenResponse> {
   const response = await fetch(XAI_TOKEN_URL, {
     method: "POST",
+    signal: AbortSignal.timeout(XAI_TOKEN_REQUEST_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",

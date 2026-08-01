@@ -477,7 +477,7 @@ export class SessionDO extends DurableObject<Env> {
           );
           return service.refresh(session);
         },
-        isOpenAISecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        isManagedSecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
         getScmCredentials: (log) =>
           new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
         messenger: this.messenger,

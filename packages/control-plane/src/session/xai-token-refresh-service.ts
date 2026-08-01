@@ -7,6 +7,8 @@ import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
 
 const XAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const XAI_DEFAULT_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
+const XAI_CONCURRENT_ROTATION_DELAY_MS = 500;
 
 type TokenSecretSource =
   | { kind: "environment"; environmentId: string }
@@ -140,7 +142,7 @@ export class XaiTokenRefreshService {
     state: Extract<XaiTokenState, { type: "refresh" }>
   ): Promise<XaiTokenRefreshResult> {
     const tokens = await refreshXaiToken(state.refreshToken);
-    const expiresIn = tokens.expires_in ?? 3600;
+    const expiresIn = tokens.expires_in ?? XAI_DEFAULT_TOKEN_LIFETIME_MS / 1000;
     const secrets = {
       XAI_OAUTH_REFRESH_TOKEN: tokens.refresh_token || state.refreshToken,
       XAI_OAUTH_ACCESS_TOKEN: tokens.access_token,
@@ -148,17 +150,17 @@ export class XaiTokenRefreshService {
     };
     await this.writeSecrets(state.source, secrets);
     this.log.info("xAI tokens rotated and cached", { source: state.source.kind });
-    return { ok: true, accessToken: tokens.access_token, expiresIn: tokens.expires_in };
+    return { ok: true, accessToken: tokens.access_token, expiresIn };
   }
 
   private async handleUnauthorizedRefresh(
     state: Extract<XaiTokenState, { type: "refresh" }>,
     readState: () => Promise<XaiTokenState | null>
   ): Promise<XaiTokenRefreshResult> {
-    this.log.warn("xAI refresh got 401, checking for concurrent rotation", {
+    this.log.warn("xAI refresh was rejected, checking for concurrent rotation", {
       source: state.source.kind,
     });
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, XAI_CONCURRENT_ROTATION_DELAY_MS));
     try {
       const current = await readState();
       if (current?.type === "cached") {
