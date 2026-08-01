@@ -191,12 +191,12 @@ Choose the AI model that fits your task, with per-session reasoning effort contr
 | ---------------- | ----------------------------------------------------------------- |
 | Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8/5, Fable 5 |
 | OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                      |
-| xAI / SuperGrok  | Grok Build 0.1 (opt-in)                                           |
+| xAI / SuperGrok  | Grok models (opt-in)                                              |
 | OpenCode Zen     | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)     |
 | Z.AI Coding Plan | GLM 5.2 (opt-in)                                                  |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
-Grok Build works with an eligible SuperGrok subscription through control-plane-managed OAuth. See
+Grok models work with an eligible SuperGrok subscription through control-plane-managed OAuth. See
 **[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
 **[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** or **[docs/GROK_MODELS.md](docs/GROK_MODELS.md)**
 for subscription setup instructions.
