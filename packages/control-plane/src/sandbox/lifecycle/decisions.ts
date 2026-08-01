@@ -30,6 +30,16 @@ export function isDeadSandboxStatus(status: SandboxStatus): boolean {
   return DEAD_SANDBOX_STATUSES.has(status);
 }
 
+/**
+ * Whether a sandbox lifecycle state must reject bridge reconnects.
+ *
+ * Failed is intentionally reconnectable: a slow boot can outlive the
+ * connecting watchdog and then self-heal when its bridge arrives.
+ */
+export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean {
+  return status === "stopped" || status === "stale";
+}
+
 // ==================== Circuit Breaker ====================
 
 /**

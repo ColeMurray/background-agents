@@ -13,6 +13,7 @@ import {
   evaluateConnectingTimeout,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
+  isSandboxReconnectBlockedStatus,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -30,6 +31,19 @@ import {
   type WarmState,
   type ExecutionTimeoutConfig,
 } from "./decisions";
+
+describe("isSandboxReconnectBlockedStatus", () => {
+  it.each(["stopped", "stale"] as const)("blocks reconnects for %s sandboxes", (status) => {
+    expect(isSandboxReconnectBlockedStatus(status)).toBe(true);
+  });
+
+  it.each(["pending", "spawning", "connecting", "ready", "running", "failed"] as const)(
+    "allows reconnects for %s sandboxes",
+    (status) => {
+      expect(isSandboxReconnectBlockedStatus(status)).toBe(false);
+    }
+  );
+});
 
 // ==================== Circuit Breaker Tests ====================
 

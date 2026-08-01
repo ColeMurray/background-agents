@@ -13,7 +13,7 @@ import {
 } from "@open-inspect/shared/models";
 import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
 import type { SourceControlProviderName } from "../source-control";
-import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
+import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand } from "./types";
 import type { SessionRepository } from "./repository";
 import {
@@ -97,6 +97,7 @@ export class SessionMessageQueue {
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
+    private readonly alarmScheduler: AlarmScheduler,
     private readonly executionTimeoutMs: number
   ) {}
 
@@ -203,13 +204,9 @@ export class SessionMessageQueue {
     this.messenger.broadcast({ type: "processing_status", isProcessing: true });
     this.sandboxLifecycle.updateLastActivity(now);
 
-    // Execution timeout shares the DO's single alarm slot with inactivity
-    // checks — the earlier deadline always wins.
+    // Execution timeout shares the DO's single alarm slot with lifecycle checks.
     const deadline = now + this.executionTimeoutMs;
-    const currentAlarm = await this.ctx.storage.getAlarm();
-    if (!currentAlarm || deadline < currentAlarm) {
-      await this.ctx.storage.setAlarm(deadline);
-    }
+    await this.alarmScheduler.scheduleAlarm(deadline);
 
     const author = this.repository.getParticipantById(message.author_id);
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);

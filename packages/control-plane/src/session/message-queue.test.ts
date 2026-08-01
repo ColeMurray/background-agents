@@ -8,6 +8,7 @@ import type { SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
+import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
@@ -160,6 +161,7 @@ function buildQueue() {
     sandboxLifecycle,
     null,
     "github",
+    createEarliestAlarmScheduler({ getAlarm, setAlarm }),
     EXECUTION_TIMEOUT_MS
   );
 
