@@ -170,44 +170,41 @@ class OpenCodePromptStream:
             start_time=time.time(),
         )
         state.user_message_ids.add(opencode_message_id)
-        loop = asyncio.get_running_loop()
-
         try:
-            async with self._client.events(
-                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
-            ) as sse_events:
-                prompt_start = loop.time()
-                await self._client.post_prompt(opencode_session_id, request_body)
+            async with asyncio.timeout(self._prompt_max_duration_seconds):
+                async with self._client.events(
+                    inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
+                ) as sse_events:
+                    await self._client.post_prompt(opencode_session_id, request_body)
 
-                async for sse_event in sse_events:
-                    step = self._apply_sse_event(state, sse_event)
-                    for event in step.events:
-                        yield event
+                    async for sse_event in sse_events:
+                        step = self._apply_sse_event(state, sse_event)
+                        for event in step.events:
+                            yield event
 
-                    if step.disposition is _Disposition.FINISHED_IDLE:
-                        async for final_event in self._fetch_final_message_state(state):
-                            yield final_event
-                        return
-                    if step.disposition is _Disposition.FAILED:
-                        return
+                        if step.disposition is _Disposition.FINISHED_IDLE:
+                            async for final_event in self._fetch_final_message_state(state):
+                                yield final_event
+                            return
+                        if step.disposition is _Disposition.FAILED:
+                            return
 
-                    if loop.time() > prompt_start + self._prompt_max_duration_seconds:
-                        elapsed = time.time() - state.start_time
-                        self._log.error(
-                            "bridge.prompt_max_duration_timeout",
-                            timeout_ms=int(self._prompt_max_duration_seconds * 1000),
-                            elapsed_ms=int(elapsed * 1000),
-                            message_id=message_id,
-                        )
-                        await self._client.request_stop(
-                            opencode_session_id, reason="prompt_max_duration_timeout"
-                        )
-                        async for final_event in self._fetch_final_message_state(state):
-                            yield final_event
-                        raise RuntimeError(
-                            f"Prompt exceeded max duration of "
-                            f"{self._prompt_max_duration_seconds:.0f}s."
-                        )
+        except TimeoutError:
+            elapsed = time.time() - state.start_time
+            self._log.error(
+                "bridge.prompt_max_duration_timeout",
+                timeout_ms=int(self._prompt_max_duration_seconds * 1000),
+                elapsed_ms=int(elapsed * 1000),
+                message_id=message_id,
+            )
+            await self._client.request_stop(
+                opencode_session_id, reason="prompt_max_duration_timeout"
+            )
+            async for final_event in self._fetch_final_message_state(state):
+                yield final_event
+            raise RuntimeError(
+                f"Prompt exceeded max duration of {self._prompt_max_duration_seconds:.0f}s."
+            )
 
         except SSEInactivityTimeoutError:
             elapsed = time.time() - state.start_time

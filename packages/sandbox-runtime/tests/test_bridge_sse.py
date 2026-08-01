@@ -11,6 +11,7 @@ ensuring:
 
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -1531,6 +1532,30 @@ class TestPromptMaxDuration:
         )
 
         assert bridge.prompt_max_duration_seconds == 450
+
+    @pytest.mark.asyncio
+    async def test_prompt_timeout_does_not_wait_for_next_sse_event(self):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.sse_inactivity_timeout = 2.0
+        bridge.prompt_max_duration_seconds = 0.1
+
+        sse_response = DelayedMockSSEResponse([(create_sse_event("server.heartbeat", {}), 1.0)])
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+
+        started_at = time.monotonic()
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert time.monotonic() - started_at < 0.5
 
     @pytest.mark.asyncio
     async def test_prompt_max_duration_timeout(self):
