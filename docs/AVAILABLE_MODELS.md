@@ -1,9 +1,10 @@
 # Available Models
 
 Open-Inspect exposes these models in the model picker and integration preferences. The default
-enabled set includes Anthropic and OpenAI models. OpenCode Zen, Z.AI Coding Plan, and DeepSeek
-models are available but must be enabled in **Settings > Models**. Z.AI Coding Plan requires
-`ZHIPU_API_KEY`; DeepSeek requires `DEEPSEEK_API_KEY`.
+enabled set includes Anthropic and OpenAI models. xAI / SuperGrok, OpenCode Zen, Z.AI Coding Plan,
+and DeepSeek models are available but must be enabled in **Settings > Models**. SuperGrok requires
+managed xAI OAuth credentials; Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSeek requires
+`DEEPSEEK_API_KEY`.
 
 ## Anthropic
 
@@ -33,6 +34,15 @@ setup instructions.
 | `openai/gpt-5.6-luna`        | GPT 5.6 Luna        | Fast, cost-efficient high-volume workloads   | none, low, medium, high, xhigh | Not set        |
 | `openai/gpt-5.3-codex`       | GPT 5.3 Codex       | Latest codex                                 | low, medium, high, xhigh       | high           |
 | `openai/gpt-5.3-codex-spark` | GPT 5.3 Codex Spark | Low-latency codex variant                    | low, medium, high, xhigh       | high           |
+
+## xAI / SuperGrok
+
+Grok models require a SuperGrok OAuth refresh token and are disabled by default. See
+[Using Grok with a SuperGrok Subscription](GROK_MODELS.md) for setup and rollout instructions.
+
+| Model ID             | Display name   | Description                            | Reasoning efforts | Default effort |
+| -------------------- | -------------- | -------------------------------------- | ----------------- | -------------- |
+| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers | low, medium, high | high           |
 
 ## OpenCode Zen
 

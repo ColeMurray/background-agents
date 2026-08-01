@@ -545,6 +545,7 @@ was built for internal use where all employees have access to company repositori
 | User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
 | Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
 | WebSocket Token    | Authenticate client connections            | Single session                   |
+| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Provider account + secret scope  |
 
 Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
 of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
@@ -570,11 +571,19 @@ per-environment scope. A session receives global secrets plus its **session targ
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
+Managed OpenAI and xAI OAuth refresh tokens are a stricter case: they remain control-plane-only and
+are replaced with non-secret provider markers before sandbox creation. The sandbox uses its session
+auth token to request short-lived model access from a provider-specific broker. Refresh-token
+rotation is persisted back to the global, repository, or environment scope that supplied it. See
+[Using OpenAI Models](./OPENAI_MODELS.md) and
+[Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
+
 > **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
 > added as global secrets. Modal injects these automatically via its own secrets mechanism.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
-> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider.
+> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
+> require managed xAI OAuth credentials and must be enabled under **Settings > Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 
