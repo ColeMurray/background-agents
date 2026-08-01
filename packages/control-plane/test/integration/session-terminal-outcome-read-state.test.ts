@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import {
-  buildViewerSessionTerminalOutcomeReadStatesQuery,
-  SessionIndexStore,
-} from "../../src/db/session-index";
+import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import type { SqlDatabase } from "../../src/db/sql-database";
@@ -384,7 +381,7 @@ describe("session terminal-outcome read state", () => {
     expect(serviceResponse.status).toBe(403);
   });
 
-  it("decorates a 50-row page with a fixed number of indexed batch queries", async () => {
+  it("decorates a 50-row page in three indexed queries", async () => {
     const seedStore = new SessionIndexStore(env.DB);
     await createUser("viewer", 1_000);
     for (let index = 0; index < 50; index += 1) {
@@ -399,9 +396,11 @@ describe("session terminal-outcome read state", () => {
     }
 
     let queryCount = 0;
+    const preparedQueries: string[] = [];
     const countedDb = {
       prepare(query: string) {
         queryCount += 1;
+        preparedQueries.push(query);
         return env.DB.prepare(query);
       },
       batch(statements: D1PreparedStatement[]) {
@@ -414,7 +413,7 @@ describe("session terminal-outcome read state", () => {
     expect(
       result.sessions.every((session) => session.terminalOutcomeReadState?.hasUnreadTerminalOutcome)
     ).toBe(true);
-    expect(queryCount).toBe(4);
+    expect(queryCount).toBe(3);
 
     const indexes = await env.DB.prepare(
       "PRAGMA index_list('session_terminal_outcome_read_states')"
@@ -423,18 +422,17 @@ describe("session terminal-outcome read state", () => {
       "idx_session_terminal_outcome_read_states_session"
     );
 
-    const sessionIds = result.sessions.map(({ id }) => id);
-    const queryPlan = await env.DB.prepare(
-      `EXPLAIN QUERY PLAN ${buildViewerSessionTerminalOutcomeReadStatesQuery(sessionIds.length)}`
-    )
-      .bind("viewer", ...sessionIds)
+    const pageQuery = preparedQueries.find((query) => query.includes("WITH paged_sessions AS"));
+    expect(pageQuery).toBeDefined();
+    const queryPlan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${pageQuery}`)
+      .bind(51, 0, "viewer")
       .all<{ detail: string }>();
     expect(queryPlan.results.map(({ detail }) => detail).join("\n")).toMatch(
-      /INDEX .*session_terminal_outcome_read_states/i
+      /SEARCH read_state USING/i
     );
   });
 
-  it("chunks terminal-outcome read-state decoration within D1 binding limits", async () => {
+  it("decorates a 100-row page without per-session query bindings", async () => {
     const store = new SessionIndexStore(env.DB);
     await createUser("viewer", 1_000);
     for (let index = 0; index < 100; index += 1) {

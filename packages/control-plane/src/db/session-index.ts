@@ -23,7 +23,6 @@ const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).joi
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
-const MAX_TERMINAL_OUTCOME_READ_STATE_SESSION_IDS_PER_QUERY = 99;
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -125,30 +124,38 @@ export interface ListSessionsResult {
   hasMore: boolean;
 }
 
-interface ViewerSessionTerminalOutcomeReadStateRow {
-  session_id: string;
+interface ViewerTerminalOutcomeReadStateRow {
   has_unread_terminal_outcome: number;
   latest_terminal_outcome_message_id: string | null;
 }
 
-export function buildViewerSessionTerminalOutcomeReadStatesQuery(sessionCount: number): string {
-  const placeholders = Array.from({ length: sessionCount }, () => "?").join(", ");
-  return `SELECT s.id AS session_id,
-                 s.latest_terminal_outcome_message_id,
-                 CASE
-                   WHEN s.latest_terminal_outcome_message_id IS NOT NULL
-                     AND s.latest_terminal_outcome_completed_at >= u.created_at
-                     AND (
-                       r.last_read_terminal_outcome_message_id IS NULL
-                       OR r.last_read_terminal_outcome_message_id != s.latest_terminal_outcome_message_id
-                     )
-                   THEN 1 ELSE 0
-                 END AS has_unread_terminal_outcome
-          FROM sessions s
-          LEFT JOIN users u ON u.id = ?
-          LEFT JOIN session_terminal_outcome_read_states r
-            ON r.session_id = s.id AND r.user_id = u.id
-          WHERE s.id IN (${placeholders})`;
+interface ViewerSessionRow extends SessionRow, ViewerTerminalOutcomeReadStateRow {}
+
+function hasUnreadTerminalOutcomeSql(sessionAlias: string): string {
+  return `CASE
+            WHEN ${sessionAlias}.latest_terminal_outcome_message_id IS NOT NULL
+              AND ${sessionAlias}.latest_terminal_outcome_completed_at >= viewer.created_at
+              AND (
+                read_state.last_read_terminal_outcome_message_id IS NULL
+                OR read_state.last_read_terminal_outcome_message_id
+                  != ${sessionAlias}.latest_terminal_outcome_message_id
+              )
+            THEN 1 ELSE 0
+          END`;
+}
+
+function terminalOutcomeReadStateFromRow(
+  row: ViewerTerminalOutcomeReadStateRow
+): SessionTerminalOutcomeReadState {
+  return row.latest_terminal_outcome_message_id === null
+    ? {
+        latestTerminalOutcomeMessageId: null,
+        hasUnreadTerminalOutcome: false,
+      }
+    : {
+        latestTerminalOutcomeMessageId: row.latest_terminal_outcome_message_id,
+        hasUnreadTerminalOutcome: row.has_unread_terminal_outcome === 1,
+      };
 }
 
 function toEntry(row: SessionRow): SessionEntry {
@@ -367,14 +374,36 @@ export class SessionIndexStore {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    // Get paginated results
-    const result = await this.db
-      .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
-      .bind(...params, limit + 1, offset)
-      .all<SessionRow>();
+    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    const result = viewerUserId
+      ? await this.db
+          .prepare(
+            `WITH paged_sessions AS (${pageSql})
+             SELECT paged_sessions.*,
+                    ${hasUnreadTerminalOutcomeSql("paged_sessions")} AS has_unread_terminal_outcome
+             FROM paged_sessions
+             LEFT JOIN users viewer ON viewer.id = ?
+             LEFT JOIN session_terminal_outcome_read_states read_state
+               ON read_state.session_id = paged_sessions.id
+              AND read_state.user_id = viewer.id
+             ORDER BY paged_sessions.updated_at DESC`
+          )
+          .bind(...params, limit + 1, offset, viewerUserId)
+          .all<ViewerSessionRow>()
+      : await this.db
+          .prepare(pageSql)
+          .bind(...params, limit + 1, offset)
+          .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.decorateEntries(rows.slice(0, limit).map(toEntry), viewerUserId);
+    const sessions = await this.decorateEntries(
+      rows.slice(0, limit).map((row) => ({
+        ...toEntry(row),
+        ...(viewerUserId
+          ? { terminalOutcomeReadState: terminalOutcomeReadStateFromRow(row as ViewerSessionRow) }
+          : {}),
+      }))
+    );
 
     return {
       sessions,
@@ -390,74 +419,24 @@ export class SessionIndexStore {
    * the field: consumers fall back to the scalar repo columns, and PR state
    * never influences session ordering (this only decorates paged rows).
    */
-  private async decorateEntries(
-    sessions: SessionEntry[],
-    viewerUserId?: string
-  ): Promise<SessionEntry[]> {
+  private async decorateEntries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
     if (sessions.length === 0) return sessions;
     const sessionIds = sessions.map((session) => session.id);
 
-    const [repositoriesBySession, summariesBySession, terminalOutcomeReadStateBySession] =
-      await Promise.all([
-        this.repositoriesForSessions(sessionIds),
-        new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
-        viewerUserId
-          ? this.terminalOutcomeReadStatesForSessions(viewerUserId, sessionIds)
-          : Promise.resolve(new Map<string, SessionTerminalOutcomeReadState>()),
-      ]);
+    const [repositoriesBySession, summariesBySession] = await Promise.all([
+      this.repositoriesForSessions(sessionIds),
+      new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
+    ]);
 
     return sessions.map((session) => {
       const repositories = repositoriesBySession.get(session.id);
       const pullRequestSummary = summariesBySession.get(session.id);
-      const terminalOutcomeReadState = terminalOutcomeReadStateBySession.get(session.id);
       return {
         ...session,
         ...(repositories ? { repositories } : {}),
         ...(pullRequestSummary ? { pullRequestSummary } : {}),
-        ...(terminalOutcomeReadState ? { terminalOutcomeReadState } : {}),
       };
     });
-  }
-
-  private async terminalOutcomeReadStatesForSessions(
-    userId: string,
-    sessionIds: readonly string[]
-  ): Promise<Map<string, SessionTerminalOutcomeReadState>> {
-    const chunks: (readonly string[])[] = [];
-    for (
-      let index = 0;
-      index < sessionIds.length;
-      index += MAX_TERMINAL_OUTCOME_READ_STATE_SESSION_IDS_PER_QUERY
-    ) {
-      chunks.push(
-        sessionIds.slice(index, index + MAX_TERMINAL_OUTCOME_READ_STATE_SESSION_IDS_PER_QUERY)
-      );
-    }
-    const results = await Promise.all(
-      chunks.map((chunk) =>
-        this.db
-          .prepare(buildViewerSessionTerminalOutcomeReadStatesQuery(chunk.length))
-          .bind(userId, ...chunk)
-          .all<ViewerSessionTerminalOutcomeReadStateRow>()
-      )
-    );
-
-    return new Map(
-      results.flatMap((result) =>
-        (result.results ?? []).map((row): [string, SessionTerminalOutcomeReadState] => [
-          row.session_id,
-          row.latest_terminal_outcome_message_id === null
-            ? {
-                latestTerminalOutcomeMessageId: null,
-                hasUnreadTerminalOutcome: false,
-              }
-            : {
-                latestTerminalOutcomeMessageId: row.latest_terminal_outcome_message_id,
-                hasUnreadTerminalOutcome: row.has_unread_terminal_outcome === 1,
-              },
-        ])
-      )
-    );
   }
 
   async recordLatestTerminalOutcome(input: {
@@ -542,8 +521,7 @@ export class SessionIndexStore {
       writeApplied = (result.meta.changes ?? 0) > 0;
     }
 
-    const readStates = await this.terminalOutcomeReadStatesForSessions(userId, [sessionId]);
-    const currentReadState = readStates.get(sessionId);
+    const currentReadState = await this.terminalOutcomeReadStateForSession(userId, sessionId);
     if (!currentReadState) return null;
     const latestTerminalOutcomeMessageId = currentReadState.latestTerminalOutcomeMessageId;
     if (latestTerminalOutcomeMessageId === null) {
@@ -567,6 +545,26 @@ export class SessionIndexStore {
       hasUnreadTerminalOutcome: currentReadState.hasUnreadTerminalOutcome,
       latestTerminalOutcomeMessageId,
     };
+  }
+
+  private async terminalOutcomeReadStateForSession(
+    userId: string,
+    sessionId: string
+  ): Promise<SessionTerminalOutcomeReadState | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT sessions.latest_terminal_outcome_message_id,
+                ${hasUnreadTerminalOutcomeSql("sessions")} AS has_unread_terminal_outcome
+         FROM sessions
+         LEFT JOIN users viewer ON viewer.id = ?
+         LEFT JOIN session_terminal_outcome_read_states read_state
+           ON read_state.session_id = sessions.id
+          AND read_state.user_id = viewer.id
+         WHERE sessions.id = ?`
+      )
+      .bind(userId, sessionId)
+      .first<ViewerTerminalOutcomeReadStateRow>();
+    return row ? terminalOutcomeReadStateFromRow(row) : null;
   }
 
   /** Repository lists for the given sessions, in one query. */
