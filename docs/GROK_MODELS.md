@@ -1,17 +1,18 @@
 # Using Grok with a SuperGrok Subscription
 
-Open-Inspect supports xAI's Grok coding model through a SuperGrok subscription. The control plane
-manages the durable OAuth refresh token and gives each sandbox only a short-lived access token.
+Open-Inspect supports xAI's Grok models through a SuperGrok subscription. The control plane manages
+the durable OAuth refresh token and gives each sandbox only a short-lived access token.
 
 > **Note**: SuperGrok availability and model entitlement are controlled by xAI. Confirm that the
-> account you authenticate can use `grok-build-0.1` before rolling the model out broadly.
+> account you authenticate can use the selected model before rolling it out broadly.
 
 ---
 
-## Supported Model
+## Supported Models
 
 | Model ID             | Display name   | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------- | -------------- |
+| `xai/grok-4.5`       | Grok 4.5       | low, medium, high | high           |
 | `xai/grok-build-0.1` | Grok Build 0.1 | low, medium, high | high           |
 
 The **xAI / SuperGrok** group is disabled by default. An administrator must enable it under
@@ -65,9 +66,9 @@ only, then fall back to global. A secondary repository cannot become the token r
 ### Step 3: Enable and Select Grok
 
 1. Open **Settings > Models**.
-2. Enable **Grok Build 0.1** under **xAI / SuperGrok**.
+2. Enable **Grok 4.5** or **Grok Build 0.1** under **xAI / SuperGrok**.
 3. Create a new session or restart an existing sandbox.
-4. Select **Grok Build 0.1** and the desired reasoning effort.
+4. Select the enabled Grok model and the desired reasoning effort.
 
 ---
 
@@ -98,7 +99,7 @@ plugin merely because the control plane was deployed.
 
 Before production rollout, run a staging session with an eligible SuperGrok account and verify:
 
-- `grok-build-0.1` is available to the account.
+- The selected Grok model is available to the account.
 - A prompt succeeds at each enabled reasoning effort.
 - A second prompt reuses or refreshes the brokered access token.
 - A new sandbox can authenticate after token refresh without replacing the stored secret manually.
@@ -110,8 +111,8 @@ Before production rollout, run a staging session with an eligible SuperGrok acco
 
 ### Grok does not appear in the model selector
 
-Enable **Grok Build 0.1** under **Settings > Models**. The xAI group is opt-in and is not part of
-the default enabled model set.
+Enable **Grok 4.5** or **Grok Build 0.1** under **Settings > Models**. The xAI group is opt-in and
+is not part of the default enabled model set.
 
 ### `XAI_OAUTH_REFRESH_TOKEN not configured`
 
@@ -124,7 +125,7 @@ sandbox after changing secrets.
 The refresh token was revoked, expired, or already rotated elsewhere. Repeat the local OpenCode
 login and replace `XAI_OAUTH_REFRESH_TOKEN` in the same secret scope.
 
-### `Model not found: xai/grok-build-0.1`
+### `Model not found: xai/grok-4.5` or `xai/grok-build-0.1`
 
 Rebuild the sandbox image so it includes the xAI auth proxy plugin and confirm the deployment uses
 OpenCode 1.17.18 or newer.
@@ -132,4 +133,4 @@ OpenCode 1.17.18 or newer.
 ### xAI rejects the model or account
 
 Confirm that the authenticated account has an eligible SuperGrok subscription and that xAI currently
-lists `grok-build-0.1` for that account. Entitlement failures cannot be corrected by Open-Inspect.
+lists the selected model for that account. Entitlement failures cannot be corrected by Open-Inspect.

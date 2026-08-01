@@ -40,9 +40,10 @@ setup instructions.
 Grok models require a SuperGrok OAuth refresh token and are disabled by default. See
 [Using Grok with a SuperGrok Subscription](GROK_MODELS.md) for setup and rollout instructions.
 
-| Model ID             | Display name   | Description                            | Reasoning efforts | Default effort |
-| -------------------- | -------------- | -------------------------------------- | ----------------- | -------------- |
-| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers | low, medium, high | high           |
+| Model ID             | Display name   | Description                                     | Reasoning efforts | Default effort |
+| -------------------- | -------------- | ----------------------------------------------- | ----------------- | -------------- |
+| `xai/grok-4.5`       | Grok 4.5       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
+| `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | low, medium, high | high           |
 
 ## OpenCode Zen
 

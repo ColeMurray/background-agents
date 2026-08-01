@@ -193,6 +193,12 @@ export const MODEL_CATALOG = [
     enabledByDefault: false,
     models: [
       {
+        id: "xai/grok-4.5",
+        name: "Grok 4.5",
+        description: "Latest Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+      },
+      {
         id: "xai/grok-build-0.1",
         name: "Grok Build 0.1",
         description: "Coding model for SuperGrok subscribers",
