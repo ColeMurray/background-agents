@@ -2072,6 +2072,8 @@ class SandboxSupervisor:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 duration_ms = int((time.time() - startup_start) * 1000)
                 runtime_version = _resolve_runtime_version()
+                if not runtime_version:
+                    raise RuntimeError("runtime provenance is missing")
                 self.log.info(
                     "image_build.complete",
                     duration_ms=duration_ms,

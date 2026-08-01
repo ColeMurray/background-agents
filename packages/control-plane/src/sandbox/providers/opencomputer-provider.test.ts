@@ -109,7 +109,10 @@ describe("OpenComputerSandboxProvider", () => {
 
     const result = await provider.createSandbox({
       ...baseConfig,
-      userEnvVars: { ANTHROPIC_API_KEY: "sk-test" },
+      userEnvVars: {
+        ANTHROPIC_API_KEY: "sk-test",
+        SANDBOX_VERSION: "v999-user-controlled",
+      },
       codeServerEnabled: true,
       sandboxSettings: { codeServerPort: 3000, tunnelPorts: [5173] },
     });
@@ -158,6 +161,10 @@ describe("OpenComputerSandboxProvider", () => {
       value: "sk-test",
       allowedHosts: ["api.anthropic.com"],
     });
+    expect(createCall.env).toHaveProperty("SANDBOX_VERSION", "");
+    expect(client.setSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "SANDBOX_VERSION" })
+    );
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toMatchObject({
       session_id: "session-1",
       repo_owner: "acme",

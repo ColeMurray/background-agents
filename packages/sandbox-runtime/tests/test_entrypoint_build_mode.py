@@ -404,6 +404,43 @@ class TestImageBuildMode:
         callback.report_failure.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_reports_failure_when_runtime_provenance_is_missing(self, build_env, tmp_path):
+        supervisor = _make_supervisor(build_env)
+        supervisor.repo_path = tmp_path
+        _repoint_primary(supervisor)
+
+        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        async def fake_subprocess(*args, **kwargs):
+            mock_proc = MagicMock()
+            mock_proc.communicate = AsyncMock(return_value=(b"abc123def456\n", b""))
+            mock_proc.returncode = 0
+            return mock_proc
+
+        with (
+            patch.dict(os.environ, build_env, clear=True),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                side_effect=fake_subprocess,
+            ),
+            patch(
+                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
+                return_value=callback,
+            ),
+            patch("sandbox_runtime.entrypoint._resolve_runtime_version", return_value=""),
+        ):
+            await supervisor.run()
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_awaited_once_with("runtime provenance is missing")
+
+    @pytest.mark.asyncio
     async def test_reports_failure_callback_from_build_mode(self, build_env):
         """Build mode should report failures itself when callback metadata is configured."""
         supervisor = _make_supervisor(build_env)

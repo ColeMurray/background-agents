@@ -484,7 +484,9 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       prebuiltImageSha?: string;
     } = {}
   ): Promise<PreparedOpenComputerEnvironment> {
-    const { envVars: baseEnvVars, secretEnvVars } = this.prepareEnvironment(config.userEnvVars);
+    const { envVars: baseEnvVars, secretEnvVars = {} } = this.prepareEnvironment(
+      config.userEnvVars
+    );
     const envVars = buildSandboxEnvVars(config, {
       baseEnvVars,
       scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
@@ -515,7 +517,10 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     // is never an image build, so force the markers off. IMAGE_BUILD_MODE is
     // checked as === "true" in entrypoint.py, so "false" disables it.
     envVars[IMAGE_BUILD_MODE_ENV_VAR] = "false";
-    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      envVars[key] = "";
+      delete secretEnvVars[key];
+    }
 
     return { envVars, secretEnvVars };
   }

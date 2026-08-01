@@ -361,7 +361,7 @@ export class OpenComputerRestClient {
   }
 
   async startRuntime(id: string, extraEnv: Record<string, string> = {}): Promise<void> {
-    const exports = this.shellExportEnv(extraEnv);
+    const exports = this.shellExportRuntimeEnv(extraEnv);
     await this.request<void>("POST", this.expandPath(this.paths.exec, { id }), TIMEOUT_EXEC_MS, {
       cmd: "sh",
       args: [
@@ -377,7 +377,7 @@ export class OpenComputerRestClient {
     timeoutSeconds: number,
     extraEnv: Record<string, string> = {}
   ): Promise<OpenComputerExecResult> {
-    const exports = this.shellExportEnv(extraEnv);
+    const exports = this.shellExportRuntimeEnv(extraEnv);
     return await this.request<OpenComputerExecResult>(
       "POST",
       this.expandPath(this.paths.exec, { id }),
@@ -510,6 +510,12 @@ export class OpenComputerRestClient {
     const entries = Object.entries(env).filter(([, value]) => value.length > 0);
     if (entries.length === 0) return "";
     return `${entries.map(([key, value]) => `${key}=${this.shellQuote(value)}`).join(" ")} `;
+  }
+
+  private shellExportRuntimeEnv(env: Record<string, string>): string {
+    const runtimeEnv = { ...env };
+    delete runtimeEnv.SANDBOX_VERSION;
+    return this.shellExportEnv(runtimeEnv);
   }
 
   private shellQuote(value: string): string {

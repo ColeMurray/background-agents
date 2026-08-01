@@ -32,22 +32,30 @@ describe("OpenComputerRestClient runtime provenance", () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "123", stderr: "" }));
 
-    await client.startRuntime("sb-1");
+    await client.startRuntime("sb-1", {
+      SANDBOX_VERSION: "v999-user-controlled",
+      SAFE_BUILD_ENV: "present",
+    });
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain("/sandboxes/sb-1/exec/run");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.args[1]).not.toContain("SANDBOX_VERSION=");
+    expect(body.args[1]).toContain("SAFE_BUILD_ENV='present'");
   });
 
   it("runRuntimeForeground does not override baked SANDBOX_VERSION provenance", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "", stderr: "" }));
 
-    await client.runRuntimeForeground("sb-1", 60);
+    await client.runRuntimeForeground("sb-1", 60, {
+      SANDBOX_VERSION: "v999-user-controlled",
+      SAFE_BUILD_ENV: "present",
+    });
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
     expect(body.args[1]).not.toContain("SANDBOX_VERSION=");
+    expect(body.args[1]).toContain("SAFE_BUILD_ENV='present'");
   });
 });
 
