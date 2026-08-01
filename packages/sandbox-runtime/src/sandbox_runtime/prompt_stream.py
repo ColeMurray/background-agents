@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
@@ -177,10 +178,17 @@ class OpenCodePromptStream:
         loop = asyncio.get_running_loop()
         prompt_deadline = loop.time() + self._prompt_max_duration_seconds
         try:
-            async with self._client.events(
-                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
-            ) as sse_events:
-                await self._client.post_prompt(opencode_session_id, request_body)
+            async with AsyncExitStack() as stack:
+                try:
+                    async with asyncio.timeout(prompt_deadline - loop.time()):
+                        sse_events = await stack.enter_async_context(
+                            self._client.events(
+                                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
+                            )
+                        )
+                        await self._client.post_prompt(opencode_session_id, request_body)
+                except TimeoutError as error:
+                    raise _PromptMaxDurationTimeout from error
                 event_iterator = aiter(sse_events)
 
                 while True:

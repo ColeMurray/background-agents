@@ -1302,6 +1302,11 @@ class HangingMockSSEResponse:
         pass
 
 
+class HangingHandshakeSSEResponse(DelayedMockSSEResponse):
+    async def __aenter__(self):
+        await asyncio.sleep(3600)
+
+
 class DelayedMockHttpClient:
     """Mock HTTP client that uses delayed/hanging SSE responses."""
 
@@ -1330,6 +1335,14 @@ class DelayedMockHttpClient:
 
     def stream(self, method: str, url: str, timeout: Any = None):
         return self._sse_response
+
+
+class HangingPromptPostHttpClient(DelayedMockHttpClient):
+    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+        if url.endswith("/prompt_async"):
+            self.post_urls.append(url)
+            await asyncio.sleep(3600)
+        return await super().post(url, json=json, timeout=timeout)
 
 
 class TestInactivityTimeout:
@@ -1532,6 +1545,31 @@ class TestPromptMaxDuration:
         )
 
         assert bridge.prompt_max_duration_seconds == 450
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("hang_stage", ["sse_handshake", "prompt_post"])
+    async def test_prompt_deadline_covers_stream_setup(self, hang_stage: str):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.prompt_max_duration_seconds = 0.1
+
+        if hang_stage == "sse_handshake":
+            http_client = DelayedMockHttpClient(HangingHandshakeSSEResponse([]))
+        else:
+            http_client = HangingPromptPostHttpClient(DelayedMockSSEResponse([]))
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
+                pass
+
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
 
     @pytest.mark.asyncio
     async def test_prompt_timeout_does_not_wait_for_next_sse_event(self):

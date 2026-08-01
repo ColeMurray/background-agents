@@ -5,7 +5,7 @@ import {
   buildSessionConfig,
   scmCloneIdentity,
 } from "./sandbox-env";
-import type { CreateSandboxConfig } from "./provider";
+import { DEFAULT_SANDBOX_TIMEOUT_SECONDS, type CreateSandboxConfig } from "./provider";
 
 const baseInput = {
   sessionId: "session-123",
@@ -159,7 +159,7 @@ describe("buildSandboxEnvVars", () => {
       SANDBOX_ID: "sandbox-456",
       CONTROL_PLANE_URL: "https://control-plane.test",
       SANDBOX_AUTH_TOKEN: "auth-token-abc",
-      SANDBOX_TIMEOUT_SECONDS: "7200",
+      SANDBOX_TIMEOUT_SECONDS: String(DEFAULT_SANDBOX_TIMEOUT_SECONDS),
       REPO_OWNER: "testowner",
       REPO_NAME: "testrepo",
       SESSION_CONFIG: expect.any(String),

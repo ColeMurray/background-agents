@@ -600,18 +600,6 @@ export interface ExecutionTimeoutConfig {
   timeoutMs: number;
 }
 
-const MAX_SNAPSHOT_RESERVE_MS = 15 * 60 * 1000;
-const SNAPSHOT_RESERVE_FRACTION = 0.25;
-
-/** Leave time after prompt execution for the provider to persist a snapshot. */
-export function promptExecutionTimeoutMs(sandboxTimeoutMs: number): number {
-  const snapshotReserveMs = Math.min(
-    MAX_SNAPSHOT_RESERVE_MS,
-    sandboxTimeoutMs * SNAPSHOT_RESERVE_FRACTION
-  );
-  return sandboxTimeoutMs - snapshotReserveMs;
-}
-
 /**
  * Legacy fallback for sessions without a configured sandbox timeout.
  */
