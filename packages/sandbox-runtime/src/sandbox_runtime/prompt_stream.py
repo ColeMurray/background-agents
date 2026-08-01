@@ -101,6 +101,10 @@ class _Disposition(Enum):
     FAILED = "failed"
 
 
+class _PromptMaxDurationTimeout(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class _StreamStep:
     """Bridge events produced by one SSE event, plus the loop disposition."""
@@ -170,26 +174,39 @@ class OpenCodePromptStream:
             start_time=time.time(),
         )
         state.user_message_ids.add(opencode_message_id)
+        loop = asyncio.get_running_loop()
+        prompt_deadline = loop.time() + self._prompt_max_duration_seconds
         try:
-            async with asyncio.timeout(self._prompt_max_duration_seconds):
-                async with self._client.events(
-                    inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
-                ) as sse_events:
-                    await self._client.post_prompt(opencode_session_id, request_body)
+            async with self._client.events(
+                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
+            ) as sse_events:
+                await self._client.post_prompt(opencode_session_id, request_body)
+                event_iterator = aiter(sse_events)
 
-                    async for sse_event in sse_events:
-                        step = self._apply_sse_event(state, sse_event)
-                        for event in step.events:
-                            yield event
+                while True:
+                    remaining_seconds = prompt_deadline - loop.time()
+                    if remaining_seconds <= 0:
+                        raise _PromptMaxDurationTimeout
+                    try:
+                        async with asyncio.timeout(remaining_seconds):
+                            sse_event = await anext(event_iterator)
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as error:
+                        raise _PromptMaxDurationTimeout from error
 
-                        if step.disposition is _Disposition.FINISHED_IDLE:
-                            async for final_event in self._fetch_final_message_state(state):
-                                yield final_event
-                            return
-                        if step.disposition is _Disposition.FAILED:
-                            return
+                    step = self._apply_sse_event(state, sse_event)
+                    for event in step.events:
+                        yield event
 
-        except TimeoutError:
+                    if step.disposition is _Disposition.FINISHED_IDLE:
+                        async for final_event in self._fetch_final_message_state(state):
+                            yield final_event
+                        return
+                    if step.disposition is _Disposition.FAILED:
+                        return
+
+        except _PromptMaxDurationTimeout:
             elapsed = time.time() - state.start_time
             self._log.error(
                 "bridge.prompt_max_duration_timeout",

@@ -1558,6 +1558,64 @@ class TestPromptMaxDuration:
         assert time.monotonic() - started_at < 0.5
 
     @pytest.mark.asyncio
+    async def test_prompt_timeout_does_not_cancel_suspended_consumer(
+        self, opencode_message_id: str
+    ):
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+        bridge.opencode_session_id = "oc-session-123"
+        bridge.prompt_max_duration_seconds = 0.1
+
+        sse_response = DelayedMockSSEResponse(
+            [
+                (
+                    create_sse_event(
+                        "message.updated",
+                        {
+                            "info": {
+                                "id": "oc-msg-1",
+                                "role": "assistant",
+                                "sessionID": "oc-session-123",
+                                "parentID": opencode_message_id,
+                            }
+                        },
+                    ),
+                    0,
+                ),
+                (
+                    create_sse_event(
+                        "message.part.updated",
+                        {
+                            "part": {
+                                "type": "text",
+                                "id": "part-1",
+                                "sessionID": "oc-session-123",
+                                "messageID": "oc-msg-1",
+                                "text": "Hello",
+                            }
+                        },
+                    ),
+                    0,
+                ),
+            ]
+        )
+        http_client = DelayedMockHttpClient(sse_response)
+        http_client.get_responses = [MockResponse(200, [])]
+        wire_opencode_transport(bridge, http_client)
+        stream = bridge._stream_opencode_response_sse("msg-1", "test")
+
+        assert (await anext(stream))["type"] == "token"
+        await asyncio.sleep(0.2)
+        with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
+            await anext(stream)
+
+        assert any(url.endswith("/abort") for url in http_client.post_urls)
+
+    @pytest.mark.asyncio
     async def test_prompt_max_duration_timeout(self):
         """Prompt should stop when it exceeds max duration."""
         bridge = AgentBridge(
