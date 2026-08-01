@@ -3,7 +3,15 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import {
+  Suspense,
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -51,6 +59,27 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+
+const TERMINAL_VISIBILITY_KEY = "terminal-visible";
+const TERMINAL_VISIBILITY_EVENT = "terminal-visibility-change";
+
+function subscribeToTerminalVisibility(onStoreChange: () => void) {
+  window.addEventListener("storage", onStoreChange);
+  window.addEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", onStoreChange);
+    window.removeEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
+  };
+}
+
+function getTerminalVisibility() {
+  return localStorage.getItem(TERMINAL_VISIBILITY_KEY) === "true";
+}
+
+function setTerminalVisibility(visible: boolean) {
+  localStorage.setItem(TERMINAL_VISIBILITY_KEY, String(visible));
+  window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
+}
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -141,18 +170,16 @@ function SessionPageContent() {
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
-  const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("terminal-visible") === "true";
-  });
+  const terminalOpen = useSyncExternalStore(
+    subscribeToTerminalVisibility,
+    getTerminalVisibility,
+    () => false
+  );
   const toggleTerminal = useCallback(() => {
-    const next = !terminalOpen;
-    localStorage.setItem("terminal-visible", String(next));
-    setTerminalOpen(next);
+    setTerminalVisibility(!terminalOpen);
   }, [terminalOpen]);
   const closeTerminal = useCallback(() => {
-    setTerminalOpen(false);
-    localStorage.setItem("terminal-visible", "false");
+    setTerminalVisibility(false);
   }, []);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;

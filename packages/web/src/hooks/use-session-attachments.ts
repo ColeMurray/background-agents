@@ -44,9 +44,14 @@ export function useSessionAttachments() {
   const attachmentsRef = useRef<PendingAttachment[]>([]);
   const attachmentsRevisionRef = useRef(0);
   const activeUploadRef = useRef<AbortController | null>(null);
-  const uploadedByIdRef = useRef(
-    new Map<string, { sessionId: string; attachment: SessionAttachmentReference }>()
-  );
+  const uploadedByIdRef = useRef<Map<
+    string,
+    { sessionId: string; attachment: SessionAttachmentReference }
+  > | null>(null);
+  if (uploadedByIdRef.current === null) {
+    uploadedByIdRef.current = new Map();
+  }
+  const uploadedById = uploadedByIdRef.current;
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -107,32 +112,35 @@ export function useSessionAttachments() {
     }
   }, []);
 
-  const removeAttachment = useCallback((id: string) => {
-    setAttachmentError(null);
-    const current = attachmentsRef.current;
-    const removed = current.find((attachment) => attachment.id === id);
-    if (!removed) return;
+  const removeAttachment = useCallback(
+    (id: string) => {
+      setAttachmentError(null);
+      const current = attachmentsRef.current;
+      const removed = current.find((attachment) => attachment.id === id);
+      if (!removed) return;
 
-    URL.revokeObjectURL(removed.previewUrl);
-    uploadedByIdRef.current.delete(removed.id);
-    attachmentsRevisionRef.current += 1;
-    activeUploadRef.current?.abort();
-    const next = current.filter((attachment) => attachment.id !== id);
-    attachmentsRef.current = next;
-    setAttachments(next);
-  }, []);
+      URL.revokeObjectURL(removed.previewUrl);
+      uploadedById.delete(removed.id);
+      attachmentsRevisionRef.current += 1;
+      activeUploadRef.current?.abort();
+      const next = current.filter((attachment) => attachment.id !== id);
+      attachmentsRef.current = next;
+      setAttachments(next);
+    },
+    [uploadedById]
+  );
 
   const clearAttachments = useCallback(() => {
     const current = attachmentsRef.current;
     for (const attachment of current) {
       URL.revokeObjectURL(attachment.previewUrl);
     }
-    uploadedByIdRef.current.clear();
+    uploadedById.clear();
     attachmentsRevisionRef.current += 1;
     activeUploadRef.current?.abort();
     attachmentsRef.current = [];
     setAttachments([]);
-  }, []);
+  }, [uploadedById]);
 
   /**
    * Upload all pending attachments and return the references to send with the
@@ -170,7 +178,7 @@ export function useSessionAttachments() {
         for (const pendingAttachment of pending) {
           const fileName = pendingAttachment.file.name;
           assertCurrent();
-          const cached = uploadedByIdRef.current.get(pendingAttachment.id);
+          const cached = uploadedById.get(pendingAttachment.id);
           if (cached?.sessionId === sessionId) {
             uploaded.push(cached.attachment);
             continue;
@@ -204,7 +212,7 @@ export function useSessionAttachments() {
             name: fileName || "image-attachment",
             attachmentId,
           };
-          uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
+          uploadedById.set(pendingAttachment.id, { sessionId, attachment });
           uploaded.push(attachment);
         }
         assertCurrent();
@@ -228,7 +236,7 @@ export function useSessionAttachments() {
         setIsUploading(false);
       }
     },
-    []
+    [uploadedById]
   );
 
   return {
