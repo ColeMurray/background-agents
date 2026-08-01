@@ -13,6 +13,7 @@ import {
   evaluateConnectingTimeout,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
+  promptExecutionTimeoutMs,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -924,6 +925,16 @@ describe("evaluateWarmDecision", () => {
 });
 
 // ==================== Execution Timeout Tests ====================
+
+describe("promptExecutionTimeoutMs", () => {
+  it("preserves the legacy 30-minute snapshot reserve", () => {
+    expect(promptExecutionTimeoutMs(14_400_000)).toBe(12_600_000);
+  });
+
+  it("uses a proportional reserve for short sandbox lifetimes", () => {
+    expect(promptExecutionTimeoutMs(600_000)).toBe(450_000);
+  });
+});
 
 describe("evaluateExecutionTimeout", () => {
   const config: ExecutionTimeoutConfig = {

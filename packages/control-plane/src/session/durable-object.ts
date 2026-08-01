@@ -38,7 +38,11 @@ import {
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
-import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
+import {
+  DEFAULT_EXECUTION_TIMEOUT_MS,
+  promptExecutionTimeoutMs,
+} from "../sandbox/lifecycle/decisions";
+import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import {
   createSourceControlProviderFromEnv,
   resolveScmProviderFromEnv,
@@ -363,6 +367,14 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private get executionTimeoutMs(): number {
+    try {
+      const sandboxTimeoutMs = parsePersistedSandboxSettings(
+        this.repository.getSession()?.sandbox_settings ?? null
+      ).sandboxTimeoutMs;
+      if (sandboxTimeoutMs !== undefined) return promptExecutionTimeoutMs(sandboxTimeoutMs);
+    } catch {
+      this.log.warn("Failed to parse sandbox_settings for execution timeout, using fallback");
+    }
     return parseInt(this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS), 10);
   }
 

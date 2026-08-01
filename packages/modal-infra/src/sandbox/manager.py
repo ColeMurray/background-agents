@@ -20,7 +20,9 @@ import modal
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    SANDBOX_TIMEOUT_ENV_VAR,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
@@ -35,7 +37,6 @@ from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
 
-DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
@@ -336,6 +337,7 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": config.control_plane_url,
                 "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
                 "REPO_OWNER": config.repo_owner or "",
                 "REPO_NAME": config.repo_name or "",
             }
@@ -583,6 +585,7 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": control_plane_url,
                 "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(timeout_seconds),
                 "REPO_OWNER": repo_owner or "",
                 "REPO_NAME": repo_name or "",
                 "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone

@@ -1496,6 +1496,42 @@ class TestInactivityTimeout:
 class TestPromptMaxDuration:
     """Tests for prompt max duration timeout behavior."""
 
+    def test_default_preserves_legacy_snapshot_reserve(self, monkeypatch):
+        monkeypatch.delenv("SANDBOX_TIMEOUT_SECONDS", raising=False)
+
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        assert bridge.prompt_max_duration_seconds == 5400
+
+    def test_uses_configured_sandbox_timeout_with_snapshot_reserve(self, monkeypatch):
+        monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "14400")
+
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        assert bridge.prompt_max_duration_seconds == 12600
+
+    def test_uses_proportional_snapshot_reserve_for_short_sandboxes(self, monkeypatch):
+        monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "600")
+
+        bridge = AgentBridge(
+            sandbox_id="test-sandbox",
+            session_id="test-session",
+            control_plane_url="http://localhost:8787",
+            auth_token="test-token",
+        )
+
+        assert bridge.prompt_max_duration_seconds == 450
+
     @pytest.mark.asyncio
     async def test_prompt_max_duration_timeout(self):
         """Prompt should stop when it exceeds max duration."""
@@ -1507,7 +1543,7 @@ class TestPromptMaxDuration:
         )
         bridge.opencode_session_id = "oc-session-123"
         bridge.sse_inactivity_timeout = 2.0
-        bridge.PROMPT_MAX_DURATION = 0.25
+        bridge.prompt_max_duration_seconds = 0.25
 
         sse_response = DelayedMockSSEResponse(
             [

@@ -600,11 +600,20 @@ export interface ExecutionTimeoutConfig {
   timeoutMs: number;
 }
 
+const MAX_SNAPSHOT_RESERVE_MS = 30 * 60 * 1000;
+const SNAPSHOT_RESERVE_FRACTION = 0.25;
+
+/** Leave time after prompt execution for the provider to persist a snapshot. */
+export function promptExecutionTimeoutMs(sandboxTimeoutMs: number): number {
+  const snapshotReserveMs = Math.min(
+    MAX_SNAPSHOT_RESERVE_MS,
+    sandboxTimeoutMs * SNAPSHOT_RESERVE_FRACTION
+  );
+  return sandboxTimeoutMs - snapshotReserveMs;
+}
+
 /**
- * Default: 90 minutes — matches the bridge's PROMPT_MAX_DURATION.
- * The control plane timeout should never preempt the bridge's own timeout for
- * legitimate long-running prompts. It fires only when the bridge is dead and
- * can't enforce its own timeout.
+ * Legacy fallback for sessions without a configured sandbox timeout.
  */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 

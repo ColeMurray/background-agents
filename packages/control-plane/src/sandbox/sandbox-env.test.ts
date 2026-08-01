@@ -159,6 +159,7 @@ describe("buildSandboxEnvVars", () => {
       SANDBOX_ID: "sandbox-456",
       CONTROL_PLANE_URL: "https://control-plane.test",
       SANDBOX_AUTH_TOKEN: "auth-token-abc",
+      SANDBOX_TIMEOUT_SECONDS: "7200",
       REPO_OWNER: "testowner",
       REPO_NAME: "testrepo",
       SESSION_CONFIG: expect.any(String),
@@ -176,6 +177,15 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars).not.toHaveProperty("VCS_CLONE_TOKEN");
     expect(envVars).not.toHaveProperty("GITHUB_TOKEN");
     expect(envVars).not.toHaveProperty("GITHUB_APP_TOKEN");
+  });
+
+  it("passes a configured sandbox timeout to the runtime", () => {
+    const envVars = buildSandboxEnvVars(
+      { ...baseConfig, timeoutSeconds: 14_400 },
+      { scmIdentity: scmCloneIdentity("github") }
+    );
+
+    expect(envVars.SANDBOX_TIMEOUT_SECONDS).toBe("14400");
   });
 
   it("system vars take precedence over user-defined repo secrets", () => {
