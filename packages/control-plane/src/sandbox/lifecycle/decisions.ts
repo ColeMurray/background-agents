@@ -600,7 +600,7 @@ export interface ExecutionTimeoutConfig {
   timeoutMs: number;
 }
 
-const MAX_SNAPSHOT_RESERVE_MS = 30 * 60 * 1000;
+const MAX_SNAPSHOT_RESERVE_MS = 15 * 60 * 1000;
 const SNAPSHOT_RESERVE_FRACTION = 0.25;
 
 /** Leave time after prompt execution for the provider to persist a snapshot. */

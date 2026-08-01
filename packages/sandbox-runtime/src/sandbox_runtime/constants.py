@@ -8,7 +8,7 @@ DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
 # Sandbox lifetime and the env contract used to pass it to the bridge.
 DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200
 SANDBOX_TIMEOUT_ENV_VAR = "SANDBOX_TIMEOUT_SECONDS"
-MAX_SNAPSHOT_RESERVE_SECONDS = 1800
+MAX_SNAPSHOT_RESERVE_SECONDS = 900
 SNAPSHOT_RESERVE_FRACTION = 0.25
 
 # Default service ports. The control plane may override the externally-exposed

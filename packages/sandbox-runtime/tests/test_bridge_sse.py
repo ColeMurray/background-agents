@@ -1507,7 +1507,7 @@ class TestPromptMaxDuration:
             auth_token="test-token",
         )
 
-        assert bridge.prompt_max_duration_seconds == 5400
+        assert bridge.prompt_max_duration_seconds == 6300
 
     def test_uses_configured_sandbox_timeout_with_snapshot_reserve(self, monkeypatch):
         monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "14400")
@@ -1519,7 +1519,7 @@ class TestPromptMaxDuration:
             auth_token="test-token",
         )
 
-        assert bridge.prompt_max_duration_seconds == 12600
+        assert bridge.prompt_max_duration_seconds == 13500
 
     def test_uses_proportional_snapshot_reserve_for_short_sandboxes(self, monkeypatch):
         monkeypatch.setenv("SANDBOX_TIMEOUT_SECONDS", "600")

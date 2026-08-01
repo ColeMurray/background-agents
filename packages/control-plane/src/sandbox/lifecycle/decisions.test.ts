@@ -927,8 +927,8 @@ describe("evaluateWarmDecision", () => {
 // ==================== Execution Timeout Tests ====================
 
 describe("promptExecutionTimeoutMs", () => {
-  it("preserves the legacy 30-minute snapshot reserve", () => {
-    expect(promptExecutionTimeoutMs(14_400_000)).toBe(12_600_000);
+  it("caps the snapshot reserve at 15 minutes", () => {
+    expect(promptExecutionTimeoutMs(14_400_000)).toBe(13_500_000);
   });
 
   it("uses a proportional reserve for short sandbox lifetimes", () => {
