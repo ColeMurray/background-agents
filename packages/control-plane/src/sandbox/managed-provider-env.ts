@@ -10,14 +10,19 @@ const CONTROL_PLANE_OAUTH_KEYS = new Set([
   "XAI_OAUTH_MANAGED",
 ]);
 
-export function prepareManagedProviderEnv(
-  secrets: Record<string, string>,
-  managedSecrets: Record<string, string> = secrets
-): Record<string, string> {
+interface ManagedProviderEnvOptions {
+  exposedSecrets: Record<string, string>;
+  brokerSecrets: Record<string, string>;
+}
+
+export function prepareManagedProviderEnv({
+  exposedSecrets,
+  brokerSecrets,
+}: ManagedProviderEnvOptions): Record<string, string> {
   const env = Object.fromEntries(
-    Object.entries(secrets).filter(([key]) => !CONTROL_PLANE_OAUTH_KEYS.has(key))
+    Object.entries(exposedSecrets).filter(([key]) => !CONTROL_PLANE_OAUTH_KEYS.has(key))
   );
-  if (managedSecrets.OPENAI_OAUTH_REFRESH_TOKEN) env.OPENAI_OAUTH_MANAGED = "1";
-  if (managedSecrets.XAI_OAUTH_REFRESH_TOKEN) env.XAI_OAUTH_MANAGED = "1";
+  if (brokerSecrets.OPENAI_OAUTH_REFRESH_TOKEN) env.OPENAI_OAUTH_MANAGED = "1";
+  if (brokerSecrets.XAI_OAUTH_REFRESH_TOKEN) env.XAI_OAUTH_MANAGED = "1";
   return env;
 }

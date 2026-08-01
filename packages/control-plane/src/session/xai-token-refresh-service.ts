@@ -20,7 +20,7 @@ type XaiTokenState =
   | { type: "refresh"; refreshToken: string; source: TokenSecretSource };
 
 export type XaiTokenRefreshResult =
-  | { ok: true; accessToken: string; expiresIn?: number }
+  | { ok: true; accessToken: string; expiresIn: number }
   | { ok: false; status: number; error: string };
 
 export class XaiTokenRefreshService {
@@ -52,7 +52,7 @@ export class XaiTokenRefreshService {
     } catch (error) {
       if (
         error instanceof XaiTokenRefreshError &&
-        (error.status === 401 || (error.status === 400 && error.body.includes("invalid_grant")))
+        (error.reason === "invalid_grant" || error.reason === "unauthorized")
       ) {
         return this.handleUnauthorizedRefresh(state, readState);
       }

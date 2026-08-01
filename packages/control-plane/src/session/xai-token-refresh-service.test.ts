@@ -21,7 +21,7 @@ vi.mock("../auth/xai", () => {
     constructor(
       message: string,
       readonly status: number,
-      readonly body: string
+      readonly reason: string
     ) {
       super(message);
     }
@@ -207,7 +207,7 @@ describe("XaiTokenRefreshService", () => {
         XAI_OAUTH_ACCESS_TOKEN: "concurrent-access",
         XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 60 * 60 * 1000),
       });
-      throw new XaiTokenRefreshError("invalid grant", 400, '{"error":"invalid_grant"}');
+      throw new XaiTokenRefreshError("invalid grant", 400, "invalid_grant");
     });
 
     const result = service().refresh(session());

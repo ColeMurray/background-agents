@@ -1864,7 +1864,10 @@ export class SessionDO extends DurableObject<Env> {
             (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
         );
     const managedSecrets = mergeSecretSources(managedSources).merged;
-    const sandboxEnv = prepareManagedProviderEnv(merge.merged, managedSecrets);
+    const sandboxEnv = prepareManagedProviderEnv({
+      exposedSecrets: merge.merged,
+      brokerSecrets: managedSecrets,
+    });
     return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
   }
 

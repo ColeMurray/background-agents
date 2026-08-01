@@ -92,7 +92,9 @@ export class ImageBuildPlanner {
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
-      userEnvVars: userEnvVars ? prepareManagedProviderEnv(userEnvVars) : undefined,
+      userEnvVars: userEnvVars
+        ? prepareManagedProviderEnv({ exposedSecrets: userEnvVars, brokerSecrets: userEnvVars })
+        : undefined,
       correlation: {
         trace_id: params.correlation.trace_id,
         request_id: params.correlation.request_id,

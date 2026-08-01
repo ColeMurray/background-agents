@@ -8,7 +8,6 @@
 const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const CONTROL_PLANE_TOKEN_REQUEST_TIMEOUT_MS = 30_000;
-const DEFAULT_ACCESS_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 
 let cachedAccessToken = null;
 let cachedExpiresAt = 0;
@@ -40,7 +39,18 @@ async function refreshViaControlPlane() {
     const body = (await response.text()).slice(0, 200);
     throw new Error(`xAI token refresh failed (${response.status}): ${body}`);
   }
-  return response.json();
+  const result = await response.json();
+  if (
+    !result ||
+    typeof result.access_token !== "string" ||
+    !result.access_token.trim() ||
+    typeof result.expires_in !== "number" ||
+    !Number.isFinite(result.expires_in) ||
+    result.expires_in <= 0
+  ) {
+    throw new Error("Invalid xAI token broker response");
+  }
+  return result;
 }
 
 async function ensureAccessToken() {
@@ -51,9 +61,7 @@ async function ensureAccessToken() {
     refreshPromise = refreshViaControlPlane()
       .then((result) => {
         cachedAccessToken = result.access_token;
-        cachedExpiresAt =
-          Date.now() +
-          (result.expires_in ? result.expires_in * 1000 : DEFAULT_ACCESS_TOKEN_LIFETIME_MS);
+        cachedExpiresAt = Date.now() + result.expires_in * 1000;
         return cachedAccessToken;
       })
       .finally(() => {

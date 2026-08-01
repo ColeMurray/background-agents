@@ -12,14 +12,33 @@ export const xaiTokenResponseSchema = z.object({
 
 export type XaiTokenResponse = z.infer<typeof xaiTokenResponseSchema>;
 
+type XaiTokenRefreshErrorReason = "invalid_grant" | "unauthorized" | "invalid_response" | "other";
+
 export class XaiTokenRefreshError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly body: string
+    public readonly reason: XaiTokenRefreshErrorReason
   ) {
     super(message);
   }
+}
+
+function classifyRefreshError(status: number, body: string): XaiTokenRefreshErrorReason {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      "error" in parsed &&
+      parsed.error === "invalid_grant"
+    ) {
+      return "invalid_grant";
+    }
+  } catch {
+    // Error responses are not guaranteed to be JSON.
+  }
+  return status === 401 ? "unauthorized" : "other";
 }
 
 export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenResponse> {
@@ -42,7 +61,7 @@ export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenRes
     throw new XaiTokenRefreshError(
       `xAI token refresh failed: ${response.status}`,
       response.status,
-      body
+      classifyRefreshError(response.status, body)
     );
   }
 
@@ -53,7 +72,7 @@ export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenRes
     throw new XaiTokenRefreshError(
       "xAI token refresh returned invalid JSON",
       response.status,
-      body
+      "invalid_response"
     );
   }
   const result = xaiTokenResponseSchema.safeParse(parsed);
@@ -61,7 +80,7 @@ export async function refreshXaiToken(refreshToken: string): Promise<XaiTokenRes
     throw new XaiTokenRefreshError(
       `xAI token refresh returned invalid response: ${response.status}`,
       response.status,
-      body
+      "invalid_response"
     );
   }
   return result.data;

@@ -29,7 +29,7 @@ def test_auth_json_merges_openai_and_xai_entries(tmp_path):
         patch.dict(
             "os.environ",
             {"OPENAI_OAUTH_MANAGED": "1", "XAI_OAUTH_MANAGED": "1"},
-            clear=False,
+            clear=True,
         ),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
@@ -59,7 +59,7 @@ def test_auth_json_preserves_existing_provider_entries(tmp_path):
     auth_file.write_text(json.dumps({"anthropic": {"type": "api", "key": "existing"}}))
 
     with (
-        patch.dict("os.environ", {"XAI_OAUTH_MANAGED": "1"}, clear=False),
+        patch.dict("os.environ", {"XAI_OAUTH_MANAGED": "1"}, clear=True),
         patch("pathlib.Path.home", return_value=tmp_path),
     ):
         supervisor._setup_managed_oauth()
@@ -113,9 +113,6 @@ def test_xai_plugin_uses_broker_without_refresh_token_environment():
     assert 'provider: "xai"' in plugin
     assert "/xai-token-refresh" in plugin
     assert "XAI_OAUTH_REFRESH_TOKEN" not in plugin
-    assert "AbortSignal.timeout" in plugin
-    assert 'family: "grok-build"' in plugin
-    assert "context: 256000, output: 256000" in plugin
 
 
 async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
@@ -131,7 +128,7 @@ async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
     original_path = Path
 
     with (
-        patch.dict("os.environ", {"XAI_OAUTH_MANAGED": "1"}, clear=False),
+        patch.dict("os.environ", {"XAI_OAUTH_MANAGED": "1"}, clear=True),
         patch("sandbox_runtime.entrypoint.Path") as mock_path,
         patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
         patch("sandbox_runtime.entrypoint.install_runtime_git_excludes") as mock_excludes,

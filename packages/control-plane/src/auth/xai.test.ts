@@ -55,7 +55,7 @@ describe("refreshXaiToken", () => {
     });
   });
 
-  it("preserves status and body on refresh errors", async () => {
+  it("classifies invalid_grant refresh errors", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -64,7 +64,8 @@ describe("refreshXaiToken", () => {
 
     const error = await refreshXaiToken("stale").catch((cause) => cause);
     expect(error).toBeInstanceOf(XaiTokenRefreshError);
-    expect(error).toMatchObject({ status: 401, body: '{"error":"invalid_grant"}' });
+    expect(error).toMatchObject({ status: 401, reason: "invalid_grant" });
+    expect(error).not.toHaveProperty("body");
   });
 
   it.each([
