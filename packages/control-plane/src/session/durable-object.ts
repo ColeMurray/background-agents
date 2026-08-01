@@ -1061,12 +1061,17 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Handle WebSocket close.
    */
-  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+  async webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ): Promise<void> {
     this.ensureInitialized();
-    const { kind } = this.wsManager.classify(ws);
+    const connection = this.wsManager.classify(ws);
 
     try {
-      if (kind === "sandbox") {
+      if (connection.kind === "sandbox") {
         const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
         if (!wasActive) {
           // sandboxWs points to a different socket — this close is for a replaced connection.
@@ -1074,16 +1079,20 @@ export class SessionDO extends DurableObject<Env> {
           return;
         }
 
-        const isNormalClose = code === 1000 || code === 1001;
-        if (isNormalClose) {
-          this.updateSandboxStatus("stopped");
-        } else {
-          // Abnormal close (e.g., 1006): leave status unchanged so the bridge can reconnect.
-          // Schedule a heartbeat check to detect truly dead sandboxes.
-          this.log.warn("Sandbox WebSocket abnormal close", {
-            event: "sandbox.abnormal_close",
+        const sandboxStatus = this.getSandbox()?.status;
+        const reconnectBlocked = sandboxStatus === "stopped" || sandboxStatus === "stale";
+        if (!reconnectBlocked) {
+          // A close frame only ends this transport connection. Explicit lifecycle
+          // paths persist stopped/stale before closing the socket; otherwise the
+          // bridge must be allowed to reconnect regardless of the peer close code.
+          this.log.warn("Sandbox WebSocket disconnected; awaiting reconnect", {
+            event:
+              code === 1000 || code === 1001 ? "sandbox.disconnected" : "sandbox.abnormal_close",
             code,
             reason,
+            was_clean: wasClean,
+            sandbox_status: sandboxStatus,
+            sandbox_id: connection.sandboxId,
           });
           await this.lifecycleManager.scheduleDisconnectCheck();
         }

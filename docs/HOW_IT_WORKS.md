@@ -186,6 +186,11 @@ gets its own lightweight database that can handle hundreds of events per second 
 other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
 incurring compute costs.
 
+Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
+does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
+in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+
 ### Data Plane (Sandbox Backends)
 
 The data plane is where code actually runs. Each session gets an isolated sandbox with a full

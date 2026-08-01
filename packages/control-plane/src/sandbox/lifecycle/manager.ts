@@ -1312,7 +1312,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   /**
    * Schedule a disconnect check alarm (heartbeat timeout from now).
-   * Used after abnormal WebSocket close to ensure dead sandboxes are detected
+   * Used after an active WebSocket disconnect to ensure dead sandboxes are detected
    * promptly. If the bridge reconnects, scheduleInactivityCheck() will override
    * this alarm (Cloudflare DOs support only one alarm at a time).
    */
