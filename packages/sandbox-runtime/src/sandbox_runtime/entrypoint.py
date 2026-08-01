@@ -60,6 +60,23 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 # visible instead of silently dropped.
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 
+# Provider snapshots copy the sandbox_runtime package into the immutable image.
+# This file is therefore authoritative when an exec API does not preserve the
+# image's environment. Providers with their own authoritative runtime env keep
+# reporting that value instead.
+_BAKED_RUNTIME_VERSION_PATH = Path(__file__).with_name("runtime-version")
+
+
+def _resolve_runtime_version() -> str:
+    """Return runtime provenance from the provider env or baked artifact."""
+    environment_version = os.environ.get("SANDBOX_VERSION", "").strip()
+    if environment_version:
+        return environment_version
+    try:
+        return _BAKED_RUNTIME_VERSION_PATH.read_text().strip()
+    except OSError:
+        return ""
+
 
 @dataclass(frozen=True)
 class RepositoryBootResult:
@@ -2054,7 +2071,7 @@ class SandboxSupervisor:
             if image_build_mode:
                 boot_result = await self._run_image_build_execution(expected_tunnel_ports)
                 duration_ms = int((time.time() - startup_start) * 1000)
-                runtime_version = os.environ.get("SANDBOX_VERSION", "")
+                runtime_version = _resolve_runtime_version()
                 self.log.info(
                     "image_build.complete",
                     duration_ms=duration_ms,

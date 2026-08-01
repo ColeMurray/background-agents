@@ -208,6 +208,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
   image = image
     .addLocalFile(join(runtimeDir, "gh-wrapper.sh"), "/usr/local/bin/gh")
     .runCommands(
+      "test -s /app/sandbox_runtime/runtime-version",
       "sudo chmod 0755 /usr/local/bin/gh",
       "PYTHONPATH=/app /usr/local/bin/gh --version"
     );
@@ -240,7 +241,6 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
-      SANDBOX_VERSION: "v56-opencode-1-18-11",
     })
     .workdir(`${SANDBOX_HOME}/workspace`)
     .builderMemory(options.builderMemoryMb);

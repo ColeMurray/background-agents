@@ -14,11 +14,6 @@ import type {
   VercelSnapshotResponse,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  parseRuntimeVersionNumber,
-} from "../../../image-builds/model";
-import { VERCEL_SANDBOX_VERSION } from "./bootstrap";
 
 function createSessionResponse(
   sessionId = "vercel-session-1",
@@ -611,10 +606,10 @@ describe("VercelSandboxProvider", () => {
       expect.objectContaining({
         USER_SECRET: "value",
         IMAGE_BUILD_MODE: "true",
-        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
         VCS_CLONE_TOKEN: "clone-token",
       })
     );
+    expect(createCall.env).not.toHaveProperty("SANDBOX_VERSION");
     expect(createCall.env).not.toHaveProperty("GITHUB_TOKEN");
     expect(createCall.env).not.toHaveProperty("GITHUB_APP_TOKEN");
     expect(createCall.env).not.toHaveProperty("OI_GITHUB_TOKEN_IS_FALLBACK");
@@ -643,13 +638,6 @@ describe("VercelSandboxProvider", () => {
       undefined
     );
     expect(result).toEqual({ buildId: "envimg-1", status: "building" });
-  });
-
-  it("reports a compatible authoritative runtime version for image builds", () => {
-    const version = parseRuntimeVersionNumber(VERCEL_SANDBOX_VERSION);
-
-    expect(version).not.toBeNull();
-    expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
   });
 
   it("starts environment image builds with a repositories-bearing SESSION_CONFIG", async () => {

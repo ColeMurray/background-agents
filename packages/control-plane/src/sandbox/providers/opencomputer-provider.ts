@@ -63,6 +63,7 @@ const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
   "OI_REPO_IMAGE_CALLBACK_SECRET",
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
+  "SANDBOX_VERSION",
 ] as const;
 
 export interface TriggerOpenComputerEnvironmentImageBuildConfig {

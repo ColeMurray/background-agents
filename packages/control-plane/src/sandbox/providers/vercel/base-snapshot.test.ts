@@ -105,7 +105,7 @@ describe("buildVercelBaseSnapshot", () => {
       expect.objectContaining({
         sessionId: "session-1",
         command: "bash",
-        args: ["-lc", expect.stringContaining("/tmp/open-inspect-runtime/packages")],
+        args: ["-lc", expect.stringContaining("test -s /app/sandbox_runtime/runtime-version")],
         timeoutMs: 20 * 60 * 1000,
       }),
       undefined

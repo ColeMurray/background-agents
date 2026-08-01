@@ -9,6 +9,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime import entrypoint
+
 
 def _repoint_primary(supervisor):
     """Repoint the parsed primary entry at the test's reassigned repo_path."""
@@ -59,6 +61,39 @@ def _make_supervisor(env_vars: dict):
         from sandbox_runtime.entrypoint import SandboxSupervisor
 
         return SandboxSupervisor()
+
+
+class TestRuntimeVersionProvenance:
+    """Image builds report provider or immutable artifact provenance."""
+
+    def test_prefers_authoritative_provider_environment(self, tmp_path):
+        version_file = tmp_path / "runtime-version"
+        version_file.write_text("v56-baked\n")
+
+        with (
+            patch.dict(os.environ, {"SANDBOX_VERSION": "v57-provider"}, clear=False),
+            patch.object(entrypoint, "_BAKED_RUNTIME_VERSION_PATH", version_file),
+        ):
+            assert entrypoint._resolve_runtime_version() == "v57-provider"
+
+    def test_reads_version_baked_into_provider_snapshot(self, tmp_path):
+        version_file = tmp_path / "runtime-version"
+        version_file.write_text("v56-baked\n")
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(entrypoint, "_BAKED_RUNTIME_VERSION_PATH", version_file),
+        ):
+            assert entrypoint._resolve_runtime_version() == "v56-baked"
+
+    def test_fails_closed_without_runtime_provenance(self, tmp_path):
+        missing_file = tmp_path / "missing-runtime-version"
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(entrypoint, "_BAKED_RUNTIME_VERSION_PATH", missing_file),
+        ):
+            assert entrypoint._resolve_runtime_version() == ""
 
 
 class TestImageBuildMode:

@@ -42,7 +42,7 @@ import type {
   VercelVcpus,
 } from "./client";
 import { VercelSandboxApiError } from "./client";
-import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN, VERCEL_SANDBOX_VERSION } from "./bootstrap";
+import { DEFAULT_VERCEL_RUNTIME, VERCEL_PYTHON_BIN } from "./bootstrap";
 
 const log = createLogger("vercel-provider");
 
@@ -70,6 +70,7 @@ const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
   "OI_REPO_IMAGE_CALLBACK_SECRET",
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
+  "SANDBOX_VERSION",
 ] as const;
 
 function resolveVercelTimeoutMs(timeoutSeconds?: number): number {
@@ -428,7 +429,6 @@ export class VercelSandboxProvider implements SandboxProvider {
 
     Object.assign(envVars, this.buildPlatformEnvVars(), {
       SANDBOX_ID: config.sandboxId,
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
       REPO_OWNER: config.repoOwner,
       REPO_NAME: config.repoName,
       [IMAGE_BUILD_MODE_ENV_VAR]: "true",

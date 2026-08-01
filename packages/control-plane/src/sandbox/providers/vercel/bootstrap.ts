@@ -6,7 +6,6 @@
 
 export const VERCEL_PYTHON_BIN = "/usr/bin/python3.12";
 export const DEFAULT_VERCEL_RUNTIME = "node24";
-export const VERCEL_SANDBOX_VERSION = "v56-opencode-1-18-11";
 export const VERCEL_RUNTIME_WORKDIR = "/tmp/open-inspect-runtime";
 export const VERCEL_LOCAL_RUNTIME_EXTRACT_DIR = `${VERCEL_RUNTIME_WORKDIR}/packages`;
 
@@ -63,6 +62,7 @@ test -d packages/sandbox-runtime/src/sandbox_runtime
 sudo rm -rf /app/sandbox_runtime
 sudo cp -a packages/sandbox-runtime/src/sandbox_runtime /app/sandbox_runtime
 sudo chmod -R a+rX /app/sandbox_runtime
+test -s /app/sandbox_runtime/runtime-version
 sudo ${VERCEL_PYTHON_BIN} -m pip install --break-system-packages -e packages/sandbox-runtime || sudo ${VERCEL_PYTHON_BIN} -m pip install -e packages/sandbox-runtime
 
 printf '%s\\n' '#!/bin/sh' ${shellQuote(gitCredentialHelperCommand)} | sudo tee /usr/local/bin/oi-git-credentials >/dev/null
