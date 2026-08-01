@@ -42,6 +42,19 @@ describe("refreshXaiToken", () => {
     });
   });
 
+  it("accepts a rotated refresh token without expires_in", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve('{"access_token":"access-new","refresh_token":"refresh-new"}'),
+    } as Response);
+
+    await expect(refreshXaiToken("refresh-old")).resolves.toEqual({
+      access_token: "access-new",
+      refresh_token: "refresh-new",
+    });
+  });
+
   it("preserves status and body on refresh errors", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
