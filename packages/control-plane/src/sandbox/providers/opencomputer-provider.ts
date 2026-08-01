@@ -59,12 +59,10 @@ const REPO_IMAGE_CALLBACK_ENV_KEYS = [
   "OI_REPO_IMAGE_CALLBACK_TOKEN",
   "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
 ] as const;
-const RESERVED_IMAGE_BUILD_ENV_KEYS = [
+const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
   ...REPO_IMAGE_CALLBACK_ENV_KEYS,
   "OI_REPO_IMAGE_CALLBACK_SECRET",
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-  "SANDBOX_VERSION",
-  IMAGE_BUILD_MODE_ENV_VAR,
 ] as const;
 
 export interface TriggerOpenComputerEnvironmentImageBuildConfig {
@@ -485,9 +483,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       prebuiltImageSha?: string;
     } = {}
   ): Promise<PreparedOpenComputerEnvironment> {
-    const { envVars: baseEnvVars, secretEnvVars = {} } = this.prepareEnvironment(
-      config.userEnvVars
-    );
+    const { envVars: baseEnvVars, secretEnvVars } = this.prepareEnvironment(config.userEnvVars);
     const envVars = buildSandboxEnvVars(config, {
       baseEnvVars,
       scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
@@ -517,11 +513,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     // failing the already-completed build-complete callback). A runtime session
     // is never an image build, so force the markers off. IMAGE_BUILD_MODE is
     // checked as === "true" in entrypoint.py, so "false" disables it.
-    for (const key of RESERVED_IMAGE_BUILD_ENV_KEYS) {
-      envVars[key] = "";
-      delete secretEnvVars[key];
-    }
     envVars[IMAGE_BUILD_MODE_ENV_VAR] = "false";
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) envVars[key] = "";
 
     return { envVars, secretEnvVars };
   }
@@ -574,7 +567,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
     const secretEnvVars = copyDefinedEnvVars({}, userEnvVars);
     if (options.scrubReservedRepoImageEnv) {
-      for (const key of RESERVED_IMAGE_BUILD_ENV_KEYS) {
+      for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
         delete envVars[key];
         delete secretEnvVars[key];
       }

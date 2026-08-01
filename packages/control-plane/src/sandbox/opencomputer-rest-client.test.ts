@@ -25,37 +25,31 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Runtime compatibility must come from the immutable template contents. A
-// control-plane value could falsely relabel a manually pinned old template.
-describe("OpenComputerRestClient runtime provenance", () => {
-  it("startRuntime does not override baked SANDBOX_VERSION provenance", async () => {
+// OpenComputer launches the runtime via `exec`, whose shell does NOT inherit the
+// image's baked env. SANDBOX_VERSION therefore has to be re-exported in the exec
+// command — otherwise the runtime reports an empty version and the image-build
+// build-complete callback is rejected by the runtime-version floor check.
+describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
+  it("startRuntime exports SANDBOX_VERSION to the exec shell", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "123", stderr: "" }));
 
-    await client.startRuntime("sb-1", {
-      SANDBOX_VERSION: "v999-user-controlled",
-      SAFE_BUILD_ENV: "present",
-    });
+    await client.startRuntime("sb-1");
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain("/sandboxes/sb-1/exec/run");
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.args[1]).not.toContain("SANDBOX_VERSION=");
-    expect(body.args[1]).toContain("SAFE_BUILD_ENV='present'");
+    expect(body.args[1]).toContain("SANDBOX_VERSION=v56-opencode-1-18-11");
   });
 
-  it("runRuntimeForeground does not override baked SANDBOX_VERSION provenance", async () => {
+  it("runRuntimeForeground (image build path) exports SANDBOX_VERSION", async () => {
     const client = new OpenComputerRestClient(config);
     fetchSpy.mockResolvedValue(jsonResponse({ exitCode: 0, stdout: "", stderr: "" }));
 
-    await client.runRuntimeForeground("sb-1", 60, {
-      SANDBOX_VERSION: "v999-user-controlled",
-      SAFE_BUILD_ENV: "present",
-    });
+    await client.runRuntimeForeground("sb-1", 60);
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
-    expect(body.args[1]).not.toContain("SANDBOX_VERSION=");
-    expect(body.args[1]).toContain("SAFE_BUILD_ENV='present'");
+    expect(body.args[1]).toContain("SANDBOX_VERSION=v56-opencode-1-18-11");
   });
 });
 

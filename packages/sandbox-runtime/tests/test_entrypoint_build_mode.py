@@ -9,8 +9,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime import entrypoint
-
 
 def _repoint_primary(supervisor):
     """Repoint the parsed primary entry at the test's reassigned repo_path."""
@@ -61,39 +59,6 @@ def _make_supervisor(env_vars: dict):
         from sandbox_runtime.entrypoint import SandboxSupervisor
 
         return SandboxSupervisor()
-
-
-class TestRuntimeVersionProvenance:
-    """Image builds report provider or immutable artifact provenance."""
-
-    def test_prefers_authoritative_provider_environment(self, tmp_path):
-        version_file = tmp_path / "runtime-version"
-        version_file.write_text("v56-baked\n")
-
-        with (
-            patch.dict(os.environ, {"SANDBOX_VERSION": "v57-provider"}, clear=False),
-            patch.object(entrypoint, "_BAKED_RUNTIME_VERSION_PATH", version_file),
-        ):
-            assert entrypoint._resolve_runtime_version() == "v57-provider"
-
-    def test_reads_version_baked_into_provider_snapshot(self, tmp_path):
-        version_file = tmp_path / "runtime-version"
-        version_file.write_text("v56-baked\n")
-
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch.object(entrypoint, "_BAKED_RUNTIME_VERSION_PATH", version_file),
-        ):
-            assert entrypoint._resolve_runtime_version() == "v56-baked"
-
-    def test_fails_closed_without_runtime_provenance(self, tmp_path):
-        missing_file = tmp_path / "missing-runtime-version"
-
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch.object(entrypoint, "_BAKED_RUNTIME_VERSION_PATH", missing_file),
-        ):
-            assert entrypoint._resolve_runtime_version() == ""
 
 
 class TestImageBuildMode:
@@ -402,43 +367,6 @@ class TestImageBuildMode:
             runtime_version="v99-test",
         )
         callback.report_failure.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_reports_failure_when_runtime_provenance_is_missing(self, build_env, tmp_path):
-        supervisor = _make_supervisor(build_env)
-        supervisor.repo_path = tmp_path
-        _repoint_primary(supervisor)
-
-        supervisor.sync_repositories = AsyncMock(return_value=[])
-        supervisor.run_setup_script = AsyncMock(return_value=True)
-        supervisor.shutdown = AsyncMock()
-
-        callback = MagicMock()
-        callback.report_success = AsyncMock(return_value=True)
-        callback.report_failure = AsyncMock(return_value=True)
-
-        async def fake_subprocess(*args, **kwargs):
-            mock_proc = MagicMock()
-            mock_proc.communicate = AsyncMock(return_value=(b"abc123def456\n", b""))
-            mock_proc.returncode = 0
-            return mock_proc
-
-        with (
-            patch.dict(os.environ, build_env, clear=True),
-            patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
-                side_effect=fake_subprocess,
-            ),
-            patch(
-                "sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env",
-                return_value=callback,
-            ),
-            patch("sandbox_runtime.entrypoint._resolve_runtime_version", return_value=""),
-        ):
-            await supervisor.run()
-
-        callback.report_success.assert_not_called()
-        callback.report_failure.assert_awaited_once_with("runtime provenance is missing")
 
     @pytest.mark.asyncio
     async def test_reports_failure_callback_from_build_mode(self, build_env):

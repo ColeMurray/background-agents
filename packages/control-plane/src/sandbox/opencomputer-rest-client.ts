@@ -186,6 +186,13 @@ const RUNTIME_HOSTS_BOOTSTRAP =
   "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
   "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
+// Runtime version the sandbox reports back to the image-build callback.
+// OpenComputer launches the runtime via `exec`, which does NOT inherit the
+// image's baked env, so SANDBOX_VERSION must be re-exported here — otherwise the
+// runtime reports an empty version and the build-complete callback is rejected
+// (runtime-version floor check). Keep in sync with the value baked in
+// packages/opencomputer-infra/src/build-template.ts (SANDBOX_VERSION).
+const OPENCOMPUTER_SANDBOX_VERSION = "v56-opencode-1-18-11";
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
   `VIRTUAL_ENV=${PYTHON_VENV} ` +
@@ -196,6 +203,7 @@ const RUNTIME_ENV_EXPORTS =
   `NO_PROXY=${LOCAL_NO_PROXY} ` +
   `no_proxy=${LOCAL_NO_PROXY} ` +
   `PATH=${PYTHON_VENV}/bin:/home/sandbox/.npm-global/bin:${USER_BIN}:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin ` +
+  `SANDBOX_VERSION=${OPENCOMPUTER_SANDBOX_VERSION} ` +
   RUNTIME_CA_EXPORTS;
 const RUNTIME_CA_BOOTSTRAP =
   `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates >/tmp/openinspect-update-ca.log 2>&1 || true; ` +
@@ -361,7 +369,7 @@ export class OpenComputerRestClient {
   }
 
   async startRuntime(id: string, extraEnv: Record<string, string> = {}): Promise<void> {
-    const exports = this.shellExportRuntimeEnv(extraEnv);
+    const exports = this.shellExportEnv(extraEnv);
     await this.request<void>("POST", this.expandPath(this.paths.exec, { id }), TIMEOUT_EXEC_MS, {
       cmd: "sh",
       args: [
@@ -377,7 +385,7 @@ export class OpenComputerRestClient {
     timeoutSeconds: number,
     extraEnv: Record<string, string> = {}
   ): Promise<OpenComputerExecResult> {
-    const exports = this.shellExportRuntimeEnv(extraEnv);
+    const exports = this.shellExportEnv(extraEnv);
     return await this.request<OpenComputerExecResult>(
       "POST",
       this.expandPath(this.paths.exec, { id }),
@@ -510,12 +518,6 @@ export class OpenComputerRestClient {
     const entries = Object.entries(env).filter(([, value]) => value.length > 0);
     if (entries.length === 0) return "";
     return `${entries.map(([key, value]) => `${key}=${this.shellQuote(value)}`).join(" ")} `;
-  }
-
-  private shellExportRuntimeEnv(env: Record<string, string>): string {
-    const runtimeEnv = { ...env };
-    delete runtimeEnv.SANDBOX_VERSION;
-    return this.shellExportEnv(runtimeEnv);
   }
 
   private shellQuote(value: string): string {

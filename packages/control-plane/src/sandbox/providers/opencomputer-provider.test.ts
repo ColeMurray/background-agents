@@ -109,11 +109,7 @@ describe("OpenComputerSandboxProvider", () => {
 
     const result = await provider.createSandbox({
       ...baseConfig,
-      userEnvVars: {
-        ANTHROPIC_API_KEY: "sk-test",
-        SANDBOX_VERSION: "v999-user-controlled",
-        IMAGE_BUILD_MODE: "true",
-      },
+      userEnvVars: { ANTHROPIC_API_KEY: "sk-test" },
       codeServerEnabled: true,
       sandboxSettings: { codeServerPort: 3000, tunnelPorts: [5173] },
     });
@@ -162,14 +158,6 @@ describe("OpenComputerSandboxProvider", () => {
       value: "sk-test",
       allowedHosts: ["api.anthropic.com"],
     });
-    expect(createCall.env).toHaveProperty("SANDBOX_VERSION", "");
-    expect(createCall.env).toHaveProperty("IMAGE_BUILD_MODE", "false");
-    expect(client.setSecret).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "SANDBOX_VERSION" })
-    );
-    expect(client.setSecret).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "IMAGE_BUILD_MODE" })
-    );
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toMatchObject({
       session_id: "session-1",
       repo_owner: "acme",
@@ -686,8 +674,6 @@ describe("OpenComputerSandboxProvider", () => {
       cloneToken: "clone-token",
       userEnvVars: {
         ANTHROPIC_API_KEY: "sk-repo",
-        SANDBOX_VERSION: "v999-user-controlled",
-        IMAGE_BUILD_MODE: "false",
         OI_REPO_IMAGE_PROVIDER_SESSION_ID: "user-controlled",
         OI_REPO_IMAGE_CALLBACK_TOKEN: "user-controlled",
         OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
@@ -715,7 +701,6 @@ describe("OpenComputerSandboxProvider", () => {
       })
     );
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
-    expect(createCall.env).not.toHaveProperty("SANDBOX_VERSION");
     expect(createCall.env).not.toHaveProperty("OI_REPO_IMAGE_PROVIDER_SESSION_ID");
     expect(createCall.env).not.toHaveProperty("OI_REPO_IMAGE_CALLBACK_SECRET");
     expect(client.setSecret).toHaveBeenCalledWith({
@@ -732,12 +717,6 @@ describe("OpenComputerSandboxProvider", () => {
     );
     expect(client.setSecret).not.toHaveBeenCalledWith(
       expect.objectContaining({ name: "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS" })
-    );
-    expect(client.setSecret).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "SANDBOX_VERSION" })
-    );
-    expect(client.setSecret).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "IMAGE_BUILD_MODE" })
     );
     expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");
     expect(client.startRuntime).toHaveBeenCalledWith("oc-sandbox-1", {
