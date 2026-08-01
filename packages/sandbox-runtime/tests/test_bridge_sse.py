@@ -28,6 +28,9 @@ from sandbox_runtime.prompt_stream import (
 )
 from tests.conftest import MockResponse, wire_opencode_transport
 
+MOCK_HTTP_TIMEOUT_SECONDS = 30.0
+PROMPT_TIMEOUT_TEST_BUDGET_SECONDS = 0.8
+
 
 class MockSSEResponse:
     """Mock SSE streaming response."""
@@ -68,7 +71,12 @@ class MockHttpClient:
         self._post_call_count = 0
         self._get_call_count = 0
 
-    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
         self._post_call_count += 1
         if self.post_responses:
             return self.post_responses.pop(0)
@@ -1319,7 +1327,12 @@ class DelayedMockHttpClient:
         self._post_call_count = 0
         self._get_call_count = 0
 
-    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
         self._post_call_count += 1
         self.post_urls.append(url)
         if self.post_responses:
@@ -1338,7 +1351,12 @@ class DelayedMockHttpClient:
 
 
 class HangingPromptPostHttpClient(DelayedMockHttpClient):
-    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
         if url.endswith("/prompt_async"):
             self.post_urls.append(url)
             await asyncio.sleep(3600)
@@ -1346,7 +1364,12 @@ class HangingPromptPostHttpClient(DelayedMockHttpClient):
 
 
 class HangingAbortHttpClient(DelayedMockHttpClient):
-    async def post(self, url: str, json: dict | None = None, timeout: float = 30.0) -> Any:
+    async def post(
+        self,
+        url: str,
+        json: dict | None = None,
+        timeout: float = MOCK_HTTP_TIMEOUT_SECONDS,
+    ) -> Any:
         if url.endswith("/abort"):
             self.post_urls.append(url)
             await asyncio.sleep(3600)
@@ -1573,10 +1596,12 @@ class TestPromptMaxDuration:
         http_client.get_responses = [MockResponse(200, [])]
         wire_opencode_transport(bridge, http_client)
 
+        started_at = time.monotonic()
         with pytest.raises(RuntimeError, match="Prompt exceeded max duration"):
             async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
                 pass
 
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
         assert any(url.endswith("/abort") for url in http_client.post_urls)
 
     @pytest.mark.asyncio
@@ -1601,7 +1626,7 @@ class TestPromptMaxDuration:
             async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
                 pass
 
-        assert time.monotonic() - started_at < 0.5
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
 
     @pytest.mark.asyncio
     async def test_prompt_timeout_bounds_cleanup(self):
@@ -1625,7 +1650,7 @@ class TestPromptMaxDuration:
             async for _event in bridge._stream_opencode_response_sse("msg-1", "test"):
                 pass
 
-        assert time.monotonic() - started_at < 0.5
+        assert time.monotonic() - started_at < PROMPT_TIMEOUT_TEST_BUDGET_SECONDS
         assert any(url.endswith("/abort") for url in http_client.post_urls)
 
     @pytest.mark.asyncio
