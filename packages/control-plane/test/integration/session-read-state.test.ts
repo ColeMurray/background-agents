@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { SessionIndexStore, sessionNavigationQuery } from "../../src/db/session-index";
+import { buildViewerSessionUnreadStatesQuery, SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 import type { SqlDatabase } from "../../src/db/sql-database";
@@ -336,7 +336,7 @@ describe("session read state", () => {
 
     const sessionIds = result.sessions.map(({ id }) => id);
     const queryPlan = await env.DB.prepare(
-      `EXPLAIN QUERY PLAN ${sessionNavigationQuery(sessionIds.length)}`
+      `EXPLAIN QUERY PLAN ${buildViewerSessionUnreadStatesQuery(sessionIds.length)}`
     )
       .bind("viewer", ...sessionIds)
       .all<{ detail: string }>();

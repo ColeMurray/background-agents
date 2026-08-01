@@ -134,7 +134,7 @@ interface SessionNavigationRow {
   attention_message_id: string | null;
 }
 
-export function sessionNavigationQuery(sessionCount: number): string {
+export function buildViewerSessionUnreadStatesQuery(sessionCount: number): string {
   const placeholders = Array.from({ length: sessionCount }, () => "?").join(", ");
   return `SELECT s.id AS session_id,
                  s.latest_attention_message_id AS attention_message_id,
@@ -432,7 +432,7 @@ export class SessionIndexStore {
     const results = await Promise.all(
       chunks.map((chunk) =>
         this.db
-          .prepare(sessionNavigationQuery(chunk.length))
+          .prepare(buildViewerSessionUnreadStatesQuery(chunk.length))
           .bind(userId, ...chunk)
           .all<SessionNavigationRow>()
       )
