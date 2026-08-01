@@ -6,7 +6,9 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
+import { useState } from "react";
 import Home from "./page";
+import { SessionTabs, SessionTabsProvider } from "@/components/session-tabs";
 
 expect.extend(matchers);
 
@@ -56,6 +58,7 @@ vi.mock("@/lib/auth-session", () => ({
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.routerPush }),
+  usePathname: () => "/",
 }));
 
 vi.mock("swr", () => ({
@@ -136,9 +139,52 @@ function sessionCreateBody(): Record<string, unknown> {
   return JSON.parse(String(createCall?.[1]?.body)) as Record<string, unknown>;
 }
 
+function HomeUnderTest() {
+  return (
+    <SessionTabsProvider>
+      <SessionTabs />
+      <Home />
+    </SessionTabsProvider>
+  );
+}
+
+function DraftRemountHarness() {
+  return (
+    <SessionTabsProvider>
+      <DraftVisibility />
+    </SessionTabsProvider>
+  );
+}
+
+function DraftVisibility() {
+  const [showHome, setShowHome] = useState(true);
+  return (
+    <>
+      <button type="button" onClick={() => setShowHome((current) => !current)}>
+        {showHome ? "Hide draft" : "Show draft"}
+      </button>
+      {showHome && <Home />}
+    </>
+  );
+}
+
 describe("Home", () => {
+  it("preserves the new-session draft when switching tabs", async () => {
+    const user = userEvent.setup();
+    render(<DraftRemountHarness />);
+
+    const prompt = screen.getByPlaceholderText("What do you want to build?");
+    await user.type(prompt, "Keep this draft");
+    await user.click(screen.getByRole("button", { name: "Hide draft" }));
+    await user.click(screen.getByRole("button", { name: "Show draft" }));
+
+    expect(screen.getByPlaceholderText("What do you want to build?")).toHaveValue(
+      "Keep this draft"
+    );
+  });
+
   it("disables autofill suggestions for the prompt", () => {
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     expect(screen.getByPlaceholderText("What do you want to build?")).toHaveAttribute(
       "autocomplete",
@@ -159,7 +205,7 @@ describe("Home", () => {
         })
     );
     const user = userEvent.setup();
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "I");
 
@@ -175,7 +221,7 @@ describe("Home", () => {
 
   it("can start a new session without a repository from the primary selector", async () => {
     const user = userEvent.setup();
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /background-agents/i });
     await user.click(screen.getByRole("button", { name: /background-agents/i }));
@@ -186,6 +232,7 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(screen.getByRole("tab", { name: "Open Starting session..." })).toBeInTheDocument();
     expect(sessionCreateBody()).toMatchObject({
       repoOwner: null,
       repoName: null,
@@ -194,10 +241,34 @@ describe("Home", () => {
     expect(sessionCreateBody()).not.toHaveProperty("branch");
   });
 
+  it("keeps the new-session tab when the initial prompt fails", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/sessions") return Response.json({ sessionId: "session-1" });
+      if (url === "/api/sessions/session-1/prompt") {
+        return Response.json({ error: "Prompt rejected" }, { status: 500 });
+      }
+      return Response.json({ error: "unexpected request" }, { status: 500 });
+    });
+    const user = userEvent.setup();
+    render(<HomeUnderTest />);
+
+    await user.click(await screen.findByRole("button", { name: /background-agents/i }));
+    await user.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /no repository/i })
+    );
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Investigate logs");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText("Prompt rejected")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Open New session" })).toBeInTheDocument();
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+
   it("defaults to a no-repository session target when no repositories are available", async () => {
     mocks.reposValue = [];
     const user = userEvent.setup();
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /no repository/i });
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Draft a plan");
@@ -228,7 +299,7 @@ describe("Home", () => {
       },
     ];
     const user = userEvent.setup();
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /background-agents/i });
     await user.click(screen.getByRole("button", { name: /background-agents/i }));
@@ -260,7 +331,7 @@ describe("Home", () => {
       },
     ];
     const user = userEvent.setup();
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /background-agents/i });
     await user.click(screen.getByRole("button", { name: /background-agents/i }));
@@ -301,7 +372,7 @@ describe("Home", () => {
   it("persists an environment selection and restores it on the next visit", async () => {
     mocks.environmentsValue = [environment];
     const user = userEvent.setup();
-    const first = render(<Home />);
+    const first = render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /background-agents/i });
     await user.click(screen.getByRole("button", { name: /background-agents/i }));
@@ -313,7 +384,7 @@ describe("Home", () => {
 
     // A fresh mount (e.g. the sidebar "+" navigating back to "/") restores it.
     first.unmount();
-    render(<Home />);
+    render(<HomeUnderTest />);
     await screen.findByRole("button", { name: /full-stack/i });
 
     await user.type(screen.getByPlaceholderText("What do you want to build?"), "Continue work");
@@ -325,7 +396,7 @@ describe("Home", () => {
   it("waits for environments to load before restoring a stored environment", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:env-1");
     mocks.environmentsLoadingValue = true;
-    const { rerender } = render(<Home />);
+    const { rerender } = render(<HomeUnderTest />);
 
     // Must not commit the repo default while the stored environment is pending.
     await screen.findByRole("button", { name: /select repo/i });
@@ -333,20 +404,20 @@ describe("Home", () => {
 
     mocks.environmentsLoadingValue = false;
     mocks.environmentsValue = [environment];
-    rerender(<Home />);
+    rerender(<HomeUnderTest />);
     await screen.findByRole("button", { name: /full-stack/i });
   });
 
   it("falls back to the repo default when the stored environment was deleted", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:deleted-env");
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /background-agents/i });
   });
 
   it("falls back to the repo default on a malformed stored value", async () => {
     localStorage.setItem("open-inspect-last-selected-repo", "env:");
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /background-agents/i });
   });
@@ -365,7 +436,7 @@ describe("Home", () => {
       },
     ];
     localStorage.setItem("open-inspect-last-selected-repo", "open-inspect/docs");
-    render(<Home />);
+    render(<HomeUnderTest />);
 
     await screen.findByRole("button", { name: /docs/i });
   });

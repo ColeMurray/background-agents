@@ -18,8 +18,10 @@ const { mockUseIsMobile } = vi.hoisted(() => ({
   mockUseIsMobile: vi.fn(() => false),
 }));
 
-const { mockPush } = vi.hoisted(() => ({
+const { mockPush, mockCloseSession, mockUpdateSessionTitle } = vi.hoisted(() => ({
   mockPush: vi.fn(),
+  mockCloseSession: vi.fn(),
+  mockUpdateSessionTitle: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -51,6 +53,13 @@ vi.mock("@/hooks/use-media-query", () => ({
   useIsMobile: mockUseIsMobile,
 }));
 
+vi.mock("@/components/session-tabs", () => ({
+  useSessionTabs: () => ({
+    closeSession: mockCloseSession,
+    updateSessionTitle: mockUpdateSessionTitle,
+  }),
+}));
+
 const { mockUseEnvironments } = vi.hoisted(() => ({
   mockUseEnvironments: vi.fn(() => ({ environments: [] as unknown[], loading: false })),
 }));
@@ -65,6 +74,8 @@ afterEach(() => {
   vi.useRealTimers();
   mockUseIsMobile.mockReturnValue(false);
   mockPush.mockReset();
+  mockCloseSession.mockReset();
+  mockUpdateSessionTitle.mockReset();
   mockUseEnvironments.mockReturnValue({ environments: [], loading: false });
 });
 
@@ -446,7 +457,6 @@ describe("SessionSidebar", () => {
         credentials: "same-origin",
       });
     });
-
     fireEvent.click(screen.getByText("Mine"));
     expect(await screen.findByText("Mine only")).toBeInTheDocument();
 
@@ -579,6 +589,7 @@ describe("SessionSidebar", () => {
         credentials: "same-origin",
       });
     });
+    expect(mockCloseSession).toHaveBeenCalledWith("session-1");
   });
 
   it("keeps the session in the sidebar when archiving fails", async () => {
@@ -626,5 +637,6 @@ describe("SessionSidebar", () => {
     });
 
     expect(screen.getByRole("link", { name: /session 1/i })).toBeInTheDocument();
+    expect(mockCloseSession).not.toHaveBeenCalled();
   });
 });

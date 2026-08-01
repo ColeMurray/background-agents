@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
@@ -21,9 +20,8 @@ export type SessionItem = Session;
 
 type SessionCreatorFilter = "all" | "mine";
 
-export function useSidebarSessions(currentSessionId: string | null) {
+export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
-  const router = useRouter();
   const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
   const [extraSessionsState, setExtraSessionsState] = useState<{
     source: SessionListResponse | undefined;
@@ -218,12 +216,8 @@ export function useSidebarSessions(currentSessionId: string | null) {
         ...previous,
         sessions: previous.sessions.filter((session) => session.id !== sessionId),
       }));
-
-      if (currentSessionId === sessionId) {
-        router.push("/");
-      }
     },
-    [currentSessionId, router, sidebarSessionsKey]
+    [sidebarSessionsKey]
   );
 
   const handleSessionRenamed = useCallback(

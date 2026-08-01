@@ -4,7 +4,7 @@ import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useRouter } from "next/navigation";
 import { mutate } from "swr";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -24,8 +24,8 @@ import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import {
   ATTACHMENT_ACCEPT,
   DEFAULT_ATTACHMENT_ONLY_MESSAGE,
-  useSessionAttachments,
 } from "@/hooks/use-session-attachments";
+import type { useSessionAttachments } from "@/hooks/use-session-attachments";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
 import {
   useSessionTargetPicker,
@@ -35,6 +35,8 @@ import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { useNewSessionDraft, useSessionTabs } from "@/components/session-tabs";
+import { archiveSession } from "@/lib/archive-session";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
@@ -42,31 +44,33 @@ const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-r
 export default function Home() {
   const { data: session } = useAuthSession();
   const router = useRouter();
+  const { completeNewSession } = useSessionTabs();
+  const newSessionDraft = useNewSessionDraft();
   const picker = useSessionTargetPicker();
   const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
-  const [storedPreference, setStoredPreference] = useState<ModelPreference>({
-    model: DEFAULT_MODEL,
-    reasoningEffort: getDefaultReasoningEffort(DEFAULT_MODEL),
-  });
-  const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
-  const [prompt, setPrompt] = useState("");
-  const sessionAttachments = useSessionAttachments();
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState("");
-  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
-  const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const sessionCreationPromise = useRef<Promise<string | null> | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  const submitInFlightRef = useRef(false);
-  // Keyed by the picker's configKey so environment/ad-hoc selections
-  // invalidate a warmed session exactly like repo/branch changes do.
-  const pendingConfigRef = useRef<{
-    target: string;
-    model: string;
-    reasoningEffort?: string;
-    branch: string;
-  } | null>(null);
-  const hasHydratedModelPreferencesRef = useRef(false);
+  const {
+    storedPreference,
+    setStoredPreference,
+    modelPreferenceDraft,
+    setModelPreferenceDraft,
+    prompt,
+    setPrompt,
+    sessionAttachments,
+    creating,
+    setCreating,
+    error,
+    setError,
+    pendingSessionId,
+    setPendingSessionId,
+    isCreatingSession,
+    setIsCreatingSession,
+    sessionCreationPromise,
+    abortControllerRef,
+    submitInFlightRef,
+    pendingConfigRef,
+    hasHydratedModelPreferencesRef,
+    reset: resetNewSessionDraft,
+  } = newSessionDraft;
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
 
   useEffect(() => {
@@ -79,7 +83,7 @@ export default function Home() {
       reasoningEffort: storedReasoningEffort ?? undefined,
     });
     hasHydratedModelPreferencesRef.current = true;
-  }, []);
+  }, [hasHydratedModelPreferencesRef, setStoredPreference]);
 
   const { model: selectedModel, reasoningEffort } = resolveModelPreference(
     modelPreferenceDraft ?? storedPreference,
@@ -87,15 +91,43 @@ export default function Home() {
   );
 
   useEffect(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+    const pendingConfig = pendingConfigRef.current;
+    if (!pendingConfig || !isLaunchable) return;
+    const currentConfig = {
+      target: configKey,
+      model: selectedModel,
+      reasoningEffort,
+      branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
+    };
+    if (
+      pendingConfig.target === currentConfig.target &&
+      pendingConfig.model === currentConfig.model &&
+      pendingConfig.reasoningEffort === currentConfig.reasoningEffort &&
+      pendingConfig.branch === currentConfig.branch
+    ) {
+      return;
     }
+
+    if (pendingSessionId) void archiveSession(pendingSessionId);
+    abortControllerRef.current = null;
     setPendingSessionId(null);
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch]);
+  }, [
+    abortControllerRef,
+    configKey,
+    isLaunchable,
+    pendingConfigRef,
+    pendingSessionId,
+    reasoningEffort,
+    selectedBranch,
+    selectedModel,
+    sessionCreationPromise,
+    sessionTarget,
+    setIsCreatingSession,
+    setPendingSessionId,
+  ]);
 
   const createSessionForWarming = useCallback(async () => {
     if (loadingEnabledModels) return null;
@@ -140,6 +172,7 @@ export default function Home() {
             setPendingSessionId(data.sessionId);
             return data.sessionId as string;
           }
+          void archiveSession(data.sessionId);
           return null;
         }
         return null;
@@ -169,17 +202,28 @@ export default function Home() {
     reasoningEffort,
     pendingSessionId,
     loadingEnabledModels,
+    abortControllerRef,
+    pendingConfigRef,
+    sessionCreationPromise,
+    setIsCreatingSession,
+    setPendingSessionId,
   ]);
 
-  const saveModelPreferenceDraft = useCallback((preference: ModelPreference) => {
-    setModelPreferenceDraft(preference);
-    localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, preference.model);
-    if (preference.reasoningEffort) {
-      localStorage.setItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY, preference.reasoningEffort);
-    } else {
-      localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
-    }
-  }, []);
+  const saveModelPreferenceDraft = useCallback(
+    (preference: ModelPreference) => {
+      setModelPreferenceDraft(preference);
+      localStorage.setItem(LAST_SELECTED_MODEL_STORAGE_KEY, preference.model);
+      if (preference.reasoningEffort) {
+        localStorage.setItem(
+          LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY,
+          preference.reasoningEffort
+        );
+      } else {
+        localStorage.removeItem(LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY);
+      }
+    },
+    [setModelPreferenceDraft]
+  );
 
   const handleModelChange = useCallback(
     (model: string) => {
@@ -267,8 +311,9 @@ export default function Home() {
       });
 
       if (res.ok) {
-        sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
+        completeNewSession(sessionId);
+        resetNewSessionDraft();
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();

@@ -63,6 +63,14 @@ describe("CollapsedSidebarControls", () => {
     fireEvent.click(buttons![2]);
     expect(push).toHaveBeenCalledWith("/");
   });
+
+  it("exposes routed content as the controlled tab panel", () => {
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    render(<SidebarLayout>Session content</SidebarLayout>);
+
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "session-tab-panel");
+  });
 });
 
 describe("mobile sidebar drag", () => {
@@ -77,7 +85,7 @@ describe("mobile sidebar drag", () => {
       width: 288,
     } as DOMRect);
     const gestureBoundary = screen.getByTestId("mobile-sidebar-gesture-boundary");
-    expect(gestureBoundary).toHaveClass("touch-pan-y");
+    expect(gestureBoundary).toHaveClass("touch-manipulation");
     fireEvent.pointerDown(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",

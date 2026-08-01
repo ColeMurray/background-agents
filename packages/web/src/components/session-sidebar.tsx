@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
+import { useSessionTabs } from "@/components/session-tabs";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
@@ -73,6 +74,7 @@ export function SessionSidebar({
   const { data: authSession } = useAuthSession();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const { closeSession, updateSessionTitle } = useSessionTabs();
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
@@ -90,7 +92,22 @@ export function SessionSidebar({
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
-  } = useSidebarSessions(currentSessionId);
+  } = useSidebarSessions();
+
+  const handleArchivedSession = useCallback(
+    async (sessionId: string) => {
+      await handleSessionArchived(sessionId);
+      closeSession(sessionId);
+    },
+    [closeSession, handleSessionArchived]
+  );
+  const handleRenamedSession = useCallback(
+    (sessionId: string, title: string) => {
+      handleSessionRenamed(sessionId, title);
+      updateSessionTitle(sessionId, title);
+    },
+    [handleSessionRenamed, updateSessionTitle]
+  );
 
   // Environment provenance for the cards, resolved once for the whole list.
   // Names are looked up so a deleted environment (or one still loading)
@@ -229,9 +246,9 @@ export function SessionSidebar({
                 childrenMap={childrenMap}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
-                onArchive={handleSessionArchived}
+                onArchive={handleArchivedSession}
                 onSessionSelect={onSessionSelect}
-                onSessionRenamed={handleSessionRenamed}
+                onSessionRenamed={handleRenamedSession}
               />
             ))}
 
@@ -255,9 +272,9 @@ export function SessionSidebar({
                     childrenMap={childrenMap}
                     currentSessionId={currentSessionId}
                     isMobile={isMobile}
-                    onArchive={handleSessionArchived}
+                    onArchive={handleArchivedSession}
                     onSessionSelect={onSessionSelect}
-                    onSessionRenamed={handleSessionRenamed}
+                    onSessionRenamed={handleRenamedSession}
                   />
                 ))}
               </>
