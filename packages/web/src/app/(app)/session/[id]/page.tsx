@@ -52,11 +52,11 @@ import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import {
-  acknowledgeSessionAttention,
-  classifyTerminalAcknowledgement,
-  reconcileSessionUnread,
-  SessionReadStateRequestError,
-} from "@/lib/session-read-state";
+  classifyTerminalOutcomeReadAttempt,
+  markTerminalOutcomeRead,
+  reconcileSessionTerminalOutcomeReadState,
+  SessionTerminalOutcomeReadRequestError,
+} from "@/lib/session-terminal-outcome-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -218,18 +218,18 @@ function SessionPageContent() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
-  const acknowledgeVisibleOutcome = useCallback(
+  const attemptMarkVisibleTerminalOutcomeRead = useCallback(
     async (messageId: string) => {
       try {
-        const result = await acknowledgeSessionAttention(sessionId, messageId);
-        await reconcileSessionUnread(result);
-        return classifyTerminalAcknowledgement(result, messageId);
+        const result = await markTerminalOutcomeRead(sessionId, messageId);
+        await reconcileSessionTerminalOutcomeReadState(result);
+        return classifyTerminalOutcomeReadAttempt(result);
       } catch (error) {
         if (
-          error instanceof SessionReadStateRequestError &&
+          error instanceof SessionTerminalOutcomeReadRequestError &&
           [400, 401, 403, 404, 405].includes(error.status)
         ) {
-          return "not_applicable" as const;
+          return "permanent_failure" as const;
         }
         return "retry" as const;
       }
@@ -272,14 +272,14 @@ function SessionPageContent() {
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
-            canAcknowledgeTerminalOutcome={
+            terminalOutcomeReadObservationEnabled={
               !replaying &&
               !loadingHistory &&
               !isDetailsOpen &&
               selectedMediaArtifactId === null &&
               resolvedDiff === null
             }
-            onTerminalOutcomeVisible={acknowledgeVisibleOutcome}
+            onMarkTerminalOutcomeRead={attemptMarkVisibleTerminalOutcomeRead}
           />
         </Panel>
         {showTerminal && (

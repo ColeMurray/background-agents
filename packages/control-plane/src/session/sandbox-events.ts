@@ -12,6 +12,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
+import type { TerminalOutcomeProjectionInput } from "./terminal-outcome-projection";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -52,11 +53,7 @@ export class SessionSandboxEventProcessor {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
-    private readonly recordTerminalOutcome: (
-      messageId: string,
-      messageCreatedAt: number,
-      acceptedAt: number
-    ) => Promise<void>
+    private readonly recordTerminalOutcome: (input: TerminalOutcomeProjectionInput) => Promise<void>
   ) {}
 
   private get log(): Logger {
@@ -207,7 +204,11 @@ export class SessionSandboxEventProcessor {
 
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
         if (timestamps) {
-          await this.recordTerminalOutcome(completionMessageId, timestamps.created_at, now);
+          await this.recordTerminalOutcome({
+            messageId: completionMessageId,
+            messageCreatedAt: timestamps.created_at,
+            terminalOutcomeCompletedAt: now,
+          });
         }
         const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
         const processingDurationMs =

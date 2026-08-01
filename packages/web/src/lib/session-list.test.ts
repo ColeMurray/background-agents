@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
-  applySessionUnread,
+  applySessionTerminalOutcomeReadState,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -58,19 +58,38 @@ describe("buildSessionsPageKey", () => {
   });
 });
 
-describe("applySessionUnread", () => {
-  it("does not let an older mutation response overwrite a newer attention cursor", () => {
+describe("applySessionTerminalOutcomeReadState", () => {
+  it("does not let an older mutation response overwrite a newer terminal outcome", () => {
     const data: SessionListResponse = {
-      sessions: [session("session-1", { navigation: { unread: true, attentionId: "message-b" } })],
+      sessions: [
+        session("session-1", {
+          terminalOutcomeReadState: {
+            hasUnreadTerminalOutcome: true,
+            latestTerminalOutcomeMessageId: "message-b",
+          },
+        }),
+      ],
       hasMore: false,
     };
 
     expect(
-      applySessionUnread(data, "session-1", false, "message-a")?.sessions[0].navigation
-    ).toEqual({ unread: true, attentionId: "message-b" });
+      applySessionTerminalOutcomeReadState(data, "session-1", {
+        hasUnreadTerminalOutcome: false,
+        latestTerminalOutcomeMessageId: "message-a",
+      })?.sessions[0].terminalOutcomeReadState
+    ).toEqual({
+      hasUnreadTerminalOutcome: true,
+      latestTerminalOutcomeMessageId: "message-b",
+    });
     expect(
-      applySessionUnread(data, "session-1", false, "message-b")?.sessions[0].navigation
-    ).toEqual({ unread: false, attentionId: "message-b" });
+      applySessionTerminalOutcomeReadState(data, "session-1", {
+        hasUnreadTerminalOutcome: false,
+        latestTerminalOutcomeMessageId: "message-b",
+      })?.sessions[0].terminalOutcomeReadState
+    ).toEqual({
+      hasUnreadTerminalOutcome: false,
+      latestTerminalOutcomeMessageId: "message-b",
+    });
   });
 });
 

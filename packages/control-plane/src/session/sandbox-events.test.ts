@@ -342,7 +342,11 @@ describe("SessionSandboxEventProcessor", () => {
       "completed",
       expect.any(Number)
     );
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith("msg-1", 1000, expect.any(Number));
+    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+      messageId: "msg-1",
+      messageCreatedAt: 1000,
+      terminalOutcomeCompletedAt: expect.any(Number),
+    });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
@@ -386,7 +390,11 @@ describe("SessionSandboxEventProcessor", () => {
       "failed",
       expect.any(Number)
     );
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith("msg-failed", 900, expect.any(Number));
+    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+      messageId: "msg-failed",
+      messageCreatedAt: 900,
+      terminalOutcomeCompletedAt: expect.any(Number),
+    });
   });
 
   it("resolves pending push when push_complete event arrives", async () => {

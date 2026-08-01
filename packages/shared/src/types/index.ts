@@ -108,15 +108,15 @@ export type {
   SessionState,
   ParticipantPresence,
   PullRequestSummary,
-  SessionNavigationState,
-  SessionReadStateAction,
-  SessionReadStateResult,
+  SessionTerminalOutcomeReadState,
+  SessionTerminalOutcomeReadAction,
+  SessionTerminalOutcomeReadResult,
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
 } from "./sessions";
 export {
-  sessionReadStateActionSchema,
-  sessionReadStateResultSchema,
+  sessionTerminalOutcomeReadActionSchema,
+  sessionTerminalOutcomeReadResultSchema,
   sessionParticipantProfileSchema,
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";

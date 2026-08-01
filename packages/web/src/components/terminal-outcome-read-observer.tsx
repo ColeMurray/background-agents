@@ -1,15 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
-import type { TerminalOutcomeAcknowledgement } from "@/lib/session-read-state";
+import type { TerminalOutcomeReadAttemptDisposition } from "@/lib/session-terminal-outcome-read-state";
 
-const TERMINAL_ACK_RETRY_MS = 2_000;
-const TERMINAL_ACK_MAX_ATTEMPTS = 4;
+const TERMINAL_OUTCOME_READ_RETRY_MS = 2_000;
+const TERMINAL_OUTCOME_READ_MAX_ATTEMPTS = 4;
 const MEANINGFUL_VISIBLE_HEIGHT_PX = 48;
 
-interface TerminalAcknowledgementAttemptState {
+interface TerminalOutcomeReadAttemptState {
   enabled: boolean;
-  acknowledged: boolean;
+  attemptsComplete: boolean;
   requestInFlight: boolean;
   attemptCount: number;
   intersecting: boolean;
@@ -17,45 +17,45 @@ interface TerminalAcknowledgementAttemptState {
   documentFocused: boolean;
 }
 
-export function shouldAttemptTerminalAcknowledgement(
-  state: TerminalAcknowledgementAttemptState
+export function shouldAttemptMarkTerminalOutcomeRead(
+  state: TerminalOutcomeReadAttemptState
 ): boolean {
   return (
     state.enabled &&
-    !state.acknowledged &&
+    !state.attemptsComplete &&
     !state.requestInFlight &&
-    state.attemptCount < TERMINAL_ACK_MAX_ATTEMPTS &&
+    state.attemptCount < TERMINAL_OUTCOME_READ_MAX_ATTEMPTS &&
     state.intersecting &&
     state.documentVisible &&
     state.documentFocused
   );
 }
 
-export function TerminalOutcomeVisibilityBoundary({
+export function TerminalOutcomeReadObserver({
   messageId,
   enabled,
-  onVisible,
+  onMarkTerminalOutcomeRead,
   children,
 }: {
   messageId: string;
   enabled: boolean;
-  onVisible: (messageId: string) => Promise<TerminalOutcomeAcknowledgement>;
+  onMarkTerminalOutcomeRead: (messageId: string) => Promise<TerminalOutcomeReadAttemptDisposition>;
   children: ReactNode;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
   const enabledRef = useRef(enabled);
   const intersectingRef = useRef(false);
-  const acknowledgedRef = useRef(false);
+  const attemptsCompleteRef = useRef(false);
   const requestInFlightRef = useRef(false);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptCountRef = useRef(0);
   const cancelledRef = useRef(false);
 
-  const attemptAcknowledgement = useCallback(async () => {
+  const attemptMarkTerminalOutcomeRead = useCallback(async () => {
     if (
-      !shouldAttemptTerminalAcknowledgement({
+      !shouldAttemptMarkTerminalOutcomeRead({
         enabled: enabledRef.current,
-        acknowledged: acknowledgedRef.current,
+        attemptsComplete: attemptsCompleteRef.current,
         requestInFlight: requestInFlightRef.current,
         attemptCount: attemptCountRef.current,
         intersecting: intersectingRef.current,
@@ -68,37 +68,37 @@ export function TerminalOutcomeVisibilityBoundary({
 
     requestInFlightRef.current = true;
     attemptCountRef.current += 1;
-    let result: TerminalOutcomeAcknowledgement;
+    let disposition: TerminalOutcomeReadAttemptDisposition;
     try {
-      result = await onVisible(messageId);
+      disposition = await onMarkTerminalOutcomeRead(messageId);
     } catch (error) {
-      console.error("Failed to acknowledge visible terminal outcome", error);
-      result = "retry";
+      console.error("Failed to mark visible terminal outcome read", error);
+      disposition = "retry";
     } finally {
       requestInFlightRef.current = false;
     }
     if (cancelledRef.current) return;
 
-    acknowledgedRef.current = result !== "retry";
+    attemptsCompleteRef.current = disposition !== "retry";
 
     if (
-      result === "retry" &&
+      disposition === "retry" &&
       enabledRef.current &&
       intersectingRef.current &&
-      attemptCountRef.current < TERMINAL_ACK_MAX_ATTEMPTS
+      attemptCountRef.current < TERMINAL_OUTCOME_READ_MAX_ATTEMPTS
     ) {
-      const retryDelayMs = TERMINAL_ACK_RETRY_MS * 2 ** (attemptCountRef.current - 1);
+      const retryDelayMs = TERMINAL_OUTCOME_READ_RETRY_MS * 2 ** (attemptCountRef.current - 1);
       retryTimerRef.current = setTimeout(() => {
         retryTimerRef.current = null;
-        void attemptAcknowledgement();
+        void attemptMarkTerminalOutcomeRead();
       }, retryDelayMs);
     }
-  }, [messageId, onVisible]);
+  }, [messageId, onMarkTerminalOutcomeRead]);
 
   useEffect(() => {
     enabledRef.current = enabled;
-    if (enabled) void attemptAcknowledgement();
-  }, [attemptAcknowledgement, enabled]);
+    if (enabled) void attemptMarkTerminalOutcomeRead();
+  }, [attemptMarkTerminalOutcomeRead, enabled]);
 
   useEffect(() => {
     const element = elementRef.current;
@@ -113,7 +113,7 @@ export function TerminalOutcomeVisibilityBoundary({
         const meaningfullyVisible = entry.isIntersecting && visibleHeight >= requiredHeight;
         intersectingRef.current = meaningfullyVisible;
         if (meaningfullyVisible) {
-          void attemptAcknowledgement();
+          void attemptMarkTerminalOutcomeRead();
         } else {
           attemptCountRef.current = 0;
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -124,14 +124,14 @@ export function TerminalOutcomeVisibilityBoundary({
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [attemptAcknowledgement]);
+  }, [attemptMarkTerminalOutcomeRead]);
 
   useEffect(() => {
     const attempt = () => {
-      if (attemptCountRef.current >= TERMINAL_ACK_MAX_ATTEMPTS) {
+      if (attemptCountRef.current >= TERMINAL_OUTCOME_READ_MAX_ATTEMPTS) {
         attemptCountRef.current = 0;
       }
-      void attemptAcknowledgement();
+      void attemptMarkTerminalOutcomeRead();
     };
     document.addEventListener("visibilitychange", attempt);
     window.addEventListener("focus", attempt);
@@ -140,7 +140,7 @@ export function TerminalOutcomeVisibilityBoundary({
       window.removeEventListener("focus", attempt);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, [attemptAcknowledgement]);
+  }, [attemptMarkTerminalOutcomeRead]);
 
   useEffect(() => {
     cancelledRef.current = false;

@@ -1,7 +1,8 @@
 import type {
   PullRequestSummary,
-  SessionNavigationState,
-  SessionReadStateResult,
+  SessionTerminalOutcomeReadAction,
+  SessionTerminalOutcomeReadResult,
+  SessionTerminalOutcomeReadState,
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared";
@@ -22,7 +23,7 @@ const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).joi
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
  */
 const MAX_DESCENDANT_DEPTH = 10;
-const MAX_NAVIGATION_SESSION_IDS_PER_QUERY = 99;
+const MAX_TERMINAL_OUTCOME_READ_STATE_SESSION_IDS_PER_QUERY = 99;
 
 /**
  * One member of a session's repository set — the identity subset of the
@@ -70,7 +71,7 @@ export interface SessionEntry {
    * has no tracked PRs. Attached by list() for the global sidebar.
    */
   pullRequestSummary?: PullRequestSummary;
-  navigation?: SessionNavigationState;
+  terminalOutcomeReadState?: SessionTerminalOutcomeReadState;
 }
 
 interface SessionRepositoryRow {
@@ -124,32 +125,28 @@ export interface ListSessionsResult {
   hasMore: boolean;
 }
 
-export type SessionReadAction =
-  | { kind: "acknowledge"; observedAttentionId: string }
-  | { kind: "mark_read" };
-
-interface SessionNavigationRow {
+interface ViewerSessionTerminalOutcomeReadStateRow {
   session_id: string;
-  unread: number;
-  attention_message_id: string | null;
+  has_unread_terminal_outcome: number;
+  latest_terminal_outcome_message_id: string | null;
 }
 
-export function buildViewerSessionUnreadStatesQuery(sessionCount: number): string {
+export function buildViewerSessionTerminalOutcomeReadStatesQuery(sessionCount: number): string {
   const placeholders = Array.from({ length: sessionCount }, () => "?").join(", ");
   return `SELECT s.id AS session_id,
-                 s.latest_attention_message_id AS attention_message_id,
+                 s.latest_terminal_outcome_message_id,
                  CASE
-                   WHEN s.latest_attention_message_id IS NOT NULL
-                     AND s.latest_attention_at >= u.created_at
+                   WHEN s.latest_terminal_outcome_message_id IS NOT NULL
+                     AND s.latest_terminal_outcome_completed_at >= u.created_at
                      AND (
-                       r.acknowledged_attention_message_id IS NULL
-                       OR r.acknowledged_attention_message_id != s.latest_attention_message_id
+                       r.last_read_terminal_outcome_message_id IS NULL
+                       OR r.last_read_terminal_outcome_message_id != s.latest_terminal_outcome_message_id
                      )
                    THEN 1 ELSE 0
-                 END AS unread
+                 END AS has_unread_terminal_outcome
           FROM sessions s
           LEFT JOIN users u ON u.id = ?
-          LEFT JOIN session_read_states r
+          LEFT JOIN session_terminal_outcome_read_states r
             ON r.session_id = s.id AND r.user_id = u.id
           WHERE s.id IN (${placeholders})`;
 }
@@ -400,80 +397,95 @@ export class SessionIndexStore {
     if (sessions.length === 0) return sessions;
     const sessionIds = sessions.map((session) => session.id);
 
-    const [repositoriesBySession, summariesBySession, navigationBySession] = await Promise.all([
-      this.repositoriesForSessions(sessionIds),
-      new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
-      viewerUserId
-        ? this.navigationForSessions(viewerUserId, sessionIds)
-        : Promise.resolve(new Map<string, SessionNavigationState>()),
-    ]);
+    const [repositoriesBySession, summariesBySession, terminalOutcomeReadStateBySession] =
+      await Promise.all([
+        this.repositoriesForSessions(sessionIds),
+        new SessionPullRequestStore(this.db).summariesForSessions(sessionIds),
+        viewerUserId
+          ? this.terminalOutcomeReadStatesForSessions(viewerUserId, sessionIds)
+          : Promise.resolve(new Map<string, SessionTerminalOutcomeReadState>()),
+      ]);
 
     return sessions.map((session) => {
       const repositories = repositoriesBySession.get(session.id);
       const pullRequestSummary = summariesBySession.get(session.id);
-      const navigation = navigationBySession.get(session.id);
+      const terminalOutcomeReadState = terminalOutcomeReadStateBySession.get(session.id);
       return {
         ...session,
         ...(repositories ? { repositories } : {}),
         ...(pullRequestSummary ? { pullRequestSummary } : {}),
-        ...(navigation ? { navigation } : {}),
+        ...(terminalOutcomeReadState ? { terminalOutcomeReadState } : {}),
       };
     });
   }
 
-  private async navigationForSessions(
+  private async terminalOutcomeReadStatesForSessions(
     userId: string,
     sessionIds: readonly string[]
-  ): Promise<Map<string, SessionNavigationState>> {
+  ): Promise<Map<string, SessionTerminalOutcomeReadState>> {
     const chunks: (readonly string[])[] = [];
-    for (let index = 0; index < sessionIds.length; index += MAX_NAVIGATION_SESSION_IDS_PER_QUERY) {
-      chunks.push(sessionIds.slice(index, index + MAX_NAVIGATION_SESSION_IDS_PER_QUERY));
+    for (
+      let index = 0;
+      index < sessionIds.length;
+      index += MAX_TERMINAL_OUTCOME_READ_STATE_SESSION_IDS_PER_QUERY
+    ) {
+      chunks.push(
+        sessionIds.slice(index, index + MAX_TERMINAL_OUTCOME_READ_STATE_SESSION_IDS_PER_QUERY)
+      );
     }
     const results = await Promise.all(
       chunks.map((chunk) =>
         this.db
-          .prepare(buildViewerSessionUnreadStatesQuery(chunk.length))
+          .prepare(buildViewerSessionTerminalOutcomeReadStatesQuery(chunk.length))
           .bind(userId, ...chunk)
-          .all<SessionNavigationRow>()
+          .all<ViewerSessionTerminalOutcomeReadStateRow>()
       )
     );
 
     return new Map(
       results.flatMap((result) =>
-        (result.results ?? []).map((row) => [
+        (result.results ?? []).map((row): [string, SessionTerminalOutcomeReadState] => [
           row.session_id,
-          { unread: row.unread === 1, attentionId: row.attention_message_id },
+          row.latest_terminal_outcome_message_id === null
+            ? {
+                latestTerminalOutcomeMessageId: null,
+                hasUnreadTerminalOutcome: false,
+              }
+            : {
+                latestTerminalOutcomeMessageId: row.latest_terminal_outcome_message_id,
+                hasUnreadTerminalOutcome: row.has_unread_terminal_outcome === 1,
+              },
         ])
       )
     );
   }
 
-  async recordLatestAttention(input: {
+  async recordLatestTerminalOutcome(input: {
     sessionId: string;
     messageId: string;
     messageCreatedAt: number;
-    acceptedAt: number;
+    terminalOutcomeCompletedAt: number;
   }): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE sessions
-         SET latest_attention_message_id = ?,
-             latest_attention_message_created_at = ?,
-             latest_attention_at = ?
+         SET latest_terminal_outcome_message_id = ?,
+             latest_terminal_outcome_message_created_at = ?,
+             latest_terminal_outcome_completed_at = ?
          WHERE id = ?
            AND (
-             latest_attention_message_created_at IS NULL
-             OR latest_attention_message_created_at < ?
+             latest_terminal_outcome_message_created_at IS NULL
+             OR latest_terminal_outcome_message_created_at < ?
              OR (
-               latest_attention_message_created_at = ?
-               AND latest_attention_message_id < ?
+               latest_terminal_outcome_message_created_at = ?
+               AND latest_terminal_outcome_message_id < ?
              )
            )`
       )
       .bind(
         input.messageId,
         input.messageCreatedAt,
-        input.acceptedAt,
+        input.terminalOutcomeCompletedAt,
         input.sessionId,
         input.messageCreatedAt,
         input.messageCreatedAt,
@@ -488,55 +500,72 @@ export class SessionIndexStore {
     return this.get(sessionId);
   }
 
-  async updateReadState(
+  async updateTerminalOutcomeReadState(
     userId: string,
     sessionId: string,
-    action: SessionReadAction
-  ): Promise<SessionReadStateResult | null> {
-    let accepted: boolean;
-    if (action.kind === "acknowledge") {
+    action: SessionTerminalOutcomeReadAction
+  ): Promise<SessionTerminalOutcomeReadResult | null> {
+    let writeApplied: boolean;
+    if (action.action === "mark_terminal_outcome_read") {
       const result = await this.db
         .prepare(
-          `INSERT INTO session_read_states
-             (user_id, session_id, acknowledged_attention_message_id, updated_at)
-           SELECT ?, id, latest_attention_message_id, ?
+          `INSERT INTO session_terminal_outcome_read_states
+             (user_id, session_id, last_read_terminal_outcome_message_id, updated_at)
+           SELECT ?, id, latest_terminal_outcome_message_id, ?
            FROM sessions
-           WHERE id = ? AND latest_attention_message_id = ?
+           WHERE id = ? AND latest_terminal_outcome_message_id = ?
            ON CONFLICT(user_id, session_id) DO UPDATE SET
-             acknowledged_attention_message_id = excluded.acknowledged_attention_message_id,
-             updated_at = excluded.updated_at`
+              last_read_terminal_outcome_message_id = excluded.last_read_terminal_outcome_message_id,
+              updated_at = excluded.updated_at
+            WHERE session_terminal_outcome_read_states.last_read_terminal_outcome_message_id
+              != excluded.last_read_terminal_outcome_message_id`
         )
-        .bind(userId, Date.now(), sessionId, action.observedAttentionId)
+        .bind(userId, Date.now(), sessionId, action.terminalOutcomeMessageId)
         .run();
-      accepted = (result.meta.changes ?? 0) > 0;
+      writeApplied = (result.meta.changes ?? 0) > 0;
     } else {
       const result = await this.db
         .prepare(
-          `INSERT INTO session_read_states
-             (user_id, session_id, acknowledged_attention_message_id, updated_at)
-           SELECT ?, id, latest_attention_message_id, ?
+          `INSERT INTO session_terminal_outcome_read_states
+             (user_id, session_id, last_read_terminal_outcome_message_id, updated_at)
+           SELECT ?, id, latest_terminal_outcome_message_id, ?
            FROM sessions
-           WHERE id = ? AND latest_attention_message_id IS NOT NULL
+           WHERE id = ? AND latest_terminal_outcome_message_id IS NOT NULL
            ON CONFLICT(user_id, session_id) DO UPDATE SET
-             acknowledged_attention_message_id = excluded.acknowledged_attention_message_id,
-             updated_at = excluded.updated_at`
+              last_read_terminal_outcome_message_id = excluded.last_read_terminal_outcome_message_id,
+              updated_at = excluded.updated_at
+            WHERE session_terminal_outcome_read_states.last_read_terminal_outcome_message_id
+              != excluded.last_read_terminal_outcome_message_id`
         )
         .bind(userId, Date.now(), sessionId)
         .run();
-      accepted = (result.meta.changes ?? 0) > 0;
+      writeApplied = (result.meta.changes ?? 0) > 0;
     }
 
-    const navigation = await this.navigationForSessions(userId, [sessionId]);
-    const currentNavigation = navigation.get(sessionId);
-    if (!currentNavigation) return null;
-    if (action.kind === "mark_read") {
-      accepted = accepted || !currentNavigation.unread;
+    const readStates = await this.terminalOutcomeReadStatesForSessions(userId, [sessionId]);
+    const currentReadState = readStates.get(sessionId);
+    if (!currentReadState) return null;
+    const latestTerminalOutcomeMessageId = currentReadState.latestTerminalOutcomeMessageId;
+    if (latestTerminalOutcomeMessageId === null) {
+      return {
+        sessionId,
+        outcome: "no_terminal_outcome",
+        hasUnreadTerminalOutcome: false,
+        latestTerminalOutcomeMessageId: null,
+      };
     }
+    const outcome =
+      action.action === "mark_terminal_outcome_read" &&
+      latestTerminalOutcomeMessageId !== action.terminalOutcomeMessageId
+        ? "not_latest"
+        : writeApplied
+          ? "marked_read"
+          : "already_read";
     return {
       sessionId,
-      accepted,
-      unread: currentNavigation.unread,
-      attentionId: currentNavigation.attentionId ?? null,
+      outcome,
+      hasUnreadTerminalOutcome: currentReadState.hasUnreadTerminalOutcome,
+      latestTerminalOutcomeMessageId,
     };
   }
 

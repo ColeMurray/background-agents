@@ -13,7 +13,7 @@ export function SessionWithChildren({
   onArchive,
   onSessionSelect,
   onSessionRenamed,
-  onMarkRead,
+  onMarkLatestTerminalOutcomeRead,
 }: {
   session: SessionItem;
   environmentName?: string;
@@ -23,7 +23,7 @@ export function SessionWithChildren({
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onSessionRenamed: (sessionId: string, title: string) => void;
-  onMarkRead: (sessionId: string) => Promise<void>;
+  onMarkLatestTerminalOutcomeRead: (sessionId: string) => Promise<void>;
 }) {
   return (
     <>
@@ -35,7 +35,7 @@ export function SessionWithChildren({
         onArchive={onArchive}
         onSessionSelect={onSessionSelect}
         onSessionRenamed={onSessionRenamed}
-        onMarkRead={onMarkRead}
+        onMarkLatestTerminalOutcomeRead={onMarkLatestTerminalOutcomeRead}
       />
       <ChildSessionTree
         parentId={session.id}
@@ -43,7 +43,7 @@ export function SessionWithChildren({
         currentSessionId={currentSessionId}
         isMobile={isMobile}
         onSessionSelect={onSessionSelect}
-        onMarkRead={onMarkRead}
+        onMarkLatestTerminalOutcomeRead={onMarkLatestTerminalOutcomeRead}
         visitedIds={new Set([session.id])}
       />
     </>
@@ -56,7 +56,7 @@ function ChildSessionTree({
   currentSessionId,
   isMobile,
   onSessionSelect,
-  onMarkRead,
+  onMarkLatestTerminalOutcomeRead,
   visitedIds,
   depth = 1,
 }: {
@@ -65,7 +65,7 @@ function ChildSessionTree({
   currentSessionId: string | null;
   isMobile: boolean;
   onSessionSelect?: () => void;
-  onMarkRead: (sessionId: string) => Promise<void>;
+  onMarkLatestTerminalOutcomeRead: (sessionId: string) => Promise<void>;
   visitedIds: Set<string>;
   depth?: number;
 }) {
@@ -85,7 +85,7 @@ function ChildSessionTree({
           isActive={child.id === currentSessionId}
           isMobile={isMobile}
           onSessionSelect={onSessionSelect}
-          onMarkRead={onMarkRead}
+          onMarkLatestTerminalOutcomeRead={onMarkLatestTerminalOutcomeRead}
           depth={depth}
         />
         <ChildSessionTree
@@ -94,7 +94,7 @@ function ChildSessionTree({
           currentSessionId={currentSessionId}
           isMobile={isMobile}
           onSessionSelect={onSessionSelect}
-          onMarkRead={onMarkRead}
+          onMarkLatestTerminalOutcomeRead={onMarkLatestTerminalOutcomeRead}
           visitedIds={nextVisitedIds}
           depth={depth + 1}
         />

@@ -18,8 +18,8 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
-import { TerminalOutcomeVisibilityBoundary } from "./terminal-outcome-visibility-boundary";
-import type { TerminalOutcomeAcknowledgement } from "@/lib/session-read-state";
+import { TerminalOutcomeReadObserver } from "./terminal-outcome-read-observer";
+import type { TerminalOutcomeReadAttemptDisposition } from "@/lib/session-terminal-outcome-read-state";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -111,8 +111,8 @@ export function SessionTimeline({
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
-  canAcknowledgeTerminalOutcome = false,
-  onTerminalOutcomeVisible,
+  terminalOutcomeReadObservationEnabled = false,
+  onMarkTerminalOutcomeRead,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -123,37 +123,37 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
-  canAcknowledgeTerminalOutcome?: boolean;
-  onTerminalOutcomeVisible?: (messageId: string) => Promise<TerminalOutcomeAcknowledgement>;
+  terminalOutcomeReadObservationEnabled?: boolean;
+  onMarkTerminalOutcomeRead?: (messageId: string) => Promise<TerminalOutcomeReadAttemptDisposition>;
 }) {
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
-  const latestTerminalMessageId = useMemo(() => {
+  const latestTerminalOutcomeMessageId = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
       if (event?.type === "execution_complete" && event.messageId) return event.messageId;
     }
     return null;
   }, [events]);
-  const attentionRange = useMemo(() => {
-    if (!latestTerminalMessageId) return null;
+  const latestTerminalOutcomeGroupRange = useMemo(() => {
+    if (!latestTerminalOutcomeMessageId) return null;
     const completionIndex = groupedEvents.findIndex(
       (group) =>
         group.type === "single" &&
         group.event.type === "execution_complete" &&
-        group.event.messageId === latestTerminalMessageId
+        group.event.messageId === latestTerminalOutcomeMessageId
     );
     if (completionIndex < 0) return null;
     const outputIndex = groupedEvents.findIndex(
       (group) =>
         group.type === "single" &&
         group.event.type === "token" &&
-        group.event.messageId === latestTerminalMessageId
+        group.event.messageId === latestTerminalOutcomeMessageId
     );
     return {
       start: outputIndex >= 0 ? Math.min(outputIndex, completionIndex) : completionIndex,
       end: Math.max(outputIndex, completionIndex),
     };
-  }, [groupedEvents, latestTerminalMessageId]);
+  }, [groupedEvents, latestTerminalOutcomeMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -237,21 +237,32 @@ export function SessionTimeline({
           <TimelineSkeleton />
         ) : (
           groupedEvents.map((group, index) => {
-            if (attentionRange && onTerminalOutcomeVisible && index === attentionRange.start) {
+            if (
+              latestTerminalOutcomeGroupRange &&
+              onMarkTerminalOutcomeRead &&
+              index === latestTerminalOutcomeGroupRange.start
+            ) {
               return (
-                <TerminalOutcomeVisibilityBoundary
-                  key={`attention-${latestTerminalMessageId}`}
-                  messageId={latestTerminalMessageId!}
-                  enabled={canAcknowledgeTerminalOutcome}
-                  onVisible={onTerminalOutcomeVisible}
+                <TerminalOutcomeReadObserver
+                  key={`terminal-outcome-${latestTerminalOutcomeMessageId}`}
+                  messageId={latestTerminalOutcomeMessageId!}
+                  enabled={terminalOutcomeReadObservationEnabled}
+                  onMarkTerminalOutcomeRead={onMarkTerminalOutcomeRead}
                 >
                   {groupedEvents
-                    .slice(attentionRange.start, attentionRange.end + 1)
+                    .slice(
+                      latestTerminalOutcomeGroupRange.start,
+                      latestTerminalOutcomeGroupRange.end + 1
+                    )
                     .map(renderGroup)}
-                </TerminalOutcomeVisibilityBoundary>
+                </TerminalOutcomeReadObserver>
               );
             }
-            if (attentionRange && index > attentionRange.start && index <= attentionRange.end) {
+            if (
+              latestTerminalOutcomeGroupRange &&
+              index > latestTerminalOutcomeGroupRange.start &&
+              index <= latestTerminalOutcomeGroupRange.end
+            ) {
               return null;
             }
             return renderGroup(group);

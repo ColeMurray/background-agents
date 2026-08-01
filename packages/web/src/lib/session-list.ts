@@ -98,31 +98,28 @@ export function applyTitleUpdate(
   };
 }
 
-export function applySessionUnread(
+export function applySessionTerminalOutcomeReadState(
   data: SessionListResponse | undefined,
   sessionId: string,
-  unread: boolean,
-  attentionId?: string | null
+  terminalOutcomeReadState: Session["terminalOutcomeReadState"]
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
     sessions: data.sessions.map((session) => {
       if (session.id !== sessionId) return session;
-      const currentAttentionId = session.navigation?.attentionId;
+      if (!terminalOutcomeReadState) return session;
+      const currentTerminalOutcomeMessageId =
+        session.terminalOutcomeReadState?.latestTerminalOutcomeMessageId;
       if (
-        currentAttentionId !== undefined &&
-        attentionId !== undefined &&
-        currentAttentionId !== attentionId
+        currentTerminalOutcomeMessageId !== undefined &&
+        currentTerminalOutcomeMessageId !== terminalOutcomeReadState.latestTerminalOutcomeMessageId
       ) {
         return session;
       }
       return {
         ...session,
-        navigation: {
-          unread,
-          ...(attentionId !== undefined ? { attentionId } : {}),
-        },
+        terminalOutcomeReadState,
       };
     }),
   };

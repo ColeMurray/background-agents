@@ -611,7 +611,11 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ type: "execution_complete", success: false }),
       expect.any(Number)
     );
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith("msg-9", 900, expect.any(Number));
+    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+      messageId: "msg-9",
+      messageCreatedAt: 900,
+      terminalOutcomeCompletedAt: expect.any(Number),
+    });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
     expect(h.waitUntil).toHaveBeenCalledTimes(1);
@@ -639,7 +643,11 @@ describe("SessionMessageQueue", () => {
     await h.queue.failStuckProcessingMessage();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith("msg-timeout", 800, expect.any(Number));
+    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+      messageId: "msg-timeout",
+      messageCreatedAt: 800,
+      terminalOutcomeCompletedAt: expect.any(Number),
+    });
   });
 
   describe("enqueuePromptFromApi", () => {

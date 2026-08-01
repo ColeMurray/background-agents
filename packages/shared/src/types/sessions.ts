@@ -38,27 +38,50 @@ export interface PullRequestSummary {
   closed: number;
 }
 
-export interface SessionNavigationState {
-  unread: boolean;
-  /** Latest terminal outcome represented by this state; absent during mixed deployments. */
-  attentionId?: string | null;
-}
+export type SessionTerminalOutcomeReadState =
+  | {
+      latestTerminalOutcomeMessageId: null;
+      hasUnreadTerminalOutcome: false;
+    }
+  | {
+      latestTerminalOutcomeMessageId: string;
+      hasUnreadTerminalOutcome: boolean;
+    };
 
-export const sessionReadStateActionSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("acknowledge"), observedAttentionId: z.string().min(1) }).strict(),
-  z.object({ action: z.literal("mark_read") }).strict(),
+export const sessionTerminalOutcomeReadActionSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("mark_terminal_outcome_read"),
+      terminalOutcomeMessageId: z.string().min(1),
+    })
+    .strict(),
+  z.object({ action: z.literal("mark_latest_terminal_outcome_read") }).strict(),
 ]);
-export type SessionReadStateAction = z.infer<typeof sessionReadStateActionSchema>;
+export type SessionTerminalOutcomeReadAction = z.infer<
+  typeof sessionTerminalOutcomeReadActionSchema
+>;
 
-export const sessionReadStateResultSchema = z
-  .object({
-    sessionId: z.string(),
-    accepted: z.boolean(),
-    unread: z.boolean(),
-    attentionId: z.string().nullable(),
-  })
-  .strict();
-export type SessionReadStateResult = z.infer<typeof sessionReadStateResultSchema>;
+export const sessionTerminalOutcomeReadResultSchema = z.union([
+  z
+    .object({
+      sessionId: z.string(),
+      outcome: z.literal("no_terminal_outcome"),
+      hasUnreadTerminalOutcome: z.literal(false),
+      latestTerminalOutcomeMessageId: z.null(),
+    })
+    .strict(),
+  z
+    .object({
+      sessionId: z.string(),
+      outcome: z.enum(["marked_read", "already_read", "not_latest"]),
+      hasUnreadTerminalOutcome: z.boolean(),
+      latestTerminalOutcomeMessageId: z.string(),
+    })
+    .strict(),
+]);
+export type SessionTerminalOutcomeReadResult = z.infer<
+  typeof sessionTerminalOutcomeReadResultSchema
+>;
 
 export interface Session {
   id: string;
@@ -94,8 +117,8 @@ export interface Session {
    * overlap or when the session has no tracked PRs.
    */
   pullRequestSummary?: PullRequestSummary;
-  /** Viewer-specific navigation state; absent for non-user service callers. */
-  navigation?: SessionNavigationState;
+  /** Viewer-specific terminal-outcome read state; absent for non-user service callers. */
+  terminalOutcomeReadState?: SessionTerminalOutcomeReadState;
 }
 
 export interface SessionMessage {

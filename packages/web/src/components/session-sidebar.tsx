@@ -90,7 +90,7 @@ export function SessionSidebar({
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
-    handleSessionMarkedRead,
+    handleMarkLatestTerminalOutcomeRead,
   } = useSidebarSessions(currentSessionId);
 
   // Environment provenance for the cards, resolved once for the whole list.
@@ -233,7 +233,7 @@ export function SessionSidebar({
                 onArchive={handleSessionArchived}
                 onSessionSelect={onSessionSelect}
                 onSessionRenamed={handleSessionRenamed}
-                onMarkRead={handleSessionMarkedRead}
+                onMarkLatestTerminalOutcomeRead={handleMarkLatestTerminalOutcomeRead}
               />
             ))}
 
@@ -260,7 +260,7 @@ export function SessionSidebar({
                     onArchive={handleSessionArchived}
                     onSessionSelect={onSessionSelect}
                     onSessionRenamed={handleSessionRenamed}
-                    onMarkRead={handleSessionMarkedRead}
+                    onMarkLatestTerminalOutcomeRead={handleMarkLatestTerminalOutcomeRead}
                   />
                 ))}
               </>

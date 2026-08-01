@@ -30,6 +30,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
+import type { TerminalOutcomeProjectionInput } from "./terminal-outcome-projection";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -98,11 +99,7 @@ export class SessionMessageQueue {
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly executionTimeoutMs: number,
-    private readonly recordTerminalOutcome: (
-      messageId: string,
-      messageCreatedAt: number,
-      acceptedAt: number
-    ) => Promise<void>
+    private readonly recordTerminalOutcome: (input: TerminalOutcomeProjectionInput) => Promise<void>
   ) {}
 
   async handlePromptMessage(
@@ -294,7 +291,11 @@ export class SessionMessageQueue {
         syntheticExecutionComplete,
         now
       );
-      await this.recordTerminalOutcome(processingMessage.id, processingMessage.created_at, now);
+      await this.recordTerminalOutcome({
+        messageId: processingMessage.id,
+        messageCreatedAt: processingMessage.created_at,
+        terminalOutcomeCompletedAt: now,
+      });
 
       this.messenger.broadcast({
         type: "sandbox_event",
@@ -342,7 +343,11 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
     };
     this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
-    await this.recordTerminalOutcome(processingMessage.id, processingMessage.created_at, now);
+    await this.recordTerminalOutcome({
+      messageId: processingMessage.id,
+      messageCreatedAt: processingMessage.created_at,
+      terminalOutcomeCompletedAt: now,
+    });
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.ctx.waitUntil(

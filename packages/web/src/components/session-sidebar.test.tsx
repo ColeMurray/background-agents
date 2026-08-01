@@ -164,8 +164,18 @@ describe("SessionSidebar", () => {
           fallback: {
             [SIDEBAR_SESSIONS_KEY]: {
               sessions: [
-                createSession(1, { navigation: { unread: true } }),
-                createSession(2, { navigation: { unread: false } }),
+                createSession(1, {
+                  terminalOutcomeReadState: {
+                    hasUnreadTerminalOutcome: true,
+                    latestTerminalOutcomeMessageId: "message-1",
+                  },
+                }),
+                createSession(2, {
+                  terminalOutcomeReadState: {
+                    hasUnreadTerminalOutcome: false,
+                    latestTerminalOutcomeMessageId: "message-2",
+                  },
+                }),
               ],
               hasMore: false,
             },
@@ -187,17 +197,24 @@ describe("SessionSidebar", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === SIDEBAR_SESSIONS_KEY) {
         return jsonResponse({
-          sessions: [createSession(1, { navigation: { unread: true, attentionId: "message-1" } })],
+          sessions: [
+            createSession(1, {
+              terminalOutcomeReadState: {
+                hasUnreadTerminalOutcome: true,
+                latestTerminalOutcomeMessageId: "message-1",
+              },
+            }),
+          ],
           hasMore: false,
         });
       }
       expect(init?.method).toBe("PATCH");
-      expect(init?.body).toBe(JSON.stringify({ action: "mark_read" }));
+      expect(init?.body).toBe(JSON.stringify({ action: "mark_latest_terminal_outcome_read" }));
       return jsonResponse({
         sessionId: "session-1",
-        accepted: true,
-        unread: false,
-        attentionId: "message-1",
+        outcome: "marked_read",
+        hasUnreadTerminalOutcome: false,
+        latestTerminalOutcomeMessageId: "message-1",
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -223,7 +240,7 @@ describe("SessionSidebar", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/sessions/session-1/read-state",
+        "/api/sessions/session-1/terminal-outcome-read-state",
         expect.objectContaining({ method: "PATCH" })
       )
     );
