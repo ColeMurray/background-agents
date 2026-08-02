@@ -148,8 +148,15 @@ export class XaiTokenRefreshService {
       XAI_OAUTH_ACCESS_TOKEN: tokens.access_token,
       XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + expiresIn * 1000),
     };
-    await this.writeSecrets(state.source, secrets);
-    this.log.info("xAI tokens rotated and cached", { source: state.source.kind });
+    try {
+      await this.writeSecrets(state.source, secrets);
+      this.log.info("xAI tokens rotated and cached", { source: state.source.kind });
+    } catch (error) {
+      this.log.error("xAI token refreshed but failed to persist rotated tokens", {
+        source: state.source.kind,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return { ok: true, accessToken: tokens.access_token, expiresIn };
   }
 
