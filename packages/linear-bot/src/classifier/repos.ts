@@ -5,7 +5,8 @@
  * repository name.
  */
 
-import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
+import { controlPlaneReposResponseSchema } from "@open-inspect/shared";
+import type { Env, RepoConfig, ControlPlaneRepo } from "../types";
 import { createCachedResource } from "../cached-resource";
 import { fetchControlPlaneJson } from "../control-plane";
 
@@ -33,7 +34,9 @@ const reposResource = createCachedResource<RepoConfig[]>({
   kvKey: "repos:cache",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/repos", traceId);
-    return (body as ControlPlaneReposResponse).repos.map(toRepoConfig);
+    const result = controlPlaneReposResponseSchema.safeParse(body);
+    if (!result.success) return [];
+    return result.data.repos.map(toRepoConfig);
   },
   deserialize: (cached) => (Array.isArray(cached) ? (cached as RepoConfig[]) : null),
   fallback: [],

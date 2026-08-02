@@ -9,6 +9,7 @@
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
+import { z } from "zod";
 import type {
   Env,
   TeamRepoMapping,
@@ -19,6 +20,18 @@ import type {
 import { createLogger } from "./logger";
 
 const log = createLogger("kv-store");
+
+const issueSessionSchema = z.object({
+  sessionId: z.string(),
+  issueId: z.string(),
+  issueIdentifier: z.string(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
+  environmentId: z.string().optional(),
+  model: z.string(),
+  agentSessionId: z.string().optional(),
+  createdAt: z.number(),
+});
 
 export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
   try {
@@ -67,7 +80,8 @@ function getIssueSessionKey(issueId: string): string {
 export async function lookupIssueSession(env: Env, issueId: string): Promise<IssueSession | null> {
   try {
     const data = await env.LINEAR_KV.get(getIssueSessionKey(issueId), "json");
-    if (data && typeof data === "object") return data as IssueSession;
+    const result = issueSessionSchema.safeParse(data);
+    if (result.success) return result.data;
   } catch (e) {
     log.debug("kv.lookup_issue_session_failed", {
       issueId,

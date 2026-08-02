@@ -6,7 +6,8 @@
  * skipped and resolution falls through to the next stage.
  */
 
-import type { Env, Environment, ListEnvironmentsResponse } from "./types";
+import { listEnvironmentsResponseSchema } from "@open-inspect/shared";
+import type { Env, Environment } from "./types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";
 
@@ -15,8 +16,8 @@ const environments = createCachedResource<Environment[]>({
   kvKey: "environments:cache",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/environments", traceId);
-    const list = (body as ListEnvironmentsResponse).environments;
-    return Array.isArray(list) ? list : [];
+    const result = listEnvironmentsResponseSchema.safeParse(body);
+    return result.success ? result.data.environments : [];
   },
   deserialize: (cached) => (Array.isArray(cached) ? (cached as Environment[]) : null),
   fallback: [],

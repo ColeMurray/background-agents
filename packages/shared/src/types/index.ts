@@ -207,6 +207,9 @@ export {
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
   isEnvironmentId,
   environmentRepositoriesInputSchema,
+  environmentRepositorySchema,
+  environmentSchema,
+  listEnvironmentsResponseSchema,
   createEnvironmentInputSchema,
   updateEnvironmentInputSchema,
 } from "./environments";
