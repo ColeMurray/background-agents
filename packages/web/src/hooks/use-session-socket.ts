@@ -74,18 +74,23 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
-  const subscriptionWaitersRef = useRef(new Set<(subscribed: boolean) => void>());
+  const subscriptionWaitersRef = useRef<Set<(subscribed: boolean) => void>>(null);
+  if (subscriptionWaitersRef.current === null) subscriptionWaitersRef.current = new Set();
+  const subscriptionWaiters = subscriptionWaitersRef.current;
   const pendingPromptRef = useRef<{
     resolve: (accepted: boolean) => void;
     timeout: ReturnType<typeof setTimeout>;
   } | null>(null);
 
-  const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
-    for (const resolve of subscriptionWaitersRef.current) {
-      resolve(subscribed);
-    }
-    subscriptionWaitersRef.current.clear();
-  }, []);
+  const settleSubscriptionWaiters = useCallback(
+    (subscribed: boolean) => {
+      for (const resolve of subscriptionWaiters) {
+        resolve(subscribed);
+      }
+      subscriptionWaiters.clear();
+    },
+    [subscriptionWaiters]
+  );
 
   const settlePendingPrompt = useCallback((accepted: boolean) => {
     const pending = pendingPromptRef.current;
@@ -166,13 +171,13 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        subscriptionWaitersRef.current.delete(finish);
+        subscriptionWaiters.delete(finish);
         resolve(subscribed);
       };
       const timeout = setTimeout(() => finish(false), PROMPT_SUBSCRIPTION_TIMEOUT_MS);
-      subscriptionWaitersRef.current.add(finish);
+      subscriptionWaiters.add(finish);
     });
-  }, [isOpen]);
+  }, [isOpen, subscriptionWaiters]);
 
   const sendPrompt = useCallback(
     async (

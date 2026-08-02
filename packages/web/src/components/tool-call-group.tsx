@@ -88,12 +88,12 @@ export const ToolCallGroup = memo(
 
         {isExpanded && (
           <div className="ml-4 mt-1 pl-2 border-l-2 border-border">
-            {events.map((event, index) => (
+            {events.map((event) => (
               <ToolCallItem
-                key={`${groupId}-${index}`}
+                key={event.callId}
                 event={event}
-                isExpanded={expandedItems.has(`${groupId}-${index}`)}
-                onToggle={() => toggleItem(`${groupId}-${index}`)}
+                isExpanded={expandedItems.has(event.callId)}
+                onToggle={() => toggleItem(event.callId)}
                 showTime={false}
               />
             ))}
