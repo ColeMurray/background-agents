@@ -320,8 +320,7 @@ async def api_snapshot_sandbox(
         if not handle:
             raise HTTPException(status_code=404, detail=f"Sandbox not found: {sandbox_id}")
 
-        # Take filesystem snapshot using Modal's native API (sync method)
-        image_id = manager.take_snapshot(handle)
+        image_id = await manager.take_snapshot(handle)
 
         return {
             "success": True,

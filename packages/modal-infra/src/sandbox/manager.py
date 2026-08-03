@@ -448,7 +448,7 @@ class SandboxManager:
             tunnel_urls=extra_tunnel_urls,
         )
 
-    def take_snapshot(
+    async def take_snapshot(
         self,
         handle: SandboxHandle,
     ) -> str:
@@ -475,9 +475,7 @@ class SandboxManager:
         start_time = time.time()
         snapshot_id = f"snap-{handle.sandbox_id}-{int(time.time() * 1000)}"
 
-        # Use Modal's native snapshot_filesystem() API
-        # This returns an Image directly (not async)
-        image = handle.modal_sandbox.snapshot_filesystem(
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(
             timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
         )
 
@@ -510,7 +508,7 @@ class SandboxManager:
             SandboxHandle if found, None otherwise
         """
         try:
-            modal_sandbox = modal.Sandbox.from_id(sandbox_id)
+            modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
             return SandboxHandle(
                 sandbox_id=sandbox_id,
                 modal_sandbox=modal_sandbox,
