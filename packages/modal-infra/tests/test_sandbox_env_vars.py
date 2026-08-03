@@ -99,6 +99,7 @@ async def test_user_env_vars_override_order(monkeypatch):
 
     env_vars = captured["env"]
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
+    assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     assert env_vars["CUSTOM_SECRET"] == "value"
 
 
@@ -148,6 +149,7 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     # System vars must override user-provided values
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
     assert env_vars["SANDBOX_AUTH_TOKEN"] == "token-456"
+    assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     # User vars that don't collide are preserved
     assert env_vars["CUSTOM_SECRET"] == "value"
 
@@ -204,6 +206,7 @@ async def test_restore_uses_custom_timeout(monkeypatch):
 
     async def fake_create_aio(*args, **kwargs):
         captured["timeout"] = kwargs.get("timeout")
+        captured["env"] = kwargs.get("env")
 
         class FakeSandbox:
             object_id = "obj-789"
@@ -229,6 +232,7 @@ async def test_restore_uses_custom_timeout(monkeypatch):
     )
 
     assert captured["timeout"] == 14400
+    assert captured["env"]["SANDBOX_TIMEOUT_SECONDS"] == "14400"
 
 
 @pytest.mark.asyncio

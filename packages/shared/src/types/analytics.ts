@@ -1,4 +1,4 @@
-import type { SpawnSource } from "./statuses";
+import type { SpawnSource } from "./sessions";
 
 export const ANALYTICS_DAYS = [7, 14, 30, 90] as const;
 export type AnalyticsDays = (typeof ANALYTICS_DAYS)[number];

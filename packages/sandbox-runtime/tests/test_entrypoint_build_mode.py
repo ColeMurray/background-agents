@@ -61,6 +61,19 @@ def _make_supervisor(env_vars: dict):
         return SandboxSupervisor()
 
 
+def _completion_callback(supervisor):
+    """Release the test only after build work reaches its success callback."""
+    callback = MagicMock()
+
+    async def report_success(**_kwargs):
+        supervisor.shutdown_event.set()
+        return True
+
+    callback.report_success = AsyncMock(side_effect=report_success)
+    callback.report_failure = AsyncMock(return_value=True)
+    return callback
+
+
 class TestImageBuildMode:
     """IMAGE_BUILD_MODE=true: setup only, don't run start/OpenCode/bridge."""
 
@@ -77,12 +90,8 @@ class TestImageBuildMode:
         supervisor.start_bridge = AsyncMock()
         supervisor.monitor_processes = AsyncMock()
         supervisor.shutdown = AsyncMock()
-        # In build mode, entrypoint waits for shutdown_event (builder terminates sandbox).
-        # Pre-set so the test doesn't hang.
-        supervisor.shutdown_event.set()
-
         with patch.dict(os.environ, build_env, clear=False):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         supervisor.sync_repositories.assert_called_once()
         supervisor.run_setup_script.assert_called_once()
@@ -91,6 +100,18 @@ class TestImageBuildMode:
         supervisor.start_opencode.assert_not_called()
         supervisor.start_bridge.assert_not_called()
         supervisor.monitor_processes.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_completed_operation_wins_when_shutdown_is_also_ready(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.shutdown_event.set()
+
+        async def completed_operation():
+            return "completed"
+
+        result = await supervisor._run_until_shutdown(completed_operation())
+
+        assert result == "completed"
 
     @pytest.mark.asyncio
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
@@ -105,10 +126,9 @@ class TestImageBuildMode:
 
         supervisor.run_setup_script = AsyncMock(side_effect=assert_baseline_is_ready)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
 
         with patch.dict(os.environ, build_env, clear=False):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         supervisor.run_setup_script.assert_awaited_once()
         assert observed_baselines == ["a" * 40]
@@ -120,9 +140,6 @@ class TestImageBuildMode:
         # Point repo_path to a non-existent dir so clone branch is taken
         supervisor.repo_path = tmp_path / "nonexistent"
         _repoint_primary(supervisor)
-        # Pre-set so entrypoint doesn't hang waiting for builder to terminate
-        supervisor.shutdown_event.set()
-
         all_calls = []
 
         async def fake_subprocess(*args, **kwargs):
@@ -144,7 +161,7 @@ class TestImageBuildMode:
                 side_effect=fake_subprocess,
             ),
         ):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         # Find the clone command (the one with "clone" in the args)
         clone_calls = [args for args in all_calls if "clone" in args]
@@ -196,11 +213,8 @@ class TestImageBuildMode:
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.run_start_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        # Pre-set so entrypoint doesn't hang waiting for builder to terminate
-        supervisor.shutdown_event.set()
-
         with patch.dict(os.environ, build_env, clear=False):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         supervisor.run_setup_script.assert_called_once()
         supervisor.run_start_script.assert_not_called()
@@ -236,7 +250,6 @@ class TestImageBuildMode:
         supervisor.sync_repositories = AsyncMock(return_value=[])
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
         supervisor.log = MagicMock()
 
         async def fake_subprocess(*args, **kwargs):
@@ -252,7 +265,7 @@ class TestImageBuildMode:
                 side_effect=fake_subprocess,
             ),
         ):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         # Verify git.sync_complete was logged with the SHA
         sync_calls = [
@@ -289,7 +302,6 @@ class TestImageBuildMode:
         supervisor.sync_repositories = AsyncMock(return_value=[])
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
         supervisor.log = MagicMock()
 
         shas_by_cwd = {tmp_path / "web": b"aaa111\n", tmp_path / "api": b"bbb222\n"}
@@ -309,7 +321,7 @@ class TestImageBuildMode:
                 side_effect=fake_subprocess,
             ),
         ):
-            await supervisor.run()
+            await supervisor.run(_completion_callback(supervisor))
 
         sync_calls = [
             c
@@ -333,11 +345,8 @@ class TestImageBuildMode:
         supervisor.sync_repositories = AsyncMock(return_value=[])
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
-        supervisor.shutdown_event.set()
 
-        callback = MagicMock()
-        callback.report_success = AsyncMock(return_value=True)
-        callback.report_failure = AsyncMock(return_value=True)
+        callback = _completion_callback(supervisor)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -369,6 +378,25 @@ class TestImageBuildMode:
         callback.report_failure.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_injected_callback_bypasses_environment_fallback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor._run_image_build_execution = AsyncMock(
+            return_value=MagicMock(head_sha="abc123", repository_shas=[])
+        )
+        supervisor.shutdown = AsyncMock()
+        callback = _completion_callback(supervisor)
+
+        with (
+            patch.dict(os.environ, build_env, clear=False),
+            patch("sandbox_runtime.entrypoint.RepoImageBuildCallback.from_env") as from_env,
+        ):
+            await supervisor.run(callback)
+
+        from_env.assert_not_called()
+        callback.report_success.assert_awaited_once()
+        callback.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_reports_failure_callback_from_build_mode(self, build_env):
         """Build mode should report failures itself when callback metadata is configured."""
         supervisor = _make_supervisor(build_env)
@@ -389,8 +417,9 @@ class TestImageBuildMode:
                 return_value=callback,
             ),
         ):
-            await supervisor.run()
+            build_succeeded = await supervisor.run()
 
+        assert build_succeeded is False
         callback.report_success.assert_not_called()
         callback.report_failure.assert_awaited_once_with(
             "setup hook failed for acme/my-repo in build mode"
@@ -462,6 +491,114 @@ class TestImageBuildMode:
             operation.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await operation
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_during_setup_cancels_build_without_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        setup_started = asyncio.Event()
+        setup_cancelled = asyncio.Event()
+
+        async def setup_until_cancelled(_repo):
+            setup_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                setup_cancelled.set()
+
+        supervisor.run_setup_script = AsyncMock(side_effect=setup_until_cancelled)
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            operation = asyncio.create_task(supervisor.run(callback))
+            await setup_started.wait()
+            supervisor.request_shutdown(signal.SIGTERM)
+            await asyncio.wait_for(operation, timeout=1)
+
+        assert setup_cancelled.is_set()
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_before_success_callback_suppresses_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def finish_as_shutdown_arrives(_expected_tunnel_ports):
+            supervisor.shutdown_event.set()
+            return MagicMock(head_sha="abc123", repository_shas=[])
+
+        supervisor._run_image_build_execution = AsyncMock(side_effect=finish_as_shutdown_arrives)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run(callback)
+
+        callback.report_success.assert_not_called()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_during_success_callback_cancels_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor._run_image_build_execution = AsyncMock(
+            return_value=MagicMock(head_sha="abc123", repository_shas=[])
+        )
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback_started = asyncio.Event()
+        callback_cancelled = asyncio.Event()
+
+        async def report_until_cancelled(**_kwargs):
+            callback_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                callback_cancelled.set()
+
+        callback = MagicMock()
+        callback.report_success = AsyncMock(side_effect=report_until_cancelled)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            operation = asyncio.create_task(supervisor.run(callback))
+            await callback_started.wait()
+            supervisor.request_shutdown(signal.SIGTERM)
+            await asyncio.wait_for(operation, timeout=1)
+
+        assert callback_cancelled.is_set()
+        callback.report_failure.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_signal_before_failure_callback_suppresses_callback(self, build_env):
+        supervisor = _make_supervisor(build_env)
+
+        async def fail_as_shutdown_arrives(_expected_tunnel_ports):
+            supervisor.shutdown_event.set()
+            raise RuntimeError("setup failed")
+
+        supervisor._run_image_build_execution = AsyncMock(side_effect=fail_as_shutdown_arrives)
+        supervisor.shutdown = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+        callback = MagicMock()
+        callback.report_success = AsyncMock(return_value=True)
+        callback.report_failure = AsyncMock(return_value=True)
+
+        with patch.dict(os.environ, build_env, clear=False):
+            await supervisor.run(callback)
 
         callback.report_success.assert_not_called()
         callback.report_failure.assert_not_called()

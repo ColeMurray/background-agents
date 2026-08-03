@@ -20,7 +20,9 @@ import modal
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    SANDBOX_TIMEOUT_ENV_VAR,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
@@ -35,7 +37,6 @@ from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
 
-DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
@@ -336,6 +337,7 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": config.control_plane_url,
                 "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
                 "REPO_OWNER": config.repo_owner or "",
                 "REPO_NAME": config.repo_name or "",
             }
@@ -446,7 +448,7 @@ class SandboxManager:
             tunnel_urls=extra_tunnel_urls,
         )
 
-    def take_snapshot(
+    async def take_snapshot(
         self,
         handle: SandboxHandle,
     ) -> str:
@@ -473,9 +475,7 @@ class SandboxManager:
         start_time = time.time()
         snapshot_id = f"snap-{handle.sandbox_id}-{int(time.time() * 1000)}"
 
-        # Use Modal's native snapshot_filesystem() API
-        # This returns an Image directly (not async)
-        image = handle.modal_sandbox.snapshot_filesystem(
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(
             timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
         )
 
@@ -508,7 +508,7 @@ class SandboxManager:
             SandboxHandle if found, None otherwise
         """
         try:
-            modal_sandbox = modal.Sandbox.from_id(sandbox_id)
+            modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
             return SandboxHandle(
                 sandbox_id=sandbox_id,
                 modal_sandbox=modal_sandbox,
@@ -583,6 +583,7 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": control_plane_url,
                 "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(timeout_seconds),
                 "REPO_OWNER": repo_owner or "",
                 "REPO_NAME": repo_name or "",
                 "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone

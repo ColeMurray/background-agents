@@ -92,6 +92,7 @@ export function SessionSidebar({
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
+    handleMarkLatestMessageRead,
   } = useSidebarSessions();
 
   const handleArchivedSession = useCallback(
@@ -272,6 +273,7 @@ export function SessionSidebar({
                 onArchive={handleArchivedSession}
                 onSessionSelect={onSessionSelect}
                 onSessionRenamed={handleRenamedSession}
+                onMarkLatestMessageRead={handleMarkLatestMessageRead}
               />
             ))}
 
@@ -298,6 +300,7 @@ export function SessionSidebar({
                     onArchive={handleArchivedSession}
                     onSessionSelect={onSessionSelect}
                     onSessionRenamed={handleRenamedSession}
+                    onMarkLatestMessageRead={handleMarkLatestMessageRead}
                   />
                 ))}
               </>

@@ -193,7 +193,19 @@ export class ImageBuildWorkflow {
     // Validate provider configuration before any database work. This keeps a
     // bad deployment from accumulating failed rows and preserves the most
     // actionable configuration error when multiple bindings are absent.
-    const adapter = this.createAdapterForOperation(provider, "trigger_build", ctx, "start");
+    let adapter: ImageBuildAdapter;
+    try {
+      adapter = this.adapterFactory.create(provider, "start");
+    } catch (e) {
+      logger.error("image_build.adapter_config_error", {
+        operation: "trigger_build",
+        provider,
+        error: errorMessage(e),
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
+    }
     if (!this.finalizationQueue) {
       throw new ImageBuildWorkflowUnavailableError("Image build finalization Queue not configured");
     }
@@ -269,7 +281,7 @@ export class ImageBuildWorkflow {
         return { type: "already_building", buildId: winner.id };
       }
 
-      const planned = await planner.planBuild({
+      const plan = await planner.planBuild({
         buildId,
         scope,
         callbackUrl,
@@ -280,7 +292,7 @@ export class ImageBuildWorkflow {
       });
 
       startAdapter = adapter;
-      await adapter.startBuild(planned.plan, {
+      await adapter.startBuild(plan, {
         bindProviderSession: async (providerSessionId) => {
           providerSessionIdForCleanup = providerSessionId;
           const bound = await this.store.bindProviderSession(buildId, provider, providerSessionId);
@@ -294,7 +306,7 @@ export class ImageBuildWorkflow {
         build_id: buildId,
         scope_kind: scope.kind,
         scope_id: scope.id,
-        repositories_fingerprint: planned.plan.repositoriesFingerprint,
+        repositories_fingerprint: plan.repositoriesFingerprint,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
@@ -558,39 +570,6 @@ export class ImageBuildWorkflow {
       trace_id: params.ctx.trace_id,
     });
     return new ImageBuildCallbackAuthRejectedError("Unauthorized");
-  }
-
-  private createAdapterForOperation(
-    provider: ImageBuildProvider,
-    operation: string,
-    ctx: ImageBuildWorkflowContext,
-    adapterOperation: "start" | "existing_session" = "existing_session"
-  ): ImageBuildAdapter {
-    return this.createAdapterGuarded(provider, operation, ctx, () =>
-      this.adapterFactory.create(provider, adapterOperation)
-    );
-  }
-
-  private createAdapterGuarded<TAdapter>(
-    provider: ImageBuildProvider,
-    operation: string,
-    ctx: ImageBuildWorkflowContext,
-    create: () => TAdapter,
-    buildId?: string
-  ): TAdapter {
-    try {
-      return create();
-    } catch (e) {
-      logger.error("image_build.adapter_config_error", {
-        operation,
-        build_id: buildId,
-        provider,
-        error: errorMessage(e),
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
-    }
   }
 }
 

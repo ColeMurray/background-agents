@@ -13,8 +13,8 @@ import type {
   AutomationRepository,
   AutomationRun,
   AutomationRunStatus,
-  TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/automations";
+import type { TriggerConfig } from "@open-inspect/shared/triggers";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 // ─── Internal row types ──────────────────────────────────────────────────────

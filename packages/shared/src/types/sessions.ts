@@ -1,20 +1,79 @@
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
 import {
-  sandboxStatusSchema,
-  sessionStatusSchema,
-  type MessageSource,
-  type MessageStatus,
-  type ParticipantRole,
-  type SandboxStatus,
-  type SessionStatus,
-  type SpawnSource,
-} from "./statuses";
-import {
   sessionRepositoryStateSchema,
   type SessionListRepository,
   type SessionRepositoryState,
 } from "./repositories";
+
+export const sessionStatusSchema = z.enum([
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+]);
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+export type SandboxStatus =
+  | "pending"
+  | "spawning"
+  | "connecting"
+  | "warming"
+  | "syncing"
+  | "ready"
+  | "running"
+  | "stale"
+  | "snapshotting"
+  | "stopped"
+  | "failed";
+
+export const sandboxStatusSchema = z.enum([
+  "pending",
+  "spawning",
+  "connecting",
+  "warming",
+  "syncing",
+  "ready",
+  "running",
+  "stale",
+  "snapshotting",
+  "stopped",
+  "failed",
+]);
+
+export type MessageStatus = "pending" | "processing" | "completed" | "failed";
+
+export const messageSourceSchema = z.enum([
+  "web",
+  "slack",
+  "linear",
+  "extension",
+  "github",
+  "automation",
+  "agent",
+]);
+export type MessageSource = z.infer<typeof messageSourceSchema>;
+
+export type ParticipantRole = "owner" | "member";
+
+export type SpawnSource =
+  | "user"
+  | "agent"
+  | "automation"
+  | "github-bot"
+  | "linear-bot"
+  | "slack-bot";
+
+export const spawnSourceSchema = z.enum([
+  "user",
+  "agent",
+  "automation",
+  "github-bot",
+  "linear-bot",
+  "slack-bot",
+]);
 
 export interface SessionParticipant {
   id: string;
@@ -37,6 +96,47 @@ export interface PullRequestSummary {
   merged: number;
   closed: number;
 }
+
+export type SessionReadState =
+  | {
+      latestMessageId: null;
+      unread: false;
+    }
+  | {
+      latestMessageId: string;
+      unread: boolean;
+    };
+
+export const sessionReadActionSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("mark_message_read"),
+      messageId: z.string().min(1),
+    })
+    .strict(),
+  z.object({ action: z.literal("mark_latest_message_read") }).strict(),
+]);
+export type SessionReadAction = z.infer<typeof sessionReadActionSchema>;
+
+export const sessionReadResultSchema = z.union([
+  z
+    .object({
+      sessionId: z.string(),
+      outcome: z.literal("no_terminal_message"),
+      unread: z.literal(false),
+      latestMessageId: z.null(),
+    })
+    .strict(),
+  z
+    .object({
+      sessionId: z.string(),
+      outcome: z.enum(["marked_read", "already_read", "not_latest"]),
+      unread: z.boolean(),
+      latestMessageId: z.string(),
+    })
+    .strict(),
+]);
+export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
 
 export interface Session {
   id: string;
@@ -72,6 +172,8 @@ export interface Session {
    * overlap or when the session has no tracked PRs.
    */
   pullRequestSummary?: PullRequestSummary;
+  /** Viewer-specific read state; absent for non-user service callers. */
+  readState?: SessionReadState;
 }
 
 export interface SessionMessage {

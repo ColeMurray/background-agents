@@ -53,6 +53,12 @@ import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionTabs } from "@/components/session-tabs";
 import { formatRepoLabel } from "@/lib/repo-label";
+import {
+  classifySessionReadAttempt,
+  markMessageRead,
+  reconcileSessionReadState,
+  SessionReadRequestError,
+} from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -251,6 +257,24 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
+  const attemptMarkVisibleMessageRead = useCallback(
+    async (messageId: string) => {
+      try {
+        const result = await markMessageRead(sessionId, messageId);
+        await reconcileSessionReadState(result);
+        return classifySessionReadAttempt(result);
+      } catch (error) {
+        if (
+          error instanceof SessionReadRequestError &&
+          [400, 401, 403, 404, 405].includes(error.status)
+        ) {
+          return "permanent_failure" as const;
+        }
+        return "retry" as const;
+      }
+    },
+    [sessionId]
+  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -287,6 +311,14 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
+            terminalMessageReadObservationEnabled={
+              !replaying &&
+              !loadingHistory &&
+              !isDetailsOpen &&
+              selectedMediaArtifactId === null &&
+              resolvedDiff === null
+            }
+            onMarkMessageRead={attemptMarkVisibleMessageRead}
           />
         </Panel>
         {showTerminal && (

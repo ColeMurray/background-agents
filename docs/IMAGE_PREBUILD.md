@@ -178,13 +178,11 @@ shared one-hour limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
-durably accepted. New builds no longer invoke the long-running Modal `build_image` function; the
-legacy function and cron remain deployed only until the final cleanup step in the rollout.
+durably accepted. The retired long-running Modal `build_image` function and Modal-side rebuild cron
+have been removed; rebuild evaluation now runs only in the provider-neutral control-plane scheduler.
 
 Terraform deploys the Modal app before the control-plane Worker so a one-shot upgrade cannot expose
-the new Worker until Modal's provider-session endpoints are available. The repository history keeps
-that cutover reviewable as three changes: add the compatible Modal endpoints, switch the Worker to
-Queue finalization, then remove the legacy Modal builder.
+the Worker until Modal's provider-session endpoints are available.
 
 ### What Happens When You Start a Session
 

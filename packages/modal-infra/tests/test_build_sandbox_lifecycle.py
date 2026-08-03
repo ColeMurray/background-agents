@@ -48,7 +48,7 @@ def test_build_timeout_limits_match_shared_contract(constant_name, python_value)
 
 
 @pytest.mark.asyncio
-async def test_create_build_sandbox_is_dormant_tagged_and_scrubs_callback_env(monkeypatch):
+async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env(monkeypatch):
     sandbox = SimpleNamespace(object_id="modal-session-1")
     create = _async_method(sandbox)
     monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
@@ -61,9 +61,15 @@ async def test_create_build_sandbox_is_dormant_tagged_and_scrubs_callback_env(mo
         clone_token="clone-token",
         clone_host="gitlab.com",
         clone_username="oauth2",
+        callback_url="https://cp.test/image-builds/build-complete",
+        failure_callback_url="https://cp.test/image-builds/build-failed",
         user_env_vars={
             "FOO": "bar",
+            "OI_REPO_IMAGE_BUILD_ID": "attacker-build",
+            "OI_REPO_IMAGE_CALLBACK_URL": "https://attacker.test/complete",
+            "OI_REPO_IMAGE_FAILURE_CALLBACK_URL": "https://attacker.test/failed",
             "OI_REPO_IMAGE_CALLBACK_TOKEN": "attacker-token",
+            "MODAL_SANDBOX_ID": "attacker-sandbox",
             "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "99999",
         },
         build_execution_timeout_seconds=1200,
@@ -73,15 +79,31 @@ async def test_create_build_sandbox_is_dormant_tagged_and_scrubs_callback_env(mo
     assert provider_session_id == "modal-session-1"
     args = create.aio.await_args.args
     kwargs = create.aio.await_args.kwargs
-    assert args[:2] == ("python", "-c")
+    assert args == (
+        "python",
+        "-m",
+        "sandbox_runtime.entrypoint",
+        "--await-modal-image-build-token-stdin-v1",
+    )
     assert kwargs["tags"] == {
         "openinspect_kind": "image-build",
         "openinspect_build_id": "build-1",
         "openinspect_scope_kind": "repo",
         "openinspect_scope_id": "acme/repo",
+        "openinspect_launch_protocol": "stdin-token-v1",
     }
     assert kwargs["env"]["FOO"] == "bar"
-    assert kwargs["env"]["OI_REPO_IMAGE_CALLBACK_TOKEN"] == ""
+    assert "OI_REPO_IMAGE_CALLBACK_TOKEN" not in kwargs["env"]
+    assert "OI_REPO_IMAGE_PROVIDER_SESSION_ID" not in kwargs["env"]
+    assert "MODAL_SANDBOX_ID" not in kwargs["env"]
+    assert kwargs["env"]["OI_REPO_IMAGE_BUILD_ID"] == "build-1"
+    assert (
+        kwargs["env"]["OI_REPO_IMAGE_CALLBACK_URL"] == "https://cp.test/image-builds/build-complete"
+    )
+    assert (
+        kwargs["env"]["OI_REPO_IMAGE_FAILURE_CALLBACK_URL"]
+        == "https://cp.test/image-builds/build-failed"
+    )
     assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == "1200"
     assert kwargs["env"]["VCS_HOST"] == "gitlab.com"
     assert kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
@@ -96,8 +118,76 @@ async def test_create_build_sandbox_is_dormant_tagged_and_scrubs_callback_env(mo
 
 
 @pytest.mark.asyncio
-async def test_start_build_sandbox_verifies_tags_and_injects_exact_callback_env(monkeypatch):
-    process = SimpleNamespace(object_id="process-1")
+async def test_create_build_sandbox_without_callback_context_uses_legacy_placeholder(monkeypatch):
+    sandbox = SimpleNamespace(object_id="modal-session-1")
+    create = _async_method(sandbox)
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+
+    await ModalBuildSessionService().create(
+        build_id="build-1",
+        scope_kind="repo",
+        scope_id="acme/repo",
+        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+    )
+
+    args = create.aio.await_args.args
+    kwargs = create.aio.await_args.kwargs
+    assert args == ("python", "-c", "import signal; signal.pause()")
+    assert "openinspect_launch_protocol" not in kwargs["tags"]
+    assert "OI_REPO_IMAGE_CALLBACK_URL" not in kwargs["env"]
+    assert "OI_REPO_IMAGE_FAILURE_CALLBACK_URL" not in kwargs["env"]
+
+
+@pytest.mark.asyncio
+async def test_create_build_sandbox_rejects_unpaired_callback_urls(monkeypatch):
+    create = _async_method(SimpleNamespace(object_id="modal-session-1"))
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+
+    with pytest.raises(ValueError, match="callback URLs must be provided together"):
+        await ModalBuildSessionService().create(
+            build_id="build-1",
+            scope_kind="repo",
+            scope_id="acme/repo",
+            repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            callback_url="https://cp.test/image-builds/build-complete",
+        )
+
+    create.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_build_sandbox_writes_only_callback_token_to_gated_entrypoint(monkeypatch):
+    stdin = SimpleNamespace(write=MagicMock(), drain=_async_method())
+    sandbox = SimpleNamespace(
+        get_tags=_async_method(
+            {
+                "openinspect_kind": "image-build",
+                "openinspect_build_id": "build-1",
+                "openinspect_launch_protocol": "stdin-token-v1",
+            }
+        ),
+        stdin=stdin,
+        exec=_async_method(),
+    )
+    from_id = _mock_sandbox_lookup(monkeypatch, sandbox)
+
+    await ModalBuildSessionService().start(
+        build_id="build-1",
+        provider_session_id="modal-session-1",
+        callback_url="https://cp.test/image-builds/build-complete",
+        failure_callback_url="https://cp.test/image-builds/build-failed",
+        callback_token="a" * 64,
+    )
+
+    stdin.write.assert_called_once_with("a" * 64 + "\n")
+    stdin.drain.aio.assert_awaited_once_with()
+    sandbox.exec.aio.assert_not_awaited()
+    from_id.assert_not_called()
+    from_id.aio.assert_awaited_once_with("modal-session-1")
+
+
+@pytest.mark.asyncio
+async def test_start_build_sandbox_uses_legacy_exec_for_untagged_sandbox(monkeypatch):
     sandbox = SimpleNamespace(
         get_tags=_async_method(
             {
@@ -105,9 +195,9 @@ async def test_start_build_sandbox_verifies_tags_and_injects_exact_callback_env(
                 "openinspect_build_id": "build-1",
             }
         ),
-        exec=_async_method(process),
+        exec=_async_method(),
     )
-    from_id = _mock_sandbox_lookup(monkeypatch, sandbox)
+    _mock_sandbox_lookup(monkeypatch, sandbox)
 
     await ModalBuildSessionService().start(
         build_id="build-1",
@@ -129,9 +219,36 @@ async def test_start_build_sandbox_verifies_tags_and_injects_exact_callback_env(
         "OI_REPO_IMAGE_CALLBACK_TOKEN": "callback-token",
         "OI_REPO_IMAGE_PROVIDER_SESSION_ID": "modal-session-1",
     }
-    assert sandbox.exec.aio.await_args.kwargs["workdir"] == "/workspace"
-    from_id.assert_not_called()
-    from_id.aio.assert_awaited_once_with("modal-session-1")
+
+
+@pytest.mark.asyncio
+async def test_start_build_sandbox_rejects_unknown_launch_protocol_without_delivery(monkeypatch):
+    stdin = SimpleNamespace(write=MagicMock(), drain=_async_method())
+    sandbox = SimpleNamespace(
+        get_tags=_async_method(
+            {
+                "openinspect_kind": "image-build",
+                "openinspect_build_id": "build-1",
+                "openinspect_launch_protocol": "stdin-v2",
+            }
+        ),
+        stdin=stdin,
+        exec=_async_method(),
+    )
+    _mock_sandbox_lookup(monkeypatch, sandbox)
+
+    with pytest.raises(ValueError, match="unsupported image-build launch protocol"):
+        await ModalBuildSessionService().start(
+            build_id="build-1",
+            provider_session_id="modal-session-1",
+            callback_url="https://cp.test/image-builds/build-complete",
+            failure_callback_url="https://cp.test/image-builds/build-failed",
+            callback_token="callback-token",
+        )
+
+    stdin.write.assert_not_called()
+    stdin.drain.aio.assert_not_awaited()
+    sandbox.exec.aio.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -199,7 +316,7 @@ async def test_terminate_build_sandbox_verifies_tags(monkeypatch):
         reason="image_build_complete",
     )
 
-    sandbox.terminate.aio.assert_awaited_once_with()
+    sandbox.terminate.aio.assert_awaited_once_with(wait=True)
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,8 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
+import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
+import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -109,6 +111,8 @@ export function SessionTimeline({
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
+  terminalMessageReadObservationEnabled = false,
+  onMarkMessageRead,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -119,8 +123,37 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
+  terminalMessageReadObservationEnabled?: boolean;
+  onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
   const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const latestTerminalMessageId = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type === "execution_complete" && event.messageId) return event.messageId;
+    }
+    return null;
+  }, [events]);
+  const latestTerminalMessageGroupRange = useMemo(() => {
+    if (!latestTerminalMessageId) return null;
+    const completionIndex = groupedEvents.findIndex(
+      (group) =>
+        group.type === "single" &&
+        group.event.type === "execution_complete" &&
+        group.event.messageId === latestTerminalMessageId
+    );
+    if (completionIndex < 0) return null;
+    const outputIndex = groupedEvents.findIndex(
+      (group) =>
+        group.type === "single" &&
+        group.event.type === "token" &&
+        group.event.messageId === latestTerminalMessageId
+    );
+    return {
+      start: outputIndex >= 0 ? Math.min(outputIndex, completionIndex) : completionIndex,
+      end: Math.max(outputIndex, completionIndex),
+    };
+  }, [groupedEvents, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -169,6 +202,20 @@ export function SessionTimeline({
     }
   }, [events]);
 
+  const renderGroup = (group: EventGroup) =>
+    group.type === "tool_group" ? (
+      <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
+    ) : (
+      <EventItem
+        key={group.id}
+        event={group.event}
+        sessionId={sessionId}
+        currentParticipantId={currentParticipantId}
+        participantProfiles={participantProfiles}
+        onOpenMedia={onOpenMedia}
+      />
+    );
+
   useEffect(() => {
     if (isNearBottomRef.current && !isPrependingRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
@@ -189,20 +236,37 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          groupedEvents.map((group) =>
-            group.type === "tool_group" ? (
-              <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-            ) : (
-              <EventItem
-                key={group.id}
-                event={group.event}
-                sessionId={sessionId}
-                currentParticipantId={currentParticipantId}
-                participantProfiles={participantProfiles}
-                onOpenMedia={onOpenMedia}
-              />
-            )
-          )
+          groupedEvents.map((group, index) => {
+            if (
+              latestTerminalMessageGroupRange &&
+              onMarkMessageRead &&
+              index === latestTerminalMessageGroupRange.start
+            ) {
+              return (
+                <TerminalMessageReadObserver
+                  key={`terminal-message-${latestTerminalMessageId}`}
+                  messageId={latestTerminalMessageId!}
+                  enabled={terminalMessageReadObservationEnabled}
+                  onMarkMessageRead={onMarkMessageRead}
+                >
+                  {groupedEvents
+                    .slice(
+                      latestTerminalMessageGroupRange.start,
+                      latestTerminalMessageGroupRange.end + 1
+                    )
+                    .map(renderGroup)}
+                </TerminalMessageReadObserver>
+              );
+            }
+            if (
+              latestTerminalMessageGroupRange &&
+              index > latestTerminalMessageGroupRange.start &&
+              index <= latestTerminalMessageGroupRange.end
+            ) {
+              return null;
+            }
+            return renderGroup(group);
+          })
         )}
         {isProcessing && <ThinkingIndicator />}
 

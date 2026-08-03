@@ -268,6 +268,10 @@ For the full runtime, lifecycle, and configuration model, see
 
 > **Want to use your OpenAI ChatGPT subscription?** See [Using OpenAI Models](OPENAI_MODELS.md) for
 > setup instructions (can be configured after deployment).
+>
+> **Want to use your xAI SuperGrok subscription?** See
+> [Using Grok with a SuperGrok Subscription](GROK_MODELS.md). Grok is opt-in and can also be
+> configured after deployment.
 
 ---
 
@@ -1244,3 +1248,4 @@ For details on the infrastructure components, see:
 - [README.md](../README.md) - System architecture overview
 - [AVAILABLE_MODELS.md](AVAILABLE_MODELS.md) - Supported model list and reasoning efforts
 - [OPENAI_MODELS.md](OPENAI_MODELS.md) - Configuring OpenAI Codex models
+- [GROK_MODELS.md](GROK_MODELS.md) - Configuring Grok with a SuperGrok subscription

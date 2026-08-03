@@ -57,12 +57,6 @@ export interface ImageBuildPlan extends BaseImageBuildPlan {
   cloneAuth: ImageBuildCloneAuth;
 }
 
-export interface PlannedImageBuild {
-  plan: ImageBuildPlan;
-  /** Registration side of the callback token every build authenticates with. */
-  callbackAuth: { tokenHash: string; expiresAt: number };
-}
-
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
 export interface ImageBuildStartCallbacks {
   bindProviderSession(providerSessionId: string): Promise<void>;
