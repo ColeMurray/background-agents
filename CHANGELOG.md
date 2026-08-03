@@ -2,6 +2,23 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## July 31, 2026
+
+**Automatic prebuild refresh.** Repository and environment images now rebuild automatically when
+tracked branches move or the sandbox runtime changes, with provider-neutral scheduling and durable
+finalization across Modal, Vercel, and OpenComputer.
+
+**Configurable session lifetimes.** Set sandbox timeouts globally or per repository and environment;
+the setting applies to fresh, restored, and resumed sandboxes, and child sessions inherit it.
+
+**More control over child sessions.** Child-session tools now use consistent `spawn-child`,
+`get-child-status`, and `cancel-child` names. Spawned children inherit the parent's model and
+reasoning effort by default, with optional per-child overrides.
+
+**Better Slack session guidance.** Workspace-wide instructions can now apply to every Slack-started
+session. Watched-channel automations can also return `NO_REPLY` when no response is useful, while
+failures and runs with artifacts still post normally.
+
 ## July 30, 2026
 
 **Choose GitHub, Google, or both for sign-in.** Deployments can now enable either provider

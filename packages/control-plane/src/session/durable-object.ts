@@ -9,11 +9,9 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import {
-  clientMessageSchema,
-  sandboxEventSchema,
-  type SessionAttachmentReference,
-} from "@open-inspect/shared";
+import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
+import { sandboxEventSchema } from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
@@ -40,7 +38,9 @@ import {
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
-import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
+import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
+import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
+import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import {
   createSourceControlProviderFromEnv,
   resolveScmProviderFromEnv,
@@ -80,6 +80,8 @@ import {
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
 import type { SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
+import { XaiTokenRefreshService } from "./xai-token-refresh-service";
+import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
@@ -88,6 +90,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
@@ -117,6 +120,7 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
+import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
@@ -203,10 +207,12 @@ export class SessionDO extends DurableObject<Env> {
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
   private _alarmHandler: AlarmHandler | null = null;
+  private _alarmScheduler: AlarmScheduler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
+  private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -239,6 +245,7 @@ export class SessionDO extends DurableObject<Env> {
     verifySandboxToken: (request, _url, log) =>
       this.sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.openaiTokenRefresh(log),
+    xaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
     tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
@@ -368,7 +375,27 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private get executionTimeoutMs(): number {
-    return parseInt(this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS), 10);
+    try {
+      const sandboxTimeoutMs = parsePersistedSandboxSettings(
+        this.repository.getSession()?.sandbox_settings ?? null
+      ).sandboxTimeoutMs;
+      // This watchdog starts before bridge setup, so it must not race the
+      // bridge's earlier snapshot-reserved prompt deadline.
+      if (sandboxTimeoutMs !== undefined) return sandboxTimeoutMs;
+    } catch {
+      this.log.warn("Failed to parse sandbox_settings for execution timeout, using fallback");
+    }
+    return parseInt(
+      this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000),
+      10
+    );
+  }
+
+  private get alarmScheduler(): AlarmScheduler {
+    if (!this._alarmScheduler) {
+      this._alarmScheduler = createEarliestAlarmScheduler(this.ctx.storage);
+    }
+    return this._alarmScheduler;
   }
 
   private get messageQueue(): SessionMessageQueue {
@@ -386,11 +413,27 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager,
         this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
-        this.executionTimeoutMs
+        this.alarmScheduler,
+        this.executionTimeoutMs,
+        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
 
     return this._messageQueue;
+  }
+
+  private get terminalMessageProjection(): SessionTerminalMessageProjection {
+    if (!this._terminalMessageProjection) {
+      this._terminalMessageProjection = new SessionTerminalMessageProjection(
+        this.db ? new SessionIndexStore(this.db) : null,
+        () => {
+          const session = this.getSession();
+          return session ? this.getPublicSessionId(session) : null;
+        },
+        this.log
+      );
+    }
+    return this._terminalMessageProjection;
   }
 
   private get messageService(): MessageService {
@@ -476,7 +519,16 @@ export class SessionDO extends DurableObject<Env> {
           );
           return service.refresh(session);
         },
-        isOpenAISecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        refreshXaiToken: async (session, log) => {
+          const service = new XaiTokenRefreshService(
+            this.db!,
+            this.env.REPO_SECRETS_ENCRYPTION_KEY!,
+            (sessionRow) => this.ensureRepoId(sessionRow),
+            log
+          );
+          return service.refresh(session);
+        },
+        isManagedSecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
         getScmCredentials: (log) =>
           new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
         messenger: this.messenger,
@@ -627,6 +679,7 @@ export class SessionDO extends DurableObject<Env> {
         repository: this.repository,
         messageQueue: this.messageQueue,
         lifecycleManager: this.lifecycleManager,
+        alarmScheduler: this.alarmScheduler,
         executionTimeoutMs: this.executionTimeoutMs,
         now: () => Date.now(),
         log: this.log,
@@ -651,7 +704,8 @@ export class SessionDO extends DurableObject<Env> {
         this.statusService,
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
-        () => this.messageQueue.processMessageQueue()
+        () => this.messageQueue.processMessageQueue(),
+        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
 
@@ -760,13 +814,6 @@ export class SessionDO extends DurableObject<Env> {
       getConnectedClientCount: () => this.wsManager.getConnectedClientCount(),
     };
 
-    // Alarm scheduler adapter
-    const alarmScheduler: AlarmScheduler = {
-      scheduleAlarm: async (timestamp) => {
-        await this.ctx.storage.setAlarm(timestamp);
-      },
-    };
-
     // ID generator adapter
     const idGenerator: IdGenerator = {
       generateId: () => generateId(),
@@ -843,7 +890,7 @@ export class SessionDO extends DurableObject<Env> {
       storage,
       broadcaster,
       wsManager,
-      alarmScheduler,
+      this.alarmScheduler,
       idGenerator,
       config,
       {
@@ -978,7 +1025,7 @@ export class SessionDO extends DurableObject<Env> {
       // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
       // still connect — a slow boot that outlived the connecting watchdog
       // self-heals here by flipping the status back to ready.
-      if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
+      if (sandbox && isSandboxReconnectBlockedStatus(sandbox.status)) {
         log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
@@ -1088,12 +1135,17 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Handle WebSocket close.
    */
-  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+  async webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ): Promise<void> {
     this.ensureInitialized();
-    const { kind } = this.wsManager.classify(ws);
+    const connection = this.wsManager.classify(ws);
 
     try {
-      if (kind === "sandbox") {
+      if (connection.kind === "sandbox") {
         const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
         if (!wasActive) {
           // sandboxWs points to a different socket — this close is for a replaced connection.
@@ -1101,16 +1153,20 @@ export class SessionDO extends DurableObject<Env> {
           return;
         }
 
-        const isNormalClose = code === 1000 || code === 1001;
-        if (isNormalClose) {
-          this.updateSandboxStatus("stopped");
-        } else {
-          // Abnormal close (e.g., 1006): leave status unchanged so the bridge can reconnect.
-          // Schedule a heartbeat check to detect truly dead sandboxes.
-          this.log.warn("Sandbox WebSocket abnormal close", {
-            event: "sandbox.abnormal_close",
+        const sandboxStatus = this.getSandbox()?.status;
+        const reconnectBlocked =
+          sandboxStatus !== undefined && isSandboxReconnectBlockedStatus(sandboxStatus);
+        if (!reconnectBlocked) {
+          // A close frame only ends this transport connection. Explicit lifecycle
+          // paths persist stopped/stale before closing the socket; otherwise the
+          // bridge must be allowed to reconnect regardless of the peer close code.
+          this.log.warn("Sandbox WebSocket disconnected; awaiting reconnect", {
+            event: "sandbox.disconnected",
             code,
             reason,
+            was_clean: wasClean,
+            sandbox_status: sandboxStatus,
+            sandbox_id: connection.sandboxId,
           });
           await this.lifecycleManager.scheduleDisconnectCheck();
         }
@@ -1827,10 +1883,11 @@ export class SessionDO extends DurableObject<Env> {
 
     const repoStore = new RepoSecretsStore(this.db, encryptionKey);
     const environmentSecretsStore = new EnvironmentSecretsStore(this.db, encryptionKey);
+    const members = this.repository.getSessionRepositories();
     const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,
-      members: this.repository.getSessionRepositories(),
+      members,
       loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
       loadEnvironmentSecrets: (environmentId) =>
         environmentSecretsStore.getDecryptedSecrets(environmentId),
@@ -1854,7 +1911,21 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
-    return mergedCount === 0 ? undefined : merge.merged;
+    if (mergedCount === 0) return undefined;
+    const primary = members.find((member) => member.isPrimary);
+    const managedSources = session.environment_id
+      ? sources
+      : sources.filter(
+          (source) =>
+            source.label === "global" ||
+            (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
+        );
+    const managedSecrets = mergeSecretSources(managedSources).merged;
+    const sandboxEnv = prepareManagedProviderEnv({
+      exposedSecrets: merge.merged,
+      brokerSecrets: managedSecrets,
+    });
+    return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
   }
 
   /**

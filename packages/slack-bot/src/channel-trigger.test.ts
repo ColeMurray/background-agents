@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-// eslint-disable-next-line @typescript-eslint/no-restricted-imports -- Preserve unrelated root exports in this module mock.
-import type * as SharedModule from "@open-inspect/shared";
+import type * as SlackModule from "@open-inspect/shared/slack";
 import type { Env } from "./types";
 
 const {
@@ -17,10 +16,10 @@ const {
   mockAddReaction: vi.fn(),
 }));
 
-vi.mock("@open-inspect/shared", async () => {
-  const actual = await vi.importActual<typeof SharedModule>("@open-inspect/shared");
+vi.mock("@open-inspect/shared/slack", async () => {
+  const actual = await vi.importActual<typeof SlackModule>("@open-inspect/shared/slack");
   return {
-    ...actual, // keep the real normalizeSlackEvent, internal-auth helpers, cache store
+    ...actual, // keep the real Slack client functions not under test
     verifySlackSignature: mockVerifySlackSignature,
     authTest: mockAuthTest,
     getChannelInfo: mockGetChannelInfo,

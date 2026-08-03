@@ -3,7 +3,7 @@ import {
   ANALYTICS_DAYS,
   type AnalyticsBreakdownBy,
   type AnalyticsDays,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/analytics";
 import { type AnalyticsFilters, AnalyticsStore, HUMAN_SPAWN_SOURCES } from "../db/analytics-store";
 import {
   type PullRequestAnalyticsFilters,

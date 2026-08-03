@@ -3,7 +3,7 @@ import {
   type ImageBuildScopeKind,
   type ImageBuildStatus,
   type RepositoryShaEntry,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/image-builds";
 import type {
   ImageBuildProvider,
   ImageBuildScope,

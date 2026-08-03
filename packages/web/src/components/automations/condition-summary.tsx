@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { TriggerCondition } from "@open-inspect/shared";
+import type { TriggerCondition } from "@open-inspect/shared/triggers";
 import { useSlackChannels } from "@/hooks/use-slack-channels";
 
 /**

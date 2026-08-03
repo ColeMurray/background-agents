@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INTERNAL_TTYD_PORT } from "@open-inspect/shared";
+import { INTERNAL_TTYD_PORT } from "@open-inspect/shared/types/integrations";
 import {
   normalizeSandboxSettings,
   parsePersistedSandboxSettings,

@@ -26,12 +26,14 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
+  excludeAutomationLineage,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
+  excludeAutomationLineage?: boolean;
   createdBy?: readonly string[];
 }): BrowserApiPath {
   const searchParams = new URLSearchParams({
@@ -45,6 +47,10 @@ export function buildSessionsPageKey({
 
   if (excludeStatus) {
     searchParams.set("excludeStatus", excludeStatus);
+  }
+
+  if (excludeAutomationLineage) {
+    searchParams.set("excludeAutomationLineage", "true");
   }
 
   for (const userId of createdBy ?? []) {
@@ -89,6 +95,29 @@ export function applyTitleUpdate(
     sessions: data.sessions.map((session) =>
       session.id === sessionId ? { ...session, title, updatedAt } : session
     ),
+  };
+}
+
+export function applySessionReadState(
+  data: SessionListResponse | undefined,
+  sessionId: string,
+  readState: Session["readState"]
+): SessionListResponse | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    sessions: data.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      if (!readState) return session;
+      const currentMessageId = session.readState?.latestMessageId;
+      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
+        return session;
+      }
+      return {
+        ...session,
+        readState,
+      };
+    }),
   };
 }
 

@@ -1,4 +1,4 @@
-import type { RepositoryShaEntry } from "@open-inspect/shared";
+import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
 import type { ImageBuildProvider, ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
@@ -55,12 +55,6 @@ export interface ImageBuildPlan extends BaseImageBuildPlan {
   provider: ImageBuildProvider;
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
-}
-
-export interface PlannedImageBuild {
-  plan: ImageBuildPlan;
-  /** Registration side of the callback token every build authenticates with. */
-  callbackAuth: { tokenHash: string; expiresAt: number };
 }
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */

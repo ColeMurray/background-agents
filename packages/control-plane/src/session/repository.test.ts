@@ -685,7 +685,7 @@ describe("SessionRepository", () => {
         [message]
       );
       expect(repo.getNextPendingMessage()).toEqual(message);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
     });
   });
 
@@ -782,16 +782,16 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("listPendingMessageIds", () => {
+  describe("listPendingMessagesWithCreatedAt", () => {
     it("returns pending messages in deterministic queue order", () => {
       mock.setData(
-        `SELECT id FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`,
-        [{ id: "msg-1" }]
+        `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`,
+        [{ id: "msg-1", created_at: 1000 }]
       );
 
-      expect(repo.listPendingMessageIds()).toEqual([{ id: "msg-1" }]);
+      expect(repo.listPendingMessagesWithCreatedAt()).toEqual([{ id: "msg-1", created_at: 1000 }]);
 
-      expect(mock.calls[0].query).toContain("SELECT id FROM messages");
+      expect(mock.calls[0].query).toContain("SELECT id, created_at FROM messages");
       expect(mock.calls[0].query).toContain("WHERE status = 'pending'");
       expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
       expect(mock.calls[0].params).toEqual([]);

@@ -3,13 +3,13 @@ import { recordSchema, type AgentResponse } from "./artifacts";
 import { isValidSandboxTimeoutMs } from "./integrations";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
-import type { Session } from "./sessions";
 import {
   messageSourceSchema,
   sessionStatusSchema,
   type SandboxStatus,
+  type Session,
   type SessionStatus,
-} from "./statuses";
+} from "./sessions";
 
 export interface UserPreferences {
   userId: string;
@@ -32,6 +32,13 @@ export const slackCallbackContextSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().optional(),
   reactionMessageTs: z.string().optional(),
+  /**
+   * Set when the session belongs to an automation rather than an interactive
+   * request. A thread follow-up completes through the same callback as an
+   * `@mention` turn, so the route alone cannot tell the two apart, and only the
+   * control plane knows which automation (if any) owns the thread.
+   */
+  automationId: z.string().optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;

@@ -1,4 +1,4 @@
-import { verifySlackSignature } from "@open-inspect/shared";
+import { verifySlackSignature } from "@open-inspect/shared/slack";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { Hono } from "hono";
 import { handleSlackEvent, type SlackEventPayload } from "../events/dispatcher";

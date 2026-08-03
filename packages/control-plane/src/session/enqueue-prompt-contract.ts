@@ -1,4 +1,5 @@
-import { messageSourceSchema, sessionAttachmentReferencesSchema } from "@open-inspect/shared";
+import { messageSourceSchema } from "@open-inspect/shared";
+import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
 
 export const enqueuePromptRequestSchema = z.object({

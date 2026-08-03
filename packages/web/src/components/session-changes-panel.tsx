@@ -5,9 +5,13 @@ import { useTheme } from "next-themes";
 import { mutate } from "swr";
 import useSWR from "swr";
 import { useEffect, useId, useRef, useState } from "react";
-import { formatRepositoryFullName, SESSION_DIFF_REVISION_STALE_CODE } from "@open-inspect/shared";
-import type { SessionDiffErrorCode } from "@open-inspect/shared";
-import type { SessionDiffFile, SessionDiffState } from "@open-inspect/shared";
+import { formatRepositoryFullName } from "@open-inspect/shared/types/repositories";
+import {
+  SESSION_DIFF_REVISION_STALE_CODE,
+  type SessionDiffErrorCode,
+  type SessionDiffFile,
+  type SessionDiffState,
+} from "@open-inspect/shared/types/session-diffs";
 import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-diff-preferences";
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
 import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";

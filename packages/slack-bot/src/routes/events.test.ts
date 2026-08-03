@@ -6,7 +6,7 @@ const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
   mockVerifySlackSignature: vi.fn(),
 }));
 
-vi.mock("@open-inspect/shared", () => {
+vi.mock("@open-inspect/shared/slack", () => {
   return { verifySlackSignature: mockVerifySlackSignature };
 });
 

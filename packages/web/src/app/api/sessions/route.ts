@@ -27,7 +27,10 @@ export async function GET(request: NextRequest) {
 
     console.log(`[sessions:GET] total=${totalMs}ms fetch=${fetchMs}ms status=${response.status}`);
 
-    return NextResponse.json(data, { status: response.status });
+    return NextResponse.json(data, {
+      status: response.status,
+      headers: { "Cache-Control": "private, no-store" },
+    });
   } catch (error) {
     console.error("Failed to fetch sessions:", error);
     return NextResponse.json({ error: "Failed to fetch sessions" }, { status: 500 });

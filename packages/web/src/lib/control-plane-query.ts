@@ -3,6 +3,7 @@ export const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = ["status", "limit", "offset"] 
 export const SESSION_CONTROL_PLANE_QUERY_PARAMS = [
   ...DEFAULT_CONTROL_PLANE_QUERY_PARAMS,
   "excludeStatus",
+  "excludeAutomationLineage",
   "createdBy",
 ] as const;
 

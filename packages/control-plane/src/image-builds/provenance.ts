@@ -1,4 +1,4 @@
-import type { RepositoryShaEntry } from "@open-inspect/shared";
+import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 
 type RepositoryIdentity = Pick<RepositoryShaEntry, "repoOwner" | "repoName">;
 

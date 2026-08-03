@@ -5,7 +5,7 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import type { ImageBuildScopeKind } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";

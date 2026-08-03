@@ -76,7 +76,6 @@ const PUBLIC_ROUTES: RegExp[] = [
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
-  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
@@ -91,6 +90,8 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
 const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/commit-signing$/, // Public signing configuration and remote signer
   /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/, // Parent agent follow-up to a direct child
+  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
+  /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
 ];
 
 /** Diff endpoints the sandbox needs, constrained by both path and method. */
@@ -167,11 +168,14 @@ function isWebServiceAuthRoute(method: string, path: string): boolean {
   );
 }
 
-function isScmAgnosticRoute(method: string, path: string): boolean {
+export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
-    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles)$/.test(path) ||
+    (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
+      path
+    ) ||
     /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
@@ -416,7 +420,7 @@ export async function handleRequest(
     return new Response(null, {
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Max-Age": "86400",
         "x-request-id": ctx.request_id,

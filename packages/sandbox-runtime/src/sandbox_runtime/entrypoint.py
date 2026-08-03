@@ -941,42 +941,63 @@ class SandboxSupervisor:
             self.log.info("opencode.skills_installed", skills_path=str(skills_dest))
         return installed
 
-    def _setup_openai_oauth(self) -> None:
-        """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
-        refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
-        if not refresh_token:
+    def _setup_managed_oauth(self) -> None:
+        """Write OpenCode OAuth sentinels for control-plane-managed providers."""
+        openai_managed = os.environ.get("OPENAI_OAUTH_MANAGED")
+        xai_managed = os.environ.get("XAI_OAUTH_MANAGED")
+        if not openai_managed and not xai_managed:
             return
 
         try:
             auth_dir = Path.home() / ".local" / "share" / "opencode"
             auth_dir.mkdir(parents=True, exist_ok=True)
 
-            openai_entry = {
+            oauth_entry = {
                 "type": "oauth",
                 "refresh": "managed-by-control-plane",
                 "access": "",
                 "expires": 0,
             }
-
-            account_id = os.environ.get("OPENAI_OAUTH_ACCOUNT_ID")
-            if account_id:
-                openai_entry["accountId"] = account_id
+            entries = {}
+            if openai_managed:
+                entries["openai"] = {**oauth_entry}
+            if xai_managed:
+                entries["xai"] = {**oauth_entry}
 
             auth_file = auth_dir / "auth.json"
             tmp_file = auth_dir / ".auth.json.tmp"
+
+            existing_entries = {}
+            if auth_file.exists():
+                try:
+                    existing = json.loads(auth_file.read_text())
+                    if isinstance(existing, dict):
+                        existing_entries = existing
+                except (OSError, json.JSONDecodeError):
+                    self.log.warn("managed_oauth.existing_auth_invalid")
+            existing_entries = {
+                key: value
+                for key, value in existing_entries.items()
+                if not (
+                    isinstance(value, dict)
+                    and value.get("refresh") == "managed-by-control-plane"
+                    and key not in entries
+                )
+            }
+            entries = {**existing_entries, **entries}
 
             # Write to a temp file created with 0o600 from the start, then
             # atomically rename so the target is never world-readable.
             fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
-                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+                os.write(fd, json.dumps(entries).encode())
             finally:
                 os.close(fd)
             tmp_file.replace(auth_file)
 
-            self.log.info("openai_oauth.setup")
+            self.log.info("managed_oauth.setup", providers=list(entries))
         except Exception as e:
-            self.log.warn("openai_oauth.setup_error", exc=e)
+            self.log.warn("managed_oauth.setup_error", exc=e)
 
     async def start_code_server(self) -> None:
         """Start code-server for browser-based VS Code editing."""
@@ -1244,7 +1265,7 @@ class SandboxSupervisor:
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
-        self._setup_openai_oauth()
+        self._setup_managed_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
@@ -1270,15 +1291,21 @@ class SandboxSupervisor:
 
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir)
 
-        # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
-        plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.js")
-        if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
+        managed_plugins = (
+            ("OPENAI_OAUTH_MANAGED", "codex-auth-plugin.js", "openai_oauth.plugin_deployed"),
+            ("XAI_OAUTH_MANAGED", "xai-auth-plugin.js", "xai_oauth.plugin_deployed"),
+        )
+        for marker, filename, log_event in managed_plugins:
+            plugin_source = Path(f"/app/sandbox_runtime/plugins/{filename}")
+            if not plugin_source.exists() or not os.environ.get(marker):
+                continue
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
-            installed_runtime_paths.add(".opencode/plugins/codex-auth-plugin.js")
-            self.log.info("openai_oauth.plugin_deployed")
+            shutil.copy(plugin_source, plugin_dir / filename)
+            installed_runtime_paths.add(f".opencode/plugins/{filename}")
+            self.log.info(log_event)
 
         if installed_runtime_paths and (workdir / ".git").exists():
             try:

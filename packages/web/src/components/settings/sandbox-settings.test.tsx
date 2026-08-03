@@ -10,7 +10,7 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   MAX_TUNNEL_PORTS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
 
 expect.extend(matchers);

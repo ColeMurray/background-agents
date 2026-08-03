@@ -2307,6 +2307,9 @@ describe("SchedulerDO", () => {
         reactionMessageTs: "1700000000.000200",
         // Label reads the steered run's snapshot.
         repoFullName: "acme/web-app",
+        // Marks the turn as automation-owned even though it completes through
+        // the interactive callback route.
+        automationId: "auto-slack",
       });
 
       // A steer is not a new trigger and not a skip.

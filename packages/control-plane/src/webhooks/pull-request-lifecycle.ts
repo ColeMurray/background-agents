@@ -13,13 +13,13 @@
  * dropped as not-ours.
  */
 
-import {
-  extractSessionIdFromBranch,
-  prArtifactBelongsToRepo,
-  type GitHubAutomationEvent,
-  type GitHubPullRequestEventFacts,
-  type PullRequestStatus,
-} from "@open-inspect/shared";
+import { extractSessionIdFromBranch } from "@open-inspect/shared/git";
+import { prArtifactBelongsToRepo } from "@open-inspect/shared/types/repositories";
+import type {
+  GitHubAutomationEvent,
+  GitHubPullRequestEventFacts,
+} from "@open-inspect/shared/triggers";
+import type { PullRequestStatus } from "@open-inspect/shared";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,

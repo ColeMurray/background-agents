@@ -1,6 +1,9 @@
 import "server-only";
 
-import { parseEnabledSignInProviders, type SignInProvider } from "@open-inspect/shared";
+import {
+  parseEnabledSignInProviders,
+  type SignInProvider,
+} from "@open-inspect/shared/sign-in-provider";
 import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
 import { dispatchWebServiceRequest } from "./control-plane-service";
 import { createLogger } from "./logger";

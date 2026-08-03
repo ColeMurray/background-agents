@@ -1,4 +1,4 @@
-import type { RepoMetadata } from "@open-inspect/shared";
+import type { RepoMetadata } from "@open-inspect/shared/types/repository-catalog";
 import { parseJsonStringArray } from "./json-columns";
 import type { SqlDatabase } from "./sql-database";
 

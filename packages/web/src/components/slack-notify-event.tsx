@@ -6,7 +6,7 @@ import {
   type SlackNotifySuccessOutput,
   type SlackNotifyToolEnvelope,
   slackNotifyToolEnvelopeSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
 import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";

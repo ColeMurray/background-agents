@@ -382,7 +382,7 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
     handle = SimpleNamespace()
     manager = SimpleNamespace(
         get_sandbox_by_id=AsyncMock(return_value=handle),
-        take_snapshot=MagicMock(return_value="im-session-1"),
+        take_snapshot=AsyncMock(return_value="im-session-1"),
     )
     monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
 
@@ -396,3 +396,4 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
 
     assert result["data"]["image_id"] == "im-session-1"
     manager.get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    manager.take_snapshot.assert_awaited_once_with(handle)

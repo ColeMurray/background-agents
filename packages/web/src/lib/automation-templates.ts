@@ -6,7 +6,7 @@
  * repo-required-at-creation invariant is untouched.
  */
 
-import type { AutomationTriggerType } from "@open-inspect/shared";
+import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 import type { AutomationFormValues } from "@/components/automations/automation-form";
 
 export type TemplateCategory =

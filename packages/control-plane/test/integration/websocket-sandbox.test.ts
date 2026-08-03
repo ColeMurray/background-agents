@@ -102,6 +102,45 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ws!.close();
   });
 
+  it.each([1000, 1001])(
+    "allows the active sandbox to reconnect after close code %s",
+    async (closeCode) => {
+      const name = `ws-sandbox-reconnect-${closeCode}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "ready",
+      });
+
+      const { ws: firstWs } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(firstWs).not.toBeNull();
+      firstWs!.accept();
+
+      const closed = new Promise<void>((resolve) => {
+        firstWs!.addEventListener("close", () => resolve());
+      });
+      firstWs!.close(closeCode, closeCode === 1001 ? "Going away" : "Normal closure");
+      await closed;
+
+      const stateAfterClose = await stub.fetch("http://internal/internal/state");
+      const state = await stateAfterClose.json<{ sandbox: { status: string } }>();
+      expect(state.sandbox.status).toBe("ready");
+
+      const { ws: reconnectedWs, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(response.status).toBe(101);
+      expect(reconnectedWs).not.toBeNull();
+      reconnectedWs!.accept();
+      reconnectedWs!.close();
+    }
+  );
+
   it("failed sandbox can reconnect and self-heal to ready", async () => {
     const name = `ws-sandbox-selfheal-${Date.now()}`;
     const { stub } = await initNamedSession(name);

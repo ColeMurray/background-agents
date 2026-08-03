@@ -9,8 +9,8 @@ This package provides the data plane for Open-Inspect:
 - **Sandboxes**: Isolated development environments running OpenCode
 - **Images**: Pre-built container images with all development tools
 - **Snapshots**: Filesystem snapshots for fast startup and session persistence
-- **Scheduler**: Cron-based rebuilds of prebuilt scope images — repositories and environments alike
-  (every 30 minutes)
+- **Image builds**: Short-lived provider sessions that the control plane creates, starts, snapshots,
+  and terminates
 
 ## Architecture
 

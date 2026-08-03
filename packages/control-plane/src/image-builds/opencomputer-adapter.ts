@@ -74,9 +74,7 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
     // build teardown (the sandbox is gone by the time the image is deleted, so
     // there is no attachment left to delete it through).
     await this.deleteBuildSandbox(
-      input.buildId,
       input.providerSessionId,
-      input.correlation,
       {
         deleteSecretStore: false,
       },
@@ -88,9 +86,7 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
     // A failed build produced no checkpoint, so nothing references its store —
     // delete it with the sandbox.
     await this.deleteBuildSandbox(
-      input.buildId,
       input.providerSessionId,
-      input.correlation,
       {
         deleteSecretStore: true,
       },
@@ -107,14 +103,10 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
   }
 
   private async deleteBuildSandbox(
-    buildId: string,
     providerSessionId: string,
-    correlation: FinalizeImageBuildInput["correlation"],
     options: { deleteSecretStore: boolean },
     signal?: AbortSignal
   ): Promise<void> {
-    void buildId;
-    void correlation;
     await this.provider.deleteSandbox(
       providerSessionId,
       {

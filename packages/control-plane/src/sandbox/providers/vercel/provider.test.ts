@@ -276,6 +276,9 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
       VERCEL_MAX_SANDBOX_TIMEOUT_MS
     );
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].env).toMatchObject({
+      SANDBOX_TIMEOUT_SECONDS: String(VERCEL_MAX_SANDBOX_TIMEOUT_MS / 1000),
+    });
   });
 
   it("keeps explicit Vercel sandbox timeouts below the provider limit", async () => {
@@ -307,6 +310,9 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
       VERCEL_MAX_SANDBOX_TIMEOUT_MS
     );
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].env).toMatchObject({
+      SANDBOX_TIMEOUT_SECONDS: String(VERCEL_MAX_SANDBOX_TIMEOUT_MS / 1000),
+    });
   });
 
   it("maps sandbox CPU and memory settings to Vercel vCPU resources", async () => {

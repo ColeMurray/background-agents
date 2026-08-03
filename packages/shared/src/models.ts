@@ -10,7 +10,7 @@
  *
  * - "none": No reasoning (OpenAI only)
  * - "low"/"medium"/"high"/"xhigh": Progressive reasoning depth
- * - "max": Maximum reasoning budget (Anthropic extended thinking)
+ * - "max": Maximum reasoning effort for models that support it
  */
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -158,7 +158,7 @@ export const MODEL_CATALOG = [
         name: "GPT 5.6 Luna",
         description: "Fast, cost-efficient high-volume workloads",
         reasoning: {
-          efforts: ["none", "low", "medium", "high", "xhigh"],
+          efforts: ["none", "low", "medium", "high", "xhigh", "max"],
           default: undefined,
         },
       },
@@ -186,6 +186,23 @@ export const MODEL_CATALOG = [
       { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
       { id: "opencode/glm-5.1", name: "GLM 5.1", description: "Z.ai" },
+    ],
+  },
+  {
+    category: "xAI / SuperGrok",
+    enabledByDefault: false,
+    models: [
+      {
+        id: "xai/grok-4.5",
+        name: "Grok 4.5",
+        description: "Latest Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+      },
+      {
+        id: "xai/grok-build-0.1",
+        name: "Grok Build 0.1",
+        description: "Coding model for SuperGrok subscribers",
+      },
     ],
   },
   {

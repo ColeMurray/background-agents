@@ -1,7 +1,8 @@
-import { resolveBuildTimeoutSeconds } from "@open-inspect/shared";
+import { resolveBuildTimeoutSeconds } from "@open-inspect/shared/types/integrations";
 import { createLogger, type CorrelationContext } from "../logger";
 import { createSourceControlProviderFromEnv, resolveScmProviderFromEnv } from "../source-control";
 import { scmCloneIdentity } from "../sandbox/sandbox-env";
+import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import {
@@ -10,14 +11,13 @@ import {
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
 import type { ImageBuildProvider, ImageBuildScope } from "./model";
-import { getImageBuildCloneAuthMode } from "./provider-policy";
 import {
   loadScopeBuildSecrets,
   resolveScopeSandboxSettings,
   resolveScopeTarget,
   type ResolvedImageBuildTarget,
 } from "./scope";
-import type { ImageBuildCloneAuth, PlannedImageBuild } from "./types";
+import type { ImageBuildCloneAuth, ImageBuildPlan } from "./types";
 
 const logger = createLogger("image-builds:planner");
 const MS_PER_SECOND = 1000;
@@ -72,10 +72,9 @@ export class ImageBuildPlanner {
     correlation: CorrelationContext;
     target: ResolvedImageBuildTarget;
     callbackAuth: PlannedCallbackAuth;
-  }): Promise<PlannedImageBuild> {
+  }): Promise<ImageBuildPlan> {
     const { repositories, repositoriesFingerprint } = params.target;
     const primary = repositories[0];
-    const callbackAuth = params.callbackAuth;
 
     const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       resolveScopeSandboxSettings(this.db, params.scope, primary),
@@ -91,31 +90,24 @@ export class ImageBuildPlanner {
       callbackUrl: params.callbackUrl,
       failureCallbackUrl: params.failureCallbackUrl,
       buildTimeoutMs: resolveBuildTimeoutSeconds(sandboxSettings) * MS_PER_SECOND,
-      userEnvVars,
+      userEnvVars: userEnvVars
+        ? prepareManagedProviderEnv({ exposedSecrets: userEnvVars, brokerSecrets: userEnvVars })
+        : undefined,
       correlation: {
         trace_id: params.correlation.trace_id,
         request_id: params.correlation.request_id,
       },
     };
 
-    const registration = { tokenHash: callbackAuth.tokenHash, expiresAt: callbackAuth.expiresAt };
-
     return {
-      plan: {
-        ...basePlan,
-        provider: this.provider,
-        callbackToken: callbackAuth.token,
-        cloneAuth,
-      },
-      callbackAuth: registration,
+      ...basePlan,
+      provider: this.provider,
+      callbackToken: params.callbackAuth.token,
+      cloneAuth,
     };
   }
 
   private async resolveCloneAuth(scope: ImageBuildScope): Promise<ImageBuildCloneAuth> {
-    if (getImageBuildCloneAuthMode(this.provider) !== "credential_helper") {
-      return { type: "unavailable" };
-    }
-
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
       const auth = await provider.generateCredentialHelperAuth();

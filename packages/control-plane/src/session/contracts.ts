@@ -25,6 +25,7 @@ export const SessionInternalPaths = {
   unarchive: "/internal/unarchive",
   verifySandboxToken: "/internal/verify-sandbox-token",
   openaiTokenRefresh: "/internal/openai-token-refresh",
+  xaiTokenRefresh: "/internal/xai-token-refresh",
   scmCredentials: "/internal/scm-credentials",
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",

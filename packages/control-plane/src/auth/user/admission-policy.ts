@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { SignInProvider } from "@open-inspect/shared";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./providers/constants";
 import type { VerifiedProviderIdentity } from "./providers/types";
 
