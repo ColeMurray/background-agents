@@ -134,8 +134,6 @@ async def run_modal_image_build(supervisor: ModalImageBuildSupervisor) -> int:
             build_id=callback.build_id,
             provider_session_id=callback.provider_session_id,
         )
-        build_succeeded = await supervisor.run(callback)
-        return 0 if build_succeeded else 1
     except ModalImageBuildStartCancelled:
         supervisor.log.info("image_build.launch_cancelled", build_id=build_id)
         return 0
@@ -149,3 +147,6 @@ async def run_modal_image_build(supervisor: ModalImageBuildSupervisor) -> int:
     finally:
         if transport is not None:
             transport.close()
+
+    build_succeeded = await supervisor.run(callback)
+    return 0 if build_succeeded else 1

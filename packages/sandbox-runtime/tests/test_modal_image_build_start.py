@@ -323,3 +323,33 @@ async def test_modal_entrypoint_returns_failure_when_supervisor_reports_failed_b
     assert exit_code == 1
     supervisor.run.assert_awaited_once()
     transport.close.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_modal_entrypoint_does_not_relabel_supervisor_errors_as_launch_failures(monkeypatch):
+    from sandbox_runtime import entrypoint, modal_image_build_start
+
+    _set_modal_build_context(monkeypatch)
+    reader = asyncio.StreamReader()
+    reader.feed_data(("a" * 64 + "\n").encode())
+    transport = MagicMock()
+    supervisor = MagicMock(
+        run=AsyncMock(side_effect=ValueError("unexpected build error")),
+        shutdown_event=asyncio.Event(),
+    )
+    monkeypatch.setattr(entrypoint, "SandboxSupervisor", MagicMock(return_value=supervisor))
+    monkeypatch.setattr(entrypoint, "install_signal_handlers", MagicMock())
+    monkeypatch.setattr(
+        modal_image_build_start,
+        "_connect_start_reader",
+        AsyncMock(return_value=(reader, transport)),
+    )
+
+    with pytest.raises(ValueError, match="unexpected build error"):
+        await entrypoint.main([MODAL_IMAGE_BUILD_START_ARGUMENT])
+
+    supervisor.run.assert_awaited_once()
+    assert all(
+        call.args != ("image_build.launch_failed",) for call in supervisor.log.error.call_args_list
+    )
+    transport.close.assert_called_once_with()
