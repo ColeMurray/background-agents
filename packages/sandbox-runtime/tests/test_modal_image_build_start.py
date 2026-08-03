@@ -226,6 +226,52 @@ async def test_modal_entrypoint_fails_closed_outside_image_build_mode(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_modal_entrypoint_requires_build_identity(monkeypatch):
+    from sandbox_runtime import entrypoint
+
+    _set_modal_build_context(monkeypatch)
+    monkeypatch.delenv(BUILD_ID_ENV)
+    run = AsyncMock()
+    supervisor = MagicMock(run=run, shutdown_event=asyncio.Event())
+    monkeypatch.setattr(entrypoint, "SandboxSupervisor", MagicMock(return_value=supervisor))
+    monkeypatch.setattr(entrypoint, "install_signal_handlers", MagicMock())
+
+    exit_code = await entrypoint.main([MODAL_IMAGE_BUILD_START_ARGUMENT])
+
+    assert exit_code == 1
+    run.assert_not_awaited()
+    supervisor.log.error.assert_called_once_with(
+        "image_build.launch_failed", reason="missing_build_identity"
+    )
+
+
+@pytest.mark.asyncio
+async def test_modal_entrypoint_exits_cleanly_when_shutdown_wins(monkeypatch):
+    from sandbox_runtime import entrypoint, modal_image_build_start
+
+    _set_modal_build_context(monkeypatch)
+    reader = asyncio.StreamReader()
+    transport = MagicMock()
+    run = AsyncMock()
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+    supervisor = MagicMock(run=run, shutdown_event=shutdown_event)
+    monkeypatch.setattr(entrypoint, "SandboxSupervisor", MagicMock(return_value=supervisor))
+    monkeypatch.setattr(entrypoint, "install_signal_handlers", MagicMock())
+    monkeypatch.setattr(
+        modal_image_build_start,
+        "_connect_start_reader",
+        AsyncMock(return_value=(reader, transport)),
+    )
+
+    exit_code = await entrypoint.main([MODAL_IMAGE_BUILD_START_ARGUMENT])
+
+    assert exit_code == 0
+    run.assert_not_awaited()
+    transport.close.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_modal_entrypoint_rejects_invalid_token_without_starting(monkeypatch):
     from sandbox_runtime import entrypoint, modal_image_build_start
 
