@@ -431,8 +431,9 @@ class TestImageBuildMode:
                 return_value=callback,
             ),
         ):
-            await supervisor.run()
+            build_succeeded = await supervisor.run()
 
+        assert build_succeeded is False
         callback.report_success.assert_not_called()
         callback.report_failure.assert_awaited_once_with(
             "setup hook failed for acme/my-repo in build mode"

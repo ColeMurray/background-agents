@@ -2021,7 +2021,7 @@ class SandboxSupervisor:
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> None:
+    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
         """Main supervisor loop."""
         startup_start = time.time()
 
@@ -2098,7 +2098,7 @@ class SandboxSupervisor:
                 # The sandbox remains available for deferred provider
                 # finalization after the bounded build execution completes.
                 await self.shutdown_event.wait()
-                return
+                return True
 
             boot_result = await self._run_repository_boot(expected_tunnel_ports)
 
@@ -2152,21 +2152,25 @@ class SandboxSupervisor:
 
         except ImageBuildExecutionCancelled:
             self.log.info("image_build.cancelled", reason="shutdown_requested")
+            return True
         except Exception as e:
             self.log.error("supervisor.error", exc=e)
             if image_build_mode and self.shutdown_event.is_set():
                 self.log.info("image_build.cancelled", reason="shutdown_requested")
-                return
+                return True
             if image_build_mode and repo_image_callback:
                 try:
                     await self._run_until_shutdown(repo_image_callback.report_failure(str(e)))
                 except ImageBuildExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
-                    return
+                    return True
             await self._report_fatal_error(str(e))
+            return False
 
         finally:
             await self.shutdown()
+
+        return True
 
     def request_shutdown(self, sig: signal.Signals) -> None:
         """Record a process shutdown signal for the current lifecycle phase."""

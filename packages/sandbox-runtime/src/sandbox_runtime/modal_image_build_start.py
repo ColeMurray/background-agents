@@ -34,7 +34,7 @@ class ModalImageBuildSupervisor(Protocol):
     log: StructuredLogger
     shutdown_event: asyncio.Event
 
-    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> None: ...
+    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool: ...
 
 
 async def read_modal_callback_token(
@@ -134,8 +134,8 @@ async def run_modal_image_build(supervisor: ModalImageBuildSupervisor) -> int:
             build_id=callback.build_id,
             provider_session_id=callback.provider_session_id,
         )
-        await supervisor.run(callback)
-        return 0
+        build_succeeded = await supervisor.run(callback)
+        return 0 if build_succeeded else 1
     except ModalImageBuildStartCancelled:
         supervisor.log.info("image_build.launch_cancelled", build_id=build_id)
         return 0
