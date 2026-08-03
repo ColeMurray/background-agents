@@ -79,15 +79,6 @@ describe("deriveIdentity", () => {
       spawnSource: "slack-bot",
     });
   });
-
-  it("derives modal with no participant and no spawn source", () => {
-    expect(deriveIdentity({ kind: "service", service: "modal", actor: null })).toEqual({
-      participantUserId: null,
-      canonicalUserId: null,
-      actor: null,
-      spawnSource: null,
-    });
-  });
 });
 
 describe("applyIdentityEnforcement — identityless principals", () => {

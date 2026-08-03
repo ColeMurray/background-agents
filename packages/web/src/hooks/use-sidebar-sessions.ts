@@ -3,19 +3,28 @@
 import { useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuthSession } from "@/lib/auth-session";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
 import useSWR, { mutate } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
+  applySessionReadState,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isUnarchivedSessionListKey,
   mergeUniqueSessions,
   removeSessionFromList,
+  SESSIONS_PAGE_SIZE,
   type SessionListResponse,
 } from "@/lib/session-list";
 import type { Session } from "@open-inspect/shared";
+import {
+  markLatestMessageRead,
+  reconcileSessionReadState,
+  readStateFromResult,
+} from "@/lib/session-read-state";
+
+const VISIBLE_SESSION_LIST_POLL_MS = 30_000;
 
 export type SessionItem = Session;
 
@@ -25,100 +34,87 @@ export function useSidebarSessions(currentSessionId: string | null) {
   const { data: authSession } = useAuthSession();
   const router = useRouter();
   const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
-  const [extraSessionsState, setExtraSessionsState] = useState<{
-    source: SessionListResponse | undefined;
-    sessions: SessionItem[];
-  }>({ source: undefined, sessions: [] });
-  const [hasMorePages, setHasMorePages] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [extraPageRequest, setExtraPageRequest] = useState({
+    key: null as string | null,
+    count: 0,
+  });
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const offsetRef = useRef(0);
-  const hasMoreRef = useRef(false);
-  const loadingMoreRef = useRef(false);
-  const sessionListVersionRef = useRef(0);
+
+  const sidebarSessionListOptions = useMemo(
+    () => ({
+      excludeStatus: "archived",
+      ...(sessionCreatorFilter === "mine"
+        ? {
+            excludeAutomationLineage: true,
+            createdBy: [CURRENT_USER_CREATED_BY],
+          }
+        : {}),
+    }),
+    [sessionCreatorFilter]
+  );
 
   const sidebarSessionsKey = useMemo(() => {
     if (!authSession) return null;
 
-    return buildSessionsPageKey({
-      excludeStatus: "archived",
-      createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-    });
-  }, [authSession, sessionCreatorFilter]);
-
+    return buildSessionsPageKey(sidebarSessionListOptions);
+  }, [authSession, sidebarSessionListOptions]);
   const {
-    data,
+    data: firstPage,
     error: sessionsError,
     isLoading: sessionsLoading,
-  } = useSWR<SessionListResponse>(sidebarSessionsKey);
-  const loading = sessionsLoading;
-  const firstPageSessions = useMemo(() => data?.sessions ?? [], [data?.sessions]);
+    mutate: mutateFirstPage,
+  } = useSWR<SessionListResponse>(sidebarSessionsKey, {
+    refreshInterval: () =>
+      typeof document !== "undefined" && document.visibilityState === "visible"
+        ? VISIBLE_SESSION_LIST_POLL_MS
+        : 0,
+    refreshWhenHidden: false,
+  });
+  const requestedExtraPages =
+    extraPageRequest.key === sidebarSessionsKey ? extraPageRequest.count : 0;
 
-  // Hide paginated rows synchronously when SWR replaces their source page.
-  const extraSessions = useMemo(
-    () => (extraSessionsState.source === data ? extraSessionsState.sessions : []),
-    [data, extraSessionsState]
+  const getExtraPageKey = useCallback(
+    (pageIndex: number, previousPage: SessionListResponse | null) => {
+      if (
+        !authSession ||
+        pageIndex >= requestedExtraPages ||
+        !firstPage?.hasMore ||
+        (previousPage && !previousPage.hasMore)
+      ) {
+        return null;
+      }
+      return buildSessionsPageKey({
+        ...sidebarSessionListOptions,
+        offset: (pageIndex + 1) * SESSIONS_PAGE_SIZE,
+      });
+    },
+    [authSession, firstPage?.hasMore, requestedExtraPages, sidebarSessionListOptions]
   );
 
-  useEffect(() => {
-    sessionListVersionRef.current += 1;
-    setExtraSessionsState({ source: data, sessions: [] });
-    setLoadingMore(false);
-    loadingMoreRef.current = false;
-
-    const nextHasMore = data?.hasMore ?? false;
-    const nextOffset = data ? firstPageSessions.length : 0;
-
-    setHasMorePages(nextHasMore);
-    offsetRef.current = nextOffset;
-    hasMoreRef.current = nextHasMore;
-  }, [sidebarSessionsKey, data, firstPageSessions.length]);
+  const {
+    data: extraPages,
+    isValidating,
+    size,
+    setSize,
+    mutate: mutateExtraPages,
+  } = useSWRInfinite<SessionListResponse>(getExtraPageKey, {
+    refreshInterval: () =>
+      typeof document !== "undefined" && document.visibilityState === "visible"
+        ? VISIBLE_SESSION_LIST_POLL_MS
+        : 0,
+    refreshWhenHidden: false,
+    revalidateAll: true,
+  });
+  const loading = sessionsLoading;
+  const loadingMore = isValidating && extraPages?.[size - 1] === undefined;
+  const hasMorePages = extraPages?.at(-1)?.hasMore ?? firstPage?.hasMore ?? false;
 
   const loadMoreSessions = useCallback(async () => {
-    if (!authSession || !sidebarSessionsKey || loadingMoreRef.current || !hasMoreRef.current) {
-      return;
-    }
-
-    loadingMoreRef.current = true;
-    setLoadingMore(true);
-    const sessionListVersion = sessionListVersionRef.current;
-
-    try {
-      const response = await browserApiFetch(
-        buildSessionsPageKey({
-          excludeStatus: "archived",
-          createdBy: sessionCreatorFilter === "mine" ? [CURRENT_USER_CREATED_BY] : undefined,
-          offset: offsetRef.current,
-        })
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch additional sessions: ${response.status}`);
-      }
-
-      const page: SessionListResponse = await response.json();
-      const fetched = page.sessions ?? [];
-
-      if (sessionListVersion !== sessionListVersionRef.current) {
-        return;
-      }
-
-      setExtraSessionsState((previous) => ({
-        source: data,
-        sessions: mergeUniqueSessions(previous.source === data ? previous.sessions : [], fetched),
-      }));
-      setHasMorePages(page.hasMore);
-      offsetRef.current += fetched.length;
-      hasMoreRef.current = page.hasMore;
-    } catch (error) {
-      console.error("Failed to fetch additional sessions:", error);
-    } finally {
-      if (sessionListVersion === sessionListVersionRef.current) {
-        loadingMoreRef.current = false;
-        setLoadingMore(false);
-      }
-    }
-  }, [authSession, data, sessionCreatorFilter, sidebarSessionsKey]);
+    if (!authSession || !sidebarSessionsKey || loadingMore || !hasMorePages) return;
+    const nextPageCount = requestedExtraPages + 1;
+    setExtraPageRequest({ key: sidebarSessionsKey, count: nextPageCount });
+    await setSize(nextPageCount);
+  }, [authSession, hasMorePages, loadingMore, requestedExtraPages, setSize, sidebarSessionsKey]);
 
   const maybeLoadMoreSessions = useCallback(() => {
     const container = scrollContainerRef.current;
@@ -137,19 +133,14 @@ export function useSidebarSessions(currentSessionId: string | null) {
     if (container.clientHeight > 0 && container.scrollHeight <= container.clientHeight) {
       void loadMoreSessions();
     }
-  }, [
-    hasMorePages,
-    loading,
-    loadingMore,
-    loadMoreSessions,
-    firstPageSessions.length,
-    extraSessions.length,
-  ]);
+  }, [hasMorePages, loading, loadingMore, loadMoreSessions, extraPages, firstPage]);
 
-  const sessions = useMemo(
-    () => mergeUniqueSessions(firstPageSessions, extraSessions),
-    [firstPageSessions, extraSessions]
-  );
+  const sessions = useMemo(() => {
+    return (extraPages ?? []).reduce<SessionItem[]>(
+      (all, page) => mergeUniqueSessions(all, page?.sessions ?? []),
+      firstPage?.sessions ?? []
+    );
+  }, [extraPages, firstPage?.sessions]);
 
   // Sort sessions by updatedAt (most recent first) and group children under their parent sessions.
   const { activeSessions, inactiveSessions, childrenMap } = useMemo(() => {
@@ -204,8 +195,23 @@ export function useSidebarSessions(currentSessionId: string | null) {
 
   const handleSessionArchived = useCallback(
     async (sessionId: string) => {
-      if (!sidebarSessionsKey) return;
-
+      await Promise.all([
+        mutateFirstPage(
+          (current) =>
+            current
+              ? { ...current, sessions: removeSessionFromList(current.sessions, sessionId) }
+              : current,
+          { revalidate: false }
+        ),
+        mutateExtraPages(
+          (current) =>
+            current?.map((page) => ({
+              ...page,
+              sessions: removeSessionFromList(page.sessions, sessionId),
+            })),
+          { revalidate: false }
+        ),
+      ]);
       await mutate<SessionListResponse>(
         isUnarchivedSessionListKey,
         (current) =>
@@ -214,28 +220,25 @@ export function useSidebarSessions(currentSessionId: string | null) {
             : current,
         { revalidate: false, populateCache: true }
       );
-      setExtraSessionsState((previous) => ({
-        ...previous,
-        sessions: previous.sessions.filter((session) => session.id !== sessionId),
-      }));
 
       if (currentSessionId === sessionId) {
         router.push("/");
       }
     },
-    [currentSessionId, router, sidebarSessionsKey]
+    [currentSessionId, mutateExtraPages, mutateFirstPage, router]
   );
 
   const handleSessionRenamed = useCallback(
     (sessionId: string, title: string) => {
       const updatedAt = Date.now();
-      setExtraSessionsState((previous) => ({
-        ...previous,
-        sessions: previous.sessions.map((session) =>
-          session.id === sessionId ? { ...session, title, updatedAt } : session
-        ),
-      }));
-      if (!sidebarSessionsKey) return;
+      void mutateFirstPage((current) => applyTitleUpdate(current, sessionId, title, updatedAt), {
+        revalidate: false,
+      });
+      void mutateExtraPages(
+        (current) =>
+          current?.map((page) => applyTitleUpdate(page, sessionId, title, updatedAt) ?? page),
+        { revalidate: false }
+      );
 
       void mutate<SessionListResponse>(
         isUnarchivedSessionListKey,
@@ -243,7 +246,25 @@ export function useSidebarSessions(currentSessionId: string | null) {
         { revalidate: false }
       );
     },
-    [sidebarSessionsKey]
+    [mutateExtraPages, mutateFirstPage]
+  );
+
+  const handleMarkLatestMessageRead = useCallback(
+    async (sessionId: string) => {
+      const result = await markLatestMessageRead(sessionId);
+      const readState = readStateFromResult(result);
+      await mutateFirstPage(
+        (current) => applySessionReadState(current, result.sessionId, readState),
+        { revalidate: false }
+      );
+      await mutateExtraPages(
+        (current) =>
+          current?.map((page) => applySessionReadState(page, result.sessionId, readState) ?? page),
+        { revalidate: false }
+      );
+      await reconcileSessionReadState(result);
+    },
+    [mutateExtraPages, mutateFirstPage]
   );
 
   return {
@@ -260,5 +281,6 @@ export function useSidebarSessions(currentSessionId: string | null) {
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
+    handleMarkLatestMessageRead,
   };
 }

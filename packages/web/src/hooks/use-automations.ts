@@ -4,7 +4,7 @@ import type {
   Automation,
   ListAutomationsResponse,
   ListAutomationInvocationsResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/automations";
 
 export function useAutomations() {
   const { data: session } = useAuthSession();

@@ -1,4 +1,4 @@
-import { publishView } from "@open-inspect/shared";
+import { publishView } from "@open-inspect/shared/slack";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { getUserRepoBranchPreferences } from "../branch-preferences";
 import { getAvailableRepos } from "../classifier/repos";

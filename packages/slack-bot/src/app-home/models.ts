@@ -1,13 +1,12 @@
-import type { SlackGlobalConfig } from "@open-inspect/shared";
 import {
   DEFAULT_ENABLED_MODELS,
   MODEL_OPTIONS,
-  isValidModel,
   normalizeValidModels,
 } from "@open-inspect/shared/models";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { ModelOption } from "./slack-types";
+import { getSlackSettings } from "../slack-settings";
 
 const ALL_MODELS = MODEL_OPTIONS.flatMap((group) =>
   group.models.map((model) => ({
@@ -51,18 +50,5 @@ export async function getSlackDefaultModel(
   env: Env,
   traceId?: string
 ): Promise<string | undefined> {
-  try {
-    const url = "https://internal/integration-settings/slack";
-    const response = await signedControlPlaneFetch(env, { method: "GET", url, traceId });
-
-    if (!response.ok) {
-      return undefined;
-    }
-
-    const data = (await response.json()) as { settings: SlackGlobalConfig | null };
-    const model = data.settings?.defaults?.model;
-    return model && isValidModel(model) ? model : undefined;
-  } catch {
-    return undefined;
-  }
+  return (await getSlackSettings(env, traceId)).defaultModel;
 }

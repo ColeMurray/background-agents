@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { AnalyticsDays } from "@open-inspect/shared";
+import type { AnalyticsDays } from "@open-inspect/shared/types/analytics";
 import { AnalyticsPullRequestCards } from "@/components/analytics/pull-request-cards";
 import { AnalyticsPullRequestChart } from "@/components/analytics/pull-request-chart";
 import { AnalyticsPullRequestRepoTable } from "@/components/analytics/pull-request-repo-table";

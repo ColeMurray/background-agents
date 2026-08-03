@@ -1,6 +1,6 @@
-import type { RepositoryShaEntry } from "@open-inspect/shared";
+import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
-import type { ImageBuildProviderImageRef, ImageBuildScope, SupersededImageBuild } from "./model";
+import type { ImageBuildProvider, ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
 export type ImageBuildWorkflowContext = CorrelationContext;
 
@@ -23,14 +23,8 @@ export type TriggerImageBuildResult =
   | { type: "up_to_date" };
 
 export type ImageBuildWorkflowResult =
-  | { type: "completion_accepted"; finalization: Promise<void> }
-  | {
-      type: "build_ready";
-      replacedImages: SupersededImageBuild[];
-      cleanup?: Promise<void>;
-    }
-  | { type: "build_superseded"; cleanup?: Promise<void> }
-  | { type: "build_failed"; cleanup?: Promise<void> };
+  | { type: "completion_accepted" }
+  | { type: "failure_accepted" };
 
 /** Provider-neutral build request fields resolved before adapter-specific execution. */
 interface BaseImageBuildPlan {
@@ -45,48 +39,22 @@ interface BaseImageBuildPlan {
    * plane can be renamed without silently pointing failures at a 404).
    */
   failureCallbackUrl: string;
+  /** User-configured build-execution budget; provider sessions add finalization headroom. */
   buildTimeoutMs: number;
   userEnvVars?: Record<string, string>;
   correlation: CorrelationContext;
 }
 
-/** Modal's data-plane builder returns the provider image id directly in its callback. */
-export interface ModalImageBuildPlan extends BaseImageBuildPlan {
-  provider: "modal";
-  callbackMode: "provider_image";
-  callbackToken: string;
-}
-
 /** Clone auth handed to provider-session build sandboxes (provider-policy.ts). */
 export type ImageBuildCloneAuth =
-  | { type: "credential_helper"; token: string }
+  | { type: "credential_helper"; host: string; username: string; token: string }
   | { type: "unavailable" };
 
-/** Vercel builds inside a sandbox; the control plane snapshots it after callback success. */
-export interface VercelImageBuildPlan extends BaseImageBuildPlan {
-  provider: "vercel";
-  callbackMode: "provider_session";
+/** Every supported provider uses the same create-bind-launch session contract. */
+export interface ImageBuildPlan extends BaseImageBuildPlan {
+  provider: ImageBuildProvider;
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
-}
-
-/** OpenComputer builds inside a sandbox; the control plane checkpoints it after callback success. */
-export interface OpenComputerImageBuildPlan extends BaseImageBuildPlan {
-  provider: "opencomputer";
-  callbackMode: "provider_session";
-  callbackToken: string;
-  cloneAuth: ImageBuildCloneAuth;
-}
-
-export type ImageBuildPlan =
-  | ModalImageBuildPlan
-  | VercelImageBuildPlan
-  | OpenComputerImageBuildPlan;
-
-export interface PlannedImageBuild {
-  plan: ImageBuildPlan;
-  /** Registration side of the callback token every build authenticates with. */
-  callbackAuth: { tokenHash: string; expiresAt: number };
 }
 
 /** Lets provider-session adapters bind the provider sandbox id before the runtime launches. */
@@ -102,7 +70,6 @@ export interface ImageBuildStartCallbacks {
  */
 export interface CompleteImageBuildCallback {
   buildId: string;
-  providerImageId?: string;
   providerSessionId?: string;
   repositoryShas?: RepositoryShaEntry[];
   runtimeVersion?: string;
@@ -118,6 +85,7 @@ export interface FailImageBuildCallback {
 export interface DeleteImageInput {
   image: ImageBuildProviderImageRef;
   correlation?: CorrelationContext;
+  signal?: AbortSignal;
 }
 
 /** Finalization input for provider-session builds (the deferred snapshot/checkpoint). */
@@ -125,6 +93,7 @@ export interface FinalizeImageBuildInput {
   buildId: string;
   providerSessionId: string;
   correlation: CorrelationContext;
+  signal?: AbortSignal;
 }
 
 export interface FailedImageBuildInput {
@@ -132,24 +101,19 @@ export interface FailedImageBuildInput {
   providerSessionId: string;
   errorMessage: string;
   correlation: CorrelationContext;
+  signal?: AbortSignal;
 }
 
 /**
  * Provider-facing operations for image builds. The workflow owns state
  * transitions; adapters own translating lifecycle steps into provider API
  * calls (start build, snapshot/checkpoint, teardown, artifact deletion).
- * The finalize/cleanup hooks apply to provider_session builds only — Modal's
- * callback already carries the artifact id.
+ * Every supported provider follows the same provider-session lifecycle.
  */
-export type ImageBuildAdapter<Plan extends ImageBuildPlan> = {
-  startBuild(plan: Plan, callbacks: ImageBuildStartCallbacks): Promise<void>;
+export type ImageBuildAdapter = {
+  startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void>;
   deleteImage(input: DeleteImageInput): Promise<void>;
-  finalizeSuccessfulBuild?(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef>;
-  cleanupFailedBuild?(input: FailedImageBuildInput): Promise<void>;
-  cleanupCompletedBuild?(input: FinalizeImageBuildInput): Promise<void>;
+  finalizeSuccessfulBuild(input: FinalizeImageBuildInput): Promise<ImageBuildProviderImageRef>;
+  cleanupFailedBuild(input: FailedImageBuildInput): Promise<void>;
+  cleanupCompletedBuild(input: FinalizeImageBuildInput): Promise<void>;
 };
-
-export type AnyImageBuildAdapter =
-  | ImageBuildAdapter<ModalImageBuildPlan>
-  | ImageBuildAdapter<VercelImageBuildPlan>
-  | ImageBuildAdapter<OpenComputerImageBuildPlan>;

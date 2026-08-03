@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import type { ImageBuildRecordView } from "@open-inspect/shared";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeSupersededBuilds,
@@ -47,8 +47,8 @@ export async function GET() {
       statusResponse.json(),
     ]);
 
-    // The enabled feed also carries the cron's repository lists — serve the
-    // scope identity plus the current fingerprint the status fold keys on.
+    // Serve the enabled scope identities and current fingerprints that the
+    // status fold keys on.
     const units = ((enabledData.units ?? []) as ImageBuildUnitView[]).map((unit) => ({
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,

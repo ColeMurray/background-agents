@@ -2,7 +2,7 @@
  * Shared route primitives used by all route modules.
  */
 
-import { decodeRepositoryPathSegments } from "@open-inspect/shared";
+import { decodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import type { CorrelationContext } from "../logger";
 import type { AuthenticationContext, Principal } from "../auth/principal";
 import type { RequestMetrics } from "../db/instrumented-d1";
@@ -81,34 +81,6 @@ export function json(data: unknown, status = 200): Response {
  */
 export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
-}
-
-/**
- * max_age_seconds for the image-maintenance routes (repo + environment
- * mark-stale/cleanup). Rejecting non-numbers matters: a null that fell
- * through to `null * 1000 = 0` would mark every building row stale or delete
- * every failed row.
- */
-export async function parseMaxAgeMs(
-  request: Request,
-  defaultMs: number
-): Promise<number | Response> {
-  let body: { max_age_seconds?: unknown };
-  try {
-    body = (await request.json()) as typeof body;
-  } catch {
-    body = {};
-  }
-
-  if (body.max_age_seconds === undefined) return defaultMs;
-  if (
-    typeof body.max_age_seconds !== "number" ||
-    !Number.isFinite(body.max_age_seconds) ||
-    body.max_age_seconds < 0
-  ) {
-    return error("max_age_seconds must be a non-negative number", 400);
-  }
-  return body.max_age_seconds * 1000;
 }
 
 /**

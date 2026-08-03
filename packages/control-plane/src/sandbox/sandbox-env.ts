@@ -1,7 +1,12 @@
-import type { McpServerConfig } from "@open-inspect/shared";
+import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { SourceControlProviderName } from "../source-control";
-import type { CreateSandboxConfig, RestoreConfig, SessionRepositoryInfo } from "./provider";
+import {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  type CreateSandboxConfig,
+  type RestoreConfig,
+  type SessionRepositoryInfo,
+} from "./provider";
 import { resolveServicePorts } from "./providers/port-resolution";
 
 /**
@@ -96,6 +101,7 @@ export function toRepositoryConfigPayload(
 export const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
 /** Build-mode marker checked as `=== "true"` by the runtime entrypoint. */
 export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
+export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
 /** One-shot clone token used only by image-build sandboxes. */
 export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 
@@ -195,6 +201,7 @@ export function buildSandboxEnvVars(
     SANDBOX_ID: config.sandboxId,
     CONTROL_PLANE_URL: config.controlPlaneUrl,
     SANDBOX_AUTH_TOKEN: config.sandboxAuthToken,
+    SANDBOX_TIMEOUT_SECONDS: String(config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS),
     REPO_OWNER: config.repoOwner ?? "",
     REPO_NAME: config.repoName ?? "",
     [SESSION_CONFIG_ENV_VAR]: JSON.stringify(sessionConfig),

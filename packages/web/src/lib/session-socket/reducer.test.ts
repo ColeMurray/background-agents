@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
-import type { ServerMessage, SessionState } from "@open-inspect/shared";
+import type { SessionState } from "@open-inspect/shared";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import {
   initialSessionSocketState,
   sessionSocketReducer,

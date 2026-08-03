@@ -1,4 +1,4 @@
-import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared";
+import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";

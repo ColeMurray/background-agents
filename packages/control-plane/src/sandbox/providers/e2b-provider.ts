@@ -10,7 +10,7 @@
  * template's start command runs at build time.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createLogger } from "../../logger";
 import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
@@ -58,6 +58,7 @@ export class E2BSandboxProvider implements SandboxProvider {
   private static readonly TERMINAL_STOP_REASONS = new Set(["connecting_timeout"]);
 
   readonly capabilities: SandboxProviderCapabilities = {
+    supportsSandboxTimeout: true,
     supportsSnapshots: false,
     supportsRestore: false,
     // Stop is a resumable pause; the manager treats it as provider-managed state.
@@ -78,10 +79,14 @@ export class E2BSandboxProvider implements SandboxProvider {
             this.providerConfig.codeServerPasswordSecret
           )
         : undefined;
-      const envVars = buildSandboxEnvVars(config, {
-        scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
-        codeServerPassword,
-      });
+      const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
+      const envVars = buildSandboxEnvVars(
+        { ...config, timeoutSeconds },
+        {
+          scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+          codeServerPassword,
+        }
+      );
       // E2B sandboxes run as a non-root user and /run is a root-owned tmpfs, so
       // the git credential helper can't create its default cache dir (/run/oi)
       // and fails before brokering a token. Point it at a user-writable path.
@@ -90,7 +95,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       const sandbox = await this.client.createSandbox({
         templateID: this.client.config.templateId,
         metadata,
-        timeoutSeconds: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
+        timeoutSeconds,
         autoPause: this.providerConfig.autoPause,
         // Require secure envd access: the per-session env we upload carries
         // SANDBOX_AUTH_TOKEN + user secrets, so envd must reject writes lacking the

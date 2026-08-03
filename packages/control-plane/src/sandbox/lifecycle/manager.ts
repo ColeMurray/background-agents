@@ -10,7 +10,7 @@
  * spawn attempts within the same request.
  */
 
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { SandboxStatus } from "../../types";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
@@ -44,7 +44,7 @@ import { createLogger, type Logger } from "../../logger";
 import { hashToken } from "../../auth/crypto";
 import { mintJwt } from "../../auth/jwt";
 import { repoImageBuildScope, type ImageBuildScope } from "../../image-builds/model";
-import { normalizeSandboxSettings } from "../settings";
+import { parsePersistedSandboxSettings } from "../settings";
 import {
   evaluateImageBuildForSpawn,
   type ImageBuildLookup,
@@ -156,7 +156,7 @@ export interface WebSocketManager {
  * Alarm scheduler for timeouts.
  */
 export interface AlarmScheduler {
-  /** Schedule an alarm at the given timestamp */
+  /** Schedule an alarm no later than the given timestamp */
   scheduleAlarm(timestamp: number): Promise<void>;
 }
 
@@ -202,9 +202,6 @@ export const DEFAULT_LIFECYCLE_CONFIG: Omit<SandboxLifecycleConfig, "controlPlan
   heartbeat: DEFAULT_HEARTBEAT_CONFIG,
   connectingTimeout: DEFAULT_CONNECTING_TIMEOUT_CONFIG,
 };
-
-/** Child (agent-spawned) sessions get a shorter sandbox timeout. */
-const CHILD_SANDBOX_TIMEOUT_SECONDS = 3600; // 1 hour (vs default 2 hours)
 
 function buildSandboxIdForSession(session: SessionRow, now: number): string {
   const sandboxName = sessionHasRepository(session)
@@ -461,15 +458,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const prebuiltImageId: string | null = selectedImage?.providerImageId ?? null;
       const prebuiltImageSha: string | null = selectedImage?.primaryBaseSha ?? null;
 
-      // Child sessions get a shorter timeout
-      const timeoutSeconds =
-        session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
-
       const mcpServers = await this.loadMcpServers(repositories);
 
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
+      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const createConfig: CreateSandboxConfig = {
         sessionId,
         sandboxId: expectedSandboxId,
@@ -756,15 +750,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const userEnvVars = await this.storage.getUserEnvVars();
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
 
-      // Child sessions get a shorter timeout (same logic as doSpawn)
-      const timeoutSeconds =
-        session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
-
       const repositories = this.storage.getSessionRepositories();
       const codeServerEnabled = session.code_server_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
+      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
       const result = await this.provider.restoreFromSnapshot({
         snapshotImageId,
         sessionId: session.session_name || session.id,
@@ -897,8 +888,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
       this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
 
-      const timeoutSeconds =
-        session.spawn_source === "agent" ? CHILD_SANDBOX_TIMEOUT_SECONDS : undefined;
+      const sandboxSettings = this.parseSandboxSettings(session);
+      const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
 
       const result = await this.provider.resumeSandbox({
         providerObjectId,
@@ -906,7 +897,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
         codeServerEnabled: session.code_server_enabled === 1,
-        sandboxSettings: this.parseSandboxSettings(session),
+        sandboxSettings,
       });
 
       if (!result.success) {
@@ -1321,9 +1312,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   /**
    * Schedule a disconnect check alarm (heartbeat timeout from now).
-   * Used after abnormal WebSocket close to ensure dead sandboxes are detected
-   * promptly. If the bridge reconnects, scheduleInactivityCheck() will override
-   * this alarm (Cloudflare DOs support only one alarm at a time).
+   * Used after an active WebSocket disconnect to ensure dead sandboxes are detected
+   * promptly. The shared scheduler preserves any earlier deadline in the Durable
+   * Object's single alarm slot; the alarm handler evaluates and reschedules all work.
    */
   async scheduleDisconnectCheck(): Promise<void> {
     const alarmTime = Date.now() + this.config.heartbeat.timeoutMs;
@@ -1383,14 +1374,26 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
-    if (!session.sandbox_settings) return {};
     try {
-      const parsed: unknown = JSON.parse(session.sandbox_settings);
-      return normalizeSandboxSettings(parsed, { invalid: "omit" });
+      return parsePersistedSandboxSettings(session.sandbox_settings);
     } catch {
       this.log.warn("Failed to parse sandbox_settings, using defaults");
       return {};
     }
+  }
+
+  private resolveSandboxTimeoutSeconds(sandboxSettings: SandboxSettings): number | undefined {
+    if (!this.provider.capabilities.supportsSandboxTimeout) {
+      if (sandboxSettings.sandboxTimeoutMs !== undefined) {
+        throw new SandboxProviderError(
+          `${this.provider.name} does not support configurable sandbox timeouts`,
+          "permanent"
+        );
+      }
+      return undefined;
+    }
+    const timeoutMs = sandboxSettings.sandboxTimeoutMs;
+    return timeoutMs === undefined ? undefined : timeoutMs / 1000;
   }
 
   private async storeAndBroadcastTunnelUrls(

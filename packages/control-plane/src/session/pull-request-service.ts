@@ -1,4 +1,5 @@
-import { generateBranchName, toDisplayStatus } from "@open-inspect/shared";
+import { generateBranchName } from "@open-inspect/shared/git";
+import { toDisplayStatus } from "@open-inspect/shared";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,

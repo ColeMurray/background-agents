@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import type {
+  SessionDiffFile,
+  SessionDiffRepository,
+} from "@open-inspect/shared/types/session-diffs";
 import { buildUniquePathLabels, type DiffSelection } from "@/lib/session-diffs";
 import { cn } from "@/lib/utils";
 

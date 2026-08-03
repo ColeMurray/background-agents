@@ -3,20 +3,25 @@
 import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
+import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
 import {
-  DEFAULT_MENTIONS_POLICY,
   encodeRepositoryPathSegments,
-  MAX_SLACK_ROUTING_RULES,
   parseRepositoryFullName,
-  type EnrichedRepository,
-  type Environment,
-  type ListEnvironmentsResponse,
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  Environment,
+  ListEnvironmentsResponse,
+} from "@open-inspect/shared/types/environments";
+import {
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
+  MAX_SLACK_ROUTING_RULES,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRepoSettings,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { MODEL_OPTIONS } from "@open-inspect/shared/models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
@@ -27,6 +32,7 @@ import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -176,6 +182,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
+  const [sessionInstructions, setSessionInstructions] = useState(
+    settings?.defaults?.sessionInstructions ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -185,6 +194,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
     setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
+    setSessionInstructions(settings?.defaults?.sessionInstructions ?? "");
   }, [settings, dirty, saving]);
 
   const selectedModelEnabled = model ? enabledModels.includes(model) : true;
@@ -201,18 +211,24 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       // preserve them by writing a blob that keeps just the rules (rather than
       // deleting the whole row); otherwise clear the row entirely.
       const existingRules = settings?.defaults?.routingRules;
-      const res = existingRules?.length
+      const resetBody: SlackGlobalConfig | null = existingRules?.length
+        ? { defaults: { routingRules: existingRules } }
+        : null;
+      const res = resetBody
         ? await browserApiFetch(GLOBAL_SETTINGS_KEY, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ settings: { defaults: { routingRules: existingRules } } }),
+            body: JSON.stringify({ settings: resetBody }),
           })
         : await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the post-reset blob before revalidation (see
+        // handleSave for why).
+        mutate(GLOBAL_SETTINGS_KEY, { settings: resetBody });
         setAgentNotificationsEnabled(false);
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
+        setSessionInstructions("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -233,6 +249,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         agentNotificationsEnabled,
         model: model || undefined,
         mentionsPolicy,
+        sessionInstructions: sessionInstructions || undefined,
       }),
     };
 
@@ -243,7 +260,10 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         body: JSON.stringify({ settings: body }),
       });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the saved blob before revalidation: the other
+        // global sections merge against this snapshot, so a stale one would
+        // let a back-to-back save resurrect pre-save defaults.
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -353,6 +373,32 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         </div>
       </div>
 
+      <div className="mb-4">
+        <label
+          htmlFor="slack-session-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
+          Session Instructions
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Custom instructions appended to agent prompts for all Slack-initiated sessions. Use this
+          to guide how the agent approaches requests (e.g., coding standards, preferred tools, PR
+          conventions).
+        </p>
+        <Textarea
+          id="slack-session-instructions"
+          value={sessionInstructions}
+          onChange={(e) => {
+            setSessionInstructions(e.target.value);
+            setDirty(true);
+          }}
+          rows={3}
+          maxLength={MAX_SESSION_INSTRUCTIONS_LENGTH}
+          placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
+          className="resize-y"
+        />
+      </div>
+
       <div className="flex items-center gap-2">
         <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
@@ -371,8 +417,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
               Reset Slack defaults? The master switch will turn off, the default model will use the
-              system default, and mentions policy will return to <strong>allow</strong>.
-              Per-repository overrides and routing rules are not affected.
+              system default, mentions policy will return to <strong>allow</strong>, and session
+              instructions will be cleared. Per-repository overrides and routing rules are not
+              affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -673,7 +720,9 @@ function RoutingRulesSection({
         body: JSON.stringify({ settings: body }),
       });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the saved blob before revalidation (see the
+        // Defaults section save for why).
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Routing rules saved.");
         setDirty(false);
       } else {

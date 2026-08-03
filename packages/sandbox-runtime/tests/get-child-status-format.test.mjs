@@ -7,7 +7,7 @@ import {
   formatRecentEvents,
   formatTrajectory,
   summarizeEvent,
-} from "../src/sandbox_runtime/tools/get-task-status-format.js";
+} from "../src/sandbox_runtime/tools/get-child-status-format.js";
 
 test("buildChildDetailQuery includes only result when response is requested", () => {
   assert.equal(buildChildDetailQuery({ includeResponse: true }), "?include=result");

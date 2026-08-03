@@ -1,4 +1,4 @@
-import { type CodeServerSettings, type SandboxSettings } from "@open-inspect/shared";
+import type { CodeServerSettings, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore } from "../db/integration-settings";
 import { createLogger } from "../logger";
 import type { RepoIdentity } from "./repository-target";

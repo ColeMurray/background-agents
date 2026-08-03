@@ -41,6 +41,7 @@ export interface SessionInternalRouteHandlers {
   unarchive: SessionInternalRouteHandler;
   verifySandboxToken: SessionInternalRouteHandler;
   openaiTokenRefresh: SessionInternalRouteHandler;
+  xaiTokenRefresh: SessionInternalRouteHandler;
   scmCredentials: SessionInternalRouteHandler;
   tunnelUrls: SessionInternalRouteHandler;
   spawnContext: SessionInternalRouteHandler;
@@ -110,6 +111,11 @@ export function createSessionInternalRoutes(
       method: "POST",
       path: SessionInternalPaths.openaiTokenRefresh,
       handler: handlers.openaiTokenRefresh,
+    },
+    {
+      method: "POST",
+      path: SessionInternalPaths.xaiTokenRefresh,
+      handler: handlers.xaiTokenRefresh,
     },
     {
       method: "POST",
