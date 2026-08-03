@@ -158,13 +158,10 @@ function createHandler() {
     status: "queued" as const,
   }));
   const messageService = { enqueuePrompt };
-  const countActiveSiblingSessions = vi.fn(async () => 0);
   const childFollowUpService = new ChildFollowUpService({
     repository,
     getSession,
-    getPublicSessionId,
     messageService,
-    countActiveSiblingSessions,
   });
 
   const handler = createChildSessionsHandler({
@@ -186,7 +183,6 @@ function createHandler() {
     parseArtifactMetadata,
     broadcast,
     enqueuePrompt,
-    countActiveSiblingSessions,
   };
 }
 
@@ -291,70 +287,6 @@ describe("createChildSessionsHandler", () => {
 
       expect(response.status).toBe(429);
       await expect(response.json()).resolves.toEqual({ error: "Child prompt queue is full" });
-      expect(enqueuePrompt).not.toHaveBeenCalled();
-    });
-
-    it("enforces concurrent child admission when resuming a terminal child", async () => {
-      const {
-        handler,
-        getSession,
-        getPublicSessionId,
-        repository,
-        enqueuePrompt,
-        countActiveSiblingSessions,
-      } = createHandler();
-      getSession.mockReturnValue(
-        createSession({
-          session_name: "child-1",
-          parent_session_id: "parent-1",
-          status: "completed",
-          sandbox_settings: JSON.stringify({ maxConcurrentChildSessions: 2 }),
-        })
-      );
-      repository.listParticipants.mockReturnValue([createParticipant()]);
-      getPublicSessionId.mockReturnValue("child-1");
-      countActiveSiblingSessions.mockResolvedValue(2);
-
-      const response = await handler.parentPrompt(
-        request({ parentSessionId: "parent-1", content: "Continue" })
-      );
-
-      expect(response.status).toBe(429);
-      await expect(response.json()).resolves.toEqual({
-        error: "Maximum concurrent children (2) reached",
-      });
-      expect(countActiveSiblingSessions).toHaveBeenCalledWith("parent-1", "child-1");
-      expect(enqueuePrompt).not.toHaveBeenCalled();
-    });
-
-    it("rechecks queue depth after asynchronous resume admission", async () => {
-      const {
-        handler,
-        getSession,
-        getPublicSessionId,
-        repository,
-        enqueuePrompt,
-        countActiveSiblingSessions,
-      } = createHandler();
-      getSession.mockReturnValue(
-        createSession({
-          parent_session_id: "parent-1",
-          status: "completed",
-        })
-      );
-      getPublicSessionId.mockReturnValue("child-1");
-      repository.listParticipants.mockReturnValue([createParticipant()]);
-      // The service checks queue depth both before and after asynchronous sibling admission.
-      repository.getPendingOrProcessingCount
-        .mockReturnValueOnce(MAX_PENDING_CHILD_PROMPTS - 1)
-        .mockReturnValueOnce(MAX_PENDING_CHILD_PROMPTS);
-      countActiveSiblingSessions.mockResolvedValue(0);
-
-      const response = await handler.parentPrompt(
-        request({ parentSessionId: "parent-1", content: "Continue" })
-      );
-
-      expect(response.status).toBe(429);
       expect(enqueuePrompt).not.toHaveBeenCalled();
     });
 

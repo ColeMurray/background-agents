@@ -57,7 +57,6 @@ function childFollowUpErrorStatus(reason: ChildFollowUpErrorReason): 404 | 409 |
     case "session_not_promptable":
       return 409;
     case "queue_full":
-    case "concurrency_limit":
       return 429;
     case "owner_missing":
       return 500;

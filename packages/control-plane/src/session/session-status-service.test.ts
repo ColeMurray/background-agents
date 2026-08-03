@@ -58,6 +58,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
       ? null
       : {
           updateStatus: vi.fn(async () => true),
+          finalizeChildAdmission: vi.fn(async () => {}),
           updateMetrics: vi.fn(async () => true),
         };
 
@@ -128,6 +129,7 @@ describe("SessionStatusService.transition", () => {
       "active",
       updatedAt
     );
+    expect(h.sessionIndex!.finalizeChildAdmission).toHaveBeenCalledWith("public-session-1");
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "active" });
   });
 

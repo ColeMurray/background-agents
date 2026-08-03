@@ -41,9 +41,12 @@ export class SessionStatusService {
 
     const publicSessionId = this.getPublicSessionId(session);
     if (session.status === status) {
-      await this.syncSessionIndexStatus(publicSessionId, status, session.updated_at).catch(
-        (error) =>
-          this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
+      await this.syncSessionIndexStatusAndAdmission(
+        publicSessionId,
+        status,
+        session.updated_at
+      ).catch((error) =>
+        this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
       );
       if (TERMINAL_STATUSES.includes(status)) {
         this.syncSessionMetrics(publicSessionId);
@@ -82,8 +85,8 @@ export class SessionStatusService {
     status: SessionStatus,
     updatedAt: number
   ): Promise<void> {
-    await this.syncSessionIndexStatus(publicSessionId, status, updatedAt).catch((error) =>
-      this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
+    await this.syncSessionIndexStatusAndAdmission(publicSessionId, status, updatedAt).catch(
+      (error) => this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
     );
 
     this.messenger.broadcast({ type: "session_status", status });
@@ -161,13 +164,16 @@ export class SessionStatusService {
     return session.session_name || session.id || this.ctx.id.toString();
   }
 
-  private async syncSessionIndexStatus(
+  private async syncSessionIndexStatusAndAdmission(
     sessionId: string,
     status: SessionStatus,
     updatedAt: number
   ): Promise<void> {
     if (!this.sessionIndex) return;
-    await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
+    const projected = await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
+    if (projected && status === "active") {
+      await this.sessionIndex.finalizeChildAdmission(sessionId);
+    }
   }
 
   private logSessionIndexStatusSyncError(

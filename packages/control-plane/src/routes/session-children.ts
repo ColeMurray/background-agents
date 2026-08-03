@@ -1,11 +1,13 @@
 import {
   cancelChildSessionRequestSchema,
   childFollowUpPromptRequestSchema,
+  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   type CancelChildSessionRequest,
 } from "@open-inspect/shared";
-import { SessionIndexStore } from "../db/session-index";
+import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
+import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import type { Env } from "../types";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -52,7 +54,7 @@ async function handleGetChild(
   );
 }
 
-async function handlePromptChild(
+export async function handlePromptChild(
   request: Request,
   env: Env,
   match: RegExpMatchArray,
@@ -72,15 +74,44 @@ async function handlePromptChild(
   if (!parsed.success) return error("Invalid prompt body", 400);
 
   const sessionStore = new SessionIndexStore(ctx.db);
-  if (!(await sessionStore.isChildOf(childId, parentId))) {
+  const childSession = await sessionStore.get(childId);
+  if (!childSession || childSession.parentSessionId !== parentId) {
     return error("Child session not found", 404);
   }
 
-  const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ parentSessionId: parentId, content: parsed.data.content }),
-  });
+  let admissionLease: ChildAdmissionLease | null = null;
+  if (childSession.status === "completed" || childSession.status === "failed") {
+    const parentSession = await sessionStore.get(parentId);
+    if (!parentSession) return error("Parent session not found", 404);
+    const parentSettings = await resolveSandboxSettings(
+      ctx.db,
+      parentSession.repoOwner,
+      parentSession.repoName,
+      parentSession.environmentId
+    );
+    const maxConcurrentChildren =
+      parentSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+    admissionLease = await sessionStore.acquireChildAdmissionLease(
+      parentId,
+      childId,
+      maxConcurrentChildren
+    );
+    if (!admissionLease) {
+      return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
+    }
+  }
+
+  let response: Response;
+  try {
+    response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parentSessionId: parentId, content: parsed.data.content }),
+    });
+  } catch (fetchError) {
+    if (admissionLease) await sessionStore.releaseChildAdmissionLease(admissionLease);
+    throw fetchError;
+  }
   if (response.ok) {
     let messageId: string | undefined;
     try {
@@ -110,6 +141,7 @@ async function handlePromptChild(
       })
     );
   } else {
+    if (admissionLease) await sessionStore.releaseChildAdmissionLease(admissionLease);
     logger.warn("session.child_prompt", {
       event: "session.child_prompt",
       outcome: "rejected",

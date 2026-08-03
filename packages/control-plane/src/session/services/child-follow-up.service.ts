@@ -1,5 +1,3 @@
-import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared";
-import { parsePersistedSandboxSettings } from "../../sandbox/settings";
 import { isPromptableSessionStatus, SessionNotPromptableError } from "../message-queue";
 import type { SessionRepository } from "../repository";
 import type { SessionRow } from "../types";
@@ -11,7 +9,6 @@ export type ChildFollowUpErrorReason =
   | "child_not_found"
   | "session_not_promptable"
   | "queue_full"
-  | "concurrency_limit"
   | "owner_missing";
 
 export class ChildFollowUpError extends Error {
@@ -28,9 +25,7 @@ export class ChildFollowUpError extends Error {
 interface ChildFollowUpServiceDeps {
   repository: Pick<SessionRepository, "listParticipants" | "getPendingOrProcessingCount">;
   getSession: () => SessionRow | null;
-  getPublicSessionId: (session: SessionRow) => string;
   messageService: Pick<MessageService, "enqueuePrompt">;
-  countActiveSiblingSessions: (parentSessionId: string, childSessionId: string) => Promise<number>;
 }
 
 export class ChildFollowUpService {
@@ -56,30 +51,6 @@ export class ChildFollowUpService {
     }
     if (this.isPendingQueueFull()) {
       throw new ChildFollowUpError("queue_full", "Child prompt queue is full");
-    }
-
-    if (session.status === "completed" || session.status === "failed") {
-      let maxConcurrentChildren = DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-      try {
-        maxConcurrentChildren =
-          parsePersistedSandboxSettings(session.sandbox_settings).maxConcurrentChildSessions ??
-          DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-      } catch {
-        maxConcurrentChildren = DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
-      }
-      const activeSiblings = await this.deps.countActiveSiblingSessions(
-        request.parentSessionId,
-        this.deps.getPublicSessionId(session)
-      );
-      if (activeSiblings >= maxConcurrentChildren) {
-        throw new ChildFollowUpError(
-          "concurrency_limit",
-          `Maximum concurrent children (${maxConcurrentChildren}) reached`
-        );
-      }
-      if (this.isPendingQueueFull()) {
-        throw new ChildFollowUpError("queue_full", "Child prompt queue is full");
-      }
     }
 
     const owner = this.deps.repository

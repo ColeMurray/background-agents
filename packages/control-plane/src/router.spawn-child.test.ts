@@ -74,8 +74,13 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       environmentId: "env_parent",
     }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
-    countActiveChildren: vi.fn().mockResolvedValue(0),
     countTotalChildren: vi.fn().mockResolvedValue(0),
+    acquireChildAdmissionLease: vi.fn().mockResolvedValue({
+      token: "lease-token",
+      childSessionId: "child-session",
+      expiresAt: Date.now() + 60_000,
+    }),
+    releaseChildAdmissionLease: vi.fn().mockResolvedValue(undefined),
     create: vi.fn().mockResolvedValue(undefined),
     updateStatus: vi.fn().mockResolvedValue(true),
   });
@@ -459,7 +464,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("uses configured concurrent child session limit", async () => {
     const store = makeStore();
-    store.countActiveChildren.mockResolvedValue(2);
+    store.acquireChildAdmissionLease.mockResolvedValue(null);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
@@ -500,7 +505,6 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("uses configured total child session limit", async () => {
     const store = makeStore();
-    store.countActiveChildren.mockResolvedValue(0);
     store.countTotalChildren.mockResolvedValue(4);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;

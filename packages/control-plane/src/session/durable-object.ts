@@ -488,15 +488,7 @@ export class SessionDO extends DurableObject<Env> {
       this._childFollowUpService = new ChildFollowUpService({
         repository: this.repository,
         getSession: () => this.getSession(),
-        getPublicSessionId: (session) => this.getPublicSessionId(session),
         messageService: this.messageService,
-        countActiveSiblingSessions: (parentSessionId, childSessionId) =>
-          this.db
-            ? new SessionIndexStore(this.db).countActiveChildrenExcluding(
-                parentSessionId,
-                childSessionId
-              )
-            : Promise.resolve(0),
       });
     }
     return this._childFollowUpService;
