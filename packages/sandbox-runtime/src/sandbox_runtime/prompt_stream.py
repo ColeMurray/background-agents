@@ -64,6 +64,20 @@ class _PendingPart:
     delta: Any
 
 
+@dataclass(frozen=True)
+class _PendingChildMessage:
+    child_session_id: str
+    message_id: str
+    can_correlate: bool
+
+
+@dataclass(frozen=True)
+class _PendingChildError:
+    child_session_id: str
+    error: str
+    can_correlate: bool
+
+
 @dataclass
 class _PromptState:
     """Mutable translation state for one ``stream_prompt`` call."""
@@ -81,6 +95,13 @@ class _PromptState:
     pending_drop_logged: bool = False
     # Child session tracking (sub-tasks)
     tracked_child_session_ids: set[str] = field(default_factory=set)
+    child_session_task_call_ids: dict[str, str] = field(default_factory=dict)
+    task_call_child_session_ids: dict[str, str] = field(default_factory=dict)
+    child_message_task_call_ids: dict[str, str] = field(default_factory=dict)
+    closed_child_session_ids: set[str] = field(default_factory=set)
+    pending_child_activity: list[_PendingChildMessage | _PendingChildError] = field(
+        default_factory=list
+    )
     # Compaction tracking: after compaction, parentID changes so we must
     # accept all non-summary assistant messages from the parent session
     compaction_occurred: bool = False
@@ -206,6 +227,9 @@ class OpenCodePromptStream:
                         raise _PromptMaxDurationTimeout from error
 
                     step = self._apply_sse_event(state, sse_event)
+                    if step.disposition is not _Disposition.CONTINUE:
+                        for event in self._flush_unassociated_child_activity(state):
+                            yield event
                     for event in step.events:
                         yield event
 
@@ -216,6 +240,9 @@ class OpenCodePromptStream:
                     if step.disposition is _Disposition.FAILED:
                         return
 
+                for event in self._flush_unassociated_child_activity(state):
+                    yield event
+
         except _PromptMaxDurationTimeout:
             elapsed = time.time() - state.start_time
             self._log.error(
@@ -224,6 +251,9 @@ class OpenCodePromptStream:
                 elapsed_ms=int(elapsed * 1000),
                 message_id=message_id,
             )
+            pending_child_events = self._flush_unassociated_child_activity(state)
+            for event in pending_child_events:
+                yield event
             final_events: list[dict[str, Any]] = []
             try:
                 async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
@@ -254,6 +284,9 @@ class OpenCodePromptStream:
                 operation="bridge.sse",
                 message_id=message_id,
             )
+            pending_child_events = self._flush_unassociated_child_activity(state)
+            for event in pending_child_events:
+                yield event
             await self._client.request_stop(opencode_session_id, reason="inactivity_timeout")
             async for final_event in self._fetch_final_message_state(state):
                 yield final_event
@@ -263,6 +296,8 @@ class OpenCodePromptStream:
             )
 
         except SSEStreamDisconnectedError as e:
+            for event in self._flush_unassociated_child_activity(state):
+                yield event
             async for final_event in self._fetch_final_message_state(state):
                 yield final_event
             raise SSEConnectionError(
@@ -412,10 +447,26 @@ class OpenCodePromptStream:
             return events
 
         if msg_session_id in state.tracked_child_session_ids:
-            # Child session: authorize all assistant messages
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
+                if msg_session_id not in state.child_session_task_call_ids:
+                    if not any(
+                        isinstance(activity, _PendingChildMessage)
+                        and activity.message_id == oc_msg_id
+                        for activity in state.pending_child_activity
+                    ):
+                        state.pending_child_activity.append(
+                            _PendingChildMessage(
+                                msg_session_id,
+                                oc_msg_id,
+                                msg_session_id not in state.closed_child_session_ids,
+                            )
+                        )
+                    return []
+                state.child_message_task_call_ids[oc_msg_id] = state.child_session_task_call_ids[
+                    msg_session_id
+                ]
                 state.allowed_assistant_msg_ids.add(oc_msg_id)
                 return self._drain_pending_parts(state, oc_msg_id, is_subtask=True)
 
@@ -427,25 +478,49 @@ class OpenCodePromptStream:
         delta = props.get("delta")
         oc_msg_id = part.get("messageID", "")
         part_session_id = part.get("sessionID", "")
+        events: list[dict[str, Any]] = []
+        correlated_child_sid: str | None = None
 
         # Discover child sessions from task tool metadata (covers task_id resume)
         if part.get("tool") == "task" and part_session_id == state.opencode_session_id:
             metadata = part.get("metadata")
             child_sid = metadata.get("sessionId") if isinstance(metadata, dict) else None
-            if child_sid and child_sid not in state.tracked_child_session_ids:
-                state.tracked_child_session_ids.add(child_sid)
-                self._log.info(
-                    "bridge.child_session_detected",
-                    child_session_id=child_sid,
-                    source="task_metadata",
-                )
+            task_call_id = part.get("callID")
+            if child_sid:
+                if task_call_id:
+                    state.child_session_task_call_ids[child_sid] = task_call_id
+                    state.task_call_child_session_ids[task_call_id] = child_sid
+                    correlated_child_sid = child_sid
+                if child_sid not in state.tracked_child_session_ids:
+                    state.tracked_child_session_ids.add(child_sid)
+                    self._log.info(
+                        "bridge.child_session_detected",
+                        child_session_id=child_sid,
+                        source="task_metadata",
+                    )
 
         if oc_msg_id in state.allowed_assistant_msg_ids:
             is_subtask = part_session_id in state.tracked_child_session_ids
-            return self._handle_part(state, part, delta, is_subtask=is_subtask)
-        if oc_msg_id:
+            events.extend(self._handle_part(state, part, delta, is_subtask=is_subtask))
+        elif oc_msg_id:
             self._buffer_part(state, oc_msg_id, part, delta)
-        return []
+
+        if correlated_child_sid:
+            events.extend(self._release_child_activity(state, correlated_child_sid))
+
+        if part.get("tool") == "task":
+            status = part.get("state", {}).get("status", "")
+            if status in ("completed", "error"):
+                task_call_id = part.get("callID", "")
+                child_session_id = state.task_call_child_session_ids.get(task_call_id)
+                if (
+                    child_session_id
+                    and state.child_session_task_call_ids.get(child_session_id) == task_call_id
+                ):
+                    del state.child_session_task_call_ids[child_session_id]
+                    state.closed_child_session_ids.add(child_session_id)
+
+        return events
 
     def _on_session_error(self, state: _PromptState, props: dict[str, Any]) -> _StreamStep:
         error_session_id = props.get("sessionID")
@@ -495,14 +570,24 @@ class OpenCodePromptStream:
                 child_session_id=error_session_id,
             )
             # Stream does not end — the parent continues after a sub-task error
+            normalized_error = error_msg or "Sub-task error"
+            if error_session_id not in state.child_session_task_call_ids:
+                state.pending_child_activity.append(
+                    _PendingChildError(
+                        error_session_id,
+                        normalized_error,
+                        error_session_id not in state.closed_child_session_ids,
+                    )
+                )
+                return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
             return _StreamStep(
                 events=[
-                    {
-                        "type": "error",
-                        "error": error_msg or "Sub-task error",
-                        "messageId": state.message_id,
-                        "isSubtask": True,
-                    }
+                    self._child_error_event(
+                        state,
+                        error_session_id,
+                        normalized_error,
+                        state.child_session_task_call_ids[error_session_id],
+                    )
                 ],
                 disposition=_Disposition.CONTINUE,
             )
@@ -582,7 +667,12 @@ class OpenCodePromptStream:
                 status = tool_state.get("status", "")
                 call_id = part.get("callID", "")
                 part_sid = part.get("sessionID", "")
-                tool_key = f"tool:{part_sid}:{call_id}:{status}"
+                child_session_id = state.task_call_child_session_ids.get(call_id, "")
+                tool_key = f"tool:{part_sid}:{call_id}:{status}:{child_session_id}"
+
+                if part.get("tool") == "task":
+                    if child_session_id:
+                        tool_event["childSessionId"] = child_session_id
 
                 if tool_key not in state.emitted_tool_states:
                     state.emitted_tool_states.add(tool_key)
@@ -608,9 +698,80 @@ class OpenCodePromptStream:
             )
 
         if is_subtask:
+            child_session_id = part.get("sessionID", "")
             for ev in events:
                 ev["isSubtask"] = True
+                if child_session_id:
+                    ev["childSessionId"] = child_session_id
+                    task_call_id = state.child_message_task_call_ids.get(part.get("messageID", ""))
+                    if task_call_id:
+                        ev["taskCallId"] = task_call_id
         return events
+
+    def _release_child_activity(
+        self, state: _PromptState, child_session_id: str
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        remaining: list[_PendingChildMessage | _PendingChildError] = []
+        for activity in state.pending_child_activity:
+            if activity.child_session_id != child_session_id or not activity.can_correlate:
+                remaining.append(activity)
+                continue
+            events.extend(self._emit_pending_child_activity(state, activity))
+        state.pending_child_activity = remaining
+        return events
+
+    def _flush_unassociated_child_activity(self, state: _PromptState) -> list[dict[str, Any]]:
+        pending = state.pending_child_activity
+        state.pending_child_activity = []
+        return [
+            event
+            for activity in pending
+            for event in self._emit_pending_child_activity(state, activity)
+        ]
+
+    def _emit_pending_child_activity(
+        self, state: _PromptState, activity: _PendingChildMessage | _PendingChildError
+    ) -> list[dict[str, Any]]:
+        if isinstance(activity, _PendingChildError):
+            task_call_id = (
+                state.child_session_task_call_ids.get(activity.child_session_id)
+                if activity.can_correlate
+                else None
+            )
+            return [
+                self._child_error_event(
+                    state, activity.child_session_id, activity.error, task_call_id
+                )
+            ]
+
+        task_call_id = (
+            state.child_session_task_call_ids.get(activity.child_session_id)
+            if activity.can_correlate
+            else None
+        )
+        if task_call_id:
+            state.child_message_task_call_ids[activity.message_id] = task_call_id
+        state.allowed_assistant_msg_ids.add(activity.message_id)
+        return self._drain_pending_parts(state, activity.message_id, is_subtask=True)
+
+    def _child_error_event(
+        self,
+        state: _PromptState,
+        child_session_id: str,
+        error: str,
+        task_call_id: str | None,
+    ) -> dict[str, Any]:
+        event = {
+            "type": "error",
+            "error": error,
+            "messageId": state.message_id,
+            "isSubtask": True,
+            "childSessionId": child_session_id,
+        }
+        if task_call_id:
+            event["taskCallId"] = task_call_id
+        return event
 
     def _buffer_part(
         self, state: _PromptState, oc_msg_id: str, part: dict[str, Any], delta: Any

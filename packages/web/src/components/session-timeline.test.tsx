@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import { buildTimelineItems } from "@/lib/timeline-items";
 import type { SandboxEvent } from "@/types/session";
 import { EventItem, SessionTimeline } from "./session-timeline";
 
@@ -23,6 +25,19 @@ function mockScrollIntoView() {
     value: vi.fn(),
   });
 }
+beforeEach(() => {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    }
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+});
 
 function event(userId?: string): SandboxEvent {
   return {
@@ -382,5 +397,167 @@ describe("terminal message visibility", () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(onMarkMessageRead).toHaveBeenCalledOnce();
+  });
+});
+
+function toolEvent(
+  tool: string,
+  callId: string,
+  timestamp: number,
+  extra: Partial<Extract<SandboxEvent, { type: "tool_call" }>> = {}
+): Extract<SandboxEvent, { type: "tool_call" }> {
+  return {
+    type: "tool_call",
+    tool,
+    args: {},
+    callId,
+    status: "completed",
+    messageId: "message-1",
+    sandboxId: "sandbox-1",
+    timestamp,
+    ...extra,
+  };
+}
+
+describe("task activity grouping", () => {
+  it("nests child tools beneath their Task and keeps parallel Tasks separate", () => {
+    const groups = buildTimelineItems([
+      toolEvent("task", "task-a", 1, { childSessionId: "child-a" }),
+      toolEvent("task", "task-b", 2, { childSessionId: "child-b" }),
+      toolEvent("Read", "call-b", 3, {
+        isSubtask: true,
+        childSessionId: "child-b",
+        taskCallId: "task-b",
+      }),
+      toolEvent("Bash", "call-a", 4, {
+        isSubtask: true,
+        childSessionId: "child-a",
+        taskCallId: "task-a",
+      }),
+    ]);
+
+    expect(groups.filter((group) => group.type === "task_group")).toMatchObject([
+      { event: { callId: "task-a" }, activity: [{ events: [{ callId: "call-a" }] }] },
+      { event: { callId: "task-b" }, activity: [{ events: [{ callId: "call-b" }] }] },
+    ]);
+  });
+
+  it("retains colliding parent and child call IDs", () => {
+    const groups = buildTimelineItems([
+      toolEvent("Bash", "shared-call", 1),
+      toolEvent("task", "task-call", 2, { childSessionId: "child-1" }),
+      toolEvent("Bash", "shared-call", 3, {
+        isSubtask: true,
+        childSessionId: "child-1",
+        taskCallId: "task-call",
+      }),
+    ]);
+
+    expect(groups).toMatchObject([
+      { type: "tool_group", events: [{ callId: "shared-call" }] },
+      {
+        type: "task_group",
+        activity: [{ type: "tool_group", events: [{ callId: "shared-call", isSubtask: true }] }],
+      },
+    ]);
+  });
+
+  it("does not infer ownership from a reused child session ID", () => {
+    const groups = buildTimelineItems([
+      toolEvent("task", "task-a", 1, { childSessionId: "child-1" }),
+      toolEvent("task", "task-b", 2, { childSessionId: "child-1" }),
+      toolEvent("Bash", "child-call", 3, {
+        isSubtask: true,
+        childSessionId: "child-1",
+      }),
+    ]);
+
+    expect(groups.some((group) => group.type === "task_group")).toBe(false);
+    expect(
+      groups.flatMap((group) => (group.type === "tool_group" ? group.events : []))
+    ).toContainEqual(expect.objectContaining({ callId: "child-call" }));
+  });
+
+  it("renders Task activity nested and preserves its disclosure state", async () => {
+    const user = userEvent.setup();
+    const events = [
+      toolEvent("task", "task-call", 1, {
+        args: { description: "Review code" },
+        childSessionId: "child-1",
+      }),
+      toolEvent("Bash", "child-call", 2, {
+        args: { command: "npm test" },
+        isSubtask: true,
+        childSessionId: "child-1",
+        taskCallId: "task-call",
+      }),
+    ];
+
+    const view = render(
+      <SessionTimeline
+        events={events}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.getByText("Task activity")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Task Review code/ }));
+    expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+
+    view.rerender(
+      <SessionTimeline
+        events={[event(), ...events]}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+      />
+    );
+    expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+  });
+
+  it("preserves tool-group disclosure across append and history prepend", async () => {
+    const user = userEvent.setup();
+    const initial = [
+      toolEvent("Bash", "bash-1", 2, { args: { command: "first" } }),
+      toolEvent("Bash", "bash-2", 3, { args: { command: "second" } }),
+    ];
+    const props = {
+      sessionId: "session-1",
+      currentParticipantId: null,
+      participantProfiles: {},
+      isProcessing: false,
+      loadingHistory: false,
+      showSkeleton: false,
+      onLoadOlder: () => {},
+      onOpenMedia: () => {},
+    };
+    const view = render(<SessionTimeline {...props} events={initial} />);
+
+    await user.click(screen.getByRole("button", { name: /Bash2 commands/ }));
+    view.rerender(
+      <SessionTimeline
+        {...props}
+        events={[
+          toolEvent("Bash", "bash-0", 1, { args: { command: "zeroth" } }),
+          ...initial,
+          toolEvent("Bash", "bash-3", 4, { args: { command: "third" } }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText(/Bash zeroth/)).toBeInTheDocument();
+    expect(screen.getByText(/Bash third/)).toBeInTheDocument();
   });
 });

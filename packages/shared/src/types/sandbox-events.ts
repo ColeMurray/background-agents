@@ -95,10 +95,15 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     callId: z.string(),
     status: z.string().optional(),
     output: z.string().optional(),
+    isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_start"),
     isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
@@ -106,6 +111,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_result"),
@@ -121,6 +128,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("error"),
     error: z.string(),
+    isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("execution_complete"),

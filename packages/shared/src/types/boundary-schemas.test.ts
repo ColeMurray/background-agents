@@ -226,6 +226,55 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("preserves task activity correlation fields", () => {
+      const taskResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "task",
+        args: { description: "Review code" },
+        callId: "task-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+        childSessionId: "child-session-1",
+      });
+      const childResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "child-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 124,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      const errorResult = sandboxEventSchema.safeParse({
+        type: "error",
+        error: "Child failed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 125,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+
+      expect(taskResult.success && taskResult.data.childSessionId).toBe("child-session-1");
+      expect(childResult.success && childResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      expect(errorResult.success && errorResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+    });
+
     it("rejects a malformed partial sandbox event", () => {
       const result = sandboxEventSchema.safeParse({
         type: "tool_call",

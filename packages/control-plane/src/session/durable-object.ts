@@ -1494,13 +1494,15 @@ export class SessionDO extends DurableObject<Env> {
   private handleFetchHistory(
     ws: WebSocket,
     client: ClientInfo,
-    data: { cursor?: { timestamp: number; id: string }; limit?: number }
+    data: { cursor?: { timestamp: number; id: string; sequence?: number }; limit?: number }
   ): void {
     // Validate cursor
     if (
       !data.cursor ||
       typeof data.cursor.timestamp !== "number" ||
-      typeof data.cursor.id !== "string"
+      typeof data.cursor.id !== "string" ||
+      (data.cursor.sequence !== undefined &&
+        (!Number.isSafeInteger(data.cursor.sequence) || data.cursor.sequence < 0))
     ) {
       this.safeSend(ws, {
         type: "error",

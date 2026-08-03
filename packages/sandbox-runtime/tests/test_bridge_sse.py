@@ -1837,6 +1837,7 @@ class TestSubtaskStreaming:
         assert len(tool_events) == 2
         assert tool_events[0]["status"] == "running"
         assert tool_events[0]["isSubtask"] is True
+        assert tool_events[0]["childSessionId"] == "child-1"
         assert tool_events[0]["messageId"] == "cp-msg-1"
         assert tool_events[1]["status"] == "completed"
         assert tool_events[1]["isSubtask"] is True
@@ -2079,6 +2080,7 @@ class TestSubtaskStreaming:
         assert len(error_events) == 1
         assert error_events[0]["error"] == "Sub-task failed"
         assert error_events[0]["isSubtask"] is True
+        assert error_events[0]["childSessionId"] == "child-1"
 
         token_events = [e for e in events if e["type"] == "token"]
         assert len(token_events) == 1
@@ -2238,9 +2240,12 @@ class TestSubtaskStreaming:
         child_tools = [e for e in tool_events if e.get("isSubtask")]
         assert len(parent_tools) == 1
         assert parent_tools[0]["tool"] == "task"
+        assert parent_tools[0]["childSessionId"] == "child-1"
         assert len(child_tools) == 1
         assert child_tools[0]["tool"] == "Bash"
         assert child_tools[0]["isSubtask"] is True
+        assert child_tools[0]["childSessionId"] == "child-1"
+        assert child_tools[0]["taskCallId"] == "task-call-1"
 
     @pytest.mark.asyncio
     async def test_parent_child_callid_collision(
