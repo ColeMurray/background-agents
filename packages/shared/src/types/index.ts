@@ -25,20 +25,6 @@ export type {
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
-export { messageSourceSchema, sessionStatusSchema } from "./statuses";
-export type {
-  SessionStatus,
-  SandboxStatus,
-  GitSyncStatus,
-  MessageStatus,
-  MessageSource,
-  ArtifactType,
-  EventType,
-  ParticipantRole,
-  SpawnSource,
-  ConfidenceLevel,
-} from "./statuses";
-
 export {
   MAX_TARGET_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
@@ -77,6 +63,7 @@ export type {
   ControlPlaneRepo,
   ControlPlaneReposResponse,
   ClassificationResult,
+  ConfidenceLevel,
 } from "./repository-catalog";
 
 export { toDisplayStatus } from "./artifacts";
@@ -96,10 +83,18 @@ export type {
   ArtifactInfo,
   MediaArtifactInfo,
   AgentResponse,
+  ArtifactType,
 } from "./artifacts";
 
 export { sandboxEventSchema } from "./sandbox-events";
-export type { AgentEvent, SandboxEvent, EventResponse, ListEventsResponse } from "./sandbox-events";
+export type {
+  AgentEvent,
+  SandboxEvent,
+  EventResponse,
+  ListEventsResponse,
+  GitSyncStatus,
+  EventType,
+} from "./sandbox-events";
 
 export type {
   SessionParticipant,
@@ -110,8 +105,16 @@ export type {
   PullRequestSummary,
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
+  SessionStatus,
+  SandboxStatus,
+  MessageStatus,
+  MessageSource,
+  ParticipantRole,
+  SpawnSource,
 } from "./sessions";
 export {
+  messageSourceSchema,
+  sessionStatusSchema,
   sessionParticipantProfileSchema,
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";

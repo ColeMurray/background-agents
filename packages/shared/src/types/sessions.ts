@@ -1,20 +1,79 @@
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
 import {
-  sandboxStatusSchema,
-  sessionStatusSchema,
-  type MessageSource,
-  type MessageStatus,
-  type ParticipantRole,
-  type SandboxStatus,
-  type SessionStatus,
-  type SpawnSource,
-} from "./statuses";
-import {
   sessionRepositoryStateSchema,
   type SessionListRepository,
   type SessionRepositoryState,
 } from "./repositories";
+
+export const sessionStatusSchema = z.enum([
+  "created",
+  "active",
+  "completed",
+  "failed",
+  "archived",
+  "cancelled",
+]);
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+export type SandboxStatus =
+  | "pending"
+  | "spawning"
+  | "connecting"
+  | "warming"
+  | "syncing"
+  | "ready"
+  | "running"
+  | "stale"
+  | "snapshotting"
+  | "stopped"
+  | "failed";
+
+export const sandboxStatusSchema = z.enum([
+  "pending",
+  "spawning",
+  "connecting",
+  "warming",
+  "syncing",
+  "ready",
+  "running",
+  "stale",
+  "snapshotting",
+  "stopped",
+  "failed",
+]);
+
+export type MessageStatus = "pending" | "processing" | "completed" | "failed";
+
+export const messageSourceSchema = z.enum([
+  "web",
+  "slack",
+  "linear",
+  "extension",
+  "github",
+  "automation",
+  "agent",
+]);
+export type MessageSource = z.infer<typeof messageSourceSchema>;
+
+export type ParticipantRole = "owner" | "member";
+
+export type SpawnSource =
+  | "user"
+  | "agent"
+  | "automation"
+  | "github-bot"
+  | "linear-bot"
+  | "slack-bot";
+
+export const spawnSourceSchema = z.enum([
+  "user",
+  "agent",
+  "automation",
+  "github-bot",
+  "linear-bot",
+  "slack-bot",
+]);
 
 export interface SessionParticipant {
   id: string;
