@@ -86,12 +86,13 @@ def test_modal_deploy_script_stops_when_eager_build_fails(tmp_path: Path) -> Non
     ]
 
 
-def test_generic_modal_deploy_does_not_assume_open_inspect_entrypoint(tmp_path: Path) -> None:
+def test_src_modal_deploy_builds_sandbox_image_before_app_deploy(tmp_path: Path) -> None:
     result, uv_calls = _run_deploy_script(tmp_path, deploy_module="src")
 
     assert result.returncode == 0
     assert uv_calls == [
         "sync --frozen",
+        "run python deploy.py --build-sandbox-image",
         "run modal deploy -m src",
     ]
 
