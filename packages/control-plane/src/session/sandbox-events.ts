@@ -12,7 +12,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
-import type { TerminalOutcomeProjectionInput } from "./terminal-outcome-projection";
+import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -53,7 +53,7 @@ export class SessionSandboxEventProcessor {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
-    private readonly recordTerminalOutcome: (input: TerminalOutcomeProjectionInput) => Promise<void>
+    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
   private get log(): Logger {
@@ -204,10 +204,10 @@ export class SessionSandboxEventProcessor {
 
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
         if (timestamps) {
-          await this.recordTerminalOutcome({
+          await this.recordTerminalMessage({
             messageId: completionMessageId,
             messageCreatedAt: timestamps.created_at,
-            terminalOutcomeCompletedAt: now,
+            terminalMessageCompletedAt: now,
           });
         }
         const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;

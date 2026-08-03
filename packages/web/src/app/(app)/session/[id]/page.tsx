@@ -52,11 +52,11 @@ import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import {
-  classifyTerminalOutcomeReadAttempt,
-  markTerminalOutcomeRead,
-  reconcileSessionTerminalOutcomeReadState,
-  SessionTerminalOutcomeReadRequestError,
-} from "@/lib/session-terminal-outcome-read-state";
+  classifySessionReadAttempt,
+  markMessageRead,
+  reconcileSessionReadState,
+  SessionReadRequestError,
+} from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -218,15 +218,15 @@ function SessionPageContent() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
-  const attemptMarkVisibleTerminalOutcomeRead = useCallback(
+  const attemptMarkVisibleMessageRead = useCallback(
     async (messageId: string) => {
       try {
-        const result = await markTerminalOutcomeRead(sessionId, messageId);
-        await reconcileSessionTerminalOutcomeReadState(result);
-        return classifyTerminalOutcomeReadAttempt(result);
+        const result = await markMessageRead(sessionId, messageId);
+        await reconcileSessionReadState(result);
+        return classifySessionReadAttempt(result);
       } catch (error) {
         if (
-          error instanceof SessionTerminalOutcomeReadRequestError &&
+          error instanceof SessionReadRequestError &&
           [400, 401, 403, 404, 405].includes(error.status)
         ) {
           return "permanent_failure" as const;
@@ -272,14 +272,14 @@ function SessionPageContent() {
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
-            terminalOutcomeReadObservationEnabled={
+            terminalMessageReadObservationEnabled={
               !replaying &&
               !loadingHistory &&
               !isDetailsOpen &&
               selectedMediaArtifactId === null &&
               resolvedDiff === null
             }
-            onMarkTerminalOutcomeRead={attemptMarkVisibleTerminalOutcomeRead}
+            onMarkMessageRead={attemptMarkVisibleMessageRead}
           />
         </Panel>
         {showTerminal && (

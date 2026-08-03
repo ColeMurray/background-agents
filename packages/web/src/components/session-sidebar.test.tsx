@@ -165,15 +165,15 @@ describe("SessionSidebar", () => {
             [SIDEBAR_SESSIONS_KEY]: {
               sessions: [
                 createSession(1, {
-                  terminalOutcomeReadState: {
-                    hasUnreadTerminalOutcome: true,
-                    latestTerminalOutcomeMessageId: "message-1",
+                  readState: {
+                    unread: true,
+                    latestMessageId: "message-1",
                   },
                 }),
                 createSession(2, {
-                  terminalOutcomeReadState: {
-                    hasUnreadTerminalOutcome: false,
-                    latestTerminalOutcomeMessageId: "message-2",
+                  readState: {
+                    unread: false,
+                    latestMessageId: "message-2",
                   },
                 }),
               ],
@@ -199,9 +199,9 @@ describe("SessionSidebar", () => {
         return jsonResponse({
           sessions: [
             createSession(1, {
-              terminalOutcomeReadState: {
-                hasUnreadTerminalOutcome: true,
-                latestTerminalOutcomeMessageId: "message-1",
+              readState: {
+                unread: true,
+                latestMessageId: "message-1",
               },
             }),
           ],
@@ -209,12 +209,12 @@ describe("SessionSidebar", () => {
         });
       }
       expect(init?.method).toBe("PATCH");
-      expect(init?.body).toBe(JSON.stringify({ action: "mark_latest_terminal_outcome_read" }));
+      expect(init?.body).toBe(JSON.stringify({ action: "mark_latest_message_read" }));
       return jsonResponse({
         sessionId: "session-1",
         outcome: "marked_read",
-        hasUnreadTerminalOutcome: false,
-        latestTerminalOutcomeMessageId: "message-1",
+        unread: false,
+        latestMessageId: "message-1",
       });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -240,7 +240,7 @@ describe("SessionSidebar", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/api/sessions/session-1/terminal-outcome-read-state",
+        "/api/sessions/session-1/read-state",
         expect.objectContaining({ method: "PATCH" })
       )
     );

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
-  applySessionTerminalOutcomeReadState,
+  applySessionReadState,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -58,14 +58,14 @@ describe("buildSessionsPageKey", () => {
   });
 });
 
-describe("applySessionTerminalOutcomeReadState", () => {
-  it("does not let an older mutation response overwrite a newer terminal outcome", () => {
+describe("applySessionReadState", () => {
+  it("does not let an older mutation response overwrite a newer terminal message", () => {
     const data: SessionListResponse = {
       sessions: [
         session("session-1", {
-          terminalOutcomeReadState: {
-            hasUnreadTerminalOutcome: true,
-            latestTerminalOutcomeMessageId: "message-b",
+          readState: {
+            unread: true,
+            latestMessageId: "message-b",
           },
         }),
       ],
@@ -73,22 +73,22 @@ describe("applySessionTerminalOutcomeReadState", () => {
     };
 
     expect(
-      applySessionTerminalOutcomeReadState(data, "session-1", {
-        hasUnreadTerminalOutcome: false,
-        latestTerminalOutcomeMessageId: "message-a",
-      })?.sessions[0].terminalOutcomeReadState
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-a",
+      })?.sessions[0].readState
     ).toEqual({
-      hasUnreadTerminalOutcome: true,
-      latestTerminalOutcomeMessageId: "message-b",
+      unread: true,
+      latestMessageId: "message-b",
     });
     expect(
-      applySessionTerminalOutcomeReadState(data, "session-1", {
-        hasUnreadTerminalOutcome: false,
-        latestTerminalOutcomeMessageId: "message-b",
-      })?.sessions[0].terminalOutcomeReadState
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-b",
+      })?.sessions[0].readState
     ).toEqual({
-      hasUnreadTerminalOutcome: false,
-      latestTerminalOutcomeMessageId: "message-b",
+      unread: false,
+      latestMessageId: "message-b",
     });
   });
 });

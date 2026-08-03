@@ -98,28 +98,24 @@ export function applyTitleUpdate(
   };
 }
 
-export function applySessionTerminalOutcomeReadState(
+export function applySessionReadState(
   data: SessionListResponse | undefined,
   sessionId: string,
-  terminalOutcomeReadState: Session["terminalOutcomeReadState"]
+  readState: Session["readState"]
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
     sessions: data.sessions.map((session) => {
       if (session.id !== sessionId) return session;
-      if (!terminalOutcomeReadState) return session;
-      const currentTerminalOutcomeMessageId =
-        session.terminalOutcomeReadState?.latestTerminalOutcomeMessageId;
-      if (
-        currentTerminalOutcomeMessageId !== undefined &&
-        currentTerminalOutcomeMessageId !== terminalOutcomeReadState.latestTerminalOutcomeMessageId
-      ) {
+      if (!readState) return session;
+      const currentMessageId = session.readState?.latestMessageId;
+      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
         return session;
       }
       return {
         ...session,
-        terminalOutcomeReadState,
+        readState,
       };
     }),
   };

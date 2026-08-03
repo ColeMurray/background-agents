@@ -103,7 +103,7 @@ describe("user message authors", () => {
   });
 });
 
-describe("terminal outcome visibility", () => {
+describe("terminal message visibility", () => {
   it("marks read only after the latest completion is visible in the active tab", async () => {
     mockScrollIntoView();
     const observations: Array<{
@@ -129,7 +129,7 @@ describe("terminal outcome visibility", () => {
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-    const onMarkTerminalOutcomeRead = vi.fn(async () => "complete" as const);
+    const onMarkMessageRead = vi.fn(async () => "complete" as const);
     const events: SandboxEvent[] = [
       {
         type: "execution_complete",
@@ -158,8 +158,8 @@ describe("terminal outcome visibility", () => {
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
-        terminalOutcomeReadObservationEnabled
-        onMarkTerminalOutcomeRead={onMarkTerminalOutcomeRead}
+        terminalMessageReadObservationEnabled
+        onMarkMessageRead={onMarkMessageRead}
       />
     );
 
@@ -173,12 +173,12 @@ describe("terminal outcome visibility", () => {
         {} as IntersectionObserver
       );
     });
-    expect(onMarkTerminalOutcomeRead).not.toHaveBeenCalled();
+    expect(onMarkMessageRead).not.toHaveBeenCalled();
 
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
     await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledOnce();
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledWith("message-2");
+    expect(onMarkMessageRead).toHaveBeenCalledOnce();
+    expect(onMarkMessageRead).toHaveBeenCalledWith("message-2");
   });
 
   it("retries an incomplete read attempt while the same outcome remains visible", async () => {
@@ -207,7 +207,7 @@ describe("terminal outcome visibility", () => {
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    const onMarkTerminalOutcomeRead = vi
+    const onMarkMessageRead = vi
       .fn()
       .mockResolvedValueOnce("retry")
       .mockResolvedValueOnce("retry")
@@ -232,8 +232,8 @@ describe("terminal outcome visibility", () => {
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
-        terminalOutcomeReadObservationEnabled
-        onMarkTerminalOutcomeRead={onMarkTerminalOutcomeRead}
+        terminalMessageReadObservationEnabled
+        onMarkMessageRead={onMarkMessageRead}
       />
     );
     const target = container.querySelector('[data-terminal-message-id="message-1"]')!;
@@ -245,16 +245,16 @@ describe("terminal outcome visibility", () => {
         {} as IntersectionObserver
       );
     });
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(1);
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(1);
 
     await act(async () => window.dispatchEvent(new Event("focus")));
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(2);
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
 
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(2);
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(2);
 
     await act(async () => vi.advanceTimersByTimeAsync(2_000));
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledTimes(3);
+    expect(onMarkMessageRead).toHaveBeenCalledTimes(3);
   });
 
   it("observes the assistant output instead of the completion badge", () => {
@@ -302,8 +302,8 @@ describe("terminal outcome visibility", () => {
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
-        terminalOutcomeReadObservationEnabled
-        onMarkTerminalOutcomeRead={async () => "complete"}
+        terminalMessageReadObservationEnabled
+        onMarkMessageRead={async () => "complete"}
       />
     );
 
@@ -341,7 +341,7 @@ describe("terminal outcome visibility", () => {
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    const onMarkTerminalOutcomeRead = vi.fn(() => readAttempt);
+    const onMarkMessageRead = vi.fn(() => readAttempt);
     const { container, unmount } = render(
       <SessionTimeline
         events={[
@@ -361,8 +361,8 @@ describe("terminal outcome visibility", () => {
         showSkeleton={false}
         onLoadOlder={() => {}}
         onOpenMedia={() => {}}
-        terminalOutcomeReadObservationEnabled
-        onMarkTerminalOutcomeRead={onMarkTerminalOutcomeRead}
+        terminalMessageReadObservationEnabled
+        onMarkMessageRead={onMarkMessageRead}
       />
     );
     const target = container.querySelector('[data-terminal-message-id="message-1"]')!;
@@ -373,7 +373,7 @@ describe("terminal outcome visibility", () => {
         {} as IntersectionObserver
       );
     });
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledOnce();
+    expect(onMarkMessageRead).toHaveBeenCalledOnce();
 
     unmount();
     resolveReadAttempt("retry");
@@ -381,6 +381,6 @@ describe("terminal outcome visibility", () => {
       await readAttempt;
       await vi.advanceTimersByTimeAsync(60_000);
     });
-    expect(onMarkTerminalOutcomeRead).toHaveBeenCalledOnce();
+    expect(onMarkMessageRead).toHaveBeenCalledOnce();
   });
 });

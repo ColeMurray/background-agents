@@ -1,13 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
-import type { TerminalOutcomeReadAttemptDisposition } from "@/lib/session-terminal-outcome-read-state";
+import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 
-const TERMINAL_OUTCOME_READ_RETRY_MS = 2_000;
-const TERMINAL_OUTCOME_READ_MAX_ATTEMPTS = 4;
+const SESSION_READ_RETRY_MS = 2_000;
+const SESSION_READ_MAX_ATTEMPTS = 4;
 const MEANINGFUL_VISIBLE_HEIGHT_PX = 48;
 
-interface TerminalOutcomeReadAttemptState {
+interface TerminalMessageReadAttemptState {
   enabled: boolean;
   attemptsComplete: boolean;
   requestInFlight: boolean;
@@ -17,29 +17,27 @@ interface TerminalOutcomeReadAttemptState {
   documentFocused: boolean;
 }
 
-export function shouldAttemptMarkTerminalOutcomeRead(
-  state: TerminalOutcomeReadAttemptState
-): boolean {
+export function shouldAttemptMarkMessageRead(state: TerminalMessageReadAttemptState): boolean {
   return (
     state.enabled &&
     !state.attemptsComplete &&
     !state.requestInFlight &&
-    state.attemptCount < TERMINAL_OUTCOME_READ_MAX_ATTEMPTS &&
+    state.attemptCount < SESSION_READ_MAX_ATTEMPTS &&
     state.intersecting &&
     state.documentVisible &&
     state.documentFocused
   );
 }
 
-export function TerminalOutcomeReadObserver({
+export function TerminalMessageReadObserver({
   messageId,
   enabled,
-  onMarkTerminalOutcomeRead,
+  onMarkMessageRead,
   children,
 }: {
   messageId: string;
   enabled: boolean;
-  onMarkTerminalOutcomeRead: (messageId: string) => Promise<TerminalOutcomeReadAttemptDisposition>;
+  onMarkMessageRead: (messageId: string) => Promise<SessionReadAttemptDisposition>;
   children: ReactNode;
 }) {
   const elementRef = useRef<HTMLDivElement>(null);
@@ -51,9 +49,9 @@ export function TerminalOutcomeReadObserver({
   const attemptCountRef = useRef(0);
   const cancelledRef = useRef(false);
 
-  const attemptMarkTerminalOutcomeRead = useCallback(async () => {
+  const attemptMarkMessageRead = useCallback(async () => {
     if (
-      !shouldAttemptMarkTerminalOutcomeRead({
+      !shouldAttemptMarkMessageRead({
         enabled: enabledRef.current,
         attemptsComplete: attemptsCompleteRef.current,
         requestInFlight: requestInFlightRef.current,
@@ -68,11 +66,11 @@ export function TerminalOutcomeReadObserver({
 
     requestInFlightRef.current = true;
     attemptCountRef.current += 1;
-    let disposition: TerminalOutcomeReadAttemptDisposition;
+    let disposition: SessionReadAttemptDisposition;
     try {
-      disposition = await onMarkTerminalOutcomeRead(messageId);
+      disposition = await onMarkMessageRead(messageId);
     } catch (error) {
-      console.error("Failed to mark visible terminal outcome read", error);
+      console.error("Failed to mark visible terminal message read", error);
       disposition = "retry";
     } finally {
       requestInFlightRef.current = false;
@@ -85,21 +83,21 @@ export function TerminalOutcomeReadObserver({
       disposition === "retry" &&
       enabledRef.current &&
       intersectingRef.current &&
-      attemptCountRef.current < TERMINAL_OUTCOME_READ_MAX_ATTEMPTS
+      attemptCountRef.current < SESSION_READ_MAX_ATTEMPTS
     ) {
-      const retryDelayMs = TERMINAL_OUTCOME_READ_RETRY_MS * 2 ** (attemptCountRef.current - 1);
+      const retryDelayMs = SESSION_READ_RETRY_MS * 2 ** (attemptCountRef.current - 1);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
       retryTimerRef.current = setTimeout(() => {
         retryTimerRef.current = null;
-        void attemptMarkTerminalOutcomeRead();
+        void attemptMarkMessageRead();
       }, retryDelayMs);
     }
-  }, [messageId, onMarkTerminalOutcomeRead]);
+  }, [messageId, onMarkMessageRead]);
 
   useEffect(() => {
     enabledRef.current = enabled;
-    if (enabled) void attemptMarkTerminalOutcomeRead();
-  }, [attemptMarkTerminalOutcomeRead, enabled]);
+    if (enabled) void attemptMarkMessageRead();
+  }, [attemptMarkMessageRead, enabled]);
 
   useEffect(() => {
     const element = elementRef.current;
@@ -114,7 +112,7 @@ export function TerminalOutcomeReadObserver({
         const meaningfullyVisible = entry.isIntersecting && visibleHeight >= requiredHeight;
         intersectingRef.current = meaningfullyVisible;
         if (meaningfullyVisible) {
-          void attemptMarkTerminalOutcomeRead();
+          void attemptMarkMessageRead();
         } else {
           attemptCountRef.current = 0;
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -125,14 +123,14 @@ export function TerminalOutcomeReadObserver({
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [attemptMarkTerminalOutcomeRead]);
+  }, [attemptMarkMessageRead]);
 
   useEffect(() => {
     const attempt = () => {
-      if (attemptCountRef.current >= TERMINAL_OUTCOME_READ_MAX_ATTEMPTS) {
+      if (attemptCountRef.current >= SESSION_READ_MAX_ATTEMPTS) {
         attemptCountRef.current = 0;
       }
-      void attemptMarkTerminalOutcomeRead();
+      void attemptMarkMessageRead();
     };
     document.addEventListener("visibilitychange", attempt);
     window.addEventListener("focus", attempt);
@@ -141,7 +139,7 @@ export function TerminalOutcomeReadObserver({
       window.removeEventListener("focus", attempt);
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
     };
-  }, [attemptMarkTerminalOutcomeRead]);
+  }, [attemptMarkMessageRead]);
 
   useEffect(() => {
     cancelledRef.current = false;

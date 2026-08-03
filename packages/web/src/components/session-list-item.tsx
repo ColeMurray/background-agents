@@ -45,7 +45,7 @@ export function SessionListItem({
   onArchive,
   onSessionSelect,
   onSessionRenamed,
-  onMarkLatestTerminalOutcomeRead,
+  onMarkLatestMessageRead,
 }: {
   session: SessionItem;
   environmentName?: string;
@@ -54,7 +54,7 @@ export function SessionListItem({
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
   onSessionRenamed: (sessionId: string, title: string) => void;
-  onMarkLatestTerminalOutcomeRead: (sessionId: string) => Promise<void>;
+  onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
@@ -71,8 +71,7 @@ export function SessionListItem({
   const [isActionsOpen, setIsActionsOpen] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
-  const [isMarkingLatestTerminalOutcomeRead, setIsMarkingLatestTerminalOutcomeRead] =
-    useState(false);
+  const [isMarkingLatestRead, setIsMarkingLatestRead] = useState(false);
   const [title, setTitle] = useState(displayTitle);
   const renameInputRef = useRef<HTMLInputElement>(null);
   const isStartingRenameRef = useRef(false);
@@ -114,16 +113,16 @@ export function SessionListItem({
     setShowArchiveDialog(true);
   };
 
-  const handleMarkLatestTerminalOutcomeRead = async () => {
-    if (isMarkingLatestTerminalOutcomeRead) return;
+  const handleMarkLatestMessageRead = async () => {
+    if (isMarkingLatestRead) return;
     setIsActionsOpen(false);
-    setIsMarkingLatestTerminalOutcomeRead(true);
+    setIsMarkingLatestRead(true);
     try {
-      await onMarkLatestTerminalOutcomeRead(session.id);
+      await onMarkLatestMessageRead(session.id);
     } catch (error) {
       console.error("Failed to mark session read", error);
     } finally {
-      setIsMarkingLatestTerminalOutcomeRead(false);
+      setIsMarkingLatestRead(false);
     }
   };
 
@@ -279,7 +278,7 @@ export function SessionListItem({
             className="block pr-8"
           >
             <div className="flex items-center gap-1.5 text-sm text-foreground">
-              {session.terminalOutcomeReadState?.hasUnreadTerminalOutcome && (
+              {session.readState?.unread && (
                 <>
                   <span
                     aria-hidden="true"
@@ -292,7 +291,7 @@ export function SessionListItem({
                 <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />
               )}
               <span
-                className={`truncate ${session.terminalOutcomeReadState?.hasUnreadTerminalOutcome ? "font-semibold" : "font-medium"}`}
+                className={`truncate ${session.readState?.unread ? "font-semibold" : "font-medium"}`}
               >
                 {displayTitle}
               </span>
@@ -331,19 +330,11 @@ export function SessionListItem({
               <button
                 type="button"
                 aria-label="Session actions"
-                aria-hidden={
-                  isMobile && !session.terminalOutcomeReadState?.hasUnreadTerminalOutcome
-                    ? "true"
-                    : undefined
-                }
-                tabIndex={
-                  isMobile && !session.terminalOutcomeReadState?.hasUnreadTerminalOutcome
-                    ? -1
-                    : undefined
-                }
+                aria-hidden={isMobile && !session.readState?.unread ? "true" : undefined}
+                tabIndex={isMobile && !session.readState?.unread ? -1 : undefined}
                 className={`items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                   isMobile
-                    ? session.terminalOutcomeReadState?.hasUnreadTerminalOutcome
+                    ? session.readState?.unread
                       ? "flex h-10 w-10"
                       : "pointer-events-none flex h-6 w-6 opacity-0"
                     : "flex h-6 w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -362,10 +353,10 @@ export function SessionListItem({
               }}
             >
               <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
-              {session.terminalOutcomeReadState?.hasUnreadTerminalOutcome && (
+              {session.readState?.unread && (
                 <DropdownMenuItem
-                  onSelect={handleMarkLatestTerminalOutcomeRead}
-                  disabled={isMarkingLatestTerminalOutcomeRead}
+                  onSelect={handleMarkLatestMessageRead}
+                  disabled={isMarkingLatestRead}
                 >
                   Mark as read
                 </DropdownMenuItem>
@@ -394,31 +385,30 @@ export function ChildSessionListItem({
   isMobile,
   onSessionSelect,
   depth,
-  onMarkLatestTerminalOutcomeRead,
+  onMarkLatestMessageRead,
 }: {
   session: SessionItem;
   isActive: boolean;
   isMobile: boolean;
   onSessionSelect?: () => void;
   depth: number;
-  onMarkLatestTerminalOutcomeRead: (sessionId: string) => Promise<void>;
+  onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
-  const [isMarkingLatestTerminalOutcomeRead, setIsMarkingLatestTerminalOutcomeRead] =
-    useState(false);
+  const [isMarkingLatestRead, setIsMarkingLatestRead] = useState(false);
   const timestamp = session.updatedAt || session.createdAt;
   const relativeTime = formatRelativeTime(timestamp);
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
   const displayTitle = session.title || "Sub-task";
   const paddingLeftRem = 1.75 + Math.max(depth - 1, 0) * 1;
-  const handleMarkLatestTerminalOutcomeRead = async () => {
-    if (isMarkingLatestTerminalOutcomeRead) return;
-    setIsMarkingLatestTerminalOutcomeRead(true);
+  const handleMarkLatestMessageRead = async () => {
+    if (isMarkingLatestRead) return;
+    setIsMarkingLatestRead(true);
     try {
-      await onMarkLatestTerminalOutcomeRead(session.id);
+      await onMarkLatestMessageRead(session.id);
     } catch (error) {
       console.error("Failed to mark session read", error);
     } finally {
-      setIsMarkingLatestTerminalOutcomeRead(false);
+      setIsMarkingLatestRead(false);
     }
   };
   return (
@@ -434,7 +424,7 @@ export function ChildSessionListItem({
         style={{ paddingLeft: `${paddingLeftRem}rem` }}
       >
         <div className="flex items-center gap-1.5 text-xs">
-          {session.terminalOutcomeReadState?.hasUnreadTerminalOutcome && (
+          {session.readState?.unread && (
             <>
               <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
               <span className="sr-only">Unread</span>
@@ -443,13 +433,13 @@ export function ChildSessionListItem({
           <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
           {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
           <span
-            className={`truncate text-foreground ${session.terminalOutcomeReadState?.hasUnreadTerminalOutcome ? "font-semibold" : "font-medium"}`}
+            className={`truncate text-foreground ${session.readState?.unread ? "font-semibold" : "font-medium"}`}
           >
             {displayTitle}
           </span>
         </div>
       </Link>
-      {session.terminalOutcomeReadState?.hasUnreadTerminalOutcome && (
+      {session.readState?.unread && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -465,10 +455,7 @@ export function ChildSessionListItem({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              onSelect={handleMarkLatestTerminalOutcomeRead}
-              disabled={isMarkingLatestTerminalOutcomeRead}
-            >
+            <DropdownMenuItem onSelect={handleMarkLatestMessageRead} disabled={isMarkingLatestRead}>
               Mark as read
             </DropdownMenuItem>
           </DropdownMenuContent>

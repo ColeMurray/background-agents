@@ -2,10 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import {
-  sessionTerminalOutcomeReadActionSchema,
-  type SessionTerminalOutcomeReadAction,
-} from "@open-inspect/shared";
+import { sessionReadActionSchema, type SessionReadAction } from "@open-inspect/shared";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerAuthSession();
@@ -13,9 +10,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: SessionTerminalOutcomeReadAction | null;
+  let body: SessionReadAction | null;
   try {
-    const parsedBody = sessionTerminalOutcomeReadActionSchema.safeParse(await request.json());
+    const parsedBody = sessionReadActionSchema.safeParse(await request.json());
     body = parsedBody.success ? parsedBody.data : null;
   } catch {
     body = null;
@@ -26,7 +23,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   const { id } = await params;
   try {
-    const response = await controlPlaneUserFetch(`/sessions/${id}/terminal-outcome-read-state`, {
+    const response = await controlPlaneUserFetch(`/sessions/${id}/read-state`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -36,10 +33,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error) {
-    console.error("Update terminal-outcome read state error:", error);
-    return NextResponse.json(
-      { error: "Failed to update terminal-outcome read state" },
-      { status: 500 }
-    );
+    console.error("Update session read state error:", error);
+    return NextResponse.json({ error: "Failed to update session read state" }, { status: 500 });
   }
 }

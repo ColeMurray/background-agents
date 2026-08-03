@@ -143,7 +143,7 @@ function buildQueue() {
   const waitUntil = vi.fn();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
-  const recordTerminalOutcome = vi.fn(async () => {});
+  const recordTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
@@ -165,7 +165,7 @@ function buildQueue() {
     null,
     "github",
     EXECUTION_TIMEOUT_MS,
-    recordTerminalOutcome
+    recordTerminalMessage
   );
 
   return {
@@ -181,7 +181,7 @@ function buildQueue() {
     getAlarm,
     setAlarm,
     callbackService,
-    recordTerminalOutcome,
+    recordTerminalMessage,
   };
 }
 
@@ -598,7 +598,7 @@ describe("SessionMessageQueue", () => {
       createMessage({ id: "msg-9", status: "processing", created_at: 900 })
     );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-    h.recordTerminalOutcome.mockReturnValue(new Promise<void>(() => {}));
+    h.recordTerminalMessage.mockReturnValue(new Promise<void>(() => {}));
 
     await h.queue.stopExecution();
 
@@ -612,10 +612,10 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ type: "execution_complete", success: false }),
       expect.any(Number)
     );
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-9",
       messageCreatedAt: 900,
-      terminalOutcomeCompletedAt: expect.any(Number),
+      terminalMessageCompletedAt: expect.any(Number),
     });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
@@ -640,15 +640,15 @@ describe("SessionMessageQueue", () => {
     h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
       createMessage({ id: "msg-timeout", status: "processing", created_at: 800 })
     );
-    h.recordTerminalOutcome.mockReturnValue(new Promise<void>(() => {}));
+    h.recordTerminalMessage.mockReturnValue(new Promise<void>(() => {}));
 
     await h.queue.failStuckProcessingMessage();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-timeout",
       messageCreatedAt: 800,
-      terminalOutcomeCompletedAt: expect.any(Number),
+      terminalMessageCompletedAt: expect.any(Number),
     });
     expect(h.waitUntil).toHaveBeenCalledTimes(2);
   });

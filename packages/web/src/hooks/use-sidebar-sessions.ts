@@ -8,7 +8,7 @@ import useSWRInfinite from "swr/infinite";
 import { isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
-  applySessionTerminalOutcomeReadState,
+  applySessionReadState,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isUnarchivedSessionListKey,
@@ -19,10 +19,10 @@ import {
 } from "@/lib/session-list";
 import type { Session } from "@open-inspect/shared";
 import {
-  markLatestTerminalOutcomeRead,
-  reconcileSessionTerminalOutcomeReadState,
-  terminalOutcomeReadStateFromResult,
-} from "@/lib/session-terminal-outcome-read-state";
+  markLatestMessageRead,
+  reconcileSessionReadState,
+  readStateFromResult,
+} from "@/lib/session-read-state";
 
 const VISIBLE_SESSION_LIST_POLL_MS = 30_000;
 
@@ -249,28 +249,20 @@ export function useSidebarSessions(currentSessionId: string | null) {
     [mutateExtraPages, mutateFirstPage]
   );
 
-  const handleMarkLatestTerminalOutcomeRead = useCallback(
+  const handleMarkLatestMessageRead = useCallback(
     async (sessionId: string) => {
-      const result = await markLatestTerminalOutcomeRead(sessionId);
-      const terminalOutcomeReadState = terminalOutcomeReadStateFromResult(result);
+      const result = await markLatestMessageRead(sessionId);
+      const readState = readStateFromResult(result);
       await mutateFirstPage(
-        (current) =>
-          applySessionTerminalOutcomeReadState(current, result.sessionId, terminalOutcomeReadState),
+        (current) => applySessionReadState(current, result.sessionId, readState),
         { revalidate: false }
       );
       await mutateExtraPages(
         (current) =>
-          current?.map(
-            (page) =>
-              applySessionTerminalOutcomeReadState(
-                page,
-                result.sessionId,
-                terminalOutcomeReadState
-              ) ?? page
-          ),
+          current?.map((page) => applySessionReadState(page, result.sessionId, readState) ?? page),
         { revalidate: false }
       );
-      await reconcileSessionTerminalOutcomeReadState(result);
+      await reconcileSessionReadState(result);
     },
     [mutateExtraPages, mutateFirstPage]
   );
@@ -289,6 +281,6 @@ export function useSidebarSessions(currentSessionId: string | null) {
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
-    handleMarkLatestTerminalOutcomeRead,
+    handleMarkLatestMessageRead,
   };
 }

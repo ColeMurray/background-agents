@@ -60,7 +60,7 @@ function createProcessor() {
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
-  const recordTerminalOutcome = vi.fn(async () => {});
+  const recordTerminalMessage = vi.fn(async () => {});
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const waitUntil = vi.fn();
   const log = {
@@ -85,7 +85,7 @@ function createProcessor() {
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue,
-    recordTerminalOutcome
+    recordTerminalMessage
   );
 
   return {
@@ -102,7 +102,7 @@ function createProcessor() {
     updateLastActivity,
     applySessionTitleUpdate,
     waitUntil,
-    recordTerminalOutcome,
+    recordTerminalMessage,
   };
 }
 
@@ -342,10 +342,10 @@ describe("SessionSandboxEventProcessor", () => {
       "completed",
       expect.any(Number)
     );
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-1",
       messageCreatedAt: 1000,
-      terminalOutcomeCompletedAt: expect.any(Number),
+      terminalMessageCompletedAt: expect.any(Number),
     });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
@@ -367,7 +367,7 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2_000,
     });
 
-    expect(h.recordTerminalOutcome).not.toHaveBeenCalled();
+    expect(h.recordTerminalMessage).not.toHaveBeenCalled();
     expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
   });
 
@@ -390,10 +390,10 @@ describe("SessionSandboxEventProcessor", () => {
       "failed",
       expect.any(Number)
     );
-    expect(h.recordTerminalOutcome).toHaveBeenCalledWith({
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-failed",
       messageCreatedAt: 900,
-      terminalOutcomeCompletedAt: expect.any(Number),
+      terminalMessageCompletedAt: expect.any(Number),
     });
   });
 

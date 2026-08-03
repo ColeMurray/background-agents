@@ -1,8 +1,8 @@
 import type {
   PullRequestSummary,
-  SessionTerminalOutcomeReadAction,
-  SessionTerminalOutcomeReadResult,
-  SessionTerminalOutcomeReadState,
+  SessionReadAction,
+  SessionReadResult,
+  SessionReadState,
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared";
@@ -70,7 +70,7 @@ export interface SessionEntry {
    * has no tracked PRs. Attached by list() for the global sidebar.
    */
   pullRequestSummary?: PullRequestSummary;
-  terminalOutcomeReadState?: SessionTerminalOutcomeReadState;
+  readState?: SessionReadState;
 }
 
 interface SessionRepositoryRow {
@@ -124,37 +124,35 @@ export interface ListSessionsResult {
   hasMore: boolean;
 }
 
-interface ViewerTerminalOutcomeReadStateRow {
-  has_unread_terminal_outcome: number;
-  latest_terminal_outcome_message_id: string | null;
+interface ViewerReadStateRow {
+  unread: number;
+  latest_terminal_message_id: string | null;
 }
 
-interface ViewerSessionRow extends SessionRow, ViewerTerminalOutcomeReadStateRow {}
+interface ViewerSessionRow extends SessionRow, ViewerReadStateRow {}
 
-function hasUnreadTerminalOutcomeSql(sessionAlias: string): string {
+function unreadSql(sessionAlias: string): string {
   return `CASE
-            WHEN ${sessionAlias}.latest_terminal_outcome_message_id IS NOT NULL
-              AND ${sessionAlias}.latest_terminal_outcome_completed_at >= viewer.created_at
+            WHEN ${sessionAlias}.latest_terminal_message_id IS NOT NULL
+              AND ${sessionAlias}.latest_terminal_message_completed_at >= viewer.created_at
               AND (
-                read_state.last_read_terminal_outcome_message_id IS NULL
-                OR read_state.last_read_terminal_outcome_message_id
-                  != ${sessionAlias}.latest_terminal_outcome_message_id
+                read_state.last_read_message_id IS NULL
+                OR read_state.last_read_message_id
+                  != ${sessionAlias}.latest_terminal_message_id
               )
             THEN 1 ELSE 0
           END`;
 }
 
-function terminalOutcomeReadStateFromRow(
-  row: ViewerTerminalOutcomeReadStateRow
-): SessionTerminalOutcomeReadState {
-  return row.latest_terminal_outcome_message_id === null
+function readStateFromRow(row: ViewerReadStateRow): SessionReadState {
+  return row.latest_terminal_message_id === null
     ? {
-        latestTerminalOutcomeMessageId: null,
-        hasUnreadTerminalOutcome: false,
+        latestMessageId: null,
+        unread: false,
       }
     : {
-        latestTerminalOutcomeMessageId: row.latest_terminal_outcome_message_id,
-        hasUnreadTerminalOutcome: row.has_unread_terminal_outcome === 1,
+        latestMessageId: row.latest_terminal_message_id,
+        unread: row.unread === 1,
       };
 }
 
@@ -380,10 +378,10 @@ export class SessionIndexStore {
           .prepare(
             `WITH paged_sessions AS (${pageSql})
              SELECT paged_sessions.*,
-                    ${hasUnreadTerminalOutcomeSql("paged_sessions")} AS has_unread_terminal_outcome
+                    ${unreadSql("paged_sessions")} AS unread
              FROM paged_sessions
              LEFT JOIN users viewer ON viewer.id = ?
-             LEFT JOIN session_terminal_outcome_read_states read_state
+             LEFT JOIN session_read_states read_state
                ON read_state.session_id = paged_sessions.id
               AND read_state.user_id = viewer.id
              ORDER BY paged_sessions.updated_at DESC`
@@ -399,9 +397,7 @@ export class SessionIndexStore {
     const sessions = await this.decorateEntries(
       rows.slice(0, limit).map((row) => ({
         ...toEntry(row),
-        ...(viewerUserId
-          ? { terminalOutcomeReadState: terminalOutcomeReadStateFromRow(row as ViewerSessionRow) }
-          : {}),
+        ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
       }))
     );
 
@@ -439,32 +435,32 @@ export class SessionIndexStore {
     });
   }
 
-  async recordLatestTerminalOutcome(input: {
+  async recordLatestTerminalMessage(input: {
     sessionId: string;
     messageId: string;
     messageCreatedAt: number;
-    terminalOutcomeCompletedAt: number;
+    terminalMessageCompletedAt: number;
   }): Promise<boolean> {
     const result = await this.db
       .prepare(
         `UPDATE sessions
-         SET latest_terminal_outcome_message_id = ?,
-             latest_terminal_outcome_message_created_at = ?,
-             latest_terminal_outcome_completed_at = ?
+         SET latest_terminal_message_id = ?,
+             latest_terminal_message_created_at = ?,
+             latest_terminal_message_completed_at = ?
          WHERE id = ?
            AND (
-             latest_terminal_outcome_message_created_at IS NULL
-             OR latest_terminal_outcome_message_created_at < ?
+             latest_terminal_message_created_at IS NULL
+             OR latest_terminal_message_created_at < ?
              OR (
-               latest_terminal_outcome_message_created_at = ?
-               AND latest_terminal_outcome_message_id < ?
+               latest_terminal_message_created_at = ?
+               AND latest_terminal_message_id < ?
              )
            )`
       )
       .bind(
         input.messageId,
         input.messageCreatedAt,
-        input.terminalOutcomeCompletedAt,
+        input.terminalMessageCompletedAt,
         input.sessionId,
         input.messageCreatedAt,
         input.messageCreatedAt,
@@ -479,62 +475,61 @@ export class SessionIndexStore {
     return this.get(sessionId);
   }
 
-  async updateTerminalOutcomeReadState(
+  async updateReadState(
     userId: string,
     sessionId: string,
-    action: SessionTerminalOutcomeReadAction
-  ): Promise<SessionTerminalOutcomeReadResult | null> {
+    action: SessionReadAction
+  ): Promise<SessionReadResult | null> {
     let writeApplied: boolean;
-    if (action.action === "mark_terminal_outcome_read") {
+    if (action.action === "mark_message_read") {
       const result = await this.db
         .prepare(
-          `INSERT INTO session_terminal_outcome_read_states
-             (user_id, session_id, last_read_terminal_outcome_message_id, updated_at)
-           SELECT ?, id, latest_terminal_outcome_message_id, ?
+          `INSERT INTO session_read_states
+             (user_id, session_id, last_read_message_id, updated_at)
+           SELECT ?, id, latest_terminal_message_id, ?
            FROM sessions
-           WHERE id = ? AND latest_terminal_outcome_message_id = ?
+           WHERE id = ? AND latest_terminal_message_id = ?
            ON CONFLICT(user_id, session_id) DO UPDATE SET
-              last_read_terminal_outcome_message_id = excluded.last_read_terminal_outcome_message_id,
+              last_read_message_id = excluded.last_read_message_id,
               updated_at = excluded.updated_at
-            WHERE session_terminal_outcome_read_states.last_read_terminal_outcome_message_id
-              != excluded.last_read_terminal_outcome_message_id`
+            WHERE session_read_states.last_read_message_id
+              != excluded.last_read_message_id`
         )
-        .bind(userId, Date.now(), sessionId, action.terminalOutcomeMessageId)
+        .bind(userId, Date.now(), sessionId, action.messageId)
         .run();
       writeApplied = (result.meta.changes ?? 0) > 0;
     } else {
       const result = await this.db
         .prepare(
-          `INSERT INTO session_terminal_outcome_read_states
-             (user_id, session_id, last_read_terminal_outcome_message_id, updated_at)
-           SELECT ?, id, latest_terminal_outcome_message_id, ?
+          `INSERT INTO session_read_states
+             (user_id, session_id, last_read_message_id, updated_at)
+           SELECT ?, id, latest_terminal_message_id, ?
            FROM sessions
-           WHERE id = ? AND latest_terminal_outcome_message_id IS NOT NULL
+           WHERE id = ? AND latest_terminal_message_id IS NOT NULL
            ON CONFLICT(user_id, session_id) DO UPDATE SET
-              last_read_terminal_outcome_message_id = excluded.last_read_terminal_outcome_message_id,
+              last_read_message_id = excluded.last_read_message_id,
               updated_at = excluded.updated_at
-            WHERE session_terminal_outcome_read_states.last_read_terminal_outcome_message_id
-              != excluded.last_read_terminal_outcome_message_id`
+            WHERE session_read_states.last_read_message_id
+              != excluded.last_read_message_id`
         )
         .bind(userId, Date.now(), sessionId)
         .run();
       writeApplied = (result.meta.changes ?? 0) > 0;
     }
 
-    const currentReadState = await this.terminalOutcomeReadStateForSession(userId, sessionId);
+    const currentReadState = await this.readStateForSession(userId, sessionId);
     if (!currentReadState) return null;
-    const latestTerminalOutcomeMessageId = currentReadState.latestTerminalOutcomeMessageId;
-    if (latestTerminalOutcomeMessageId === null) {
+    const latestMessageId = currentReadState.latestMessageId;
+    if (latestMessageId === null) {
       return {
         sessionId,
-        outcome: "no_terminal_outcome",
-        hasUnreadTerminalOutcome: false,
-        latestTerminalOutcomeMessageId: null,
+        outcome: "no_terminal_message",
+        unread: false,
+        latestMessageId: null,
       };
     }
     const outcome =
-      action.action === "mark_terminal_outcome_read" &&
-      latestTerminalOutcomeMessageId !== action.terminalOutcomeMessageId
+      action.action === "mark_message_read" && latestMessageId !== action.messageId
         ? "not_latest"
         : writeApplied
           ? "marked_read"
@@ -542,29 +537,29 @@ export class SessionIndexStore {
     return {
       sessionId,
       outcome,
-      hasUnreadTerminalOutcome: currentReadState.hasUnreadTerminalOutcome,
-      latestTerminalOutcomeMessageId,
+      unread: currentReadState.unread,
+      latestMessageId,
     };
   }
 
-  private async terminalOutcomeReadStateForSession(
+  private async readStateForSession(
     userId: string,
     sessionId: string
-  ): Promise<SessionTerminalOutcomeReadState | null> {
+  ): Promise<SessionReadState | null> {
     const row = await this.db
       .prepare(
-        `SELECT sessions.latest_terminal_outcome_message_id,
-                ${hasUnreadTerminalOutcomeSql("sessions")} AS has_unread_terminal_outcome
+        `SELECT sessions.latest_terminal_message_id,
+                ${unreadSql("sessions")} AS unread
          FROM sessions
          LEFT JOIN users viewer ON viewer.id = ?
-         LEFT JOIN session_terminal_outcome_read_states read_state
+         LEFT JOIN session_read_states read_state
            ON read_state.session_id = sessions.id
           AND read_state.user_id = viewer.id
          WHERE sessions.id = ?`
       )
       .bind(userId, sessionId)
-      .first<ViewerTerminalOutcomeReadStateRow>();
-    return row ? terminalOutcomeReadStateFromRow(row) : null;
+      .first<ViewerReadStateRow>();
+    return row ? readStateFromRow(row) : null;
   }
 
   /** Repository lists for the given sessions, in one query. */

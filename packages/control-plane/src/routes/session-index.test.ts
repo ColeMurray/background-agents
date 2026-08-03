@@ -9,7 +9,7 @@ const mockSessionIndexStore = {
   list: vi.fn(),
   delete: vi.fn(),
   getVisibleForUser: vi.fn(),
-  updateTerminalOutcomeReadState: vi.fn(),
+  updateReadState: vi.fn(),
 };
 
 vi.mock("../db/session-index", () => ({
@@ -58,14 +58,14 @@ async function listSessions(query = "", principal?: Principal): Promise<Response
   );
 }
 
-async function patchTerminalOutcomeReadState(
+async function patchReadState(
   body: string,
   principal?: Principal,
   matchOverride?: RegExpMatchArray
 ): Promise<Response> {
-  const { handler, match } = getHandler("PATCH", "/sessions/session-1/terminal-outcome-read-state");
+  const { handler, match } = getHandler("PATCH", "/sessions/session-1/read-state");
   return handler(
-    new Request("https://test.local/sessions/session-1/terminal-outcome-read-state", {
+    new Request("https://test.local/sessions/session-1/read-state", {
       method: "PATCH",
       body,
     }),
@@ -83,11 +83,11 @@ describe("session index routes", () => {
       hasMore: false,
     });
     mockSessionIndexStore.getVisibleForUser.mockResolvedValue({ id: "session-1" });
-    mockSessionIndexStore.updateTerminalOutcomeReadState.mockResolvedValue({
+    mockSessionIndexStore.updateReadState.mockResolvedValue({
       sessionId: "session-1",
       outcome: "marked_read",
-      hasUnreadTerminalOutcome: false,
-      latestTerminalOutcomeMessageId: "message-1",
+      unread: false,
+      latestMessageId: "message-1",
     });
   });
 
@@ -231,77 +231,68 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 
-  it("requires a human user for terminal-outcome read-state mutations", async () => {
-    const response = await patchTerminalOutcomeReadState(
-      JSON.stringify({ action: "mark_latest_terminal_outcome_read" }),
-      {
-        kind: "service",
-        service: "linear-bot",
-        actor: null,
-      }
-    );
+  it("requires a human user for read-state mutations", async () => {
+    const response = await patchReadState(JSON.stringify({ action: "mark_latest_message_read" }), {
+      kind: "service",
+      service: "linear-bot",
+      actor: null,
+    });
 
     expect(response.status).toBe(403);
-    expect(mockSessionIndexStore.updateTerminalOutcomeReadState).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
   });
 
   it("requires a session ID for read-state mutations", async () => {
-    const { match } = getHandler("PATCH", "/sessions/session-1/terminal-outcome-read-state");
-    const response = await patchTerminalOutcomeReadState(
-      JSON.stringify({ action: "mark_latest_terminal_outcome_read" }),
+    const { match } = getHandler("PATCH", "/sessions/session-1/read-state");
+    const response = await patchReadState(
+      JSON.stringify({ action: "mark_latest_message_read" }),
       { kind: "user", userId: "user-1" },
       Object.assign(match, { groups: {} })
     );
 
     expect(response.status).toBe(400);
-    expect(mockSessionIndexStore.updateTerminalOutcomeReadState).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
   });
 
   it.each([
     ["invalid JSON", "{"],
-    [
-      "an invalid action",
-      JSON.stringify({ action: "mark_latest_terminal_outcome_read", userId: "user-2" }),
-    ],
+    ["an invalid action", JSON.stringify({ action: "mark_latest_message_read", userId: "user-2" })],
   ])("rejects %s for read-state mutations", async (_description, body) => {
-    const response = await patchTerminalOutcomeReadState(body, {
+    const response = await patchReadState(body, {
       kind: "user",
       userId: "user-1",
     });
 
     expect(response.status).toBe(400);
-    expect(mockSessionIndexStore.updateTerminalOutcomeReadState).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
   });
 
   it("does not expose invisible sessions through read-state mutations", async () => {
     mockSessionIndexStore.getVisibleForUser.mockResolvedValue(null);
 
-    const response = await patchTerminalOutcomeReadState(
-      JSON.stringify({ action: "mark_latest_terminal_outcome_read" }),
-      {
-        kind: "user",
-        userId: "user-1",
-      }
-    );
+    const response = await patchReadState(JSON.stringify({ action: "mark_latest_message_read" }), {
+      kind: "user",
+      userId: "user-1",
+    });
 
     expect(response.status).toBe(404);
-    expect(mockSessionIndexStore.updateTerminalOutcomeReadState).not.toHaveBeenCalled();
+    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
   });
 
   it.each([
     [
-      JSON.stringify({ action: "mark_latest_terminal_outcome_read" }),
-      { action: "mark_latest_terminal_outcome_read" },
+      JSON.stringify({ action: "mark_latest_message_read" }),
+      { action: "mark_latest_message_read" },
     ],
     [
       JSON.stringify({
-        action: "mark_terminal_outcome_read",
-        terminalOutcomeMessageId: "message-1",
+        action: "mark_message_read",
+        messageId: "message-1",
       }),
-      { action: "mark_terminal_outcome_read", terminalOutcomeMessageId: "message-1" },
+      { action: "mark_message_read", messageId: "message-1" },
     ],
   ])("updates valid read state", async (body, expectedAction) => {
-    const response = await patchTerminalOutcomeReadState(body, {
+    const response = await patchReadState(body, {
       kind: "user",
       userId: "user-1",
     });
@@ -309,7 +300,7 @@ describe("session index routes", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(mockSessionIndexStore.getVisibleForUser).toHaveBeenCalledWith("session-1", "user-1");
-    expect(mockSessionIndexStore.updateTerminalOutcomeReadState).toHaveBeenCalledWith(
+    expect(mockSessionIndexStore.updateReadState).toHaveBeenCalledWith(
       "user-1",
       "session-1",
       expectedAction

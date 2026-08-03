@@ -30,7 +30,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
-import type { TerminalOutcomeProjectionInput } from "./terminal-outcome-projection";
+import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -99,7 +99,7 @@ export class SessionMessageQueue {
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly executionTimeoutMs: number,
-    private readonly recordTerminalOutcome: (input: TerminalOutcomeProjectionInput) => Promise<void>
+    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
   async handlePromptMessage(
@@ -292,10 +292,10 @@ export class SessionMessageQueue {
         now
       );
       this.ctx.waitUntil(
-        this.recordTerminalOutcome({
+        this.recordTerminalMessage({
           messageId: processingMessage.id,
           messageCreatedAt: processingMessage.created_at,
-          terminalOutcomeCompletedAt: now,
+          terminalMessageCompletedAt: now,
         })
       );
 
@@ -346,10 +346,10 @@ export class SessionMessageQueue {
     };
     this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
     this.ctx.waitUntil(
-      this.recordTerminalOutcome({
+      this.recordTerminalMessage({
         messageId: processingMessage.id,
         messageCreatedAt: processingMessage.created_at,
-        terminalOutcomeCompletedAt: now,
+        terminalMessageCompletedAt: now,
       })
     );
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });

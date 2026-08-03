@@ -89,7 +89,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
-import { SessionTerminalOutcomeProjection } from "./terminal-outcome-projection";
+import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
@@ -207,7 +207,7 @@ export class SessionDO extends DurableObject<Env> {
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
-  private _terminalOutcomeProjection: SessionTerminalOutcomeProjection | null = null;
+  private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -401,16 +401,16 @@ export class SessionDO extends DurableObject<Env> {
         this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
         this.executionTimeoutMs,
-        (input) => this.terminalOutcomeProjection.recordTerminalOutcome(input)
+        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
 
     return this._messageQueue;
   }
 
-  private get terminalOutcomeProjection(): SessionTerminalOutcomeProjection {
-    if (!this._terminalOutcomeProjection) {
-      this._terminalOutcomeProjection = new SessionTerminalOutcomeProjection(
+  private get terminalMessageProjection(): SessionTerminalMessageProjection {
+    if (!this._terminalMessageProjection) {
+      this._terminalMessageProjection = new SessionTerminalMessageProjection(
         this.db ? new SessionIndexStore(this.db) : null,
         () => {
           const session = this.getSession();
@@ -419,7 +419,7 @@ export class SessionDO extends DurableObject<Env> {
         this.log
       );
     }
-    return this._terminalOutcomeProjection;
+    return this._terminalMessageProjection;
   }
 
   private get messageService(): MessageService {
@@ -668,7 +668,7 @@ export class SessionDO extends DurableObject<Env> {
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
         () => this.messageQueue.processMessageQueue(),
-        (input) => this.terminalOutcomeProjection.recordTerminalOutcome(input)
+        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
 
