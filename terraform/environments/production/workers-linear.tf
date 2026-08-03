@@ -102,8 +102,8 @@ resource "cloudflare_queue_consumer" "linear_webhook_delivery" {
     max_wait_time_ms = 1000
     max_concurrency  = 1
     # Three retries provide four attempts, matching MAX_PROCESSING_ATTEMPTS.
-    max_retries      = 3
-    retry_delay      = 15
+    max_retries = 3
+    retry_delay = 15
   }
 
   depends_on = [module.linear_bot_worker]
