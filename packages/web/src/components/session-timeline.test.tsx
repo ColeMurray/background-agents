@@ -489,11 +489,19 @@ describe("task activity grouping", () => {
     ).toContainEqual(expect.objectContaining({ callId: "child-call" }));
   });
 
-  it("renders Task activity nested and preserves its disclosure state", async () => {
+  it("renders focused Task details with independent stable disclosures", async () => {
     const user = userEvent.setup();
     const events = [
       toolEvent("task", "task-call", 1, {
-        args: { description: "Review code" },
+        args: {
+          description: "Review code",
+          prompt: "Inspect the implementation.\nReport any regressions.",
+          subagent_type: "explore",
+          task_id: "ses_resumed",
+          command: "duplicate context",
+        },
+        output:
+          '<task id="ses_resumed" state="completed">\n<task_result>\nReview complete.\nNo regressions found.\n</task_result>\n</task>',
         childSessionId: "child-1",
       }),
       toolEvent("Bash", "child-call", 2, {
@@ -519,8 +527,33 @@ describe("task activity grouping", () => {
     );
 
     expect(screen.getByText("Task activity")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Task Review code/ }));
-    expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+    expect(screen.getByText("Agent: explore")).toBeInTheDocument();
+    expect(screen.getByText("Task ID: ses_resumed")).toBeInTheDocument();
+    expect(screen.queryByText("Arguments:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Output:")).not.toBeInTheDocument();
+    expect(screen.queryByText("duplicate context")).not.toBeInTheDocument();
+    expect(screen.queryByText(/subagent_type/)).not.toBeInTheDocument();
+
+    const instructions = screen.getByRole("button", { name: "Instructions" });
+    const result = screen.getByRole("button", { name: "Result" });
+    expect(instructions).toHaveAttribute("aria-expanded", "false");
+    expect(result).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByText("Inspect the implementation.", { exact: false })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Review complete.", { exact: false })).not.toBeInTheDocument();
+
+    await user.click(instructions);
+    expect(instructions).toHaveAttribute("aria-expanded", "true");
+    expect(result).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Inspect the implementation.", { exact: false })).toBeInTheDocument();
+
+    await user.click(result);
+    expect(result).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Review complete.", { exact: false })).toHaveTextContent(
+      "Review complete. No regressions found."
+    );
+    expect(screen.queryByText(/<task(?:_|\s|>)/)).not.toBeInTheDocument();
 
     view.rerender(
       <SessionTimeline
@@ -535,7 +568,61 @@ describe("task activity grouping", () => {
         onOpenMedia={() => {}}
       />
     );
+    expect(screen.getByRole("button", { name: "Instructions" })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
+    expect(screen.getByRole("button", { name: "Result" })).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(screen.getByRole("button", { name: /Task Review code/ }));
     expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+  });
+
+  it("omits empty Task details and preserves ordinary result output", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionTimeline
+        events={[
+          toolEvent("task", "task-call", 1, {
+            args: { description: "Review code", prompt: "   " },
+            output: "Ordinary <task_result> text is unchanged",
+          }),
+          toolEvent("Bash", "child-call", 2, {
+            isSubtask: true,
+            childSessionId: "child-1",
+            taskCallId: "task-call",
+          }),
+          toolEvent("task", "error-task-call", 3, {
+            args: { description: "Investigate failure" },
+            output:
+              '<task id="ses_failed" state="failed">\n<task_error>\nAgent could not finish.\n</task_error>\n</task>',
+          }),
+          toolEvent("Bash", "error-child-call", 4, {
+            isSubtask: true,
+            childSessionId: "child-2",
+            taskCallId: "error-task-call",
+          }),
+        ]}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Agent:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Task ID:/)).not.toBeInTheDocument();
+    const results = screen.getAllByRole("button", { name: "Result" });
+    await user.click(results[0]);
+    await user.click(results[1]);
+    expect(screen.getByText("Ordinary <task_result> text is unchanged")).toBeInTheDocument();
+    expect(screen.getByText("Agent could not finish.")).toBeInTheDocument();
+    expect(screen.queryByText(/<task_error>/)).not.toBeInTheDocument();
   });
 
   it("preserves tool-group disclosure across append and history prepend", async () => {
