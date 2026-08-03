@@ -1,13 +1,11 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
+import type { ToolCallEvent } from "@/lib/timeline-items";
 import { BoxIcon, ChevronRightIcon } from "@/components/ui/icons";
 import { ToolCallDetails } from "@/components/tool-call-item";
-
-type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
 export function TaskActivityItem({
   event,

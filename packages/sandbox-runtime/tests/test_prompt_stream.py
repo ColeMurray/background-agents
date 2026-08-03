@@ -65,7 +65,7 @@ class TestApplySseEventDispositions:
 
     def test_child_session_idle_does_not_finish_stream(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
 
         step = make_stream()._apply_sse_event(
             state, sse("session.idle", {"sessionID": CHILD_SESSION_ID})
@@ -280,7 +280,7 @@ class TestApplySseEventDispositions:
 
     def test_child_context_overflow_continues_without_error(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
 
         step = make_stream()._apply_sse_event(
             state,
@@ -348,8 +348,7 @@ class TestApplySseEventDispositions:
 
     def test_child_session_error_emits_subtask_error_and_continues(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
-        state.child_session_task_call_ids[CHILD_SESSION_ID] = "task-call-1"
+        state.child_activity.associate(CHILD_SESSION_ID, "task-call-1")
 
         step = make_stream()._apply_sse_event(
             state,
@@ -370,7 +369,7 @@ class TestApplySseEventDispositions:
 
     def test_uncorrelated_child_error_is_flushed_at_parent_idle(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
         stream = make_stream()
 
         error_step = stream._apply_sse_event(
@@ -397,9 +396,7 @@ class TestApplySseEventDispositions:
     def test_late_child_part_keeps_message_ownership_after_task_completion(self):
         state = make_state()
         state.allowed_assistant_msg_ids.add("parent-msg")
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
-        state.child_session_task_call_ids[CHILD_SESSION_ID] = "task-call"
-        state.task_call_child_session_ids["task-call"] = CHILD_SESSION_ID
+        state.child_activity.associate(CHILD_SESSION_ID, "task-call")
         stream = make_stream()
 
         stream._apply_sse_event(
@@ -453,8 +450,9 @@ class TestApplySseEventDispositions:
     def test_late_child_message_is_not_reassigned_to_resumed_task(self):
         state = make_state()
         state.allowed_assistant_msg_ids.add("parent-msg")
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
-        state.closed_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
+        state.child_activity.associate(CHILD_SESSION_ID, "closed-task")
+        state.child_activity.close("closed-task")
         stream = make_stream()
 
         stream._apply_sse_event(
@@ -558,12 +556,12 @@ class TestApplySseEventDispositions:
             ),
         )
 
-        assert state.tracked_child_session_ids == {CHILD_SESSION_ID}
+        assert state.child_activity.tracked_session_ids == {CHILD_SESSION_ID}
 
     def test_task_metadata_reemits_same_status_and_releases_buffered_child_activity(self):
         state = make_state()
         state.allowed_assistant_msg_ids.add("parent-msg")
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
         stream = make_stream()
 
         stream._apply_sse_event(

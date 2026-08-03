@@ -15,6 +15,7 @@ import type {
   SandboxRow,
   SessionRepositoryRow,
 } from "./types";
+import { toolCallIdentityKey } from "@open-inspect/shared";
 import type {
   SessionStatus,
   SandboxStatus,
@@ -39,6 +40,7 @@ type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
+const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
 /**
  * WS client mapping result for hibernation recovery.
@@ -889,7 +891,7 @@ export class SessionRepository {
   createEvent(data: CreateEventData): void {
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})`,
       data.id,
       data.type,
       data.data,
@@ -907,7 +909,7 @@ export class SessionRepository {
     const id = `${type}:${messageId}`;
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
@@ -925,11 +927,10 @@ export class SessionRepository {
   }
 
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
-    const scope = event.isSubtask ? event.childSessionId || "subtask" : "parent";
-    const id = `tool_call:${JSON.stringify([messageId, scope, event.callId])}`;
+    const id = `tool_call:${toolCallIdentityKey(event)}`;
     this.sql.exec(
       `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id`,

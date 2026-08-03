@@ -462,6 +462,17 @@ describe("task activity grouping", () => {
     ]);
   });
 
+  it("groups adjacent tool names case-insensitively", () => {
+    const groups = buildTimelineItems([
+      toolEvent("Bash", "bash-1", 1),
+      toolEvent("bash", "bash-2", 2),
+    ]);
+
+    expect(groups).toMatchObject([
+      { type: "tool_group", events: [{ callId: "bash-1" }, { callId: "bash-2" }] },
+    ]);
+  });
+
   it("does not infer ownership from a reused child session ID", () => {
     const groups = buildTimelineItems([
       toolEvent("task", "task-a", 1, { childSessionId: "child-1" }),
@@ -546,6 +557,7 @@ describe("task activity grouping", () => {
     const view = render(<SessionTimeline {...props} events={initial} />);
 
     await user.click(screen.getByRole("button", { name: /Bash2 commands/ }));
+    expect(screen.getByText(/Bash first/)).toBeInTheDocument();
     view.rerender(
       <SessionTimeline
         {...props}

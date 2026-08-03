@@ -86,7 +86,7 @@ export type {
   ArtifactType,
 } from "./artifacts";
 
-export { sandboxEventSchema } from "./sandbox-events";
+export { sandboxEventSchema, toolCallIdentityKey, toolCallIdentityTuple } from "./sandbox-events";
 export type {
   AgentEvent,
   SandboxEvent,

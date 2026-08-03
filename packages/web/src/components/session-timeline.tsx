@@ -88,6 +88,7 @@ export function SessionTimeline({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isPrependingRef = useRef(false);
+  const didPrependRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
 
@@ -128,11 +129,16 @@ export function SessionTimeline({
       const el = scrollContainerRef.current;
       el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
       isPrependingRef.current = false;
+      didPrependRef.current = true;
     }
   }, [events]);
 
   useEffect(() => {
-    if (isNearBottomRef.current && !isPrependingRef.current) {
+    if (didPrependRef.current) {
+      didPrependRef.current = false;
+      return;
+    }
+    if (isNearBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }
   }, [events]);

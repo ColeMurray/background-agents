@@ -123,7 +123,7 @@ describe("GET /internal/events", () => {
 
     expect(page1.events.map((event) => event.id)).toEqual(["evt-tie-4", "evt-tie-3"]);
     expect(page1.hasMore).toBe(true);
-    expect(page1.cursor).toBe(`${createdAt}:evt-tie-3`);
+    expect(page1.cursor).toBe(`${createdAt}:4:evt-tie-3`);
 
     const res2 = await stub.fetch(
       `http://internal/internal/events?type=error&limit=2&cursor=${encodeURIComponent(page1.cursor)}`

@@ -10,6 +10,7 @@ import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
   sandboxEventSchema,
+  toolCallIdentityKey,
   sendPromptRequestSchema,
   serverMessageSchema,
   sessionParticipantProfilesResponseSchema,
@@ -273,6 +274,21 @@ describe("boundary schemas", () => {
         childSessionId: "child-session-1",
         taskCallId: "task-call-1",
       });
+    });
+
+    it("uses task ownership when a child session ID is unavailable", () => {
+      const base = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "shared-call",
+        messageId: "message-1",
+        isSubtask: true,
+      };
+
+      expect(toolCallIdentityKey({ ...base, taskCallId: "task-1" })).not.toBe(
+        toolCallIdentityKey({ ...base, taskCallId: "task-2" })
+      );
     });
 
     it("rejects a malformed partial sandbox event", () => {

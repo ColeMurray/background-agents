@@ -1,4 +1,5 @@
 import type { SandboxEvent } from "@/types/session";
+import { toolCallIdentityKey } from "@open-inspect/shared";
 
 export type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -11,10 +12,7 @@ export type TimelineItem =
   | { type: "task_group"; event: ToolCallEvent; activity: FlatTimelineItem[]; id: string };
 
 export function toolCallKey(event: ToolCallEvent): string {
-  const scope = event.isSubtask
-    ? event.childSessionId || event.taskCallId || "unassociated-subtask"
-    : "parent";
-  return `${event.messageId}:${scope}:${event.callId}`;
+  return toolCallIdentityKey(event);
 }
 
 function taskKey(messageId: string, callId: string): string {
@@ -44,7 +42,7 @@ function groupFlatEvents(events: SandboxEvent[]): FlatTimelineItem[] {
 
   for (const event of events) {
     if (event.type === "tool_call") {
-      if (tools.length === 0 || tools[0].tool === event.tool) {
+      if (tools.length === 0 || tools[0].tool.toLowerCase() === event.tool.toLowerCase()) {
         tools.push(event);
       } else {
         flushTools();
