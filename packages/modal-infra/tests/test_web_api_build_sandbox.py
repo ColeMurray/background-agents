@@ -6,7 +6,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 
 from src import web_api
-from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS
+from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS, MAX_BUILD_TIMEOUT_SECONDS
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 
@@ -132,6 +132,29 @@ async def test_create_build_sandbox_rejects_partial_callback_context(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_create_build_sandbox_rejects_callbacks_outside_control_plane(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+    monkeypatch.setattr(web_api, "validate_control_plane_url", lambda url: "worker.test" in url)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                "callback_url": "https://worker.test/image-builds/build-complete",
+                "failure_callback_url": "https://attacker.test/image-builds/build-failed",
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "callback URLs must target the control plane"
+    service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -229,6 +252,29 @@ async def test_create_clamps_build_timeout_to_provider_maximum(monkeypatch):
     )
 
     assert service.create.await_args.kwargs["timeout_seconds"] == 4200
+
+
+@pytest.mark.asyncio
+async def test_create_clamps_build_execution_timeout_independently(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+
+    await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            "build_execution_timeout_seconds": 99999,
+            "build_timeout_seconds": 1,
+        },
+    )
+
+    assert (
+        service.create.await_args.kwargs["build_execution_timeout_seconds"]
+        == MAX_BUILD_TIMEOUT_SECONDS
+    )
+    assert service.create.await_args.kwargs["timeout_seconds"] == 1
 
 
 @pytest.mark.asyncio
