@@ -18,7 +18,7 @@ function cleanTaskResult(output: string | undefined): string | null {
   const envelope = trimmed.match(
     /^<task(?:\s[^>]*)?>\s*<(task_result|task_error)>\s*([\s\S]*?)\s*<\/\1>\s*<\/task>$/
   );
-  return envelope ? envelope[2].trim() : trimmed;
+  return envelope ? envelope[2].trim() : output;
 }
 
 function TaskDisclosure({ label, content }: { label: string; content: string }) {

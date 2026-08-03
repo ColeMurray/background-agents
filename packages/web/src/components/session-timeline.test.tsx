@@ -585,7 +585,7 @@ describe("task activity grouping", () => {
         events={[
           toolEvent("task", "task-call", 1, {
             args: { description: "Review code", prompt: "   " },
-            output: "Ordinary <task_result> text is unchanged",
+            output: "  Ordinary <task_result> text is unchanged\n\n",
           }),
           toolEvent("Bash", "child-call", 2, {
             isSubtask: true,
@@ -621,6 +621,9 @@ describe("task activity grouping", () => {
     await user.click(results[0]);
     await user.click(results[1]);
     expect(screen.getByText("Ordinary <task_result> text is unchanged")).toBeInTheDocument();
+    expect(results[0].parentElement?.querySelector("pre")?.textContent).toBe(
+      "  Ordinary <task_result> text is unchanged\n\n"
+    );
     expect(screen.getByText("Agent could not finish.")).toBeInTheDocument();
     expect(screen.queryByText(/<task_error>/)).not.toBeInTheDocument();
   });
