@@ -53,7 +53,7 @@ async def read_modal_callback_token(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    if shutdown_task in done and shutdown_event.is_set():
+    if read_task not in done:
         raise ModalImageBuildStartCancelled
 
     try:

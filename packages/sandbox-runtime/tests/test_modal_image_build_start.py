@@ -77,6 +77,18 @@ async def test_reads_one_modal_callback_token_line():
 
 
 @pytest.mark.asyncio
+async def test_completed_token_read_wins_when_shutdown_is_also_ready():
+    reader = asyncio.StreamReader()
+    reader.feed_data(("a" * 64 + "\n").encode())
+    shutdown_event = asyncio.Event()
+    shutdown_event.set()
+
+    token = await read_modal_callback_token(reader, shutdown_event)
+
+    assert token == "a" * 64
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("payload", "reason"),
     [

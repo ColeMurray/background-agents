@@ -2012,9 +2012,9 @@ class SandboxSupervisor:
         tasks = {operation_task, shutdown_task}
         try:
             done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if shutdown_task in done and self.shutdown_event.is_set():
-                raise ImageBuildExecutionCancelled
-            return operation_task.result()
+            if operation_task in done:
+                return operation_task.result()
+            raise ImageBuildExecutionCancelled
         finally:
             for task in tasks:
                 if not task.done():

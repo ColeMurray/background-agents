@@ -102,6 +102,18 @@ class TestImageBuildMode:
         supervisor.monitor_processes.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_completed_operation_wins_when_shutdown_is_also_ready(self, build_env):
+        supervisor = _make_supervisor(build_env)
+        supervisor.shutdown_event.set()
+
+        async def completed_operation():
+            return "completed"
+
+        result = await supervisor._run_until_shutdown(completed_operation())
+
+        assert result == "completed"
+
+    @pytest.mark.asyncio
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
         supervisor = _make_supervisor(build_env)
         supervisor.sync_repositories = AsyncMock(return_value=[])
