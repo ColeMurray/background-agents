@@ -3,11 +3,23 @@ import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
 } from "@open-inspect/shared";
+import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
-import type { Env, ParticipantResponse } from "../types";
+import type { Env } from "../types";
 import { error, parseJsonBody, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+
+const participantsResponseSchema = z.object({
+  participants: z.array(
+    z.object({
+      userId: z.string(),
+      canonicalUserId: z.string().nullable().optional(),
+    })
+  ),
+});
+
+type ParticipantLookup = z.infer<typeof participantsResponseSchema>["participants"][number];
 
 type SimpleProxyRouteConfig = {
   method: string;
@@ -85,11 +97,11 @@ async function handleParticipantProfiles(
   );
   if (!participantsResponse.ok) return participantsResponse;
 
-  let participants: ParticipantResponse[];
+  let participants: ParticipantLookup[];
   try {
-    const body = (await participantsResponse.json()) as { participants?: ParticipantResponse[] };
-    if (!Array.isArray(body.participants)) throw new Error("Missing participants");
-    participants = body.participants;
+    const parsed = participantsResponseSchema.safeParse(await participantsResponse.json());
+    if (!parsed.success) throw new Error("Missing participants");
+    participants = parsed.data.participants;
   } catch {
     return error("Invalid participant response", 502);
   }

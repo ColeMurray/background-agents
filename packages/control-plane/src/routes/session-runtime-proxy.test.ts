@@ -71,6 +71,7 @@ describe("session runtime proxy routes", () => {
           { id: "p-2", userId: "user-1" },
           { id: "p-3", userId: "deleted-user" },
           { id: "p-4", userId: "slack:U123", canonicalUserId: "user-bot" },
+          { id: "p-5", userId: "user-2", canonicalUserId: null },
         ],
       })
     );
@@ -95,6 +96,14 @@ describe("session runtime proxy routes", () => {
               display_name: "Build Bot",
               email: null,
               avatar_url: "https://avatars.example/bot",
+              created_at: 1,
+              updated_at: 2,
+            },
+            {
+              id: "user-2",
+              display_name: "Grace Hopper",
+              email: null,
+              avatar_url: null,
               created_at: 1,
               updated_at: 2,
             },
@@ -125,10 +134,34 @@ describe("session runtime proxy routes", () => {
           displayName: "Build Bot",
           avatarUrl: "https://avatars.example/bot",
         },
+        "user-2": {
+          userId: "user-2",
+          displayName: "Grace Hopper",
+          avatarUrl: null,
+        },
       },
     });
-    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user", "user-bot");
+    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user", "user-bot", "user-2");
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("returns a bad-gateway error for malformed participant responses", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({ participants: [{ canonicalUserId: "user-1" }] })
+    );
+    const db = { prepare: vi.fn(), batch: vi.fn() } as unknown as SqlDatabase;
+    const { handler, match } = getHandler("GET", "/sessions/session-1/participant-profiles");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participant-profiles"),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid participant response" });
+    expect(db.prepare).not.toHaveBeenCalled();
   });
 
   it("preserves participant runtime errors without querying profiles", async () => {
