@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { claimDelivery, clearDeliveryClaim, markDeliveryProcessed } from "./delivery-store";
+import { describe, expect, it, vi } from "vitest";
+import {
+  claimDelivery,
+  clearDeliveryClaim,
+  deleteExpiredDeliveries,
+  markDeliveryFailed,
+  markDeliveryProcessed,
+  runDeliveryStep,
+} from "./delivery-store";
 import { createFakeDeliveryDb, createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
 describe("delivery store", () => {
@@ -33,5 +40,41 @@ describe("delivery store", () => {
     await claimDelivery(env, "failed", "worker-1");
     await clearDeliveryClaim(env, "failed", "worker-1");
     expect(await claimDelivery(env, "failed", "worker-2")).toBe("claimed");
+  });
+
+  it("retains a terminal failed tombstone", async () => {
+    const { kv } = createFakeKV();
+    const { db } = createFakeDeliveryDb();
+    const env = makeLinearBotEnv(kv, { DB: db });
+
+    await claimDelivery(env, "failed", "worker-1");
+    await markDeliveryFailed(env, "failed", "worker-1");
+
+    expect(await claimDelivery(env, "failed", "worker-2")).toBe("failed");
+  });
+
+  it("does not repeat a completed delivery step", async () => {
+    const { kv } = createFakeKV();
+    const { db } = createFakeDeliveryDb();
+    const env = makeLinearBotEnv(kv, { DB: db });
+    const operation = vi.fn(async () => undefined);
+    await claimDelivery(env, "delivery-1", "worker-1");
+
+    await runDeliveryStep(env, "delivery-1", "worker-1", "activity", operation);
+    await runDeliveryStep(env, "delivery-1", "worker-1", "activity", operation);
+
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  it("deletes expired terminal deliveries", async () => {
+    const { kv } = createFakeKV();
+    const { db, store } = createFakeDeliveryDb({ expired: "processed", active: "processed" });
+    const env = makeLinearBotEnv(kv, { DB: db });
+    store.get("expired")!.updatedAt = 0;
+
+    await deleteExpiredDeliveries(env);
+
+    expect(store.has("expired")).toBe(false);
+    expect(store.has("active")).toBe(true);
   });
 });

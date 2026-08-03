@@ -6,6 +6,7 @@ import {
   deleteExpiredDeliveries,
   markDeliveryFailed,
   markDeliveryProcessed,
+  runDeliveryStep,
 } from "./delivery-store";
 import { handleAgentSessionEvent } from "./webhook-handler";
 import { linearWebhookJobSchema } from "./webhook-job";
@@ -15,6 +16,12 @@ const MAX_PROCESSING_ATTEMPTS = 4;
 const PROCESSING_RETRY_DELAY_SECONDS = 60;
 
 export async function consumeLinearWebhooks(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+  await deleteExpiredDeliveries(env).catch((error) => {
+    log.warn("webhook.delivery_cleanup_failed", {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+  });
+
   for (const message of batch.messages) {
     const parsed = linearWebhookJobSchema.safeParse(message.body);
     if (!parsed.success) {
@@ -29,11 +36,6 @@ export async function consumeLinearWebhooks(batch: MessageBatch<unknown>, env: E
 
     const job = parsed.data;
     try {
-      await deleteExpiredDeliveries(env).catch((error) => {
-        log.warn("webhook.delivery_cleanup_failed", {
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-      });
       const claim = await claimDelivery(env, job.deliveryId, message.id);
       if (claim === "processed" || claim === "failed") {
         log.info("webhook.deduplicated", {
@@ -58,7 +60,11 @@ export async function consumeLinearWebhooks(batch: MessageBatch<unknown>, env: E
         continue;
       }
 
-      await handleAgentSessionEvent(job.payload, env, job.traceId, job.deliveryId);
+      await handleAgentSessionEvent(job.payload, env, job.traceId, {
+        deliveryId: job.deliveryId,
+        runLinearStep: (step, operation) =>
+          runDeliveryStep(env, job.deliveryId, message.id, step, operation),
+      });
       await markDeliveryProcessed(env, job.deliveryId, message.id);
       message.ack();
     } catch (error) {

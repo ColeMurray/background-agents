@@ -21,12 +21,12 @@ const payload = {
   agentSession: { id: "agent-session-1" },
 };
 
-function makeBatch() {
+function makeBatch(attempts = 1) {
   const message = {
     id: "message-1",
     timestamp: new Date(),
     body: { version: 1, deliveryId: "delivery-1", traceId: "trace-1", payload },
-    attempts: 1,
+    attempts,
     ack: vi.fn(),
     retry: vi.fn(),
   };
@@ -56,7 +56,10 @@ describe("consumeLinearWebhooks", () => {
       payload,
       expect.any(Object),
       "trace-1",
-      "delivery-1"
+      expect.objectContaining({
+        deliveryId: "delivery-1",
+        runLinearStep: expect.any(Function),
+      })
     );
     expect(store.get("delivery-1")?.status).toBe("processed");
     expect(batch.message.ack).toHaveBeenCalledOnce();
@@ -91,5 +94,36 @@ describe("consumeLinearWebhooks", () => {
 
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
     expect(batch.message.ack).toHaveBeenCalledOnce();
+  });
+
+  it("retries a delivery with a competing processing lease", async () => {
+    const { kv } = createFakeKV();
+    const { db } = createFakeDeliveryDb({ "delivery-1": "processing" });
+    const batch = makeBatch();
+
+    await consumeLinearWebhooks(
+      batch as unknown as MessageBatch<unknown>,
+      makeLinearBotEnv(kv, { DB: db })
+    );
+
+    expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+    expect(batch.message.retry).toHaveBeenCalledOnce();
+    expect(batch.message.ack).not.toHaveBeenCalled();
+  });
+
+  it("records a terminal failure before acknowledging the final attempt", async () => {
+    mocks.handleAgentSessionEvent.mockRejectedValueOnce(new Error("processing failed"));
+    const { kv } = createFakeKV();
+    const { db, store } = createFakeDeliveryDb();
+    const batch = makeBatch(4);
+
+    await consumeLinearWebhooks(
+      batch as unknown as MessageBatch<unknown>,
+      makeLinearBotEnv(kv, { DB: db })
+    );
+
+    expect(store.get("delivery-1")?.status).toBe("failed");
+    expect(batch.message.ack).toHaveBeenCalledOnce();
+    expect(batch.message.retry).not.toHaveBeenCalled();
   });
 });

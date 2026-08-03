@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Principal } from "./auth/principal";
 import { SessionIndexStore } from "./db/session-index";
+import { SessionCreationIdempotencyStore } from "./db/session-creation-idempotency";
 import { UserStore } from "./db/user-store";
 import { handleRequest } from "./router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
@@ -10,6 +11,10 @@ import { SessionInternalPaths } from "./session/contracts";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
+}));
+
+vi.mock("./db/session-creation-idempotency", () => ({
+  SessionCreationIdempotencyStore: vi.fn(),
 }));
 
 vi.mock("./db/user-store", () => ({
@@ -135,10 +140,13 @@ describe("handleCreateSession D1 ordering", () => {
   });
 
   it("returns an existing session for a repeated idempotency key", async () => {
-    const get = vi.fn(async () => ({ id: "existing", status: "created" }));
     const create = vi.fn();
     vi.mocked(SessionIndexStore).mockImplementation(function () {
-      return { get, create } as never;
+      return { create } as never;
+    });
+    const claim = vi.fn(async () => ({ outcome: "succeeded", sessionId: "existing" }));
+    vi.mocked(SessionCreationIdempotencyStore).mockImplementation(function () {
+      return { claim } as never;
     });
     const initFetch = vi.fn();
 
@@ -150,9 +158,46 @@ describe("handleCreateSession D1 ordering", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: "created" });
-    expect(get).toHaveBeenCalledOnce();
+    expect(claim).toHaveBeenCalledOnce();
     expect(create).not.toHaveBeenCalled();
     expect(initFetch).not.toHaveBeenCalled();
+  });
+
+  it("uses a fresh session after an idempotent creation attempt fails", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    const updateStatus = vi.fn().mockResolvedValue(true);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return { create, updateStatus } as never;
+    });
+    const claim = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: "claimed", sessionId: "failed-session" })
+      .mockResolvedValueOnce({ outcome: "claimed", sessionId: "retry-session" });
+    const markFailed = vi.fn().mockResolvedValue(undefined);
+    const markSucceeded = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(SessionCreationIdempotencyStore).mockImplementation(function () {
+      return { claim, markFailed, markSucceeded } as never;
+    });
+    const initFetch = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ error: "unavailable" }, { status: 503 }))
+      .mockResolvedValueOnce(Response.json({ status: "created" }));
+    const env = createEnv(initFetch);
+    const body = {
+      repoOwner: "Acme",
+      repoName: "Web-App",
+      idempotencyKey: "linear:org-1:agent-session-1",
+    };
+
+    const first = await createSessionRequestWithBody(env, body);
+    const second = await createSessionRequestWithBody(env, body);
+
+    expect(first.status).toBe(500);
+    expect(second.status).toBe(201);
+    await expect(second.json()).resolves.toMatchObject({ sessionId: "retry-session" });
+    expect(markFailed).toHaveBeenCalledWith(expect.any(String), "failed-session");
+    expect(markSucceeded).toHaveBeenCalledWith(expect.any(String), "retry-session");
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it("rejects non-object create-session JSON before resolving the repo", async () => {

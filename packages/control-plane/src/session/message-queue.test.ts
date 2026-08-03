@@ -689,7 +689,7 @@ describe("SessionMessageQueue", () => {
       });
 
       expect(result).toEqual({
-        messageId: "idempotent:linear-webhook:delivery-1",
+        messageId: expect.stringMatching(/^idempotent:[0-9a-f]{32}$/),
         status: "queued",
       });
       expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();

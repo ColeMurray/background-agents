@@ -83,3 +83,32 @@ export async function markDeliveryFailed(
     .bind(Date.now(), deliveryId, leaseOwner)
     .run();
 }
+
+export async function runDeliveryStep(
+  env: Env,
+  deliveryId: string,
+  leaseOwner: string,
+  step: string,
+  operation: () => Promise<void>
+): Promise<void> {
+  const row = await env.DB.prepare(
+    `SELECT progress FROM linear_webhook_deliveries
+     WHERE delivery_id = ? AND status = 'processing' AND lease_owner = ?`
+  )
+    .bind(deliveryId, leaseOwner)
+    .first<{ progress: string }>();
+  if (!row) throw new Error("Linear webhook delivery lease was lost");
+
+  const progress = JSON.parse(row.progress) as Record<string, boolean>;
+  if (progress[step]) return;
+
+  await operation();
+  progress[step] = true;
+  const result = await env.DB.prepare(
+    `UPDATE linear_webhook_deliveries SET progress = ?, updated_at = ?
+     WHERE delivery_id = ? AND status = 'processing' AND lease_owner = ?`
+  )
+    .bind(JSON.stringify(progress), Date.now(), deliveryId, leaseOwner)
+    .run();
+  if ((result.meta.changes ?? 0) === 0) throw new Error("Linear webhook delivery lease was lost");
+}

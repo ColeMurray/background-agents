@@ -7,7 +7,7 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
-import { SessionIndexStore } from "../db/session-index";
+import { SessionCreationIdempotencyStore } from "../db/session-creation-idempotency";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
@@ -40,7 +40,10 @@ function principalIdempotencyNamespace(principal: Principal): string {
   return `service:${principal.service}:${principal.actor?.participantUserId ?? "service"}`;
 }
 
-async function idempotentSessionId(principal: Principal, idempotencyKey: string): Promise<string> {
+async function deriveIdempotencyRecordId(
+  principal: Principal,
+  idempotencyKey: string
+): Promise<string> {
   const bytes = new TextEncoder().encode(
     `${principalIdempotencyNamespace(principal)}:${idempotencyKey}`
   );
@@ -66,14 +69,8 @@ async function handleCreateSession(
   const enforced = enforcement.enforced;
 
   let sessionId = generateId();
-  if (body.idempotencyKey && ctx.principal) {
-    sessionId = await idempotentSessionId(ctx.principal, body.idempotencyKey);
-    const existing = await new SessionIndexStore(ctx.db).get(sessionId);
-    if (existing && existing.status !== "failed") {
-      const result: CreateSessionResponse = { sessionId, status: existing.status };
-      return json(result, 200);
-    }
-  }
+  let idempotencyRecordId: string | undefined;
+  let idempotencyStore: SessionCreationIdempotencyStore | undefined;
 
   let repositoryContext: RepositoryPair | null;
   try {
@@ -206,6 +203,20 @@ async function handleCreateSession(
     environmentId
   );
 
+  if (body.idempotencyKey && ctx.principal) {
+    idempotencyRecordId = await deriveIdempotencyRecordId(ctx.principal, body.idempotencyKey);
+    idempotencyStore = new SessionCreationIdempotencyStore(ctx.db);
+    const claim = await idempotencyStore.claim(idempotencyRecordId, sessionId);
+    if (claim.outcome === "succeeded") {
+      const result: CreateSessionResponse = { sessionId: claim.sessionId, status: "created" };
+      return json(result, 200);
+    }
+    if (claim.outcome === "in_progress") {
+      return error("Session creation is already in progress", 503);
+    }
+    sessionId = claim.sessionId;
+  }
+
   const input: SessionInitInput = {
     sessionId,
     repoOwner,
@@ -235,12 +246,25 @@ async function handleCreateSession(
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (idempotencyStore && idempotencyRecordId) {
+      await idempotencyStore.markFailed(idempotencyRecordId, sessionId).catch((error) => {
+        logger.error("Failed to mark session creation idempotency record failed", {
+          error: error instanceof Error ? error.message : String(error),
+          session_id: sessionId,
+          trace_id: ctx.trace_id,
+        });
+      });
+    }
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,
       trace_id: ctx.trace_id,
     });
     return error("Failed to create session", 500);
+  }
+
+  if (idempotencyStore && idempotencyRecordId) {
+    await idempotencyStore.markSucceeded(idempotencyRecordId, sessionId);
   }
 
   const result: CreateSessionResponse = {

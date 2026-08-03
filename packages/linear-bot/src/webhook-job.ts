@@ -1,16 +1,14 @@
 import { z } from "zod";
 import type { AgentSessionWebhook, LinearWebhookJob } from "./types";
 
-const agentSessionWebhookSchema = z
-  .object({
-    type: z.string(),
-    action: z.string(),
-    organizationId: z.string(),
-    appUserId: z.string(),
-    webhookId: z.string(),
-    agentSession: z.object({ id: z.string() }).passthrough(),
-  })
-  .passthrough();
+const agentSessionWebhookSchema = z.looseObject({
+  type: z.string(),
+  action: z.string(),
+  organizationId: z.string(),
+  appUserId: z.string(),
+  webhookId: z.string(),
+  agentSession: z.looseObject({ id: z.string() }),
+});
 
 export const linearWebhookJobSchema: z.ZodType<LinearWebhookJob> = z.object({
   version: z.literal(1),

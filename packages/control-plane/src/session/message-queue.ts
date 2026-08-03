@@ -65,6 +65,16 @@ interface EnqueuedPrompt {
   position: number;
 }
 
+async function idempotentMessageId(idempotencyKey: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`prompt:${idempotencyKey}`))
+  );
+  const value = Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join(
+    ""
+  );
+  return `idempotent:${value}`;
+}
+
 function resolveParticipantGitIdentity(
   participant: ParticipantRow | null,
   scmProvider: SourceControlProviderName
@@ -395,11 +405,11 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
-    const idempotentMessageId = data.idempotencyKey
-      ? `idempotent:${data.idempotencyKey}`
+    const existingMessageId = data.idempotencyKey
+      ? await idempotentMessageId(data.idempotencyKey)
       : undefined;
-    if (idempotentMessageId && this.repository.hasMessage(idempotentMessageId)) {
-      return { messageId: idempotentMessageId, status: "queued" };
+    if (existingMessageId && this.repository.hasMessage(existingMessageId)) {
+      return { messageId: existingMessageId, status: "queued" };
     }
 
     let participant = this.participantService.getByUserId(data.authorId);
@@ -443,7 +453,7 @@ export class SessionMessageQueue {
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
-      messageId: idempotentMessageId,
+      messageId: existingMessageId,
     });
 
     await this.processMessageQueue();

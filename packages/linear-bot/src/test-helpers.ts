@@ -38,7 +38,13 @@ export function createFakeDeliveryDb(
   const store = new Map(
     Object.entries(initial).map(([deliveryId, status]) => [
       deliveryId,
-      { status, leaseOwner: "initial", leaseExpiresAt: Date.now() + 60_000 },
+      {
+        status,
+        leaseOwner: "initial",
+        leaseExpiresAt: Date.now() + 60_000,
+        progress: {} as Record<string, boolean>,
+        updatedAt: Date.now(),
+      },
     ])
   );
   const prepare = vi.fn((query: string) => ({
@@ -57,7 +63,13 @@ export function createFakeDeliveryDb(
             (existing.status === "processing" &&
               (existing.leaseOwner === leaseOwner || existing.leaseExpiresAt <= now))
           ) {
-            store.set(deliveryId, { status: "processing", leaseOwner, leaseExpiresAt });
+            store.set(deliveryId, {
+              status: "processing",
+              leaseOwner,
+              leaseExpiresAt,
+              progress: existing?.progress ?? {},
+              updatedAt: now,
+            });
             return { meta: { changes: 1 } };
           }
           return { meta: { changes: 0 } };
@@ -70,6 +82,8 @@ export function createFakeDeliveryDb(
               status: "processed",
               leaseOwner,
               leaseExpiresAt: now,
+              progress: existing.progress,
+              updatedAt: now,
             });
             return { meta: { changes: 1 } };
           }
@@ -79,24 +93,58 @@ export function createFakeDeliveryDb(
           const [now, deliveryId, leaseOwner] = args as [number, string, string];
           const existing = store.get(deliveryId);
           if (existing?.leaseOwner === leaseOwner) {
-            store.set(deliveryId, { status: "failed", leaseOwner, leaseExpiresAt: now });
+            store.set(deliveryId, {
+              status: "failed",
+              leaseOwner,
+              leaseExpiresAt: now,
+              progress: existing.progress,
+              updatedAt: now,
+            });
             return { meta: { changes: 1 } };
           }
           return { meta: { changes: 0 } };
         }
         if (query.includes("DELETE FROM linear_webhook_deliveries")) {
-          if (query.includes("updated_at <")) return { meta: { changes: 0 } };
+          if (query.includes("updated_at <")) {
+            const [cutoff] = args as [number];
+            let changes = 0;
+            for (const [deliveryId, delivery] of store) {
+              if (delivery.status !== "processing" && delivery.updatedAt < cutoff) {
+                store.delete(deliveryId);
+                changes += 1;
+              }
+            }
+            return { meta: { changes } };
+          }
           const [deliveryId, leaseOwner] = args as [string, string];
           const existing = store.get(deliveryId);
           const changes =
             existing?.leaseOwner === leaseOwner ? Number(store.delete(deliveryId)) : 0;
           return { meta: { changes } };
         }
+        if (query.includes("SET progress = ?")) {
+          const [progress, updatedAt, deliveryId, leaseOwner] = args as [
+            string,
+            number,
+            string,
+            string,
+          ];
+          const existing = store.get(deliveryId);
+          if (existing?.status === "processing" && existing.leaseOwner === leaseOwner) {
+            existing.progress = JSON.parse(progress) as Record<string, boolean>;
+            existing.updatedAt = updatedAt;
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
         throw new Error(`Unexpected D1 query: ${query}`);
       },
       first: async () => {
         const [deliveryId] = args as [string];
         const existing = store.get(deliveryId);
+        if (query.includes("SELECT progress")) {
+          return existing ? { progress: JSON.stringify(existing.progress) } : null;
+        }
         return existing ? { status: existing.status } : null;
       },
     }),
