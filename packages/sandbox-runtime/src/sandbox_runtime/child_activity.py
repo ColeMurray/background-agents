@@ -76,6 +76,8 @@ class ChildActivityCorrelator:
     def authorize_or_queue_message(
         self, child_session_id: str, message_id: str
     ) -> MessageDisposition:
+        if message_id in self._message_task_call_ids:
+            return MessageDisposition.AUTHORIZED
         task_call_id = self.task_for_activity(child_session_id)
         if task_call_id:
             self._message_task_call_ids[message_id] = task_call_id

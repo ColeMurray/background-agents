@@ -527,6 +527,35 @@ class TestApplySseEventDispositions:
                 },
             ),
         )
+        repeated_message = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "late-child-msg",
+                        "role": "assistant",
+                        "sessionID": CHILD_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        final_part = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": CHILD_SESSION_ID,
+                        "messageID": "late-child-msg",
+                        "tool": "Bash",
+                        "callID": "final-call",
+                        "state": {"status": "completed", "input": {"command": "git status"}},
+                    }
+                },
+            ),
+        )
         orphaned = stream._flush_unassociated_child_activity(state)
 
         assert completed_task.events[0]["childSessionId"] == CHILD_SESSION_ID
@@ -557,6 +586,8 @@ class TestApplySseEventDispositions:
                 "childSessionId": CHILD_SESSION_ID,
             }
         ]
+        assert repeated_message.events == []
+        assert final_part.events[0]["taskCallId"] == "closed-task"
         assert orphaned == []
 
     def test_other_session_events_are_filtered_out(self):

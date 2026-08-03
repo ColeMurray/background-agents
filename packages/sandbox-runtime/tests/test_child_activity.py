@@ -45,6 +45,10 @@ def test_resume_replaces_completed_task_for_new_messages_without_changing_old_ow
         correlator.authorize_or_queue_message("child-1", "resumed-message")
         is MessageDisposition.AUTHORIZED
     )
+    assert (
+        correlator.authorize_or_queue_message("child-1", "late-message")
+        is MessageDisposition.AUTHORIZED
+    )
     assert correlator.task_for_message("late-message") == "task-1"
     assert correlator.task_for_message("resumed-message") == "task-2"
 
