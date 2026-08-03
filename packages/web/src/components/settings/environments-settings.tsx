@@ -18,7 +18,8 @@ import { EnvironmentForm, type EnvironmentFormValues } from "./environment-form"
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { EnvironmentIntegrationSettings } from "./environment-integration-settings";
 import { EnvironmentSecretsImport } from "./environment-secrets-import";
-import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
+import { ImageBuildStatus } from "./image-build-status";
+import { formatReadyDetails } from "./image-build-status-utils";
 import { SecretsEditor } from "@/components/secrets-editor";
 
 type View =

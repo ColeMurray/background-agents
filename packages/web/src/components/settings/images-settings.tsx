@@ -11,7 +11,8 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
 import { IMAGE_BUILDS_KEY, parsePrimaryBuildSha, type ImageBuildsFeed } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
-import { ImageBuildStatus, formatReadyDetails } from "./image-build-status";
+import { ImageBuildStatus } from "./image-build-status";
+import { formatReadyDetails } from "./image-build-status-utils";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export function ImagesSettings() {

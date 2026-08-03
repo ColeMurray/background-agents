@@ -51,6 +51,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+import { setTerminalVisibility, useTerminalVisibility } from "@/hooks/use-terminal-visibility";
 import {
   classifySessionReadAttempt,
   markMessageRead,
@@ -147,18 +148,13 @@ function SessionPageContent() {
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
-  const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("terminal-visible") === "true";
-  });
+  const terminalOpen = useTerminalVisibility();
   const toggleTerminal = useCallback(() => {
     const next = !terminalOpen;
-    localStorage.setItem("terminal-visible", String(next));
-    setTerminalOpen(next);
+    setTerminalVisibility(next);
   }, [terminalOpen]);
   const closeTerminal = useCallback(() => {
-    setTerminalOpen(false);
-    localStorage.setItem("terminal-visible", "false");
+    setTerminalVisibility(false);
   }, []);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;

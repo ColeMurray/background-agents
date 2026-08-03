@@ -23,7 +23,7 @@ import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
-export type EventGroup =
+type EventGroup =
   | { type: "tool_group"; events: ToolCallEvent[]; id: string }
   | { type: "single"; event: SandboxEvent; id: string };
 
@@ -66,7 +66,7 @@ function groupEvents(events: SandboxEvent[]): EventGroup[] {
   return groups;
 }
 
-export function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
+function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
   const filteredEvents: Array<SandboxEvent | null> = [];
   const seenToolCalls = new Map<string, number>();
   const seenCompletions = new Set<string>();
