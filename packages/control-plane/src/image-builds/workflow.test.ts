@@ -15,7 +15,7 @@ import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS } from "./reaper";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildFinalizationQueue } from "./finalization-job";
-import type { PlannedImageBuild } from "./types";
+import type { ImageBuildPlan } from "./types";
 import { ImageBuildWorkflow } from "./workflow";
 
 const ENV_SCOPE: ImageBuildScope = { kind: "environment", id: "env_1" };
@@ -79,42 +79,36 @@ function createAdapter() {
   };
 }
 
-function plannedBuild(overrides: Record<string, unknown> = {}): PlannedImageBuild {
+function plannedBuild(overrides: Record<string, unknown> = {}): ImageBuildPlan {
   return {
-    plan: {
-      buildId: "imgb-env_1-1-abcd",
-      scope: ENV_SCOPE,
-      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      repositoriesFingerprint: "fp-1",
-      callbackUrl: "https://worker.test/image-builds/build-complete",
-      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
-      buildTimeoutMs: 1800_000,
-      correlation: { trace_id: "t", request_id: "r" },
-      provider: "modal",
-      callbackToken: MODAL_CALLBACK_TOKEN,
-      cloneAuth: { type: "unavailable" },
-      ...overrides,
-    },
-    callbackAuth: { tokenHash: "hash-modal", expiresAt: 9_999_999_999_999 },
+    buildId: "imgb-env_1-1-abcd",
+    scope: ENV_SCOPE,
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    repositoriesFingerprint: "fp-1",
+    callbackUrl: "https://worker.test/image-builds/build-complete",
+    failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+    buildTimeoutMs: 1800_000,
+    correlation: { trace_id: "t", request_id: "r" },
+    provider: "modal",
+    callbackToken: MODAL_CALLBACK_TOKEN,
+    cloneAuth: { type: "unavailable" },
+    ...overrides,
   };
 }
 
-function vercelPlannedBuild(): PlannedImageBuild {
+function vercelPlannedBuild(): ImageBuildPlan {
   return {
-    plan: {
-      buildId: "imgb-env_1-1-abcd",
-      scope: ENV_SCOPE,
-      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      repositoriesFingerprint: "fp-1",
-      callbackUrl: "https://worker.test/image-builds/build-complete",
-      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
-      buildTimeoutMs: 1800_000,
-      correlation: { trace_id: "t", request_id: "r" },
-      provider: "vercel",
-      callbackToken: "callback-token",
-      cloneAuth: { type: "unavailable" },
-    },
-    callbackAuth: { tokenHash: "hash-1", expiresAt: 9_999_999_999_999 },
+    buildId: "imgb-env_1-1-abcd",
+    scope: ENV_SCOPE,
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    repositoriesFingerprint: "fp-1",
+    callbackUrl: "https://worker.test/image-builds/build-complete",
+    failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+    buildTimeoutMs: 1800_000,
+    correlation: { trace_id: "t", request_id: "r" },
+    provider: "vercel",
+    callbackToken: "callback-token",
+    cloneAuth: { type: "unavailable" },
   };
 }
 
