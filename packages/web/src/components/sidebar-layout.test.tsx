@@ -32,6 +32,10 @@ vi.mock("@/hooks/use-sidebar", () => ({
   useSidebar: () => mocks.sidebar,
 }));
 
+vi.mock("@/hooks/use-session-target-picker", () => ({
+  useSessionTargetPicker: () => ({}),
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -69,7 +73,10 @@ describe("CollapsedSidebarControls", () => {
 
     render(<SidebarLayout>Session content</SidebarLayout>);
 
+    const tab = screen.getByRole("tab", { name: "Open New session" });
     expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "session-tab-panel");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", tab.id);
+    expect(tab).toHaveAttribute("aria-controls", "session-tab-panel");
   });
 });
 

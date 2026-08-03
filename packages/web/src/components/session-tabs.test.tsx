@@ -24,6 +24,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mocks.push }),
 }));
 
+vi.mock("@/hooks/use-session-target-picker", () => ({
+  useSessionTargetPicker: () => ({}),
+}));
+
 const sessions: SessionTabInput[] = [
   { id: "first", title: "Fix authentication", repoOwner: "open", repoName: "inspect" },
   { id: "second", title: "Improve dashboard", repoOwner: "open", repoName: "inspect" },
@@ -34,6 +38,18 @@ function RegisterSessions() {
 
   useEffect(() => {
     sessions.forEach(registerSession);
+  }, [registerSession]);
+
+  return null;
+}
+
+function RegisterManySessions() {
+  const { registerSession } = useSessionTabs();
+
+  useEffect(() => {
+    for (let index = 1; index <= 11; index += 1) {
+      registerSession({ id: `bulk-${index}`, title: `Bulk ${index}` });
+    }
   }, [registerSession]);
 
   return null;
@@ -154,6 +170,39 @@ describe("SessionTabs", () => {
 
     expect(mocks.push).not.toHaveBeenCalled();
     expect(screen.queryByRole("tab", { name: "Open Fix authentication" })).not.toBeInTheDocument();
+  });
+
+  it("honors tab navigation before the pathname update commits", async () => {
+    render(
+      <SessionTabsProvider>
+        <RegisterSessions />
+        <TabTestActions />
+        <SessionTabs />
+      </SessionTabsProvider>
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Open Improve dashboard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close first programmatically" }));
+
+    expect(mocks.push).toHaveBeenCalledTimes(1);
+    expect(mocks.push).toHaveBeenCalledWith(
+      "/session/second?repoOwner=open&repoName=inspect&title=Improve+dashboard"
+    );
+  });
+
+  it("evicts the oldest inactive session when the tab limit is exceeded", async () => {
+    mocks.pathname = "/session/bulk-1";
+    render(
+      <SessionTabsProvider>
+        <RegisterManySessions />
+        <SessionTabs />
+      </SessionTabsProvider>
+    );
+
+    expect(await screen.findByRole("tab", { name: "Open Bulk 1" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Open Bulk 2" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Open Bulk 11" })).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(10);
   });
 
   it("closes an inactive tab without navigating", async () => {

@@ -74,7 +74,7 @@ export function SessionSidebar({
   const { data: authSession } = useAuthSession();
   const pathname = usePathname();
   const isMobile = useIsMobile();
-  const { closeSession, updateSessionTitle } = useSessionTabs();
+  const { closeSession, navigate, updateSessionTitle } = useSessionTabs();
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
@@ -130,9 +130,32 @@ export function SessionSidebar({
       onSessionSelect?.();
     }
   }, [isMobile, onSessionSelect]);
+  const handleSidebarLinkClick = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
+      const href = anchor?.getAttribute("href");
+      if (!href?.startsWith("/")) return;
+      event.preventDefault();
+      navigate(href);
+    },
+    [navigate]
+  );
 
   return (
-    <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
+    <aside
+      className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background"
+      onClick={handleSidebarLinkClick}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
         <div className="flex min-w-0 items-center gap-2">

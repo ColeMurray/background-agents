@@ -8,7 +8,7 @@ import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { useState } from "react";
 import Home from "./page";
-import { SessionTabs, SessionTabsProvider } from "@/components/session-tabs";
+import { SessionTabs, SessionTabsProvider, useNewSessionDraft } from "@/components/session-tabs";
 
 expect.extend(matchers);
 
@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
       baseBranch: string;
     }>;
   }>,
+  branchesValue: [{ name: "main" }],
 }));
 
 const repo = {
@@ -84,7 +85,7 @@ vi.mock("@/hooks/use-repos", () => ({
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
-  useBranches: () => ({ branches: [{ name: "main" }], loading: false }),
+  useBranches: () => ({ branches: mocks.branchesValue, loading: false }),
 }));
 
 vi.mock("@/hooks/use-enabled-models", () => ({
@@ -109,6 +110,7 @@ beforeEach(() => {
   mocks.loadingReposValue = false;
   mocks.environmentsLoadingValue = false;
   mocks.environmentsValue = [];
+  mocks.branchesValue = [{ name: "main" }];
   mocks.routerPush.mockReset();
   mocks.mutateMock.mockReset();
   vi.stubGlobal(
@@ -158,10 +160,14 @@ function DraftRemountHarness() {
 
 function DraftVisibility() {
   const [showHome, setShowHome] = useState(true);
+  const { reset } = useNewSessionDraft();
   return (
     <>
       <button type="button" onClick={() => setShowHome((current) => !current)}>
         {showHome ? "Hide draft" : "Show draft"}
+      </button>
+      <button type="button" onClick={() => reset()}>
+        Reset draft
       </button>
       {showHome && <Home />}
     </>
@@ -181,6 +187,77 @@ describe("Home", () => {
     expect(screen.getByPlaceholderText("What do you want to build?")).toHaveValue(
       "Keep this draft"
     );
+  });
+
+  it("preserves a non-default branch when switching tabs", async () => {
+    mocks.branchesValue = [{ name: "main" }, { name: "feature/session-tabs" }];
+    const user = userEvent.setup();
+    render(<DraftRemountHarness />);
+
+    await user.click(await screen.findByRole("button", { name: "main" }));
+    await user.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: "feature/session-tabs" })
+    );
+    await user.click(screen.getByRole("button", { name: "Hide draft" }));
+    await user.click(screen.getByRole("button", { name: "Show draft" }));
+
+    expect(screen.getByRole("button", { name: "feature/session-tabs" })).toBeInTheDocument();
+  });
+
+  it("preserves a multi-repository target when switching tabs", async () => {
+    mocks.reposValue = [
+      repo,
+      {
+        id: 2,
+        fullName: "open-inspect/docs",
+        owner: "open-inspect",
+        name: "docs",
+        description: null,
+        private: false,
+        defaultBranch: "main",
+      },
+    ];
+    const user = userEvent.setup();
+    render(<DraftRemountHarness />);
+
+    await user.click(await screen.findByRole("button", { name: /background-agents/i }));
+    await user.click(
+      within(screen.getByRole("listbox")).getByRole("option", { name: /multiple repositories/i })
+    );
+    await user.click(screen.getByRole("button", { name: /repository selection/i }));
+    await user.click(screen.getByRole("checkbox", { name: /open-inspect\/docs/i }));
+    await user.click(screen.getByRole("button", { name: /done/i }));
+    await user.click(screen.getByRole("button", { name: "Hide draft" }));
+    await user.click(screen.getByRole("button", { name: "Show draft" }));
+
+    expect(screen.getByRole("button", { name: "Repository selection" })).toHaveTextContent(
+      "open-inspect/background-agents, open-inspect/docs"
+    );
+  });
+
+  it("aborts a stale warmer before reusing the same draft configuration", async () => {
+    const signals: AbortSignal[] = [];
+    vi.mocked(fetch).mockImplementation((input, init) => {
+      if (String(input) !== "/api/sessions") {
+        return Promise.resolve(Response.json({ error: "unexpected request" }, { status: 500 }));
+      }
+      const signal = init?.signal as AbortSignal;
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      });
+    });
+    const user = userEvent.setup();
+    render(<DraftRemountHarness />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "First draft");
+    await waitFor(() => expect(signals).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: "Reset draft" }));
+    expect(signals[0].aborted).toBe(true);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Second draft");
+    await waitFor(() => expect(signals).toHaveLength(2));
+    expect(signals[1]).not.toBe(signals[0]);
   });
 
   it("disables autofill suggestions for the prompt", () => {

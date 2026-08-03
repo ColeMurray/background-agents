@@ -15,9 +15,17 @@ import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/m
 import type { ModelPreference } from "@/lib/model-selection";
 import { useSessionAttachments } from "@/hooks/use-session-attachments";
 import { archiveSession } from "@/lib/archive-session";
+import {
+  useSessionTargetPicker,
+  type SessionTargetSelection,
+} from "@/hooks/use-session-target-picker";
 
 const MAX_SESSION_TABS = 10;
 const NEW_SESSION_TAB_ID = "__new-session__";
+
+export function getSessionTabElementId(sessionId: string): string {
+  return `session-tab-${encodeURIComponent(sessionId)}`;
+}
 
 export interface SessionTabInput {
   id: string;
@@ -70,7 +78,9 @@ interface NewSessionDraft {
   submitInFlightRef: React.MutableRefObject<boolean>;
   pendingConfigRef: React.MutableRefObject<NewSessionPendingConfig | null>;
   hasHydratedModelPreferencesRef: React.MutableRefObject<boolean>;
+  warmingGenerationRef: React.MutableRefObject<number>;
   sessionAttachments: ReturnType<typeof useSessionAttachments>;
+  picker: SessionTargetSelection;
   reset: (options?: { archivePendingSession?: boolean }) => void;
 }
 
@@ -103,6 +113,21 @@ function createNewSessionTab(): SessionTab {
   };
 }
 
+function appendBoundedTab(
+  current: SessionTab[],
+  tab: SessionTab,
+  protectedTabId: string | null
+): SessionTab[] {
+  const next = [...current, tab];
+  if (next.length <= MAX_SESSION_TABS) return next;
+
+  const evictionIndex = next.findIndex(
+    (candidate) =>
+      candidate.kind === "session" && candidate.id !== protectedTabId && candidate.id !== tab.id
+  );
+  return evictionIndex === -1 ? next : next.filter((_, index) => index !== evictionIndex);
+}
+
 export function SessionTabsProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -124,7 +149,9 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
   const submitInFlightRef = useRef(false);
   const pendingConfigRef = useRef<NewSessionPendingConfig | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
+  const warmingGenerationRef = useRef(0);
   const sessionAttachments = useSessionAttachments();
+  const picker = useSessionTargetPicker();
   const pendingSessionIdRef = useRef(pendingSessionId);
   pendingSessionIdRef.current = pendingSessionId;
   const activeTabId =
@@ -146,11 +173,11 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (pathname !== "/") return;
     setTabs((current) =>
-      current.some((tab) => tab.kind === "draft")
+      current.some((tab) => tab.kind === "draft" || tab.kind === "pending")
         ? current
-        : [...current, createNewSessionTab()].slice(-MAX_SESSION_TABS)
+        : appendBoundedTab(current, createNewSessionTab(), activeTabId)
     );
-  }, [pathname]);
+  }, [activeTabId, pathname]);
 
   const registerSession = useCallback((session: SessionTabInput) => {
     setTabs((current) => {
@@ -165,7 +192,7 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
       };
 
       if (existingIndex === -1) {
-        return [...current, nextTab].slice(-MAX_SESSION_TABS);
+        return appendBoundedTab(current, nextTab, intendedActiveTabIdRef.current);
       }
 
       const existing = current[existingIndex];
@@ -196,7 +223,7 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
       if (draftIndex === -1) {
         return current.some((tab) => tab.id === sessionId)
           ? current
-          : [...current, session].slice(-MAX_SESSION_TABS);
+          : appendBoundedTab(current, session, intendedActiveTabIdRef.current);
       }
       return current
         .map((tab, index) => (index === draftIndex ? session : tab))
@@ -216,7 +243,7 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
     setTabs((current) =>
       current.some((tab) => tab.kind === "draft")
         ? current
-        : [...current, createNewSessionTab()].slice(-MAX_SESSION_TABS)
+        : appendBoundedTab(current, createNewSessionTab(), intendedActiveTabIdRef.current)
     );
     intendedActiveTabIdRef.current = NEW_SESSION_TAB_ID;
     router.push("/");
@@ -225,7 +252,8 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
   const navigate = useCallback(
     (href: string) => {
       intendedActiveTabIdRef.current =
-        tabsRef.current.find((tab) => tab.href === href)?.id ?? activeTabIdRef.current;
+        tabsRef.current.find((tab) => tab.href === href)?.id ??
+        (href === "/" ? NEW_SESSION_TAB_ID : getActiveSessionId(href.split("?")[0]));
       router.push(href);
     },
     [router]
@@ -236,6 +264,8 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
       if (options?.archivePendingSession && pendingSessionIdRef.current) {
         void archiveSession(pendingSessionIdRef.current);
       }
+      warmingGenerationRef.current += 1;
+      abortControllerRef.current?.abort();
       setPrompt("");
       setCreating(false);
       setError("");
@@ -294,7 +324,9 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
       submitInFlightRef,
       pendingConfigRef,
       hasHydratedModelPreferencesRef,
+      warmingGenerationRef,
       sessionAttachments,
+      picker,
       reset: resetNewSessionDraft,
     }),
     [
@@ -303,6 +335,7 @@ export function SessionTabsProvider({ children }: { children: React.ReactNode })
       isCreatingSession,
       modelPreferenceDraft,
       pendingSessionId,
+      picker,
       prompt,
       resetNewSessionDraft,
       sessionAttachments,
@@ -385,7 +418,6 @@ function SessionTabStrip({
   onNavigate: (href: string) => void;
   onNewSession: () => void;
 }) {
-  const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const tabListRef = useRef<HTMLDivElement>(null);
 
   const handleTabKeyDown = (event: React.KeyboardEvent, tabIndex: number) => {
@@ -402,11 +434,11 @@ function SessionTabStrip({
   };
 
   useEffect(() => {
-    const tab = Array.from(document.querySelectorAll<HTMLElement>("[data-session-tab]")).find(
-      (candidate) => candidate.dataset.sessionTab === activeTabId
-    );
+    const tab = Array.from(
+      tabListRef.current?.querySelectorAll<HTMLElement>("[data-session-tab]") ?? []
+    ).find((candidate) => candidate.dataset.sessionTab === activeTabId);
     tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [activeTabId, activeTab]);
+  }, [activeTabId, tabs]);
 
   if (tabs.length === 0) return null;
 
@@ -431,6 +463,7 @@ function SessionTabStrip({
               {isActive && <span className="absolute inset-x-0 top-0 h-0.5 bg-accent" />}
               <button
                 type="button"
+                id={getSessionTabElementId(tab.id)}
                 role="tab"
                 aria-selected={isActive}
                 aria-controls="session-tab-panel"

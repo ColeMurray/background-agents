@@ -27,10 +27,7 @@ import {
 } from "@/hooks/use-session-attachments";
 import type { useSessionAttachments } from "@/hooks/use-session-attachments";
 import { AttachmentPreviewStrip } from "@/components/attachment-preview-strip";
-import {
-  useSessionTargetPicker,
-  type SessionTargetSelection,
-} from "@/hooks/use-session-target-picker";
+import type { SessionTargetSelection } from "@/hooks/use-session-target-picker";
 import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
@@ -46,7 +43,7 @@ export default function Home() {
   const router = useRouter();
   const { completeNewSession } = useSessionTabs();
   const newSessionDraft = useNewSessionDraft();
-  const picker = useSessionTargetPicker();
+  const picker = newSessionDraft.picker;
   const { sessionTarget, selectedBranch, configKey, buildRequestFields, isLaunchable } = picker;
   const {
     storedPreference,
@@ -69,6 +66,7 @@ export default function Home() {
     submitInFlightRef,
     pendingConfigRef,
     hasHydratedModelPreferencesRef,
+    warmingGenerationRef,
     reset: resetNewSessionDraft,
   } = newSessionDraft;
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
@@ -109,6 +107,8 @@ export default function Home() {
     }
 
     if (pendingSessionId) void archiveSession(pendingSessionId);
+    warmingGenerationRef.current += 1;
+    abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setPendingSessionId(null);
     setIsCreatingSession(false);
@@ -127,6 +127,7 @@ export default function Home() {
     sessionTarget,
     setIsCreatingSession,
     setPendingSessionId,
+    warmingGenerationRef,
   ]);
 
   const createSessionForWarming = useCallback(async () => {
@@ -146,6 +147,7 @@ export default function Home() {
     pendingConfigRef.current = currentConfig;
 
     const abortController = new AbortController();
+    const warmingGeneration = warmingGenerationRef.current;
     abortControllerRef.current = abortController;
 
     const promise = (async () => {
@@ -167,7 +169,8 @@ export default function Home() {
             pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
             pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
-            pendingConfigRef.current?.branch === currentConfig.branch
+            pendingConfigRef.current?.branch === currentConfig.branch &&
+            warmingGenerationRef.current === warmingGeneration
           ) {
             setPendingSessionId(data.sessionId);
             return data.sessionId as string;
@@ -207,6 +210,7 @@ export default function Home() {
     sessionCreationPromise,
     setIsCreatingSession,
     setPendingSessionId,
+    warmingGenerationRef,
   ]);
 
   const saveModelPreferenceDraft = useCallback(
