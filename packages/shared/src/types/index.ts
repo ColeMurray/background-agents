@@ -103,6 +103,9 @@ export type {
   SessionState,
   ParticipantPresence,
   PullRequestSummary,
+  SessionReadState,
+  SessionReadAction,
+  SessionReadResult,
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
   SessionStatus,
@@ -115,6 +118,8 @@ export type {
 export {
   messageSourceSchema,
   sessionStatusSchema,
+  sessionReadActionSchema,
+  sessionReadResultSchema,
   sessionParticipantProfileSchema,
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";

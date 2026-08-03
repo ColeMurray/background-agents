@@ -1,4 +1,11 @@
-import type { PullRequestSummary, SessionStatus, SpawnSource } from "@open-inspect/shared";
+import type {
+  PullRequestSummary,
+  SessionReadAction,
+  SessionReadResult,
+  SessionReadState,
+  SessionStatus,
+  SpawnSource,
+} from "@open-inspect/shared";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
@@ -63,6 +70,7 @@ export interface SessionEntry {
    * has no tracked PRs. Attached by list() for the global sidebar.
    */
   pullRequestSummary?: PullRequestSummary;
+  readState?: SessionReadState;
 }
 
 interface SessionRepositoryRow {
@@ -108,11 +116,44 @@ export interface ListSessionsOptions {
   createdByUserIds?: readonly string[];
   limit?: number;
   offset?: number;
+  viewerUserId?: string;
 }
 
 export interface ListSessionsResult {
   sessions: SessionEntry[];
   hasMore: boolean;
+}
+
+interface ViewerReadStateRow {
+  unread: number;
+  latest_terminal_message_id: string | null;
+}
+
+interface ViewerSessionRow extends SessionRow, ViewerReadStateRow {}
+
+function unreadSql(sessionAlias: string): string {
+  return `CASE
+            WHEN ${sessionAlias}.latest_terminal_message_id IS NOT NULL
+              AND ${sessionAlias}.latest_terminal_message_completed_at >= viewer.created_at
+              AND (
+                read_state.last_read_message_id IS NULL
+                OR read_state.last_read_message_id
+                  != ${sessionAlias}.latest_terminal_message_id
+              )
+            THEN 1 ELSE 0
+          END`;
+}
+
+function readStateFromRow(row: ViewerReadStateRow): SessionReadState {
+  return row.latest_terminal_message_id === null
+    ? {
+        latestMessageId: null,
+        unread: false,
+      }
+    : {
+        latestMessageId: row.latest_terminal_message_id,
+        unread: row.unread === 1,
+      };
 }
 
 function toEntry(row: SessionRow): SessionEntry {
@@ -279,6 +320,7 @@ export class SessionIndexStore {
       createdByUserIds,
       limit = 50,
       offset = 0,
+      viewerUserId,
     } = options;
 
     const conditions: string[] = [];
@@ -330,14 +372,34 @@ export class SessionIndexStore {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-    // Get paginated results
-    const result = await this.db
-      .prepare(`SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`)
-      .bind(...params, limit + 1, offset)
-      .all<SessionRow>();
+    const pageSql = `SELECT * FROM sessions ${where} ORDER BY updated_at DESC LIMIT ? OFFSET ?`;
+    const result = viewerUserId
+      ? await this.db
+          .prepare(
+            `WITH paged_sessions AS (${pageSql})
+             SELECT paged_sessions.*,
+                    ${unreadSql("paged_sessions")} AS unread
+             FROM paged_sessions
+             LEFT JOIN users viewer ON viewer.id = ?
+             LEFT JOIN session_read_states read_state
+               ON read_state.session_id = paged_sessions.id
+              AND read_state.user_id = viewer.id
+             ORDER BY paged_sessions.updated_at DESC`
+          )
+          .bind(...params, limit + 1, offset, viewerUserId)
+          .all<ViewerSessionRow>()
+      : await this.db
+          .prepare(pageSql)
+          .bind(...params, limit + 1, offset)
+          .all<SessionRow>();
 
     const rows = result.results || [];
-    const sessions = await this.decorateEntries(rows.slice(0, limit).map(toEntry));
+    const sessions = await this.decorateEntries(
+      rows.slice(0, limit).map((row) => ({
+        ...toEntry(row),
+        ...(viewerUserId ? { readState: readStateFromRow(row as ViewerSessionRow) } : {}),
+      }))
+    );
 
     return {
       sessions,
@@ -371,6 +433,133 @@ export class SessionIndexStore {
         ...(pullRequestSummary ? { pullRequestSummary } : {}),
       };
     });
+  }
+
+  async recordLatestTerminalMessage(input: {
+    sessionId: string;
+    messageId: string;
+    messageCreatedAt: number;
+    terminalMessageCompletedAt: number;
+  }): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE sessions
+         SET latest_terminal_message_id = ?,
+             latest_terminal_message_created_at = ?,
+             latest_terminal_message_completed_at = ?
+         WHERE id = ?
+           AND (
+             latest_terminal_message_created_at IS NULL
+             OR latest_terminal_message_created_at < ?
+             OR (
+               latest_terminal_message_created_at = ?
+               AND latest_terminal_message_id < ?
+             )
+           )`
+      )
+      .bind(
+        input.messageId,
+        input.messageCreatedAt,
+        input.terminalMessageCompletedAt,
+        input.sessionId,
+        input.messageCreatedAt,
+        input.messageCreatedAt,
+        input.messageId
+      )
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  /** Current single-tenant visibility boundary; future grants belong here. */
+  async getVisibleForUser(sessionId: string, _userId: string): Promise<SessionEntry | null> {
+    return this.get(sessionId);
+  }
+
+  async updateReadState(
+    userId: string,
+    sessionId: string,
+    action: SessionReadAction
+  ): Promise<SessionReadResult | null> {
+    let writeApplied: boolean;
+    if (action.action === "mark_message_read") {
+      const result = await this.db
+        .prepare(
+          `INSERT INTO session_read_states
+             (user_id, session_id, last_read_message_id, updated_at)
+           SELECT ?, id, latest_terminal_message_id, ?
+           FROM sessions
+           WHERE id = ? AND latest_terminal_message_id = ?
+           ON CONFLICT(user_id, session_id) DO UPDATE SET
+              last_read_message_id = excluded.last_read_message_id,
+              updated_at = excluded.updated_at
+            WHERE session_read_states.last_read_message_id
+              != excluded.last_read_message_id`
+        )
+        .bind(userId, Date.now(), sessionId, action.messageId)
+        .run();
+      writeApplied = (result.meta.changes ?? 0) > 0;
+    } else {
+      const result = await this.db
+        .prepare(
+          `INSERT INTO session_read_states
+             (user_id, session_id, last_read_message_id, updated_at)
+           SELECT ?, id, latest_terminal_message_id, ?
+           FROM sessions
+           WHERE id = ? AND latest_terminal_message_id IS NOT NULL
+           ON CONFLICT(user_id, session_id) DO UPDATE SET
+              last_read_message_id = excluded.last_read_message_id,
+              updated_at = excluded.updated_at
+            WHERE session_read_states.last_read_message_id
+              != excluded.last_read_message_id`
+        )
+        .bind(userId, Date.now(), sessionId)
+        .run();
+      writeApplied = (result.meta.changes ?? 0) > 0;
+    }
+
+    const currentReadState = await this.readStateForSession(userId, sessionId);
+    if (!currentReadState) return null;
+    const latestMessageId = currentReadState.latestMessageId;
+    if (latestMessageId === null) {
+      return {
+        sessionId,
+        outcome: "no_terminal_message",
+        unread: false,
+        latestMessageId: null,
+      };
+    }
+    const outcome =
+      action.action === "mark_message_read" && latestMessageId !== action.messageId
+        ? "not_latest"
+        : writeApplied
+          ? "marked_read"
+          : "already_read";
+    return {
+      sessionId,
+      outcome,
+      unread: currentReadState.unread,
+      latestMessageId,
+    };
+  }
+
+  private async readStateForSession(
+    userId: string,
+    sessionId: string
+  ): Promise<SessionReadState | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT sessions.latest_terminal_message_id,
+                ${unreadSql("sessions")} AS unread
+         FROM sessions
+         LEFT JOIN users viewer ON viewer.id = ?
+         LEFT JOIN session_read_states read_state
+           ON read_state.session_id = sessions.id
+          AND read_state.user_id = viewer.id
+         WHERE sessions.id = ?`
+      )
+      .bind(userId, sessionId)
+      .first<ViewerReadStateRow>();
+    return row ? readStateFromRow(row) : null;
   }
 
   /** Repository lists for the given sessions, in one query. */

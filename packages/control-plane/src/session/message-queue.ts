@@ -30,6 +30,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
+import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -97,7 +98,8 @@ export class SessionMessageQueue {
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
-    private readonly executionTimeoutMs: number
+    private readonly executionTimeoutMs: number,
+    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
   async handlePromptMessage(
@@ -268,7 +270,7 @@ export class SessionMessageQueue {
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
 
     if (processingMessage) {
       this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
@@ -290,6 +292,13 @@ export class SessionMessageQueue {
         processingMessage.id,
         syntheticExecutionComplete,
         now
+      );
+      this.ctx.waitUntil(
+        this.recordTerminalMessage({
+          messageId: processingMessage.id,
+          messageCreatedAt: processingMessage.created_at,
+          terminalMessageCompletedAt: now,
+        })
       );
 
       this.messenger.broadcast({
@@ -323,7 +332,7 @@ export class SessionMessageQueue {
    */
   async failStuckProcessingMessage(): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
     this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
@@ -338,6 +347,13 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
     };
     this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
+    this.ctx.waitUntil(
+      this.recordTerminalMessage({
+        messageId: processingMessage.id,
+        messageCreatedAt: processingMessage.created_at,
+        terminalMessageCompletedAt: now,
+      })
+    );
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.ctx.waitUntil(
