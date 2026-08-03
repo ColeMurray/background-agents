@@ -346,14 +346,7 @@ class TestImageBuildMode:
         supervisor.run_setup_script = AsyncMock(return_value=True)
         supervisor.shutdown = AsyncMock()
 
-        callback = MagicMock()
-
-        async def report_success(**_kwargs):
-            supervisor.shutdown_event.set()
-            return True
-
-        callback.report_success = AsyncMock(side_effect=report_success)
-        callback.report_failure = AsyncMock(return_value=True)
+        callback = _completion_callback(supervisor)
 
         async def fake_subprocess(*args, **kwargs):
             mock_proc = MagicMock()
@@ -391,14 +384,7 @@ class TestImageBuildMode:
             return_value=MagicMock(head_sha="abc123", repository_shas=[])
         )
         supervisor.shutdown = AsyncMock()
-        callback = MagicMock()
-
-        async def report_success(**_kwargs):
-            supervisor.shutdown_event.set()
-            return True
-
-        callback.report_success = AsyncMock(side_effect=report_success)
-        callback.report_failure = AsyncMock(return_value=True)
+        callback = _completion_callback(supervisor)
 
         with (
             patch.dict(os.environ, build_env, clear=False),
