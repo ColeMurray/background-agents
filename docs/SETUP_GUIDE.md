@@ -203,7 +203,9 @@ Critical notes before deploy:
 - Build workers before running Terraform apply.
 - Build `@open-inspect/shared` first.
 - Use two-phase Terraform deploy for DO/service bindings.
-- For Modal deployments, deploy with `modal deploy deploy.py` (not `src/app.py`).
+- For Modal deployments, eagerly build the Sandbox image with
+  `uv run python deploy.py --build-sandbox-image`, then deploy with `uv run modal deploy deploy.py`
+  (not `src/app.py`).
 
 ## Common Issues and Fixes
 

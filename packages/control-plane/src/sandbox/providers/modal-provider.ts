@@ -32,6 +32,8 @@ interface CreateModalImageBuildConfig {
   cloneToken?: string;
   cloneHost?: string;
   cloneUsername?: string;
+  callbackUrl: string;
+  failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
   buildExecutionTimeoutSeconds: number;
   providerSessionTimeoutMs?: number;
@@ -48,8 +50,6 @@ interface StartModalImageBuildConfig {
 }
 
 export interface TriggerModalEnvironmentImageBuildConfig extends CreateModalImageBuildConfig {
-  callbackUrl: string;
-  failureCallbackUrl: string;
   callbackToken: string;
   onProviderSessionCreated: (providerSessionId: string) => Promise<void>;
 }
@@ -306,6 +306,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           cloneToken: config.cloneToken,
           ...(config.cloneHost ? { cloneHost: config.cloneHost } : {}),
           ...(config.cloneUsername ? { cloneUsername: config.cloneUsername } : {}),
+          callbackUrl: config.callbackUrl,
+          failureCallbackUrl: config.failureCallbackUrl,
           userEnvVars: config.userEnvVars,
           buildExecutionTimeoutSeconds: config.buildExecutionTimeoutSeconds,
           providerSessionTimeoutSeconds:
