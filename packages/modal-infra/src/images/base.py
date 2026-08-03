@@ -24,7 +24,7 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
 # eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.17.18"
+OPENCODE_VERSION = "1.18.11"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -37,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v55: rename child session tools
-CACHE_BUSTER = "v55-child-session-tools"
+# v56: upgrade OpenCode for GPT 5.6 Luna max reasoning
+CACHE_BUSTER = "v56-opencode-1-18-11"
 
 # Base image with all development tools
 base_image = (

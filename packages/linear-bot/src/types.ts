@@ -79,7 +79,7 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repository-catalog";
 export type {
   Environment,
   ListEnvironmentsResponse,
@@ -140,7 +140,8 @@ export interface ToolCallCallback {
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
-export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
+export type { ConfidenceLevel } from "@open-inspect/shared";
+export type { ClassificationResult } from "@open-inspect/shared/types/repository-catalog";
 
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 

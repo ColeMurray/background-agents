@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
+  applySessionReadState,
   buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
@@ -54,6 +55,41 @@ describe("buildSessionsPageKey", () => {
     ).toBe(
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
+  });
+});
+
+describe("applySessionReadState", () => {
+  it("does not let an older mutation response overwrite a newer terminal message", () => {
+    const data: SessionListResponse = {
+      sessions: [
+        session("session-1", {
+          readState: {
+            unread: true,
+            latestMessageId: "message-b",
+          },
+        }),
+      ],
+      hasMore: false,
+    };
+
+    expect(
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-a",
+      })?.sessions[0].readState
+    ).toEqual({
+      unread: true,
+      latestMessageId: "message-b",
+    });
+    expect(
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-b",
+      })?.sessions[0].readState
+    ).toEqual({
+      unread: false,
+      latestMessageId: "message-b",
+    });
   });
 });
 

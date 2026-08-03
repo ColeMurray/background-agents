@@ -90,6 +90,7 @@ export function SessionSidebar({
     maybeLoadMoreSessions,
     handleSessionArchived,
     handleSessionRenamed,
+    handleMarkLatestMessageRead,
   } = useSidebarSessions(currentSessionId);
 
   // Environment provenance for the cards, resolved once for the whole list.
@@ -232,6 +233,7 @@ export function SessionSidebar({
                 onArchive={handleSessionArchived}
                 onSessionSelect={onSessionSelect}
                 onSessionRenamed={handleSessionRenamed}
+                onMarkLatestMessageRead={handleMarkLatestMessageRead}
               />
             ))}
 
@@ -258,6 +260,7 @@ export function SessionSidebar({
                     onArchive={handleSessionArchived}
                     onSessionSelect={onSessionSelect}
                     onSessionRenamed={handleSessionRenamed}
+                    onMarkLatestMessageRead={handleMarkLatestMessageRead}
                   />
                 ))}
               </>

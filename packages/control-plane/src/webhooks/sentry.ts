@@ -3,7 +3,7 @@
  * HMAC signature using the automation's stored (encrypted) client secret.
  */
 
-import { verifySentrySignature, normalizeSentryEvent } from "@open-inspect/shared";
+import { verifySentrySignature, normalizeSentryEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { decryptSentrySecret } from "../auth/webhook-key";
 import type { Route, RequestContext } from "../routes/shared";

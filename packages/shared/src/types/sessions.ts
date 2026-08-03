@@ -38,6 +38,47 @@ export interface PullRequestSummary {
   closed: number;
 }
 
+export type SessionReadState =
+  | {
+      latestMessageId: null;
+      unread: false;
+    }
+  | {
+      latestMessageId: string;
+      unread: boolean;
+    };
+
+export const sessionReadActionSchema = z.discriminatedUnion("action", [
+  z
+    .object({
+      action: z.literal("mark_message_read"),
+      messageId: z.string().min(1),
+    })
+    .strict(),
+  z.object({ action: z.literal("mark_latest_message_read") }).strict(),
+]);
+export type SessionReadAction = z.infer<typeof sessionReadActionSchema>;
+
+export const sessionReadResultSchema = z.union([
+  z
+    .object({
+      sessionId: z.string(),
+      outcome: z.literal("no_terminal_message"),
+      unread: z.literal(false),
+      latestMessageId: z.null(),
+    })
+    .strict(),
+  z
+    .object({
+      sessionId: z.string(),
+      outcome: z.enum(["marked_read", "already_read", "not_latest"]),
+      unread: z.boolean(),
+      latestMessageId: z.string(),
+    })
+    .strict(),
+]);
+export type SessionReadResult = z.infer<typeof sessionReadResultSchema>;
+
 export interface Session {
   id: string;
   title: string | null;
@@ -72,6 +113,8 @@ export interface Session {
    * overlap or when the session has no tracked PRs.
    */
   pullRequestSummary?: PullRequestSummary;
+  /** Viewer-specific read state; absent for non-user service callers. */
+  readState?: SessionReadState;
 }
 
 export interface SessionMessage {
