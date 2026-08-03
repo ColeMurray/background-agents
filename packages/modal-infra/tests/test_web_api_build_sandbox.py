@@ -48,7 +48,9 @@ async def _call_generic_snapshot(request: dict) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_create_build_sandbox_is_dormant_and_returns_provider_session(monkeypatch):
+async def test_create_build_sandbox_forwards_callback_context_and_returns_provider_session(
+    monkeypatch,
+):
     service = _patch_dependencies(monkeypatch)
 
     result = await _call(
@@ -59,6 +61,8 @@ async def test_create_build_sandbox_is_dormant_and_returns_provider_session(monk
             "build_id": "imgb-1",
             "repositories": REPOSITORIES,
             "clone_token": "clone-token",
+            "callback_url": "https://worker.test/image-builds/build-complete",
+            "failure_callback_url": "https://worker.test/image-builds/build-failed",
             "user_env_vars": {"FOO": "bar"},
             "build_timeout_seconds": 2400,
         },
@@ -73,6 +77,8 @@ async def test_create_build_sandbox_is_dormant_and_returns_provider_session(monk
         scope_kind="repo",
         scope_id="acme/repo",
         repositories=REPOSITORIES,
+        callback_url="https://worker.test/image-builds/build-complete",
+        failure_callback_url="https://worker.test/image-builds/build-failed",
         clone_token="clone-token",
         clone_host=None,
         clone_username=None,
@@ -102,6 +108,27 @@ async def test_create_build_sandbox_adds_finalization_grace_to_default_timeout(m
     assert service.create.await_args.kwargs["timeout_seconds"] == (
         DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
     )
+
+
+@pytest.mark.asyncio
+async def test_create_build_sandbox_rejects_partial_callback_context(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                "callback_url": "https://worker.test/image-builds/build-complete",
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "callback_url and failure_callback_url must be provided together"
+    service.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -382,7 +409,7 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
     handle = SimpleNamespace()
     manager = SimpleNamespace(
         get_sandbox_by_id=AsyncMock(return_value=handle),
-        take_snapshot=MagicMock(return_value="im-session-1"),
+        take_snapshot=AsyncMock(return_value="im-session-1"),
     )
     monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
 
@@ -396,3 +423,4 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
 
     assert result["data"]["image_id"] == "im-session-1"
     manager.get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    manager.take_snapshot.assert_awaited_once_with(handle)

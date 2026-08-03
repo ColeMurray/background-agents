@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDiffState } from "@open-inspect/shared";
+import type { SessionDiffState } from "@open-inspect/shared/types/session-diffs";
 
 vi.mock("next/dynamic", () => ({
   default: () => () => <div data-testid="diff-renderer" />,

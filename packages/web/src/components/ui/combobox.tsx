@@ -35,6 +35,7 @@ function defaultFilter<T>(option: ComboboxOption<T>, query: string): boolean {
 }
 
 interface ComboboxProps<T = string> {
+  id?: string;
   value: T;
   onChange: (value: T) => void;
   items: ComboboxOption<T>[] | ComboboxGroup<T>[];
@@ -51,6 +52,7 @@ interface ComboboxProps<T = string> {
 }
 
 export function Combobox<T = string>({
+  id,
   value,
   onChange,
   items,
@@ -254,13 +256,14 @@ export function Combobox<T = string>({
   return (
     <div className="relative" ref={containerRef} onKeyDown={handleKeyDown}>
       <button
+        id={id}
         type="button"
         onClick={() => !disabled && setOpen(!open)}
         disabled={disabled}
         className={triggerClassName}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-activedescendant={open ? activeOptionId : undefined}
+        aria-controls={listboxId}
       >
         {children}
       </button>

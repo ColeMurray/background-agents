@@ -2,7 +2,7 @@
 
 import useSWR, { mutate } from "swr";
 import { z } from "zod";
-import type { SignInProvider } from "@open-inspect/shared";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import {
   browserAuthSessionResponseSchema,
   type BrowserAuthSessionUser,

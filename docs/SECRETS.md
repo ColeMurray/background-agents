@@ -1,8 +1,9 @@
 # Secrets Management
 
-Open-Inspect lets you store environment variables — API keys, database URLs, credentials — and
-inject them into every sandbox automatically. Secrets are encrypted at rest and never exposed to the
-browser (only key names are visible in the UI).
+Open-Inspect lets you store environment variables — API keys, database URLs, credentials — and make
+them available to sessions automatically. Secrets are encrypted at rest and never exposed to the
+browser (only key names are visible in the UI). Managed OAuth refresh tokens are brokered by the
+control plane instead of being injected into sandboxes.
 
 ---
 
@@ -147,6 +148,10 @@ If you try to save a reserved key, the UI will show a validation error.
 - Secrets are decrypted at sandbox creation time and injected as environment variables
 - System variables (set by the control plane) always take precedence over user-defined secrets
 
+Managed OpenAI and xAI OAuth credentials are exceptions to generic environment injection. Their
+refresh and cached access tokens stay in the control plane; the sandbox receives only a non-secret
+provider marker and requests short-lived access through its session-authenticated broker.
+
 ### Secrets and prebuilt images
 
 Image builds (repository images and environment images) run your `.openinspect/setup.sh` with the
@@ -173,6 +178,7 @@ from it, even after you rotate the secret. Two guidelines:
 | `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                  |
 | `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
 | `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
+| `XAI_OAUTH_REFRESH_TOKEN`    | Any    | SuperGrok access ([setup guide](GROK_MODELS.md))             |
 | `DATABASE_URL`               | Repo   | Database connection string                                   |
 | `AWS_ACCESS_KEY_ID`          | Repo   | AWS credentials for a specific project                       |
 | `STRIPE_SECRET_KEY`          | Repo   | Stripe API key for a specific project                        |
@@ -185,7 +191,8 @@ from it, even after you rotate the secret. Two guidelines:
 
 If you see "Model not found" errors, add the API key for your selected model provider as a global
 secret in Settings. For Claude on Daytona or Vercel, add `ANTHROPIC_API_KEY`. For DeepSeek, add
-`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`.
+`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`. For SuperGrok, follow the
+[managed OAuth setup guide](GROK_MODELS.md) instead of injecting the refresh token into a sandbox.
 
 ### Secret not appearing in sandbox
 

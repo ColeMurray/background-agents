@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import { SWRConfig } from "swr";
+import { SWRConfig, useSWRConfig } from "swr";
 import { MOBILE_LONG_PRESS_MS, SessionSidebar } from "./session-sidebar";
 import {
   buildSessionsPageKey,
@@ -157,6 +157,96 @@ describe("SessionSidebar", () => {
     expect(screen.getByText("Session 2").closest("a")).not.toHaveTextContent("3 PRs · 2 open");
   });
 
+  it("renders unread sessions distinctly with an accessible label", async () => {
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: {
+              sessions: [
+                createSession(1, {
+                  readState: {
+                    unread: true,
+                    latestMessageId: "message-1",
+                  },
+                }),
+                createSession(2, {
+                  readState: {
+                    unread: false,
+                    latestMessageId: "message-2",
+                  },
+                }),
+              ],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Unread")).toBeInTheDocument();
+    expect(screen.getByText("Session 1")).toHaveClass("font-semibold");
+    expect(screen.getByText("Session 2")).not.toHaveClass("font-semibold");
+  });
+
+  it("marks an unread session read from its action menu", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === SIDEBAR_SESSIONS_KEY) {
+        return jsonResponse({
+          sessions: [
+            createSession(1, {
+              readState: {
+                unread: true,
+                latestMessageId: "message-1",
+              },
+            }),
+          ],
+          hasMore: false,
+        });
+      }
+      expect(init?.method).toBe("PATCH");
+      expect(init?.body).toBe(JSON.stringify({ action: "mark_latest_message_read" }));
+      return jsonResponse({
+        sessionId: "session-1",
+        outcome: "marked_read",
+        unread: false,
+        latestMessageId: "message-1",
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fetcher: async (url: string) => (await fetch(url)).json(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Session actions" }), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Mark as read" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/sessions/session-1/read-state",
+        expect.objectContaining({ method: "PATCH" })
+      )
+    );
+    await waitFor(() => expect(screen.queryByText("Unread")).not.toBeInTheDocument());
+  });
+
   it("renders nested child sessions under their immediate parent", async () => {
     const parent = createSession(1, { updatedAt: 4000 });
     const child = createSession(2, {
@@ -256,6 +346,9 @@ describe("SessionSidebar", () => {
     );
 
     expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
+    );
 
     const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
     let scrollTop = 0;
@@ -282,18 +375,73 @@ describe("SessionSidebar", () => {
     expect(await screen.findByText("Session 55")).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 }),
-        {
-          mode: "same-origin",
-          credentials: "same-origin",
-        }
+        buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })
       );
     });
   });
 
-  it("filters sessions to the current user when Mine is selected", async () => {
+  it("retains loaded pagination rows when the first page revalidates", async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => createSession(index + 1));
+    const secondPage = [createSession(51)];
+    let firstPageRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === SIDEBAR_SESSIONS_KEY) {
+        firstPageRequests += 1;
+        return jsonResponse({
+          sessions: firstPage.map((session, index) =>
+            index === 0 && firstPageRequests > 1
+              ? { ...session, title: "Revalidated session" }
+              : session
+          ),
+          hasMore: true,
+        });
+      }
+      if (url === buildSessionsPageKey({ excludeStatus: "archived", offset: 50 })) {
+        return jsonResponse({ sessions: secondPage, hasMore: false });
+      }
+      throw new Error(`Unexpected fetch for ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    function RevalidateButton() {
+      const { mutate } = useSWRConfig();
+      return <button onClick={() => mutate(SIDEBAR_SESSIONS_KEY)}>Revalidate</button>;
+    }
+
+    const { container } = render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+          fetcher: async (url: string) => (await fetch(url)).json(),
+        }}
+      >
+        <RevalidateButton />
+        <SessionSidebar />
+      </SWRConfig>
+    );
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+
+    const scrollContainer = container.querySelector(".overflow-y-auto") as HTMLDivElement;
+    Object.defineProperties(scrollContainer, {
+      scrollHeight: { configurable: true, value: 2_000 },
+      clientHeight: { configurable: true, value: 400 },
+      scrollTop: { configurable: true, value: 1_705, writable: true },
+    });
+    fireEvent.scroll(scrollContainer);
+    expect(await screen.findByText("Session 51")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Revalidate" }));
+    expect(await screen.findByText("Revalidated session")).toBeInTheDocument();
+    expect(screen.getByText("Session 51")).toBeInTheDocument();
+  });
+
+  it("filters sessions to the current user and excludes automations when Mine is selected", async () => {
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
+      excludeAutomationLineage: true,
       createdBy: [CURRENT_USER_CREATED_BY],
     });
 
@@ -377,6 +525,7 @@ describe("SessionSidebar", () => {
     const allNextPageKey = buildSessionsPageKey({ excludeStatus: "archived", offset: 50 });
     const mineKey = buildSessionsPageKey({
       excludeStatus: "archived",
+      excludeAutomationLineage: true,
       createdBy: [CURRENT_USER_CREATED_BY],
     });
     let resolveAllNextPage!: (response: Response) => void;
@@ -441,10 +590,7 @@ describe("SessionSidebar", () => {
 
     fireEvent.scroll(scrollContainer);
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey, {
-        mode: "same-origin",
-        credentials: "same-origin",
-      });
+      expect(fetchMock).toHaveBeenCalledWith(allNextPageKey);
     });
 
     fireEvent.click(screen.getByText("Mine"));

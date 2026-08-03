@@ -1,4 +1,4 @@
-import type { SessionAttachmentMimeType } from "@open-inspect/shared";
+import type { SessionAttachmentMimeType } from "@open-inspect/shared/types/session-attachments";
 import type { Logger } from "../../logger";
 import { SessionInternalPaths } from "../contracts";
 import {

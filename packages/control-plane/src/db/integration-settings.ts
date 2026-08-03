@@ -1,4 +1,5 @@
-import { DEFAULT_MENTIONS_POLICY, parseRepositoryFullName } from "@open-inspect/shared";
+import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,

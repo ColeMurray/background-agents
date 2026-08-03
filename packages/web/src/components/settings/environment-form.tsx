@@ -1,7 +1,10 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { parseRepositoryFullName, type RepositoryInput } from "@open-inspect/shared";
+import {
+  parseRepositoryFullName,
+  type RepositoryInput,
+} from "@open-inspect/shared/types/repositories";
 import {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
@@ -15,10 +18,8 @@ import { Combobox } from "@/components/ui/combobox";
 import { BranchIcon, ChevronDownIcon, RepoIcon } from "@/components/ui/icons";
 import { useBranches } from "@/hooks/use-branches";
 import { useRepos, type Repo } from "@/hooks/use-repos";
-import {
-  RepositoryMultiSelect,
-  repositorySelectionKey,
-} from "@/components/repository-multi-select";
+import { RepositoryMultiSelect } from "@/components/repository-multi-select";
+import { repositorySelectionKey } from "@/lib/repository-selection";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 export interface EnvironmentFormValues {
@@ -170,13 +171,19 @@ export function EnvironmentForm({
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Repositories</label>
+        <label
+          htmlFor="environment-repositories"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Repositories
+        </label>
         <RepositoryMultiSelect
           repos={repos}
           loadingRepos={loadingRepos}
           selected={selectedKeys}
           onChange={handleSelectionChange}
           disabled={submitting}
+          triggerId="environment-repositories"
           triggerLabel={triggerLabel}
           triggerClassName="w-full"
         />

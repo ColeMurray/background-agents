@@ -6,10 +6,12 @@ import { toast } from "sonner";
 import {
   encodeRepositoryPathSegments,
   parseRepositoryFullName,
-  type EnrichedRepository,
-  type LinearBotSettings,
-  type LinearGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  LinearBotSettings,
+  LinearGlobalConfig,
+} from "@open-inspect/shared/types/integrations";
 import {
   MODEL_REASONING_CONFIG,
   isValidReasoningEffort,

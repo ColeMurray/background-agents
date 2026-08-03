@@ -1,6 +1,7 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import type { RepositoryRef, SandboxSettings } from "@open-inspect/shared";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";

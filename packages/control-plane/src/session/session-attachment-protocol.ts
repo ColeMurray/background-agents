@@ -1,4 +1,7 @@
-import { sessionAttachmentMimeTypeSchema, sessionAttachmentIdSchema } from "@open-inspect/shared";
+import {
+  sessionAttachmentMimeTypeSchema,
+  sessionAttachmentIdSchema,
+} from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
 import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "../media";
 

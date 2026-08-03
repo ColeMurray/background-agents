@@ -3,8 +3,8 @@ import {
   sendPromptResponseSchema,
   type CreateSessionResponse,
   type SendPromptResponse,
-  type SessionAttachmentReference,
 } from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";

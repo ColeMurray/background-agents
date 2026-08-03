@@ -3,7 +3,7 @@ import {
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
   MAX_SLACK_ROUTING_RULES,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,

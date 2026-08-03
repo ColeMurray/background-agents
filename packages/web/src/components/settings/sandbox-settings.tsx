@@ -7,7 +7,10 @@ import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
+import type {
+  ConfiguredSandboxPort,
+  SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -15,11 +18,11 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
-  encodeRepositoryPathSegments,
   findSandboxPortConflict,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import {
   MIN_SANDBOX_TIMEOUT_MINUTES,
   sandboxTimeoutMinutesFromMs,

@@ -10,7 +10,7 @@
  * spawn attempts within the same request.
  */
 
-import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
 import type { SandboxStatus } from "../../types";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
@@ -156,7 +156,7 @@ export interface WebSocketManager {
  * Alarm scheduler for timeouts.
  */
 export interface AlarmScheduler {
-  /** Schedule an alarm at the given timestamp */
+  /** Schedule an alarm no later than the given timestamp */
   scheduleAlarm(timestamp: number): Promise<void>;
 }
 
@@ -1312,9 +1312,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
   /**
    * Schedule a disconnect check alarm (heartbeat timeout from now).
-   * Used after abnormal WebSocket close to ensure dead sandboxes are detected
-   * promptly. If the bridge reconnects, scheduleInactivityCheck() will override
-   * this alarm (Cloudflare DOs support only one alarm at a time).
+   * Used after an active WebSocket disconnect to ensure dead sandboxes are detected
+   * promptly. The shared scheduler preserves any earlier deadline in the Durable
+   * Object's single alarm slot; the alarm handler evaluates and reschedules all work.
    */
   async scheduleDisconnectCheck(): Promise<void> {
     const alarmTime = Date.now() + this.config.heartbeat.timeoutMs;

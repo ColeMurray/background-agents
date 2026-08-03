@@ -8,10 +8,10 @@ import {
   postMessage,
   sanitizeAgentText,
   SLACK_DENIAL_STATUS,
-  type SlackGlobalSettings,
   type SlackNotifySuccessOutput,
   type SlackWireDenialReason,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
+import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";

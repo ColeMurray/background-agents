@@ -1,6 +1,6 @@
 "use client";
 
-import type { SignInProvider } from "@open-inspect/shared";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { useState } from "react";
 import { signIn } from "@/lib/auth-session";
 import { Button } from "@/components/ui/button";

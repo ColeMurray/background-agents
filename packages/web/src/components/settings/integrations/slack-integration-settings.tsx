@@ -3,12 +3,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
+import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
 import {
-  DEFAULT_MENTIONS_POLICY,
   encodeRepositoryPathSegments,
   parseRepositoryFullName,
-  type EnrichedRepository,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import type {
   Environment,
   ListEnvironmentsResponse,

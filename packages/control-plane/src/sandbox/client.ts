@@ -209,6 +209,8 @@ export interface CreateImageBuildSandboxRequest {
   cloneToken?: string;
   cloneHost?: string;
   cloneUsername?: string;
+  callbackUrl: string;
+  failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
   buildExecutionTimeoutSeconds: number;
   /** Provider-session lifetime, including deferred Queue finalization headroom. */
@@ -613,6 +615,8 @@ export class ModalClient {
           clone_token: request.cloneToken,
           clone_host: request.cloneHost,
           clone_username: request.cloneUsername,
+          callback_url: request.callbackUrl,
+          failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
           build_timeout_seconds: request.providerSessionTimeoutSeconds ?? null,

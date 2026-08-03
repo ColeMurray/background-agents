@@ -22,7 +22,7 @@ async function readyImage(
       { repoOwner: "acme", repoName: "web", baseSha: "sha-web" },
       { repoOwner: "acme", repoName: "api", baseSha: "sha-api" },
     ]),
-    runtime_version: "v53-list-native-runtime",
+    runtime_version: "v56-managed-provider-runtime",
     ...overrides,
   };
 }
@@ -37,7 +37,7 @@ describe("evaluateImageBuildForSpawn", () => {
         imageBuildId: "imgb-1",
         providerImageId: "im-abc123",
         primaryBaseSha: "sha-web",
-        runtimeVersion: "v53-list-native-runtime",
+        runtimeVersion: "v56-managed-provider-runtime",
       },
     });
   });
@@ -84,7 +84,7 @@ describe("evaluateImageBuildForSpawn", () => {
   });
 
   it("misses below the runtime floor and fails closed on an unparseable version", async () => {
-    for (const runtimeVersion of ["v52-pre-list-runtime", "dev", ""]) {
+    for (const runtimeVersion of ["v55-pre-managed-provider-runtime", "dev", ""]) {
       const image = await readyImage({ runtime_version: runtimeVersion });
 
       expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({

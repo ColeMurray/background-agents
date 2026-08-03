@@ -1,13 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { isValidCron, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
   triggerSources,
-  isValidCron,
-  cronIntervalMinutes,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
   type AutomationTriggerType,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
 import { DEFAULT_MODEL, isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   automationTemplates,
