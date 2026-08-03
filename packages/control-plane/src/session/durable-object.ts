@@ -1064,6 +1064,7 @@ export class SessionDO extends DurableObject<Env> {
         // IMPORTANT: Must await to ensure alarm is scheduled before returning
         const now = Date.now();
         this.updateLastActivity(now);
+        this.repository.updateSandboxHeartbeat(now);
         await this.scheduleInactivityCheck();
 
         log.info("ws.connect", {
