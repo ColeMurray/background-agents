@@ -139,6 +139,23 @@ async def test_create_build_sandbox_without_callback_context_uses_legacy_placeho
 
 
 @pytest.mark.asyncio
+async def test_create_build_sandbox_rejects_unpaired_callback_urls(monkeypatch):
+    create = _async_method(SimpleNamespace(object_id="modal-session-1"))
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+
+    with pytest.raises(ValueError, match="callback URLs must be provided together"):
+        await ModalBuildSessionService().create(
+            build_id="build-1",
+            scope_kind="repo",
+            scope_id="acme/repo",
+            repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            callback_url="https://cp.test/image-builds/build-complete",
+        )
+
+    create.aio.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_start_build_sandbox_writes_only_callback_token_to_gated_entrypoint(monkeypatch):
     stdin = SimpleNamespace(write=MagicMock(), drain=_async_method())
     sandbox = SimpleNamespace(
