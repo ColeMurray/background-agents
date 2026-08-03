@@ -54,8 +54,9 @@ All fields are optional so historical events continue to parse and render unchan
    and `isSubtask` at prompt completion so they remain visible inline rather than being dropped.
 5. Re-emit a same-status Task snapshot when correlation metadata first appears, making relationship
    discovery observable even when an earlier snapshot had no metadata.
-6. Clear the active child-to-Task relation when the Task terminates so a later resume cannot inherit
-   stale ownership.
+6. Clear the active child-to-Task relation when the Task terminates, but retain the completed owner
+   for delayed child events. Replace that completed owner when a later resume begins so new activity
+   cannot inherit stale ownership.
 
 ## Control-Plane Persistence
 

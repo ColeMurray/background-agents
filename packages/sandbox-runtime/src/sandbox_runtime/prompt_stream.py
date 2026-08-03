@@ -541,7 +541,7 @@ class OpenCodePromptStream:
             )
             # Stream does not end — the parent continues after a sub-task error
             normalized_error = error_msg or "Sub-task error"
-            task_call_id = state.child_activity.active_task(error_session_id)
+            task_call_id = state.child_activity.task_for_activity(error_session_id)
             if not task_call_id:
                 if not state.child_activity.queue_error(error_session_id, normalized_error):
                     self._log_pending_child_drop(state)

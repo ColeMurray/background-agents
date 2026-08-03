@@ -40,7 +40,7 @@ class ChildActivityCorrelator:
     _session_task_call_ids: dict[str, str] = field(default_factory=dict)
     _task_call_session_ids: dict[str, str] = field(default_factory=dict)
     _message_task_call_ids: dict[str, str] = field(default_factory=dict)
-    _closed_session_ids: set[str] = field(default_factory=set)
+    _closed_session_task_call_ids: dict[str, str] = field(default_factory=dict)
     _pending: list[PendingChildActivity] = field(default_factory=list)
     _drop_logged: bool = False
 
@@ -56,10 +56,16 @@ class ChildActivityCorrelator:
         is_new = self.track(child_session_id)
         self._session_task_call_ids[child_session_id] = task_call_id
         self._task_call_session_ids[task_call_id] = child_session_id
+        self._closed_session_task_call_ids.pop(child_session_id, None)
         return is_new
 
     def active_task(self, child_session_id: str) -> str | None:
         return self._session_task_call_ids.get(child_session_id)
+
+    def task_for_activity(self, child_session_id: str) -> str | None:
+        return self.active_task(child_session_id) or self._closed_session_task_call_ids.get(
+            child_session_id
+        )
 
     def child_for_task(self, task_call_id: str) -> str | None:
         return self._task_call_session_ids.get(task_call_id)
@@ -70,7 +76,7 @@ class ChildActivityCorrelator:
     def authorize_or_queue_message(
         self, child_session_id: str, message_id: str
     ) -> MessageDisposition:
-        task_call_id = self.active_task(child_session_id)
+        task_call_id = self.task_for_activity(child_session_id)
         if task_call_id:
             self._message_task_call_ids[message_id] = task_call_id
             return MessageDisposition.AUTHORIZED
@@ -85,7 +91,7 @@ class ChildActivityCorrelator:
             PendingChildMessage(
                 child_session_id,
                 message_id,
-                child_session_id not in self._closed_session_ids,
+                child_session_id not in self._closed_session_task_call_ids,
             )
         )
         return MessageDisposition.QUEUED
@@ -97,7 +103,7 @@ class ChildActivityCorrelator:
             PendingChildError(
                 child_session_id,
                 error,
-                child_session_id not in self._closed_session_ids,
+                child_session_id not in self._closed_session_task_call_ids,
             )
         )
         return True
@@ -129,7 +135,7 @@ class ChildActivityCorrelator:
         child_session_id = self.child_for_task(task_call_id)
         if child_session_id and self.active_task(child_session_id) == task_call_id:
             del self._session_task_call_ids[child_session_id]
-            self._closed_session_ids.add(child_session_id)
+            self._closed_session_task_call_ids[child_session_id] = task_call_id
 
     def should_log_drop(self) -> bool:
         if self._drop_logged:
