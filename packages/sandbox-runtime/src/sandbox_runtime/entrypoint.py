@@ -1696,23 +1696,15 @@ class SandboxSupervisor:
                 stdout = await process.stdout.read() if process.stdout else b""
                 output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 duration_ms = int((time.time() - start_time) * 1000)
-                if self.boot_mode == "build":
-                    self.log.error(
-                        f"{hook_name}.timeout",
-                        timeout_seconds=timeout_seconds,
-                        script=str(script_path),
-                        duration_ms=duration_ms,
-                        boot_mode=self.boot_mode,
-                    )
-                else:
-                    self.log.error(
-                        f"{hook_name}.timeout",
-                        timeout_seconds=timeout_seconds,
-                        output_tail=output_tail,
-                        script=str(script_path),
-                        duration_ms=duration_ms,
-                        boot_mode=self.boot_mode,
-                    )
+                timeout_fields: dict[str, object] = {
+                    "timeout_seconds": timeout_seconds,
+                    "script": str(script_path),
+                    "duration_ms": duration_ms,
+                    "boot_mode": self.boot_mode,
+                }
+                if self.boot_mode != "build":
+                    timeout_fields["output_tail"] = output_tail
+                self.log.error(f"{hook_name}.timeout", **timeout_fields)
                 return False
 
             output_tail = "\n".join(
@@ -1731,23 +1723,15 @@ class SandboxSupervisor:
                 )
                 return True
 
-            if self.boot_mode == "build":
-                self.log.error(
-                    f"{hook_name}.failed",
-                    exit_code=process.returncode,
-                    script=str(script_path),
-                    duration_ms=duration_ms,
-                    boot_mode=self.boot_mode,
-                )
-            else:
-                self.log.error(
-                    f"{hook_name}.failed",
-                    exit_code=process.returncode,
-                    output_tail=output_tail,
-                    script=str(script_path),
-                    duration_ms=duration_ms,
-                    boot_mode=self.boot_mode,
-                )
+            failure_fields: dict[str, object] = {
+                "exit_code": process.returncode,
+                "script": str(script_path),
+                "duration_ms": duration_ms,
+                "boot_mode": self.boot_mode,
+            }
+            if self.boot_mode != "build":
+                failure_fields["output_tail"] = output_tail
+            self.log.error(f"{hook_name}.failed", **failure_fields)
             return False
 
         except Exception as e:
