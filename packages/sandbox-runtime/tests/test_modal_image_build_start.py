@@ -5,13 +5,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sandbox_runtime.modal_image_build_start import (
+    MODAL_IMAGE_BUILD_START_ARGUMENT,
+    MODAL_SANDBOX_ID_ENV,
+    ModalImageBuildStartCancelled,
+    create_modal_callback,
+    read_modal_callback_token,
+)
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
     CALLBACK_TOKEN_ENV,
     CALLBACK_URL_ENV,
     FAILURE_CALLBACK_URL_ENV,
-    MODAL_IMAGE_BUILD_START_ARGUMENT,
-    MODAL_SANDBOX_ID_ENV,
 )
 
 
@@ -34,17 +39,109 @@ def _set_modal_build_context(monkeypatch):
     monkeypatch.delenv(CALLBACK_TOKEN_ENV, raising=False)
 
 
+def test_create_modal_callback_uses_create_context_and_modal_identity(monkeypatch):
+    _set_modal_build_context(monkeypatch)
+
+    reporter = create_modal_callback("a" * 64)
+
+    assert reporter.build_id == "imgb-acme-repo-123-abc"
+    assert reporter.provider_session_id == "sb-provider-123"
+    assert reporter.callback_url == "https://control-plane.test/image-builds/build-complete"
+    assert reporter.failure_callback_url == "https://control-plane.test/image-builds/build-failed"
+    assert reporter.token == "a" * 64
+
+
+def test_create_modal_callback_rejects_invalid_token(monkeypatch):
+    _set_modal_build_context(monkeypatch)
+
+    with pytest.raises(ValueError, match="invalid callback token"):
+        create_modal_callback("callback-token")
+
+
+def test_create_modal_callback_rejects_missing_create_context(monkeypatch):
+    _set_modal_build_context(monkeypatch)
+    monkeypatch.delenv(MODAL_SANDBOX_ID_ENV)
+
+    with pytest.raises(ValueError, match=MODAL_SANDBOX_ID_ENV):
+        create_modal_callback("a" * 64)
+
+
+@pytest.mark.asyncio
+async def test_reads_one_modal_callback_token_line():
+    reader = asyncio.StreamReader()
+    reader.feed_data(("a" * 64 + "\n").encode())
+
+    token = await read_modal_callback_token(reader, asyncio.Event())
+
+    assert token == "a" * 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        (b"not-a-token\n", "invalid callback token"),
+        (("a" * 65 + "\n").encode(), "callback token too large"),
+        (("a" * 64).encode(), "incomplete callback token"),
+        (b"", "stdin closed"),
+    ],
+)
+async def test_rejects_invalid_modal_callback_token_lines(payload, reason):
+    reader = asyncio.StreamReader()
+    if payload:
+        reader.feed_data(payload)
+    reader.feed_eof()
+
+    with pytest.raises(ValueError, match=reason):
+        await read_modal_callback_token(reader, asyncio.Event())
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_modal_callback_token_read():
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"a")
+    shutdown_event = asyncio.Event()
+    operation = asyncio.create_task(read_modal_callback_token(reader, shutdown_event))
+    await asyncio.sleep(0)
+
+    shutdown_event.set()
+
+    with pytest.raises(ModalImageBuildStartCancelled):
+        await operation
+
+
+@pytest.mark.asyncio
+async def test_cancelling_modal_callback_token_read_cleans_up_reader_task():
+    read_cancelled = asyncio.Event()
+
+    class BlockingReader:
+        async def readline(self):
+            try:
+                await asyncio.Event().wait()
+            finally:
+                read_cancelled.set()
+
+    operation = asyncio.create_task(read_modal_callback_token(BlockingReader(), asyncio.Event()))
+    await asyncio.sleep(0)
+
+    operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await operation
+
+    assert read_cancelled.is_set()
+
+
 @pytest.mark.asyncio
 async def test_modal_entrypoint_runs_supervisor_with_memory_only_callback_token(monkeypatch):
-    from sandbox_runtime import entrypoint
+    from sandbox_runtime import entrypoint, modal_image_build_start
 
     _set_modal_build_context(monkeypatch)
     reader = asyncio.StreamReader()
     reader.feed_data(("a" * 64 + "\n").encode())
     transport = MagicMock()
     monkeypatch.setattr(
-        entrypoint,
-        "_connect_modal_start_reader",
+        modal_image_build_start,
+        "_connect_start_reader",
         AsyncMock(return_value=(reader, transport)),
     )
     monkeypatch.setattr(entrypoint, "install_signal_handlers", MagicMock())
@@ -118,7 +215,7 @@ async def test_modal_entrypoint_fails_closed_outside_image_build_mode(monkeypatc
 
 @pytest.mark.asyncio
 async def test_modal_entrypoint_rejects_invalid_token_without_starting(monkeypatch):
-    from sandbox_runtime import entrypoint
+    from sandbox_runtime import entrypoint, modal_image_build_start
 
     _set_modal_build_context(monkeypatch)
     reader = asyncio.StreamReader()
@@ -129,8 +226,8 @@ async def test_modal_entrypoint_rejects_invalid_token_without_starting(monkeypat
     monkeypatch.setattr(entrypoint, "SandboxSupervisor", MagicMock(return_value=supervisor))
     monkeypatch.setattr(entrypoint, "install_signal_handlers", MagicMock())
     monkeypatch.setattr(
-        entrypoint,
-        "_connect_modal_start_reader",
+        modal_image_build_start,
+        "_connect_start_reader",
         AsyncMock(return_value=(reader, transport)),
     )
 

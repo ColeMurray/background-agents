@@ -1,4 +1,3 @@
-import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,10 +10,7 @@ from sandbox_runtime.repo_image_callback import (
     CALLBACK_URL_ENV,
     CALLBACK_USER_AGENT,
     FAILURE_CALLBACK_URL_ENV,
-    MODAL_SANDBOX_ID_ENV,
-    ModalImageBuildStartCancelled,
     RepoImageBuildCallback,
-    read_modal_callback_token,
 )
 
 
@@ -59,108 +55,6 @@ def test_from_env_reads_both_callback_urls(monkeypatch):
     assert reporter is not None
     assert reporter.callback_url == "https://cp.test/repo-images/build-complete"
     assert reporter.failure_callback_url == "https://cp.test/repo-images/build-failed"
-
-
-def test_from_modal_token_uses_create_context_and_modal_identity(monkeypatch):
-    token = "a" * 64
-    monkeypatch.setenv(BUILD_ID_ENV, "build-1")
-    monkeypatch.setenv(CALLBACK_URL_ENV, "https://cp.test/image-builds/build-complete")
-    monkeypatch.setenv(FAILURE_CALLBACK_URL_ENV, "https://cp.test/image-builds/build-failed")
-    monkeypatch.setenv(MODAL_SANDBOX_ID_ENV, "sb-modal-1")
-    monkeypatch.delenv(CALLBACK_TOKEN_ENV, raising=False)
-
-    reporter = RepoImageBuildCallback.from_modal_token(token)
-
-    assert reporter.build_id == "build-1"
-    assert reporter.provider_session_id == "sb-modal-1"
-    assert reporter.callback_url == "https://cp.test/image-builds/build-complete"
-    assert reporter.failure_callback_url == "https://cp.test/image-builds/build-failed"
-    assert reporter.token == token
-
-
-def test_from_modal_token_rejects_invalid_token(monkeypatch):
-    monkeypatch.setenv(BUILD_ID_ENV, "build-1")
-    monkeypatch.setenv(CALLBACK_URL_ENV, "https://cp.test/image-builds/build-complete")
-    monkeypatch.setenv(FAILURE_CALLBACK_URL_ENV, "https://cp.test/image-builds/build-failed")
-    monkeypatch.setenv(MODAL_SANDBOX_ID_ENV, "sb-modal-1")
-
-    with pytest.raises(ValueError, match="invalid callback token"):
-        RepoImageBuildCallback.from_modal_token("callback-token")
-
-
-def test_from_modal_token_rejects_missing_create_context(monkeypatch):
-    monkeypatch.setenv(BUILD_ID_ENV, "build-1")
-    monkeypatch.setenv(CALLBACK_URL_ENV, "https://cp.test/image-builds/build-complete")
-    monkeypatch.setenv(FAILURE_CALLBACK_URL_ENV, "https://cp.test/image-builds/build-failed")
-    monkeypatch.delenv(MODAL_SANDBOX_ID_ENV, raising=False)
-
-    with pytest.raises(ValueError, match=MODAL_SANDBOX_ID_ENV):
-        RepoImageBuildCallback.from_modal_token("a" * 64)
-
-
-@pytest.mark.asyncio
-async def test_reads_one_modal_callback_token_line():
-    reader = asyncio.StreamReader()
-    reader.feed_data(("a" * 64 + "\n").encode())
-
-    token = await read_modal_callback_token(reader, asyncio.Event())
-
-    assert token == "a" * 64
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("payload", "reason"),
-    [
-        (b"not-a-token\n", "invalid callback token"),
-        (("a" * 65 + "\n").encode(), "callback token too large"),
-        (("a" * 64).encode(), "incomplete callback token"),
-        (b"", "stdin closed"),
-    ],
-)
-async def test_rejects_invalid_modal_callback_token_lines(payload, reason):
-    reader = asyncio.StreamReader()
-    if payload:
-        reader.feed_data(payload)
-    reader.feed_eof()
-
-    with pytest.raises(ValueError, match=reason):
-        await read_modal_callback_token(reader, asyncio.Event())
-
-
-@pytest.mark.asyncio
-async def test_shutdown_cancels_modal_callback_token_read():
-    reader = asyncio.StreamReader()
-    reader.feed_data(b"a")
-    shutdown_event = asyncio.Event()
-    operation = asyncio.create_task(read_modal_callback_token(reader, shutdown_event))
-    await asyncio.sleep(0)
-
-    shutdown_event.set()
-
-    with pytest.raises(ModalImageBuildStartCancelled):
-        await operation
-
-
-@pytest.mark.asyncio
-async def test_cancelling_modal_callback_token_read_cleans_up_reader_task():
-    read_cancelled = asyncio.Event()
-
-    class BlockingReader:
-        async def readline(self):
-            try:
-                await asyncio.Event().wait()
-            finally:
-                read_cancelled.set()
-
-    operation = asyncio.create_task(read_modal_callback_token(BlockingReader(), asyncio.Event()))
-    await asyncio.sleep(0)
-
-    operation.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await operation
-
-    assert read_cancelled.is_set()
 
 
 @pytest.mark.asyncio

@@ -9,14 +9,16 @@ from modal.stream_type import StreamType
 
 from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
 from sandbox_runtime.log_config import get_logger
+from sandbox_runtime.modal_image_build_start import (
+    MODAL_IMAGE_BUILD_START_ARGUMENT,
+    MODAL_IMAGE_BUILD_START_PROTOCOL,
+    MODAL_SANDBOX_ID_ENV,
+)
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
     CALLBACK_TOKEN_ENV,
     CALLBACK_URL_ENV,
     FAILURE_CALLBACK_URL_ENV,
-    MODAL_IMAGE_BUILD_START_ARGUMENT,
-    MODAL_IMAGE_BUILD_START_PROTOCOL,
-    MODAL_SANDBOX_ID_ENV,
     PROVIDER_SESSION_ID_ENV,
 )
 

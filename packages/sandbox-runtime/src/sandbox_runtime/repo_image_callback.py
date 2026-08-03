@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,53 +22,6 @@ CALLBACK_URL_ENV = "OI_REPO_IMAGE_CALLBACK_URL"
 FAILURE_CALLBACK_URL_ENV = "OI_REPO_IMAGE_FAILURE_CALLBACK_URL"
 CALLBACK_TOKEN_ENV = "OI_REPO_IMAGE_CALLBACK_TOKEN"
 PROVIDER_SESSION_ID_ENV = "OI_REPO_IMAGE_PROVIDER_SESSION_ID"
-MODAL_SANDBOX_ID_ENV = "MODAL_SANDBOX_ID"
-CALLBACK_TOKEN_PATTERN = re.compile(r"^[a-f0-9]{64}$")
-MAX_CALLBACK_TOKEN_LINE_BYTES = 65
-MODAL_IMAGE_BUILD_START_ARGUMENT = "--await-modal-image-build-token-stdin-v1"
-MODAL_IMAGE_BUILD_START_PROTOCOL = "stdin-token-v1"
-
-
-class ModalImageBuildStartCancelled(Exception):
-    """Shutdown won while the Modal build waited for its callback token."""
-
-
-async def read_modal_callback_token(
-    reader: asyncio.StreamReader,
-    shutdown_event: asyncio.Event,
-) -> str:
-    """Read and validate the one callback token delivered after provider binding."""
-    read_task = asyncio.create_task(reader.readline())
-    shutdown_task = asyncio.create_task(shutdown_event.wait())
-    tasks = {read_task, shutdown_task}
-    try:
-        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-
-    if shutdown_task in done and shutdown_event.is_set():
-        raise ModalImageBuildStartCancelled
-
-    try:
-        raw_token = read_task.result()
-    except ValueError as error:
-        raise ValueError("callback token too large") from error
-    if not raw_token:
-        raise ValueError("stdin closed")
-    if not raw_token.endswith(b"\n"):
-        raise ValueError("incomplete callback token")
-    if len(raw_token) > MAX_CALLBACK_TOKEN_LINE_BYTES:
-        raise ValueError("callback token too large")
-    try:
-        token = raw_token[:-1].decode("ascii")
-    except UnicodeDecodeError as error:
-        raise ValueError("invalid callback token") from error
-    if not CALLBACK_TOKEN_PATTERN.fullmatch(token):
-        raise ValueError("invalid callback token")
-    return token
 
 
 @dataclass(frozen=True)
@@ -84,31 +36,6 @@ class RepoImageBuildCallback:
     token: str
     provider_session_id: str = ""
     logger: StructuredLogger = field(default_factory=lambda: get_logger("repo_image_callback"))
-
-    @classmethod
-    def from_modal_token(
-        cls, token: str, logger: StructuredLogger | None = None
-    ) -> RepoImageBuildCallback:
-        """Create a callback reporter from a post-bind token and Modal runtime identity."""
-        if not CALLBACK_TOKEN_PATTERN.fullmatch(token):
-            raise ValueError("invalid callback token")
-        context = {
-            BUILD_ID_ENV: os.environ.get(BUILD_ID_ENV, ""),
-            CALLBACK_URL_ENV: os.environ.get(CALLBACK_URL_ENV, ""),
-            FAILURE_CALLBACK_URL_ENV: os.environ.get(FAILURE_CALLBACK_URL_ENV, ""),
-            MODAL_SANDBOX_ID_ENV: os.environ.get(MODAL_SANDBOX_ID_ENV, ""),
-        }
-        missing = [name for name, value in context.items() if not value]
-        if missing:
-            raise ValueError(f"missing Modal callback context: {', '.join(missing)}")
-        return cls(
-            build_id=context[BUILD_ID_ENV],
-            callback_url=context[CALLBACK_URL_ENV],
-            failure_callback_url=context[FAILURE_CALLBACK_URL_ENV],
-            token=token,
-            provider_session_id=context[MODAL_SANDBOX_ID_ENV],
-            logger=logger or get_logger("repo_image_callback"),
-        )
 
     @classmethod
     def from_env(cls, logger: StructuredLogger | None = None) -> RepoImageBuildCallback | None:
