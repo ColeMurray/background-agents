@@ -22,6 +22,7 @@ export type EventType =
   | "push_complete"
   | "push_error"
   | "warning"
+  | "session_title"
   | "user_message";
 
 export interface AgentEvent {
