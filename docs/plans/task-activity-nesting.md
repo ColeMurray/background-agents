@@ -10,8 +10,8 @@ the web client's deduplication pass.
 The sandbox runtime already detects direct OpenCode child sessions and marks their events with
 `isSubtask`. However, `tool_call` and `error` do not declare that field in the shared event schema,
 so Zod removes it at the control-plane boundary. The runtime also consumes, but does not forward,
-the Task part's `metadata.sessionId`, leaving the UI without a reliable Task-to-child correlation
-key.
+the Task part's `state.metadata.sessionId`, leaving the UI without a reliable Task-to-child
+correlation key.
 
 Chronological inference is not sufficient. Parent tools and parallel Tasks may interleave, and a
 resumed Task may reuse an existing child session.
@@ -33,11 +33,11 @@ Add these optional fields to subtask-capable shared event variants:
 - `childSessionId`: identifies the OpenCode child session and scopes child tool-call identity.
 - `taskCallId`: identifies the parent Task tool invocation that owns the child activity.
 
-The parent Task `tool_call` carries `childSessionId` when OpenCode supplies `metadata.sessionId`.
-Child tool, step, and error events carry `childSessionId` and `taskCallId` after the runtime
-observes the Task metadata. Only `taskCallId` defines ownership; `childSessionId` scopes child tool
-identity and supports diagnostics, but cannot identify an invocation because resumed Tasks reuse
-sessions.
+The parent Task `tool_call` carries `childSessionId` when OpenCode supplies
+`state.metadata.sessionId`. Child tool, step, and error events carry `childSessionId` and
+`taskCallId` after the runtime observes the Task metadata. Only `taskCallId` defines ownership;
+`childSessionId` scopes child tool identity and supports diagnostics, but cannot identify an
+invocation because resumed Tasks reuse sessions.
 
 All fields are optional so historical events continue to parse and render unchanged.
 
@@ -45,8 +45,8 @@ All fields are optional so historical events continue to parse and render unchan
 
 1. Track the relationship in both directions for each prompt: `childSessionId -> taskCallId` and
    `taskCallId -> childSessionId`.
-2. Record the relationship whenever a parent Task part includes `metadata.sessionId`, including
-   resumed `task_id` calls.
+2. Record the relationship whenever a parent Task part includes `state.metadata.sessionId`,
+   including resumed `task_id` calls.
 3. Add `childSessionId` to the parent Task event, retaining it on later snapshots even if a snapshot
    omits metadata.
 4. Buffer child tools, steps, and errors until Task metadata establishes ownership, then release

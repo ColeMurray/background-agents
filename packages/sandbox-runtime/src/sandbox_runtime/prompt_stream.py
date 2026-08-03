@@ -460,7 +460,8 @@ class OpenCodePromptStream:
 
         # Discover child sessions from task tool metadata (covers task_id resume)
         if part.get("tool") == "task" and part_session_id == state.opencode_session_id:
-            metadata = part.get("metadata")
+            tool_state = part.get("state", {})
+            metadata = tool_state.get("metadata") if isinstance(tool_state, dict) else None
             child_sid = metadata.get("sessionId") if isinstance(metadata, dict) else None
             task_call_id = part.get("callID")
             if child_sid:

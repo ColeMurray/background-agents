@@ -1750,7 +1750,7 @@ class TestSubtaskStreaming:
     async def test_child_session_tool_events_streamed(
         self, bridge: AgentBridge, opencode_message_id: str
     ):
-        """Child session tool events should be forwarded with isSubtask=True."""
+        """Child tools emitted before Task completion should retain Task ownership."""
         http_client = bridge.http_client
 
         http_client.sse_events = [
@@ -1826,6 +1826,27 @@ class TestSubtaskStreaming:
                     }
                 },
             ),
+            # Foreground Tasks expose their child metadata on the completed tool state,
+            # after the child activity has already streamed.
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "parent-part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "tool": "task",
+                        "callID": "task-call-1",
+                        "state": {
+                            "status": "completed",
+                            "input": {"prompt": "inspect files"},
+                            "output": '<task id="child-1" state="completed">...</task>',
+                            "metadata": {"sessionId": "child-1"},
+                        },
+                    }
+                },
+            ),
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
@@ -1834,13 +1855,17 @@ class TestSubtaskStreaming:
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
-        assert len(tool_events) == 2
-        assert tool_events[0]["status"] == "running"
-        assert tool_events[0]["isSubtask"] is True
+        assert len(tool_events) == 3
+        assert tool_events[0]["tool"] == "task"
         assert tool_events[0]["childSessionId"] == "child-1"
-        assert tool_events[0]["messageId"] == "cp-msg-1"
-        assert tool_events[1]["status"] == "completed"
+        assert tool_events[1]["status"] == "running"
         assert tool_events[1]["isSubtask"] is True
+        assert tool_events[1]["childSessionId"] == "child-1"
+        assert tool_events[1]["taskCallId"] == "task-call-1"
+        assert tool_events[1]["messageId"] == "cp-msg-1"
+        assert tool_events[2]["status"] == "completed"
+        assert tool_events[2]["isSubtask"] is True
+        assert tool_events[2]["taskCallId"] == "task-call-1"
 
     @pytest.mark.asyncio
     async def test_child_text_events_not_forwarded(
@@ -2178,7 +2203,7 @@ class TestSubtaskStreaming:
                 },
             ),
             # NO session.created — child was resumed via task_id
-            # Parent task tool part with metadata.sessionId
+            # Parent task tool part with state.metadata.sessionId
             create_sse_event(
                 "message.part.updated",
                 {
@@ -2189,11 +2214,11 @@ class TestSubtaskStreaming:
                         "messageID": "oc-msg-1",
                         "tool": "task",
                         "callID": "task-call-1",
-                        "metadata": {"sessionId": "child-1"},
                         "state": {
                             "status": "running",
                             "input": {"prompt": "do something"},
                             "output": "",
+                            "metadata": {"sessionId": "child-1"},
                         },
                     }
                 },

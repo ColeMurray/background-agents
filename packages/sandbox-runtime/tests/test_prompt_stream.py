@@ -475,8 +475,11 @@ class TestApplySseEventDispositions:
                         "messageID": "parent-msg",
                         "tool": "task",
                         "callID": "closed-task",
-                        "metadata": {"sessionId": CHILD_SESSION_ID},
-                        "state": {"status": "completed", "input": {"prompt": "review"}},
+                        "state": {
+                            "status": "completed",
+                            "input": {"prompt": "review"},
+                            "metadata": {"sessionId": CHILD_SESSION_ID},
+                        },
                     }
                 },
             ),
@@ -521,8 +524,11 @@ class TestApplySseEventDispositions:
                         "messageID": "parent-msg",
                         "tool": "task",
                         "callID": "task-call-2",
-                        "metadata": {"sessionId": CHILD_SESSION_ID},
-                        "state": {"status": "running", "input": {"prompt": "resume"}},
+                        "state": {
+                            "status": "running",
+                            "input": {"prompt": "resume"},
+                            "metadata": {"sessionId": CHILD_SESSION_ID},
+                        },
                     }
                 },
             ),
@@ -692,8 +698,11 @@ class TestApplySseEventDispositions:
                         "messageID": "parent-msg",
                         "tool": "task",
                         "callID": "task-call",
-                        "metadata": {"sessionId": CHILD_SESSION_ID},
-                        "state": {"status": "running", "input": {"prompt": "review"}},
+                        "state": {
+                            "status": "running",
+                            "input": {"prompt": "review"},
+                            "metadata": {"sessionId": CHILD_SESSION_ID},
+                        },
                     }
                 },
             ),
