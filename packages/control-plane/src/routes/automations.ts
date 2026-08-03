@@ -293,14 +293,7 @@ function extractSlackChannels(triggerConfig: TriggerConfig | null | undefined): 
 function validateSlackTriggerConfig(
   triggerConfig: TriggerConfig | null | undefined
 ): string | null {
-  // Guard the shape here too: this runs before the generic array-shape check in
-  // the update path, so a non-array `conditions` would otherwise throw on
-  // `.some()` and surface as a 500 instead of a 400.
-  const rawConditions = triggerConfig?.conditions;
-  if (rawConditions !== undefined && !Array.isArray(rawConditions)) {
-    return "triggerConfig.conditions must be an array";
-  }
-  const conditions = rawConditions ?? [];
+  const conditions = triggerConfig?.conditions ?? [];
   if (!conditions.some((c) => c.type === "slack_channel")) {
     return "slack_event triggers require a slack_channel condition";
   }
@@ -575,9 +568,6 @@ async function handleCreateAutomation(
 
   // Validate conditions
   if (body.triggerConfig?.conditions) {
-    if (!Array.isArray(body.triggerConfig.conditions)) {
-      return error("triggerConfig.conditions must be an array", 400);
-    }
     const source = TRIGGER_TYPE_TO_SOURCE[triggerType];
     if (source) {
       const conditionErrors = validateConditions(
@@ -762,10 +752,15 @@ async function handleUpdateAutomation(
 
   const body = await parseJsonBody<UpdateAutomationRequest>(request);
   if (body instanceof Response) return body;
-  if (body.triggerConfig !== undefined && body.triggerConfig !== null) {
-    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
-    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
-    body.triggerConfig = parsedTriggerConfig.triggerConfig;
+  if (body.triggerConfig !== undefined) {
+    if (existing.trigger_type === "schedule") {
+      return error("Cannot set triggerConfig on schedule automations", 400);
+    }
+    if (body.triggerConfig !== null) {
+      const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
+      if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
+      body.triggerConfig = parsedTriggerConfig.triggerConfig;
+    }
   }
 
   // Validate fields if provided
@@ -898,9 +893,6 @@ async function handleUpdateAutomation(
 
   // Validate trigger config (conditions) — only for non-schedule types
   if (body.triggerConfig !== undefined) {
-    if (existing.trigger_type === "schedule") {
-      return error("Cannot set triggerConfig on schedule automations", 400);
-    }
     if (body.triggerConfig === null) {
       // A slack_event's trigger_config holds its required scoping (channel +
       // text_match) and the watched-channel index is derived from it. Clearing
@@ -919,9 +911,6 @@ async function handleUpdateAutomation(
         if (slackError) return error(slackError, 400);
       }
       if (body.triggerConfig.conditions) {
-        if (!Array.isArray(body.triggerConfig.conditions)) {
-          return error("triggerConfig.conditions must be an array", 400);
-        }
         const source = TRIGGER_TYPE_TO_SOURCE[existing.trigger_type as AutomationTriggerType];
         if (source) {
           const conditionErrors = validateConditions(

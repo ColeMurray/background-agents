@@ -837,6 +837,19 @@ describe("automation route handlers", () => {
       }
     );
 
+    it("rejects trigger config on schedule automations before shape validation", async () => {
+      mockStore.getById.mockResolvedValue(sampleRow);
+
+      const response = await callRoute("PUT", "/automations/auto-1", {
+        body: { triggerConfig: {} },
+      });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Cannot set triggerConfig on schedule automations",
+      });
+    });
+
     it("updates reasoning effort when valid for the selected model", async () => {
       mockStore.getById.mockResolvedValue(sampleRow);
 
