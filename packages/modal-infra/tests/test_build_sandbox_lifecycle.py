@@ -61,10 +61,15 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         clone_token="clone-token",
         clone_host="gitlab.com",
         clone_username="oauth2",
+        callback_url="https://cp.test/image-builds/build-complete",
+        failure_callback_url="https://cp.test/image-builds/build-failed",
         user_env_vars={
             "FOO": "bar",
+            "OI_REPO_IMAGE_BUILD_ID": "attacker-build",
+            "OI_REPO_IMAGE_CALLBACK_URL": "https://attacker.test/complete",
+            "OI_REPO_IMAGE_FAILURE_CALLBACK_URL": "https://attacker.test/failed",
             "OI_REPO_IMAGE_CALLBACK_TOKEN": "attacker-token",
-            "OI_IMAGE_BUILD_ID": "attacker-build",
+            "MODAL_SANDBOX_ID": "attacker-sandbox",
             "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS": "99999",
         },
         build_execution_timeout_seconds=1200,
@@ -78,21 +83,27 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
         "python",
         "-m",
         "sandbox_runtime.entrypoint",
-        "--await-image-build-start-stdin-v1",
+        "--await-modal-image-build-token-stdin-v1",
     )
     assert kwargs["tags"] == {
         "openinspect_kind": "image-build",
         "openinspect_build_id": "build-1",
         "openinspect_scope_kind": "repo",
         "openinspect_scope_id": "acme/repo",
-        "openinspect_launch_protocol": "stdin-v1",
+        "openinspect_launch_protocol": "stdin-token-v1",
     }
     assert kwargs["env"]["FOO"] == "bar"
     assert "OI_REPO_IMAGE_CALLBACK_TOKEN" not in kwargs["env"]
-    assert "OI_REPO_IMAGE_CALLBACK_URL" not in kwargs["env"]
-    assert "OI_REPO_IMAGE_FAILURE_CALLBACK_URL" not in kwargs["env"]
     assert "OI_REPO_IMAGE_PROVIDER_SESSION_ID" not in kwargs["env"]
-    assert kwargs["env"]["OI_IMAGE_BUILD_ID"] == "build-1"
+    assert "MODAL_SANDBOX_ID" not in kwargs["env"]
+    assert kwargs["env"]["OI_REPO_IMAGE_BUILD_ID"] == "build-1"
+    assert (
+        kwargs["env"]["OI_REPO_IMAGE_CALLBACK_URL"] == "https://cp.test/image-builds/build-complete"
+    )
+    assert (
+        kwargs["env"]["OI_REPO_IMAGE_FAILURE_CALLBACK_URL"]
+        == "https://cp.test/image-builds/build-failed"
+    )
     assert kwargs["env"]["OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"] == "1200"
     assert kwargs["env"]["VCS_HOST"] == "gitlab.com"
     assert kwargs["env"]["VCS_CLONE_USERNAME"] == "oauth2"
@@ -107,14 +118,35 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
 
 
 @pytest.mark.asyncio
-async def test_start_build_sandbox_writes_bound_payload_to_gated_entrypoint(monkeypatch):
+async def test_create_build_sandbox_without_callback_context_uses_legacy_placeholder(monkeypatch):
+    sandbox = SimpleNamespace(object_id="modal-session-1")
+    create = _async_method(sandbox)
+    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
+
+    await ModalBuildSessionService().create(
+        build_id="build-1",
+        scope_kind="repo",
+        scope_id="acme/repo",
+        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+    )
+
+    args = create.aio.await_args.args
+    kwargs = create.aio.await_args.kwargs
+    assert args == ("python", "-c", "import signal; signal.pause()")
+    assert "openinspect_launch_protocol" not in kwargs["tags"]
+    assert "OI_REPO_IMAGE_CALLBACK_URL" not in kwargs["env"]
+    assert "OI_REPO_IMAGE_FAILURE_CALLBACK_URL" not in kwargs["env"]
+
+
+@pytest.mark.asyncio
+async def test_start_build_sandbox_writes_only_callback_token_to_gated_entrypoint(monkeypatch):
     stdin = SimpleNamespace(write=MagicMock(), drain=_async_method())
     sandbox = SimpleNamespace(
         get_tags=_async_method(
             {
                 "openinspect_kind": "image-build",
                 "openinspect_build_id": "build-1",
-                "openinspect_launch_protocol": "stdin-v1",
+                "openinspect_launch_protocol": "stdin-token-v1",
             }
         ),
         stdin=stdin,
@@ -127,19 +159,10 @@ async def test_start_build_sandbox_writes_bound_payload_to_gated_entrypoint(monk
         provider_session_id="modal-session-1",
         callback_url="https://cp.test/image-builds/build-complete",
         failure_callback_url="https://cp.test/image-builds/build-failed",
-        callback_token="callback-token",
+        callback_token="a" * 64,
     )
 
-    payload = json.loads(stdin.write.call_args.args[0])
-    assert payload == {
-        "version": 1,
-        "build_id": "build-1",
-        "provider_session_id": "modal-session-1",
-        "callback_url": "https://cp.test/image-builds/build-complete",
-        "failure_callback_url": "https://cp.test/image-builds/build-failed",
-        "callback_token": "callback-token",
-    }
-    assert stdin.write.call_args.args[0].endswith("\n")
+    stdin.write.assert_called_once_with("a" * 64 + "\n")
     stdin.drain.aio.assert_awaited_once_with()
     sandbox.exec.aio.assert_not_awaited()
     from_id.assert_not_called()

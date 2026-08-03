@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import signal
+import sys
 import time
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
@@ -45,14 +46,18 @@ from .constants import (
 )
 from .diff_baseline import resolve_session_diff_baselines
 from .git_excludes import install_runtime_git_excludes
-from .image_build_launch import (
-    IMAGE_BUILD_LAUNCH_ARGUMENT,
-    install_signal_handlers,
-    run_gated_image_build,
-)
 from .log_config import configure_logging, get_logger
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
-from .repo_image_callback import RepoImageBuildCallback
+from .repo_image_callback import (
+    BUILD_ID_ENV,
+    CALLBACK_URL_ENV,
+    FAILURE_CALLBACK_URL_ENV,
+    MAX_CALLBACK_TOKEN_LINE_BYTES,
+    MODAL_IMAGE_BUILD_START_ARGUMENT,
+    ModalImageBuildStartCancelled,
+    RepoImageBuildCallback,
+    read_modal_callback_token,
+)
 
 configure_logging()
 
@@ -2246,12 +2251,69 @@ class SandboxSupervisor:
         self.log.info("supervisor.shutdown_complete")
 
 
+def install_signal_handlers(supervisor: SandboxSupervisor) -> None:
+    """Route process signals to the one supervisor-owned shutdown event."""
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, supervisor.request_shutdown, sig)
+
+
+async def _connect_modal_start_reader() -> tuple[asyncio.StreamReader, asyncio.ReadTransport]:
+    """Attach a bounded asyncio reader to Modal sandbox stdin."""
+    loop = asyncio.get_running_loop()
+    reader = asyncio.StreamReader(limit=MAX_CALLBACK_TOKEN_LINE_BYTES + 1)
+    protocol = asyncio.StreamReaderProtocol(reader)
+    transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin.buffer)
+    return reader, transport
+
+
+async def _run_modal_image_build(supervisor: SandboxSupervisor) -> int:
+    """Wait for the post-bind callback token, then run the build."""
+    if os.environ.get("IMAGE_BUILD_MODE") != "true":
+        supervisor.log.error("image_build.launch_failed", reason="invalid_build_mode")
+        return 1
+
+    build_id = os.environ.get(BUILD_ID_ENV, "")
+    if not build_id:
+        supervisor.log.error("image_build.launch_failed", reason="missing_build_identity")
+        return 1
+
+    supervisor.log.info("image_build.awaiting_start", build_id=build_id)
+    transport: asyncio.ReadTransport | None = None
+    try:
+        reader, transport = await _connect_modal_start_reader()
+        token = await read_modal_callback_token(reader, supervisor.shutdown_event)
+        callback = RepoImageBuildCallback.from_modal_token(token, supervisor.log)
+        for name in (BUILD_ID_ENV, CALLBACK_URL_ENV, FAILURE_CALLBACK_URL_ENV):
+            os.environ.pop(name, None)
+        supervisor.log.info(
+            "image_build.launch_accepted",
+            build_id=callback.build_id,
+            provider_session_id=callback.provider_session_id,
+        )
+        await supervisor.run(callback)
+        return 0
+    except ModalImageBuildStartCancelled:
+        supervisor.log.info("image_build.launch_cancelled", build_id=build_id)
+        return 0
+    except ValueError as error:
+        supervisor.log.error(
+            "image_build.launch_failed",
+            build_id=build_id,
+            reason=str(error),
+        )
+        return 1
+    finally:
+        if transport is not None:
+            transport.close()
+
+
 async def main(argv: list[str] | None = None) -> int:
     """Run an interactive supervisor or a gated provider-session image build."""
     parser = argparse.ArgumentParser(description="Open-Inspect sandbox supervisor")
     parser.add_argument(
-        IMAGE_BUILD_LAUNCH_ARGUMENT,
-        dest="await_image_build_start",
+        MODAL_IMAGE_BUILD_START_ARGUMENT,
+        dest="await_modal_image_build_token",
         action="store_true",
     )
     args = parser.parse_args(argv)
@@ -2260,10 +2322,10 @@ async def main(argv: list[str] | None = None) -> int:
     supervisor = SandboxSupervisor(shutdown_event=shutdown_event)
     install_signal_handlers(supervisor)
 
-    if not args.await_image_build_start:
+    if not args.await_modal_image_build_token:
         await supervisor.run()
         return 0
-    return await run_gated_image_build(supervisor)
+    return await _run_modal_image_build(supervisor)
 
 
 if __name__ == "__main__":

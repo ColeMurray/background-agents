@@ -529,6 +529,8 @@ describe("ModalSandboxProvider", () => {
           buildId: "build-123",
           repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
           cloneToken: "clone-token",
+          callbackUrl: "https://worker.test/image-builds/build-complete",
+          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
           userEnvVars: { FOO: "bar" },
           buildExecutionTimeoutSeconds: 1800,
           providerSessionTimeoutSeconds: 2400,
