@@ -102,18 +102,20 @@ pip install -e ".[dev]"
 ### Deploy
 
 ```bash
-# Deploy the app (recommended)
-modal deploy deploy.py
+# Build the dynamic Sandbox image, then deploy the app (recommended)
+uv run python deploy.py --build-sandbox-image
+uv run modal deploy deploy.py
 
-# Alternative: deploy the src package directly
-modal deploy -m src
+# Alternative app deployment after the same eager image-build step
+uv run modal deploy -m src
 
 # Run locally for development
 modal run src/
 ```
 
 > **Note**: Never deploy `src/app.py` directly - it only defines the app and shared resources.
-> Use `deploy.py` or `-m src` to ensure all function modules are registered.
+> Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
+> are registered.
 
 ## HTTP API
 

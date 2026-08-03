@@ -68,6 +68,12 @@ uv sync --frozen
 # Deploy using Modal CLI (via uv to use the project's virtual environment)
 if [ "${DEPLOY_MODULE}" = "deploy" ]; then
     # Method 1: Use deploy.py wrapper (recommended)
+    # Build the image used by dynamic Sandboxes before publishing endpoints that create them.
+    echo "Eagerly building Modal sandbox image"
+    uv run python deploy.py --build-sandbox-image || {
+        echo "Error: Modal sandbox image build failed for ${APP_NAME}"
+        exit 1
+    }
     uv run modal deploy deploy.py || {
         echo "Error: Modal deployment failed for ${APP_NAME}"
         exit 1
