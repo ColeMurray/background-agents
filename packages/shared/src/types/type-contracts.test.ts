@@ -8,6 +8,9 @@ import type {
   TextMatchValue,
   TriggerCondition,
   TriggerConfig,
+  automationTriggerTypeSchema,
+  triggerConditionSchema,
+  triggerConfigSchema,
 } from "..";
 import type {
   Automation,
@@ -30,6 +33,9 @@ import type {
   sandboxEventSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
+  automationSchema,
+  listAutomationsPageResponseSchema,
+  listAutomationsResponseSchema,
 } from ".";
 
 it("preserves public Zod input and output relationships", () => {
@@ -45,6 +51,18 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<SandboxEvent>().toEqualTypeOf<z.output<typeof sandboxEventSchema>>();
   expectTypeOf<ServerMessage>().toEqualTypeOf<z.output<typeof serverMessageSchema>>();
   expectTypeOf<AutomationRepositoryInput>().toEqualTypeOf<RepositoryInput>();
+  expectTypeOf<AutomationTriggerType>().toEqualTypeOf<
+    z.output<typeof automationTriggerTypeSchema>
+  >();
+  expectTypeOf<TriggerCondition>().toEqualTypeOf<z.output<typeof triggerConditionSchema>>();
+  expectTypeOf<TriggerConfig>().toEqualTypeOf<z.output<typeof triggerConfigSchema>>();
+  expectTypeOf<Automation>().toEqualTypeOf<z.output<typeof automationSchema>>();
+  expectTypeOf<ListAutomationsResponse>().toEqualTypeOf<
+    z.output<typeof listAutomationsResponseSchema>
+  >();
+  expectTypeOf<ListAutomationsPageResponse>().toEqualTypeOf<
+    z.output<typeof listAutomationsPageResponseSchema>
+  >();
 });
 
 it("preserves the repository transform boundary", () => {

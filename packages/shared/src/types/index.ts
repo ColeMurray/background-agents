@@ -238,6 +238,10 @@ export {
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  automationRepositorySchema,
+  automationSchema,
+  listAutomationsResponseSchema,
+  listAutomationsPageResponseSchema,
 } from "./automations";
 export type {
   AutomationRepository,

@@ -4,17 +4,41 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ListAutomationsPageResponse } from "@open-inspect/shared";
+import type { Automation, ListAutomationsPageResponse } from "@open-inspect/shared";
 import { useAutomations } from "./use-automations";
 
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "user-1" } }, status: "authenticated" }),
 }));
 
-const firstAutomation = { id: "auto-2", name: "Daily sync" } as never;
-const secondAutomation = { id: "auto-1", name: "Daily cleanup" } as never;
+function automation(id: string, name: string): Automation {
+  return {
+    id,
+    name,
+    instructions: "Run maintenance",
+    triggerType: "schedule",
+    scheduleCron: "0 9 * * *",
+    scheduleTz: "UTC",
+    model: "anthropic/claude-sonnet-4-6",
+    reasoningEffort: null,
+    enabled: true,
+    nextRunAt: null,
+    consecutiveFailures: 0,
+    createdBy: "user-1",
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+    eventType: null,
+    triggerConfig: { conditions: [] },
+    repositories: [],
+    environmentIds: [],
+  };
+}
 
-function wrapper(fetcher: (path: string) => Promise<ListAutomationsPageResponse>) {
+const firstAutomation = automation("auto-2", "Daily sync");
+const secondAutomation = automation("auto-1", "Daily cleanup");
+
+function wrapper(fetcher: (path: string) => Promise<unknown>) {
   return function TestWrapper({ children }: { children: ReactNode }) {
     return (
       <SWRConfig value={{ provider: () => new Map(), fetcher, dedupingInterval: 0 }}>
@@ -75,7 +99,7 @@ describe("useAutomations", () => {
   });
 
   it("rebuilds later cursor pages when the first page changes", async () => {
-    const insertedAutomation = { id: "auto-3", name: "New automation" } as never;
+    const insertedAutomation = automation("auto-3", "New automation");
     let listVersion: "initial" | "updated" = "initial";
     const fetcher = vi.fn(async (path: string): Promise<ListAutomationsPageResponse> => {
       if (path.includes("cursor=updated")) {
@@ -123,5 +147,40 @@ describe("useAutomations", () => {
       ])
     );
     expect(fetcher).toHaveBeenCalledWith("/api/automations?limit=25&cursor=updated");
+  });
+
+  it("reports an invalid page response as a contract error", async () => {
+    const fetcher = vi.fn(async () => ({
+      automations: [],
+      hasMore: true,
+      nextCursor: null,
+    }));
+    const { result } = renderHook(() => useAutomations(""), {
+      wrapper: wrapper(fetcher),
+    });
+
+    await waitFor(() => expect(result.current.error?.message).toBe("Invalid automations response"));
+    expect(result.current.automations).toEqual([]);
+    expect(result.current.hasMore).toBe(false);
+  });
+
+  it("does not cache or paginate beyond an invalid later page", async () => {
+    const fetcher = vi.fn(async (path: string) =>
+      path.includes("cursor=")
+        ? { automations: [], hasMore: true, nextCursor: null }
+        : { automations: [firstAutomation], hasMore: true, nextCursor: "next" }
+    );
+    const { result } = renderHook(() => useAutomations(""), {
+      wrapper: wrapper(fetcher),
+    });
+
+    await waitFor(() => expect(result.current.automations).toEqual([firstAutomation]));
+    await act(() => result.current.loadMore());
+
+    await waitFor(() => expect(result.current.error?.message).toBe("Invalid automations response"));
+    expect(result.current.automations).toEqual([firstAutomation]);
+    expect(
+      fetcher.mock.calls.filter(([path]) => String(path).includes("cursor=")).map(([path]) => path)
+    ).toEqual(["/api/automations?limit=25&cursor=next"]);
   });
 });

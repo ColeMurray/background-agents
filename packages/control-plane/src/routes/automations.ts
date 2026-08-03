@@ -4,6 +4,7 @@
 
 import { isValidCron, nextCronOccurrence, cronIntervalMinutes } from "@open-inspect/shared/cron";
 import {
+  triggerConfigSchema,
   validateConditions,
   conditionRegistry,
   TRIGGER_TYPE_TO_SOURCE,
@@ -54,6 +55,7 @@ import {
 } from "./shared";
 import type { Env } from "../types";
 import type { SqlDatabase, SqlStatement } from "../db/sql-database";
+import { z } from "zod";
 
 const logger = createLogger("router:automations");
 
@@ -65,6 +67,42 @@ const MAX_NAME_LENGTH = 200;
 
 /** Maximum instructions length. Keep in sync with INSTRUCTIONS_MAX_LENGTH in packages/web/src/components/automations/automation-form.tsx. */
 const MAX_INSTRUCTIONS_LENGTH = 15_000;
+
+type ParseTriggerConfigResult =
+  | { ok: true; triggerConfig: TriggerConfig }
+  | { ok: false; error: string };
+
+function parseTriggerConfig(value: unknown): ParseTriggerConfigResult {
+  const parsed = triggerConfigSchema.safeParse(value);
+  if (parsed.success) return { ok: true, triggerConfig: parsed.data };
+
+  const issue = parsed.error.issues[0];
+  if (issue?.path.length === 1 && issue.path[0] === "conditions") {
+    return { ok: false, error: "triggerConfig.conditions must be an array" };
+  }
+
+  const path = ["triggerConfig", ...(issue?.path ?? [])].map(String).join(".");
+  const conditionIndex = issue?.path[0] === "conditions" ? issue.path[1] : undefined;
+  const rawConditions =
+    typeof value === "object" && value !== null && "conditions" in value
+      ? (value as { conditions?: unknown }).conditions
+      : undefined;
+  const rawCondition =
+    typeof conditionIndex === "number" && Array.isArray(rawConditions)
+      ? rawConditions[conditionIndex]
+      : undefined;
+  const conditionType =
+    typeof rawCondition === "object" &&
+    rawCondition !== null &&
+    "type" in rawCondition &&
+    typeof rawCondition.type === "string"
+      ? `${rawCondition.type}: `
+      : "";
+  return {
+    ok: false,
+    error: `${path}: ${conditionType}${issue?.message ?? "invalid trigger config"}`,
+  };
+}
 
 /** Warn if next run is more than 31 days away. */
 const FAR_FUTURE_THRESHOLD_MS = 31 * 24 * 60 * 60 * 1000;
@@ -275,6 +313,50 @@ const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
 const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
 const MAX_AUTOMATION_NAME_SEARCH_LENGTH = 200;
 
+const automationListLimitSchema = z
+  .string()
+  .regex(/^\d+$/, { message: "Invalid limit" })
+  .transform(Number)
+  .refine((limit) => limit >= 1 && limit <= MAX_AUTOMATION_LIST_PAGE_SIZE, {
+    message: "Invalid limit",
+  });
+
+const automationListPageQuerySchema = z.object({
+  limit: automationListLimitSchema.optional(),
+  cursor: z.string().optional(),
+  search: z
+    .string()
+    .trim()
+    .max(MAX_AUTOMATION_NAME_SEARCH_LENGTH, { message: "Search is too long" })
+    .optional(),
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
+});
+
+const AUTOMATION_LIST_QUERY_PARAM_NAMES = [
+  "limit",
+  "cursor",
+  "search",
+  "repoOwner",
+  "repoName",
+] as const;
+
+type AutomationListQueryParamName = (typeof AUTOMATION_LIST_QUERY_PARAM_NAMES)[number];
+
+type ReadAutomationListQueryResult =
+  | { ok: true; query: Partial<Record<AutomationListQueryParamName, string>> }
+  | { ok: false; error: string };
+
+function readAutomationListQuery(searchParams: URLSearchParams): ReadAutomationListQueryResult {
+  const query: Partial<Record<AutomationListQueryParamName, string>> = {};
+  for (const name of AUTOMATION_LIST_QUERY_PARAM_NAMES) {
+    const values = searchParams.getAll(name);
+    if (values.length > 1) return { ok: false, error: `Invalid ${name}` };
+    if (values.length === 1) query[name] = values[0];
+  }
+  return { ok: true, query };
+}
+
 type ParseAutomationListParamsResult =
   | {
       ok: true;
@@ -298,11 +380,22 @@ type ParseAutomationListParamsResult =
 
 function parseAutomationListParams(request: Request): ParseAutomationListParamsResult {
   const url = new URL(request.url);
-  const rawLimit = url.searchParams.get("limit");
   const usesPagination =
-    rawLimit !== null || url.searchParams.has("cursor") || url.searchParams.has("search");
-  const repoOwner = url.searchParams.get("repoOwner") ?? undefined;
-  const repoName = url.searchParams.get("repoName") ?? undefined;
+    url.searchParams.has("limit") ||
+    url.searchParams.has("cursor") ||
+    url.searchParams.has("search");
+  const rawQuery = readAutomationListQuery(url.searchParams);
+  if (!rawQuery.ok) return rawQuery;
+
+  const parsedQuery = automationListPageQuerySchema.safeParse(rawQuery.query);
+  if (!parsedQuery.success) {
+    return {
+      ok: false,
+      error: parsedQuery.error.issues[0]?.message ?? "Invalid automation list query",
+    };
+  }
+  const { repoOwner, repoName } = parsedQuery.data;
+
   if (!usesPagination) {
     return {
       ok: true,
@@ -316,25 +409,17 @@ function parseAutomationListParams(request: Request): ParseAutomationListParamsR
     };
   }
 
-  const limit = rawLimit === null ? DEFAULT_AUTOMATION_LIST_PAGE_SIZE : Number(rawLimit);
-  if (!Number.isInteger(limit) || limit < 1 || limit > MAX_AUTOMATION_LIST_PAGE_SIZE) {
-    return { ok: false, error: "Invalid limit" };
-  }
-
-  const parsedCursor = parseAutomationListCursor(url.searchParams.get("cursor"));
+  const parsedCursor = parseAutomationListCursor(parsedQuery.data.cursor ?? null);
   if (!parsedCursor.ok) return parsedCursor;
 
-  const nameSearch = url.searchParams.get("search")?.trim();
-  if (nameSearch && nameSearch.length > MAX_AUTOMATION_NAME_SEARCH_LENGTH) {
-    return { ok: false, error: "Search is too long" };
-  }
+  const nameSearch = parsedQuery.data.search;
 
   return {
     ok: true,
     request: {
       kind: "page",
       options: {
-        limit,
+        limit: parsedQuery.data.limit ?? DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
         cursor: parsedCursor.cursor,
         ...(nameSearch ? { nameSearch } : {}),
         ...(repoOwner ? { repoOwner } : {}),
@@ -397,6 +482,11 @@ async function handleCreateAutomation(
     }
   >(request);
   if (body instanceof Response) return body;
+  if (body.triggerConfig !== undefined) {
+    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
+    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
+    body.triggerConfig = parsedTriggerConfig.triggerConfig;
+  }
 
   // Automation attribution comes from the verified principal. The stored
   // values are replayed by the scheduler as session identity at fire time,
@@ -672,6 +762,11 @@ async function handleUpdateAutomation(
 
   const body = await parseJsonBody<UpdateAutomationRequest>(request);
   if (body instanceof Response) return body;
+  if (body.triggerConfig !== undefined && body.triggerConfig !== null) {
+    const parsedTriggerConfig = parseTriggerConfig(body.triggerConfig);
+    if (!parsedTriggerConfig.ok) return error(parsedTriggerConfig.error, 400);
+    body.triggerConfig = parsedTriggerConfig.triggerConfig;
+  }
 
   // Validate fields if provided
   if (body.name !== undefined) {
