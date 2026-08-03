@@ -4,7 +4,11 @@ import type { SessionStatus } from "../../../types";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
-import type { ChildFollowUpService } from "../../services/child-follow-up.service";
+import {
+  ChildFollowUpError,
+  type ChildFollowUpErrorReason,
+  type ChildFollowUpService,
+} from "../../services/child-follow-up.service";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
@@ -45,6 +49,20 @@ export interface ChildSessionsHandler {
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
 });
+
+function childFollowUpErrorStatus(reason: ChildFollowUpErrorReason): 404 | 409 | 429 | 500 {
+  switch (reason) {
+    case "child_not_found":
+      return 404;
+    case "session_not_promptable":
+      return 409;
+    case "queue_full":
+    case "concurrency_limit":
+      return 429;
+    case "owner_missing":
+      return 500;
+  }
+}
 
 export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): ChildSessionsHandler {
   return {
@@ -161,10 +179,15 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         );
       }
 
-      const result = await deps.childFollowUpService.enqueue(parsed.data);
-      return result.ok
-        ? Response.json(result.value)
-        : Response.json({ error: result.error }, { status: result.status });
+      try {
+        return Response.json(await deps.childFollowUpService.enqueue(parsed.data));
+      } catch (error) {
+        if (!(error instanceof ChildFollowUpError)) throw error;
+        return Response.json(
+          { error: error.message },
+          { status: childFollowUpErrorStatus(error.reason) }
+        );
+      }
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {

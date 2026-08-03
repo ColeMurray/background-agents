@@ -740,7 +740,7 @@ describe("SessionMessageQueue", () => {
             authorId: "user-1",
             source: "agent",
           })
-        ).rejects.toMatchObject({ status: 409 });
+        ).rejects.toMatchObject({ sessionStatus: status });
 
         expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
         expect(h.participantService.create).not.toHaveBeenCalled();

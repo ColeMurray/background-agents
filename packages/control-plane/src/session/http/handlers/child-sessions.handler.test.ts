@@ -256,6 +256,7 @@ describe("createChildSessionsHandler", () => {
       );
 
       expect(response.status).toBe(404);
+      await expect(response.json()).resolves.toEqual({ error: "Child session not found" });
       expect(enqueuePrompt).not.toHaveBeenCalled();
     });
 
@@ -271,6 +272,9 @@ describe("createChildSessionsHandler", () => {
         );
 
         expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toEqual({
+          error: `Cannot prompt a ${status} session`,
+        });
         expect(enqueuePrompt).not.toHaveBeenCalled();
       }
     );
@@ -286,6 +290,7 @@ describe("createChildSessionsHandler", () => {
       );
 
       expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toEqual({ error: "Child prompt queue is full" });
       expect(enqueuePrompt).not.toHaveBeenCalled();
     });
 
@@ -315,6 +320,9 @@ describe("createChildSessionsHandler", () => {
       );
 
       expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toEqual({
+        error: "Maximum concurrent children (2) reached",
+      });
       expect(countActiveSiblingSessions).toHaveBeenCalledWith("parent-1", "child-1");
       expect(enqueuePrompt).not.toHaveBeenCalled();
     });
@@ -361,6 +369,9 @@ describe("createChildSessionsHandler", () => {
       );
 
       expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "Cannot prompt a archived session",
+      });
     });
 
     it("returns 500 when the child owner invariant is broken", async () => {
@@ -373,6 +384,7 @@ describe("createChildSessionsHandler", () => {
       );
 
       expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "No owner participant found" });
       expect(enqueuePrompt).not.toHaveBeenCalled();
     });
   });

@@ -7,9 +7,23 @@ import type { MessageService } from "./message.service";
 
 export const MAX_PENDING_CHILD_PROMPTS = 10;
 
-export type ChildFollowUpResult =
-  | { ok: true; value: { messageId: string; status: "queued" } }
-  | { ok: false; status: 404 | 409 | 429 | 500; error: string };
+export type ChildFollowUpErrorReason =
+  | "child_not_found"
+  | "session_not_promptable"
+  | "queue_full"
+  | "concurrency_limit"
+  | "owner_missing";
+
+export class ChildFollowUpError extends Error {
+  constructor(
+    readonly reason: ChildFollowUpErrorReason,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "ChildFollowUpError";
+  }
+}
 
 interface ChildFollowUpServiceDeps {
   repository: Pick<SessionRepository, "listParticipants" | "getPendingOrProcessingCount">;
@@ -29,20 +43,19 @@ export class ChildFollowUpService {
   async enqueue(request: {
     parentSessionId: string;
     content: string;
-  }): Promise<ChildFollowUpResult> {
+  }): Promise<{ messageId: string; status: "queued" }> {
     const session = this.deps.getSession();
     if (!session || session.parent_session_id !== request.parentSessionId) {
-      return { ok: false, status: 404, error: "Child session not found" };
+      throw new ChildFollowUpError("child_not_found", "Child session not found");
     }
     if (!isPromptableSessionStatus(session.status)) {
-      return {
-        ok: false,
-        status: 409,
-        error: `Cannot prompt a ${session.status} session`,
-      };
+      throw new ChildFollowUpError(
+        "session_not_promptable",
+        `Cannot prompt a ${session.status} session`
+      );
     }
     if (this.isPendingQueueFull()) {
-      return { ok: false, status: 429, error: "Child prompt queue is full" };
+      throw new ChildFollowUpError("queue_full", "Child prompt queue is full");
     }
 
     if (session.status === "completed" || session.status === "failed") {
@@ -59,14 +72,13 @@ export class ChildFollowUpService {
         this.deps.getPublicSessionId(session)
       );
       if (activeSiblings >= maxConcurrentChildren) {
-        return {
-          ok: false,
-          status: 429,
-          error: `Maximum concurrent children (${maxConcurrentChildren}) reached`,
-        };
+        throw new ChildFollowUpError(
+          "concurrency_limit",
+          `Maximum concurrent children (${maxConcurrentChildren}) reached`
+        );
       }
       if (this.isPendingQueueFull()) {
-        return { ok: false, status: 429, error: "Child prompt queue is full" };
+        throw new ChildFollowUpError("queue_full", "Child prompt queue is full");
       }
     }
 
@@ -74,20 +86,19 @@ export class ChildFollowUpService {
       .listParticipants()
       .find((participant) => participant.role === "owner");
     if (!owner) {
-      return { ok: false, status: 500, error: "No owner participant found" };
+      throw new ChildFollowUpError("owner_missing", "No owner participant found");
     }
 
     try {
-      const value = await this.deps.messageService.enqueuePrompt({
+      return await this.deps.messageService.enqueuePrompt({
         content: request.content,
         authorId: owner.user_id,
         canonicalUserId: owner.canonical_user_id ?? undefined,
         source: "agent",
       });
-      return { ok: true, value };
     } catch (error) {
       if (error instanceof SessionNotPromptableError) {
-        return { ok: false, status: error.status, error: error.message };
+        throw new ChildFollowUpError("session_not_promptable", error.message, { cause: error });
       }
       throw error;
     }

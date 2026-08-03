@@ -63,7 +63,7 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
           return Response.json({ error: error.message }, { status: 400 });
         }
         if (error instanceof SessionNotPromptableError) {
-          return Response.json({ error: error.message }, { status: error.status });
+          return Response.json({ error: error.message }, { status: 409 });
         }
         log.error("handleEnqueuePrompt error", {
           error: error instanceof Error ? error : String(error),

@@ -65,8 +65,6 @@ interface EnqueuedPrompt {
 }
 
 export class SessionNotPromptableError extends Error {
-  readonly status = 409;
-
   constructor(readonly sessionStatus: SessionRow["status"]) {
     super(`Cannot prompt a ${sessionStatus} session`);
     this.name = "SessionNotPromptableError";
