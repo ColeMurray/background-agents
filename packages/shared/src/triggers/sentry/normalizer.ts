@@ -10,10 +10,27 @@ import { buildSentryContextBlock } from "./context";
 // ─── Schemas ────────────────────────────────────────────────────────────────
 // Each schema is the single source of truth for one Sentry webhook shape: it
 // produces the static payload type via `z.infer` and validates at runtime via
-// `safeParse`. Only the fields consumed for trigger/concurrency keys and `meta`
-// are modeled. A successful parse guarantees the structural fields that
-// `buildSentryContextBlock` dereferences off the raw payload (`data.event`,
-// `data.event.metadata`, `data.issue`, `data.issue.project`).
+// `safeParse`. Only fields consumed by normalization and context builders are
+// modeled.
+
+const sentryIssueWebhookSchema = z.object({
+  action: z.literal("created"),
+  data: z.object({
+    issue: z.object({
+      id: z.string(),
+      shortId: z.string(),
+      title: z.string(),
+      culprit: z.string().nullish(),
+      level: z.string(),
+      count: z.union([z.string(), z.number()]).optional(),
+      firstSeen: z.string().nullish(),
+      project: z.object({
+        slug: z.string(),
+      }),
+      web_url: z.string().optional(),
+    }),
+  }),
+});
 
 const sentryIssueAlertSchema = z.object({
   action: z.string(),
@@ -58,14 +75,40 @@ const sentryMetricAlertSchema = z.object({
 });
 
 type SentryMetricAlertPayload = z.infer<typeof sentryMetricAlertSchema>;
+type SentryIssueWebhookPayload = z.infer<typeof sentryIssueWebhookSchema>;
 
 export function normalizeSentryEvent(
   payload: Record<string, unknown>,
-  automationId?: string
+  automationId?: string,
+  sentryHookResource?: string | null
 ): SentryAutomationEvent | null {
-  // Issue alert (event_alert action or issue action)
+  if (!sentryHookResource || sentryHookResource === "issue") {
+    const issueWebhookResult = sentryIssueWebhookSchema.safeParse(payload);
+    if (issueWebhookResult.success) {
+      const issue = issueWebhookResult.data.data.issue;
+      return {
+        source: "sentry",
+        automationId: automationId ?? "",
+        eventType: "issue.created",
+        triggerKey: `sentry_issue:${issue.id}`,
+        concurrencyKey: `sentry_issue:${issue.id}`,
+        sentryProject: issue.project.slug,
+        sentryLevel: issue.level,
+        contextBlock: buildSentryIssueWebhookContextBlock(issueWebhookResult.data),
+        meta: {
+          issueId: issue.id,
+          shortId: issue.shortId,
+          issueUrl: issue.web_url,
+        },
+      };
+    }
+
+    if (sentryHookResource === "issue") return null;
+  }
+
+  // Legacy issue alert (`event_alert` resource)
   const issueResult = sentryIssueAlertSchema.safeParse(payload);
-  if (issueResult.success) {
+  if ((!sentryHookResource || sentryHookResource === "event_alert") && issueResult.success) {
     const { action, data } = issueResult.data;
     const issue = data.issue;
     const isRegression = action === "regression" || issue.status === "regressed";
@@ -95,7 +138,7 @@ export function normalizeSentryEvent(
 
   // Metric alert
   const metricResult = sentryMetricAlertSchema.safeParse(payload);
-  if (metricResult.success) {
+  if ((!sentryHookResource || sentryHookResource === "metric_alert") && metricResult.success) {
     const p = metricResult.data;
     if (p.action !== "critical") return null;
 
@@ -120,6 +163,25 @@ export function normalizeSentryEvent(
   }
 
   return null;
+}
+
+function buildSentryIssueWebhookContextBlock(p: SentryIssueWebhookPayload): string {
+  const issue = p.data.issue;
+  const lines = [
+    "This automation was triggered by a new Sentry issue.",
+    "",
+    `Error: ${issue.title}`,
+    `Project: ${issue.project.slug}`,
+    `Level: ${issue.level}`,
+    `Issue: ${issue.shortId}`,
+  ];
+
+  if (issue.firstSeen) lines.push(`First seen: ${issue.firstSeen}`);
+  if (issue.count !== undefined) lines.push(`Events: ${issue.count}`);
+  if (issue.culprit) lines.push(`Culprit: ${issue.culprit}`);
+  if (issue.web_url) lines.push(`URL: ${issue.web_url}`);
+
+  return lines.join("\n");
 }
 
 function buildSentryMetricContextBlock(p: SentryMetricAlertPayload): string {

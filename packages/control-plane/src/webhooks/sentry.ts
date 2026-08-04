@@ -6,12 +6,14 @@
 import { verifySentrySignature, normalizeSentryEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { decryptSentrySecret } from "../auth/webhook-key";
+import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
 
 /** Maximum Sentry webhook payload size (256KB — Sentry payloads with stack traces can be large). */
 const MAX_PAYLOAD_SIZE = 256 * 1024;
+const logger = createLogger("sentry-webhook");
 
 async function handleSentryWebhook(
   request: Request,
@@ -73,8 +75,19 @@ async function handleSentryWebhook(
     return error("Invalid JSON", 400);
   }
 
-  const event = normalizeSentryEvent(payload, automationId);
+  const sentryResource = request.headers.get("sentry-hook-resource");
+  const event = normalizeSentryEvent(payload, automationId, sentryResource);
   if (!event) {
+    logger.warn("Sentry webhook skipped during normalization", {
+      event: "sentry.webhook_skipped",
+      reason: "unsupported_or_invalid_payload",
+      automation_id: automationId,
+      configured_event_type: automation.event_type,
+      sentry_resource: sentryResource,
+      sentry_action: typeof payload.action === "string" ? payload.action : null,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
     return json({ ok: true, skipped: true });
   }
 

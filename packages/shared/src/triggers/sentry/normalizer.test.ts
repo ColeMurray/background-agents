@@ -62,9 +62,49 @@ const issueAlertPayload = {
   actor: { type: "application", id: 1, name: "Sentry" },
 };
 
+const issueWebhookPayload = {
+  action: "created",
+  installation: { uuid: "installation-1" },
+  data: {
+    issue: {
+      id: "67890",
+      shortId: "FRONTEND-XYZ",
+      title: "TypeError: Cannot read properties of undefined",
+      culprit: "src/App.tsx in BrokenCheckout",
+      level: "error",
+      status: "unresolved",
+      project: { id: "2", slug: "sentry-demo", name: "Sentry Demo" },
+      count: "1",
+      firstSeen: "2026-08-03T20:00:00Z",
+      lastSeen: "2026-08-03T20:00:00Z",
+      web_url: "https://sentry.io/issues/67890/",
+    },
+  },
+  actor: { type: "application", id: "sentry", name: "Sentry" },
+};
+
 describe("normalizeSentryEvent", () => {
+  it("normalizes a current Sentry issue.created webhook", () => {
+    const event = normalizeSentryEvent(issueWebhookPayload, undefined, "issue");
+
+    expect(event).not.toBeNull();
+    expect(event!.eventType).toBe("issue.created");
+    expect(event!.triggerKey).toBe("sentry_issue:67890");
+    expect(event!.concurrencyKey).toBe("sentry_issue:67890");
+    expect(event!.sentryProject).toBe("sentry-demo");
+    expect(event!.sentryLevel).toBe("error");
+    expect(event!.culpritFile).toBeUndefined();
+    expect(event!.contextBlock).toContain("TypeError");
+    expect(event!.contextBlock).toContain("FRONTEND-XYZ");
+  });
+
+  it("uses the Sentry resource header to discriminate issue and alert payloads", () => {
+    expect(normalizeSentryEvent(issueWebhookPayload, undefined, "event_alert")).toBeNull();
+    expect(normalizeSentryEvent(issueAlertPayload, undefined, "issue")).toBeNull();
+  });
+
   it("normalizes an issue alert payload", () => {
-    const event = normalizeSentryEvent(issueAlertPayload);
+    const event = normalizeSentryEvent(issueAlertPayload, undefined, "event_alert");
     expect(event).not.toBeNull();
     expect(event!.source).toBe("sentry");
     expect(event!.eventType).toBe("issue.created");
@@ -104,7 +144,7 @@ describe("normalizeSentryEvent", () => {
         web_url: "https://sentry.io/alerts/456/",
       },
     };
-    const event = normalizeSentryEvent(metricPayload);
+    const event = normalizeSentryEvent(metricPayload, undefined, "metric_alert");
     expect(event).not.toBeNull();
     expect(event!.eventType).toBe("metric_alert.critical");
     expect(event!.triggerKey).toBe("sentry_metric:789:2026-03-23T14:30:00Z");
