@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const sentryIdentifierSchema = z.union([z.string(), z.number()]).transform(String);
+
 export const sentryIssueWebhookSchema = z.object({
   action: z.string(),
   data: z.object({
@@ -72,11 +74,11 @@ export const sentryMetricAlertSchema = z.object({
   action: z.string(),
   data: z.object({
     metric_alert: z.object({
-      id: z.number(),
+      id: sentryIdentifierSchema,
       title: z.string(),
       date_started: z.string(),
       alert_rule: z.object({
-        id: z.number(),
+        id: sentryIdentifierSchema,
       }),
       current_trigger: z.object({
         label: z.string(),

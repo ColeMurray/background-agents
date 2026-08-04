@@ -141,14 +141,17 @@ describe("normalizeSentryEvent", () => {
     expect(event.triggerKey).toContain("sentry_regression:");
   });
 
-  it("normalizes a metric alert payload", () => {
+  it.each([
+    ["string", "456", "789"],
+    ["numeric", 456, 789],
+  ])("normalizes a metric alert payload with %s identifiers", (_type, metricId, alertRuleId) => {
     const metricPayload = {
       action: "critical",
       data: {
         metric_alert: {
-          id: 456,
+          id: metricId,
           title: "Error rate > 5%",
-          alert_rule: { id: 789, name: "High error rate" },
+          alert_rule: { id: alertRuleId, name: "High error rate" },
           date_started: "2026-03-23T14:30:00Z",
           current_trigger: { label: "critical" },
         },
@@ -161,6 +164,7 @@ describe("normalizeSentryEvent", () => {
     expect(event.eventType).toBe("metric_alert.critical");
     expect(event.triggerKey).toBe("sentry_metric:789:2026-03-23T14:30:00Z");
     expect(event.concurrencyKey).toBe("sentry_metric:789");
+    expect(event.meta.alertRuleId).toBe("789");
   });
 
   it("returns unsupported_action for non-critical metric alerts", () => {
