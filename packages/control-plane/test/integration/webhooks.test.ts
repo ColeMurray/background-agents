@@ -299,7 +299,7 @@ describe("POST /webhooks/sentry/:id", () => {
           trace_id: expect.any(String),
         })
       );
-      expect(JSON.stringify(logEntries)).not.toContain("must-not-be-logged");
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("must-not-be-logged");
     } finally {
       warnSpy.mockRestore();
     }
