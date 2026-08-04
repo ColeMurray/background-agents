@@ -239,7 +239,7 @@ describe("POST /webhooks/sentry/:id", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const automation = await createSentryAutomation();
     const unsupportedPayload = {
-      action: "unknown",
+      action: "must-not-be-logged",
       data: { issue: { id: "12345", privateContext: "must-not-be-logged" } },
     };
     const body = JSON.stringify(unsupportedPayload);
@@ -275,7 +275,7 @@ describe("POST /webhooks/sentry/:id", () => {
           automation_id: automation.id,
           configured_event_type: "issue.created",
           sentry_resource: "issue",
-          sentry_action: "unknown",
+          sentry_action: "other",
           request_id: expect.any(String),
           trace_id: expect.any(String),
         })

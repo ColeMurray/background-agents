@@ -15,6 +15,11 @@ import type { Env } from "../types";
 const MAX_PAYLOAD_SIZE = 256 * 1024;
 const logger = createLogger("sentry-webhook");
 
+function classifySentryAction(action: unknown): "created" | "critical" | "other" | "missing" {
+  if (action === "created" || action === "critical") return action;
+  return typeof action === "string" ? "other" : "missing";
+}
+
 async function handleSentryWebhook(
   request: Request,
   env: Env,
@@ -84,7 +89,7 @@ async function handleSentryWebhook(
       automation_id: automationId,
       configured_event_type: automation.event_type,
       sentry_resource: sentryResource,
-      sentry_action: typeof payload.action === "string" ? payload.action : null,
+      sentry_action: classifySentryAction(payload.action),
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     };
