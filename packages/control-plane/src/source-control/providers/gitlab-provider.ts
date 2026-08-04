@@ -142,6 +142,11 @@ const gitlabRepositoryListSchema = z.array(
   })
 );
 
+/** Wire shape of a GitLab branch response, limited to the head commit ID. */
+const gitlabBranchHeadSchema = z.object({
+  commit: z.object({ id: z.string().min(1) }),
+});
+
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -544,14 +549,14 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
           response.status
         );
       }
-      const data = (await response.json()) as { commit?: { id?: unknown } };
-      if (typeof data.commit?.id !== "string" || !data.commit.id) {
+      const parsed = gitlabBranchHeadSchema.safeParse(await response.json());
+      if (!parsed.success) {
         throw new SourceControlProviderError(
           "Failed to resolve branch head: malformed response",
           "transient"
         );
       }
-      return data.commit.id;
+      return parsed.data.commit.id;
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;
       throw SourceControlProviderError.fromFetchError(
