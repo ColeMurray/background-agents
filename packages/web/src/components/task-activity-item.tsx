@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import type { ToolCallEvent } from "@/lib/timeline-items";
@@ -50,9 +50,11 @@ function TaskDisclosure({ label, content }: { label: string; content: string }) 
 
 export function TaskActivityItem({
   event,
+  hasActivity,
   children,
 }: {
   event: ToolCallEvent;
+  hasActivity: boolean;
   children: ReactNode;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -61,8 +63,6 @@ export function TaskActivityItem({
   const agent = stringArg(event, "subagent_type");
   const taskId = stringArg(event, "task_id");
   const result = cleanTaskResult(event.output);
-  const hasActivity = Children.count(children) > 0;
-
   return (
     <div className="py-0.5">
       <button

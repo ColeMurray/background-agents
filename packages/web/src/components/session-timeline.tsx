@@ -194,7 +194,7 @@ export function SessionTimeline({
 
   const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
     item.type === "task_group" ? (
-      <TaskActivityItem key={item.id} event={item.event}>
+      <TaskActivityItem key={item.id} event={item.event} hasActivity={item.activity.length > 0}>
         {item.activity.map(renderFlatItem)}
       </TaskActivityItem>
     ) : (
