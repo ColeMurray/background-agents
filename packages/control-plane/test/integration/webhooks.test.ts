@@ -235,6 +235,25 @@ describe("POST /webhooks/sentry/:id", () => {
     expect(result.skipped).toBe(true);
   });
 
+  it("returns a skipped response for a signed non-object JSON payload", async () => {
+    const automation = await createSentryAutomation();
+    const body = "null";
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Sentry-Hook-Resource": "issue",
+        "sentry-hook-signature": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, skipped: true });
+  });
+
   it("logs why an authenticated Sentry webhook was skipped", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const automation = await createSentryAutomation();

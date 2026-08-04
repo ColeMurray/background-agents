@@ -20,6 +20,10 @@ function classifySentryAction(action: unknown): "created" | "critical" | "other"
   return typeof action === "string" ? "other" : "missing";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 async function handleSentryWebhook(
   request: Request,
   env: Env,
@@ -73,12 +77,13 @@ async function handleSentryWebhook(
   }
 
   // 3. Parse and normalize
-  let payload: Record<string, unknown>;
+  let parsedPayload: unknown;
   try {
-    payload = JSON.parse(body) as Record<string, unknown>;
+    parsedPayload = JSON.parse(body) as unknown;
   } catch {
     return error("Invalid JSON", 400);
   }
+  const payload = isRecord(parsedPayload) ? parsedPayload : {};
 
   const sentryResource = request.headers.get("sentry-hook-resource");
   const normalization = normalizeSentryEvent(payload, automationId, sentryResource);
