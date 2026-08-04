@@ -111,10 +111,11 @@ export function buildTimelineItems(events: SandboxEvent[]): TimelineItem[] {
 
     const key = taskKey(event.messageId, event.taskCallId);
     if (!tasks.has(key)) continue;
+    nestedEvents.add(event);
+    if (event.type === "step_start" || event.type === "step_finish") continue;
     const activity = activityByTask.get(key) ?? [];
     activity.push(event);
     activityByTask.set(key, activity);
-    nestedEvents.add(event);
   }
 
   const items: TimelineItem[] = [];
@@ -128,17 +129,14 @@ export function buildTimelineItems(events: SandboxEvent[]): TimelineItem[] {
     if (nestedEvents.has(event)) continue;
     if (event.type === "tool_call" && event.tool.toLowerCase() === "task") {
       const key = taskKey(event.messageId, event.callId);
-      const activity = activityByTask.get(key);
-      if (activity) {
-        flushFlatEvents();
-        items.push({
-          type: "task_group",
-          event,
-          activity: groupFlatEvents(activity),
-          id: `task:${key}`,
-        });
-        continue;
-      }
+      flushFlatEvents();
+      items.push({
+        type: "task_group",
+        event,
+        activity: groupFlatEvents(activityByTask.get(key) ?? []),
+        id: `task:${key}`,
+      });
+      continue;
     }
     flatEvents.push(event);
   }

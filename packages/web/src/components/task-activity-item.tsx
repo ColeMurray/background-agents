@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { Children, useState, type ReactNode } from "react";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import type { ToolCallEvent } from "@/lib/timeline-items";
@@ -61,6 +61,7 @@ export function TaskActivityItem({
   const agent = stringArg(event, "subagent_type");
   const taskId = stringArg(event, "task_id");
   const result = cleanTaskResult(event.output);
+  const hasActivity = Children.count(children) > 0;
 
   return (
     <div className="py-0.5">
@@ -92,12 +93,14 @@ export function TaskActivityItem({
               {taskId && <span>Task ID: {taskId}</span>}
             </div>
           )}
-          <div className="border-l-2 border-border pl-3 py-1 space-y-1">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
-              Task activity
+          {hasActivity && (
+            <div className="border-l-2 border-border pl-3 py-1 space-y-1">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
+                Task activity
+              </div>
+              {children}
             </div>
-            {children}
-          </div>
+          )}
           {prompt && <TaskDisclosure label="Instructions" content={prompt} />}
           {result && <TaskDisclosure label="Result" content={result} />}
         </div>
