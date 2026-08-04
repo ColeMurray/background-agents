@@ -371,7 +371,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Trigger Type */}
       {mode === "create" ? (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
           <FieldDescription className="my-1">
             Scheduled automations run on a repeating timer. Other types run when the connected
             service sends an event (for example a GitHub webhook or Sentry alert).
@@ -380,7 +380,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </div>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
           <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
             {{
               schedule: "Schedule",
@@ -420,9 +420,9 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Repository Configuration */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">
+        <div className="block text-sm font-medium text-foreground mb-1.5">
           Repository Configuration
-        </label>
+        </div>
         <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
           <PopoverTrigger asChild>
             <button
@@ -825,10 +825,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Conditions (for non-schedule types) */}
       {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">
+          <div className="block text-sm font-medium text-foreground mb-1.5">
             Conditions
             <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
-          </label>
+          </div>
           <ConditionBuilder
             conditions={conditions}
             onChange={setConditions}

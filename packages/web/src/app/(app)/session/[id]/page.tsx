@@ -3,7 +3,15 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import {
+  Suspense,
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -59,6 +67,25 @@ import {
 } from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
+
+const TERMINAL_VISIBILITY_KEY = "terminal-visible";
+const TERMINAL_VISIBILITY_EVENT = "terminal-visibility-change";
+
+function getTerminalVisibilitySnapshot() {
+  return localStorage.getItem(TERMINAL_VISIBILITY_KEY) === "true";
+}
+
+function subscribeToTerminalVisibility(onStoreChange: () => void) {
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === TERMINAL_VISIBILITY_KEY) onStoreChange();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
+  };
+}
 
 export default function SessionPage() {
   return (
@@ -147,18 +174,19 @@ function SessionPageContent() {
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state
-  const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("terminal-visible") === "true";
-  });
+  const terminalOpen = useSyncExternalStore(
+    subscribeToTerminalVisibility,
+    getTerminalVisibilitySnapshot,
+    () => false
+  );
   const toggleTerminal = useCallback(() => {
     const next = !terminalOpen;
-    localStorage.setItem("terminal-visible", String(next));
-    setTerminalOpen(next);
+    localStorage.setItem(TERMINAL_VISIBILITY_KEY, String(next));
+    window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
   }, [terminalOpen]);
   const closeTerminal = useCallback(() => {
-    setTerminalOpen(false);
-    localStorage.setItem("terminal-visible", "false");
+    localStorage.setItem(TERMINAL_VISIBILITY_KEY, "false");
+    window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
   }, []);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;

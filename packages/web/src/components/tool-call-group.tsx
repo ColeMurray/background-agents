@@ -34,7 +34,6 @@ function ToolIcon({ toolName }: { toolName: string }) {
 export const ToolCallGroup = memo(
   function ToolCallGroup({
     events,
-    groupId,
     isExpanded,
     expandedToolCallIds,
     onToggleGroup,
@@ -82,9 +81,9 @@ export const ToolCallGroup = memo(
 
         {isExpanded && (
           <div className="ml-4 mt-1 pl-2 border-l-2 border-border">
-            {events.map((event, index) => (
+            {events.map((event) => (
               <ToolCallItem
-                key={`${groupId}-${index}`}
+                key={toolCallKey(event)}
                 event={event}
                 isExpanded={expandedToolCallIds.has(toolCallKey(event))}
                 onToggle={() => onToggleTool(event)}
