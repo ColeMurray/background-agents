@@ -2,80 +2,17 @@
  * Normalize Sentry webhook payloads into SentryAutomationEvent.
  */
 
-import { z } from "zod";
-
 import type { SentryAutomationEvent } from "../types";
-import { buildSentryContextBlock } from "./context";
-
-// ─── Schemas ────────────────────────────────────────────────────────────────
-// Each schema is the single source of truth for one Sentry webhook shape: it
-// produces the static payload type via `z.infer` and validates at runtime via
-// `safeParse`. Only fields consumed by normalization and context builders are
-// modeled.
-
-const sentryIssueWebhookSchema = z.object({
-  action: z.string(),
-  data: z.object({
-    issue: z.object({
-      id: z.string(),
-      shortId: z.string(),
-      title: z.string(),
-      culprit: z.string().nullish(),
-      level: z.string(),
-      count: z.union([z.string(), z.number()]).optional(),
-      firstSeen: z.string().nullish(),
-      project: z.object({
-        slug: z.string(),
-      }),
-      web_url: z.string().optional(),
-    }),
-  }),
-});
-
-const sentryIssueAlertSchema = z.object({
-  action: z.string(),
-  data: z.object({
-    event: z.object({
-      metadata: z.object({
-        filename: z.string().optional(),
-      }),
-    }),
-    issue: z.object({
-      id: z.string(),
-      shortId: z.string(),
-      level: z.string(),
-      status: z.string(),
-      lastSeen: z.string(),
-      project: z.object({
-        slug: z.string(),
-      }),
-    }),
-    triggered_rule: z.string(),
-  }),
-});
-
-const sentryMetricAlertSchema = z.object({
-  action: z.string(),
-  data: z.object({
-    metric_alert: z.object({
-      id: z.number(),
-      title: z.string(),
-      date_started: z.string(),
-      alert_rule: z.object({
-        id: z.number(),
-      }),
-      current_trigger: z.object({
-        label: z.string(),
-      }),
-    }),
-    web_url: z.string(),
-    description_text: z.string(),
-    description_title: z.string(),
-  }),
-});
-
-type SentryMetricAlertPayload = z.infer<typeof sentryMetricAlertSchema>;
-type SentryIssueWebhookPayload = z.infer<typeof sentryIssueWebhookSchema>;
+import {
+  buildSentryContextBlock,
+  buildSentryIssueWebhookContextBlock,
+  buildSentryMetricContextBlock,
+} from "./context";
+import {
+  sentryIssueAlertSchema,
+  sentryIssueWebhookSchema,
+  sentryMetricAlertSchema,
+} from "./payloads";
 
 export type SentryNormalizationResult =
   | { status: "normalized"; event: SentryAutomationEvent }
@@ -157,7 +94,7 @@ export function normalizeSentryEvent(
           sentryProject: issue.project.slug,
           sentryLevel: issue.level,
           culpritFile: data.event.metadata.filename,
-          contextBlock: buildSentryContextBlock(payload),
+          contextBlock: buildSentryContextBlock(issueResult.data),
           meta: {
             issueId: issue.id,
             shortId: issue.shortId,
@@ -213,38 +150,4 @@ export function normalizeSentryEvent(
     status: "skipped",
     reason: unsupportedIssueAction ? "unsupported_action" : "invalid_shape",
   };
-}
-
-function buildSentryIssueWebhookContextBlock(p: SentryIssueWebhookPayload): string {
-  const issue = p.data.issue;
-  const lines = [
-    "This automation was triggered by a new Sentry issue.",
-    "",
-    `Error: ${issue.title}`,
-    `Project: ${issue.project.slug}`,
-    `Level: ${issue.level}`,
-    `Issue: ${issue.shortId}`,
-  ];
-
-  if (issue.firstSeen) lines.push(`First seen: ${issue.firstSeen}`);
-  if (issue.count !== undefined) lines.push(`Events: ${issue.count}`);
-  if (issue.culprit) lines.push(`Culprit: ${issue.culprit}`);
-  if (issue.web_url) lines.push(`URL: ${issue.web_url}`);
-
-  return lines.join("\n");
-}
-
-function buildSentryMetricContextBlock(p: SentryMetricAlertPayload): string {
-  const alert = p.data.metric_alert;
-  const lines = [
-    "This automation was triggered by a Sentry metric alert.",
-    "",
-    `Alert: ${alert.title}`,
-    `Trigger: ${alert.current_trigger.label}`,
-    `Started: ${alert.date_started}`,
-    `URL: ${p.data.web_url}`,
-    "",
-    `Description: ${p.data.description_text}`,
-  ];
-  return lines.join("\n");
 }
