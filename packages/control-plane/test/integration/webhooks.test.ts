@@ -119,6 +119,22 @@ const sentryIssueCreatedPayload = {
   actor: { type: "application", id: "sentry", name: "Sentry" },
 };
 
+const sentryMetricWarningPayload = {
+  action: "warning",
+  data: {
+    metric_alert: {
+      id: 456,
+      title: "Error rate > 3%",
+      alert_rule: { id: 789, name: "Elevated error rate" },
+      date_started: "2026-08-03T20:00:00Z",
+      current_trigger: { label: "warning" },
+    },
+    description_text: "Error rate exceeded 3%",
+    description_title: "Metric Alert",
+    web_url: "https://sentry.io/alerts/456/",
+  },
+};
+
 // ─── Sentry webhook tests (per-automation) ───────────────────────────────────
 
 describe("POST /webhooks/sentry/:id", () => {
@@ -255,7 +271,7 @@ describe("POST /webhooks/sentry/:id", () => {
           service: "control-plane",
           component: "sentry-webhook",
           event: "sentry.webhook_skipped",
-          reason: "unsupported_or_invalid_payload",
+          reason: "invalid_shape",
           automation_id: automation.id,
           configured_event_type: "issue.created",
           sentry_resource: "issue",
@@ -266,6 +282,49 @@ describe("POST /webhooks/sentry/:id", () => {
       );
       expect(JSON.stringify(logEntries)).not.toContain("must-not-be-logged");
     } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for an intentionally ignored metric alert action", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const automation = await createSentryAutomation({ event_type: "metric_alert.critical" });
+    const body = JSON.stringify(sentryMetricWarningPayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    try {
+      const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Sentry-Hook-Resource": "metric_alert",
+          "sentry-hook-signature": signature,
+        },
+        body,
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, skipped: true });
+
+      const infoEntries = infoSpy.mock.calls.flatMap(([line]) => {
+        if (typeof line !== "string") return [];
+        try {
+          return [JSON.parse(line) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      });
+      expect(infoEntries).toContainEqual(
+        expect.objectContaining({
+          event: "sentry.webhook_skipped",
+          reason: "unsupported_action",
+          sentry_resource: "metric_alert",
+        })
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
       warnSpy.mockRestore();
     }
   });

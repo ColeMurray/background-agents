@@ -76,20 +76,26 @@ async function handleSentryWebhook(
   }
 
   const sentryResource = request.headers.get("sentry-hook-resource");
-  const event = normalizeSentryEvent(payload, automationId, sentryResource);
-  if (!event) {
-    logger.warn("Sentry webhook skipped during normalization", {
+  const normalization = normalizeSentryEvent(payload, automationId, sentryResource);
+  if (normalization.status === "skipped") {
+    const logData = {
       event: "sentry.webhook_skipped",
-      reason: "unsupported_or_invalid_payload",
+      reason: normalization.reason,
       automation_id: automationId,
       configured_event_type: automation.event_type,
       sentry_resource: sentryResource,
       sentry_action: typeof payload.action === "string" ? payload.action : null,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
-    });
+    };
+    if (normalization.reason === "unsupported_action") {
+      logger.info("Sentry webhook action is not configured for automation", logData);
+    } else {
+      logger.warn("Sentry webhook skipped during normalization", logData);
+    }
     return json({ ok: true, skipped: true });
   }
+  const event = normalization.event;
 
   // 4. Forward to SchedulerDO
   if (!env.SCHEDULER) {

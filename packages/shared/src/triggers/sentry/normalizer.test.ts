@@ -83,38 +83,52 @@ const issueWebhookPayload = {
   actor: { type: "application", id: "sentry", name: "Sentry" },
 };
 
+function expectNormalized(result: ReturnType<typeof normalizeSentryEvent>) {
+  expect(result.status).toBe("normalized");
+  if (result.status !== "normalized") {
+    throw new Error(`Expected normalized event, received ${result.reason}`);
+  }
+  return result.event;
+}
+
 describe("normalizeSentryEvent", () => {
   it("normalizes a current Sentry issue.created webhook", () => {
-    const event = normalizeSentryEvent(issueWebhookPayload, undefined, "issue");
+    const event = expectNormalized(normalizeSentryEvent(issueWebhookPayload, undefined, "issue"));
 
-    expect(event).not.toBeNull();
-    expect(event!.eventType).toBe("issue.created");
-    expect(event!.triggerKey).toBe("sentry_issue:67890");
-    expect(event!.concurrencyKey).toBe("sentry_issue:67890");
-    expect(event!.sentryProject).toBe("sentry-demo");
-    expect(event!.sentryLevel).toBe("error");
-    expect(event!.culpritFile).toBeUndefined();
-    expect(event!.contextBlock).toContain("TypeError");
-    expect(event!.contextBlock).toContain("FRONTEND-XYZ");
+    expect(event.eventType).toBe("issue.created");
+    expect(event.triggerKey).toBe("sentry_issue:67890");
+    expect(event.concurrencyKey).toBe("sentry_issue:67890");
+    expect(event.sentryProject).toBe("sentry-demo");
+    expect(event.sentryLevel).toBe("error");
+    expect(event.culpritFile).toBeUndefined();
+    expect(event.contextBlock).toContain("TypeError");
+    expect(event.contextBlock).toContain("FRONTEND-XYZ");
   });
 
   it("uses the Sentry resource header to discriminate issue and alert payloads", () => {
-    expect(normalizeSentryEvent(issueWebhookPayload, undefined, "event_alert")).toBeNull();
-    expect(normalizeSentryEvent(issueAlertPayload, undefined, "issue")).toBeNull();
+    expect(normalizeSentryEvent(issueWebhookPayload, undefined, "event_alert")).toEqual({
+      status: "skipped",
+      reason: "invalid_shape",
+    });
+    expect(normalizeSentryEvent(issueAlertPayload, undefined, "issue")).toEqual({
+      status: "skipped",
+      reason: "unsupported_action",
+    });
   });
 
   it("normalizes an issue alert payload", () => {
-    const event = normalizeSentryEvent(issueAlertPayload, undefined, "event_alert");
-    expect(event).not.toBeNull();
-    expect(event!.source).toBe("sentry");
-    expect(event!.eventType).toBe("issue.created");
-    expect(event!.triggerKey).toBe("sentry_issue:12345");
-    expect(event!.concurrencyKey).toBe("sentry_issue:12345");
-    expect(event!.sentryProject).toBe("acme-backend");
-    expect(event!.sentryLevel).toBe("error");
-    expect(event!.culpritFile).toBe("src/handlers/auth.ts");
-    expect(event!.contextBlock).toContain("TypeError");
-    expect(event!.contextBlock).toContain("acme-backend");
+    const event = expectNormalized(
+      normalizeSentryEvent(issueAlertPayload, undefined, "event_alert")
+    );
+    expect(event.source).toBe("sentry");
+    expect(event.eventType).toBe("issue.created");
+    expect(event.triggerKey).toBe("sentry_issue:12345");
+    expect(event.concurrencyKey).toBe("sentry_issue:12345");
+    expect(event.sentryProject).toBe("acme-backend");
+    expect(event.sentryLevel).toBe("error");
+    expect(event.culpritFile).toBe("src/handlers/auth.ts");
+    expect(event.contextBlock).toContain("TypeError");
+    expect(event.contextBlock).toContain("acme-backend");
   });
 
   it("normalizes a regression payload", () => {
@@ -122,10 +136,9 @@ describe("normalizeSentryEvent", () => {
       ...issueAlertPayload,
       action: "regression",
     };
-    const event = normalizeSentryEvent(regressionPayload);
-    expect(event).not.toBeNull();
-    expect(event!.eventType).toBe("issue.regression");
-    expect(event!.triggerKey).toContain("sentry_regression:");
+    const event = expectNormalized(normalizeSentryEvent(regressionPayload));
+    expect(event.eventType).toBe("issue.regression");
+    expect(event.triggerKey).toContain("sentry_regression:");
   });
 
   it("normalizes a metric alert payload", () => {
@@ -144,14 +157,13 @@ describe("normalizeSentryEvent", () => {
         web_url: "https://sentry.io/alerts/456/",
       },
     };
-    const event = normalizeSentryEvent(metricPayload, undefined, "metric_alert");
-    expect(event).not.toBeNull();
-    expect(event!.eventType).toBe("metric_alert.critical");
-    expect(event!.triggerKey).toBe("sentry_metric:789:2026-03-23T14:30:00Z");
-    expect(event!.concurrencyKey).toBe("sentry_metric:789");
+    const event = expectNormalized(normalizeSentryEvent(metricPayload, undefined, "metric_alert"));
+    expect(event.eventType).toBe("metric_alert.critical");
+    expect(event.triggerKey).toBe("sentry_metric:789:2026-03-23T14:30:00Z");
+    expect(event.concurrencyKey).toBe("sentry_metric:789");
   });
 
-  it("returns null for non-critical metric alerts", () => {
+  it("returns unsupported_action for non-critical metric alerts", () => {
     const warningPayload = {
       action: "warning",
       data: {
@@ -167,15 +179,31 @@ describe("normalizeSentryEvent", () => {
         web_url: "https://sentry.io/alerts/456/",
       },
     };
-    expect(normalizeSentryEvent(warningPayload)).toBeNull();
+    expect(normalizeSentryEvent(warningPayload)).toEqual({
+      status: "skipped",
+      reason: "unsupported_action",
+    });
   });
 
-  it("returns null for unrecognized payload shapes", () => {
-    expect(normalizeSentryEvent({ action: "unknown" })).toBeNull();
-    expect(normalizeSentryEvent({})).toBeNull();
+  it("returns invalid_shape for unrecognized payload shapes", () => {
+    expect(normalizeSentryEvent({ action: "unknown" })).toEqual({
+      status: "skipped",
+      reason: "invalid_shape",
+    });
+    expect(normalizeSentryEvent({})).toEqual({
+      status: "skipped",
+      reason: "invalid_shape",
+    });
   });
 
-  it("returns null for an issue alert missing consumed issue fields", () => {
+  it("returns unknown_resource for unsupported resource headers", () => {
+    expect(normalizeSentryEvent(issueWebhookPayload, undefined, "installation")).toEqual({
+      status: "skipped",
+      reason: "unknown_resource",
+    });
+  });
+
+  it("returns invalid_shape for an issue alert missing consumed issue fields", () => {
     const malformed = {
       action: "triggered",
       data: {
@@ -186,10 +214,13 @@ describe("normalizeSentryEvent", () => {
       },
       actor: { type: "application", id: 1, name: "Sentry" },
     };
-    expect(normalizeSentryEvent(malformed)).toBeNull();
+    expect(normalizeSentryEvent(malformed)).toEqual({
+      status: "skipped",
+      reason: "invalid_shape",
+    });
   });
 
-  it("returns null for a metric alert missing trigger-key fields", () => {
+  it("returns invalid_shape for a metric alert missing trigger-key fields", () => {
     const malformed = {
       action: "critical",
       data: {
@@ -204,6 +235,9 @@ describe("normalizeSentryEvent", () => {
         web_url: "https://sentry.io/alerts/456/",
       },
     };
-    expect(normalizeSentryEvent(malformed)).toBeNull();
+    expect(normalizeSentryEvent(malformed)).toEqual({
+      status: "skipped",
+      reason: "invalid_shape",
+    });
   });
 });
