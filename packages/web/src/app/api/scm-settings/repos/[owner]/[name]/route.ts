@@ -1,58 +1,7 @@
-import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
-import { getServerAuthSession } from "@/lib/server-auth-session";
-import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { settingsProxy } from "@/lib/settings-proxy";
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ owner: string; name: string }> }
-) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { owner, name } = await params;
-
-  try {
-    const body = await request.json();
-    const response = await controlPlaneUserFetch(
-      `/scm-settings/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(body),
-      }
-    );
-    const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
-  } catch (error) {
-    console.error("Failed to update SCM repo settings:", error);
-    return NextResponse.json({ error: "Failed to update SCM repo settings" }, { status: 500 });
-  }
-}
-
-export async function DELETE(
-  _request: NextRequest,
-  { params }: { params: Promise<{ owner: string; name: string }> }
-) {
-  const session = await getServerAuthSession();
-  if (!session?.user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { owner, name } = await params;
-
-  try {
-    const response = await controlPlaneUserFetch(
-      `/scm-settings/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-      {
-        method: "DELETE",
-      }
-    );
-    const data = await response.json();
-    return NextResponse.json(data, { status: response.status });
-  } catch (error) {
-    console.error("Failed to delete SCM repo settings:", error);
-    return NextResponse.json({ error: "Failed to delete SCM repo settings" }, { status: 500 });
-  }
-}
+export const { PUT, DELETE } = settingsProxy<{ owner: string; name: string }>(
+  ({ owner, name }) =>
+    `/scm-settings/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
+  "SCM repo settings"
+);
