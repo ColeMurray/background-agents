@@ -1,6 +1,6 @@
 import { sessionAttachmentMimeTypeSchema, sessionAttachmentIdSchema } from "@open-inspect/shared";
 import { z } from "zod";
-import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "../media";
+import { SESSION_ATTACHMENT_MAX_BYTES } from "../media";
 
 const objectKeySchema = z.string().min(1).max(1024);
 
@@ -9,7 +9,7 @@ export const recordAttachmentCommandSchema = z
     action: z.literal("record"),
     attachmentId: sessionAttachmentIdSchema,
     mimeType: sessionAttachmentMimeTypeSchema,
-    sizeBytes: z.number().int().positive().max(SESSION_ATTACHMENT_IMAGE_MAX_BYTES),
+    sizeBytes: z.number().int().positive().max(SESSION_ATTACHMENT_MAX_BYTES),
   })
   .strict();
 

@@ -310,12 +310,12 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("rejects attachment rows with unsupported image metadata", async () => {
+  it("rejects attachment rows with unsupported metadata", async () => {
     const h = buildQueue();
     h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
         id: "up-invalid",
-        mime_type: "application/pdf",
+        mime_type: "application/zip",
         size_bytes: 100,
         object_key: "sessions/sess-1/attachments/up-invalid",
         message_id: null,
@@ -326,7 +326,7 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
       content: "watch this",
-      attachments: [{ name: "document.pdf", attachmentId: "up-invalid" }],
+      attachments: [{ name: "archive.zip", attachmentId: "up-invalid" }],
     });
 
     expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
@@ -334,7 +334,7 @@ describe("SessionMessageQueue", () => {
       expect.anything(),
       expect.objectContaining({
         code: "INVALID_ATTACHMENTS",
-        message: "Attachment is not a supported image",
+        message: "Attachment is not a supported type",
       })
     );
   });

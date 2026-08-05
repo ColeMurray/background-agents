@@ -3,6 +3,14 @@
 import { XIcon } from "@/components/ui/icons";
 import type { PendingAttachment } from "@/hooks/use-session-attachments";
 
+/** Short badge for a non-image attachment: the extension, else the MIME subtype. */
+function fileTypeLabel(file: File): string {
+  const ext = file.name.includes(".") ? file.name.split(".").pop() : "";
+  if (ext) return ext.slice(0, 4);
+  const subtype = file.type.split("/").pop();
+  return (subtype || "file").slice(0, 4);
+}
+
 function AttachmentPreview({
   attachment,
   onRemove,
@@ -12,16 +20,28 @@ function AttachmentPreview({
   onRemove: (id: string) => void;
   disabled?: boolean;
 }) {
+  const isImage = attachment.file.type.startsWith("image/");
   return (
     <div
       className="group/attachment relative w-16 h-16 border border-border bg-muted overflow-hidden flex-shrink-0"
       title={attachment.file.name}
     >
-      <img
-        src={attachment.previewUrl}
-        alt={attachment.file.name}
-        className="w-full h-full object-cover"
-      />
+      {isImage ? (
+        <img
+          src={attachment.previewUrl}
+          alt={attachment.file.name}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-1 text-center">
+          <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+            {fileTypeLabel(attachment.file)}
+          </span>
+          <span className="w-full truncate text-[9px] text-muted-foreground">
+            {attachment.file.name}
+          </span>
+        </div>
+      )}
       {!disabled && (
         <button
           type="button"

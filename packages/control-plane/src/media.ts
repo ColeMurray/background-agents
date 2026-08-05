@@ -1,11 +1,11 @@
 import {
-  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
-  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  SESSION_ATTACHMENT_MAX_BYTES,
+  SESSION_ATTACHMENT_MIME_TYPES,
   type SessionAttachmentMimeType,
   type VideoArtifactMetadata,
 } from "@open-inspect/shared";
 
-export { SESSION_ATTACHMENT_IMAGE_MAX_BYTES };
+export { SESSION_ATTACHMENT_MAX_BYTES };
 
 export const SCREENSHOT_MAX_BYTES = 10 * 1024 * 1024;
 export const SCREENSHOT_UPLOAD_LIMIT_PER_SESSION = 100;
@@ -16,7 +16,7 @@ export const VIDEO_TIMESTAMP_TOLERANCE_MS = 1_000;
 
 // Allows multipart boundaries and headers while rejecting oversized requests
 // before request.formData() buffers them when Content-Length is available.
-export const SESSION_ATTACHMENT_MAX_REQUEST_BYTES = SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 128 * 1024;
+export const SESSION_ATTACHMENT_MAX_REQUEST_BYTES = SESSION_ATTACHMENT_MAX_BYTES + 128 * 1024;
 export const SESSION_ATTACHMENT_LIMIT_PER_SESSION = 100;
 export const SESSION_ATTACHMENT_TOTAL_BYTES_PER_SESSION = 500 * 1024 * 1024;
 // Attachments never referenced by a message after this long are pruned (R2
@@ -108,14 +108,14 @@ export type SessionAttachmentFileType = {
   extension: string;
 };
 
-const SESSION_ATTACHMENT_MIME_TYPES: ReadonlySet<string> = new Set(
-  SESSION_ATTACHMENT_IMAGE_MIME_TYPES
+const SESSION_ATTACHMENT_MIME_TYPE_SET: ReadonlySet<string> = new Set(
+  SESSION_ATTACHMENT_MIME_TYPES
 );
 
 export function isSupportedSessionAttachmentMimeType(
   value: string
 ): value is SessionAttachmentMimeType {
-  return SESSION_ATTACHMENT_MIME_TYPES.has(value);
+  return SESSION_ATTACHMENT_MIME_TYPE_SET.has(value);
 }
 
 export function sessionAttachmentRequestExceedsLimit(request: Request): boolean {
@@ -125,9 +125,13 @@ export function sessionAttachmentRequestExceedsLimit(request: Request): boolean 
 }
 
 /**
- * Detect user-attached prompt images by magic bytes. This is intentionally
- * separate from the agent screenshot/recording detectors: session attachments do
- * not support videos in the initial attachment release.
+ * Detect user-attached prompt files by content. Binary formats (images, PDF)
+ * are matched by magic bytes; Markdown has no signature, so it is recognized as
+ * a last resort by validating the bytes decode as UTF-8 text. Ordering matters:
+ * binary signatures are checked before the text fallback so a mislabeled binary
+ * (e.g. a PNG declared as text/markdown) is caught by the declared-vs-detected
+ * check at the upload boundary rather than passing as text. Videos are not
+ * supported as session attachments.
  */
 export function detectSessionAttachmentFileType(
   bytes: Uint8Array
@@ -147,7 +151,67 @@ export function detectSessionAttachmentFileType(
     return { mimeType: "image/gif", extension: "gif" };
   }
 
+  // %PDF- header (PDF spec allows the version marker to follow).
+  if (bytes.length >= 5 && hasPrefix(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) {
+    return { mimeType: "application/pdf", extension: "pdf" };
+  }
+
+  // Markdown carries no magic bytes; accept anything that is well-formed UTF-8
+  // text (no NUL bytes). Binary formats are already handled above, so this only
+  // matches genuine text uploads.
+  if (isUtf8TextBytes(bytes)) {
+    return { mimeType: "text/markdown", extension: "md" };
+  }
+
   return null;
+}
+
+/**
+ * Well-formed UTF-8 with no NUL byte. Used as the last-resort signal that an
+ * attachment is text (Markdown), so it must reject anything binary: invalid or
+ * overlong sequences, truncated multibyte, surrogates, and NUL. Implemented by
+ * hand rather than via TextDecoder so the accept/reject contract is explicit.
+ */
+function isUtf8TextBytes(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) return false;
+  const length = bytes.length;
+  let i = 0;
+  while (i < length) {
+    const lead = bytes[i];
+    if (lead === 0x00) return false; // NUL — treat as binary
+    if (lead < 0x80) {
+      i += 1;
+      continue;
+    }
+
+    let trailing: number;
+    let minCodePoint: number;
+    if (lead >= 0xc2 && lead <= 0xdf) {
+      trailing = 1;
+      minCodePoint = 0x80;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+      trailing = 2;
+      minCodePoint = 0x800;
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+      trailing = 3;
+      minCodePoint = 0x10000;
+    } else {
+      return false; // invalid lead byte (C0/C1, F5–FF, or a stray continuation)
+    }
+
+    if (i + trailing >= length) return false; // truncated multibyte sequence
+    let codePoint = lead & (0x7f >> (trailing + 1));
+    for (let j = 1; j <= trailing; j++) {
+      const cont = bytes[i + j];
+      if ((cont & 0xc0) !== 0x80) return false; // not a continuation byte
+      codePoint = (codePoint << 6) | (cont & 0x3f);
+    }
+    if (codePoint < minCodePoint) return false; // overlong encoding
+    if (codePoint > 0x10ffff) return false; // out of Unicode range
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) return false; // surrogate half
+    i += trailing + 1;
+  }
+  return true;
 }
 
 export function buildSessionAttachmentObjectKey(sessionId: string, attachmentId: string): string {

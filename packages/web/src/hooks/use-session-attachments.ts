@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
-  SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  SESSION_ATTACHMENT_MIME_TYPES,
   type SessionAttachmentReference,
 } from "@open-inspect/shared";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
@@ -15,16 +15,20 @@ export type PendingAttachment = {
   previewUrl: string;
 };
 
-const IMAGE_MIME_TYPES: ReadonlySet<string> = new Set(SESSION_ATTACHMENT_IMAGE_MIME_TYPES);
+const SUPPORTED_MIME_TYPES: ReadonlySet<string> = new Set(SESSION_ATTACHMENT_MIME_TYPES);
 
-export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES].join(",");
+// File-picker filter: the accepted MIME types plus the extensions browsers
+// don't always map to a MIME type (notably .md).
+export const ATTACHMENT_ACCEPT = [...SUPPORTED_MIME_TYPES, ".md", ".markdown"].join(",");
 export const DEFAULT_ATTACHMENT_ONLY_MESSAGE = "See the attached files.";
 export const SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
 const ATTACHMENTS_CHANGED_DURING_UPLOAD = "Attachments changed during upload; please retry";
 const ATTACHMENT_UPLOAD_TIMED_OUT = "Attachment upload timed out; please retry";
 
-function isSupportedImage(file: File): boolean {
-  return IMAGE_MIME_TYPES.has(file.type);
+function isSupportedAttachment(file: File): boolean {
+  // Some browsers report an empty type for .md; the server sniffs content, so
+  // accept an empty type here and let the upload boundary make the final call.
+  return file.type === "" || SUPPORTED_MIME_TYPES.has(file.type);
 }
 
 function formatMegabytes(bytes: number): string {
@@ -69,8 +73,8 @@ export function useSessionAttachments() {
     let attachmentCount = current.length;
 
     for (const file of files) {
-      if (!isSupportedImage(file)) {
-        errors.push(`${file.name || "File"} is not a supported image`);
+      if (!isSupportedAttachment(file)) {
+        errors.push(`${file.name || "File"} is not a supported attachment type`);
         continue;
       }
       if (attachmentCount >= MAX_SESSION_ATTACHMENTS_PER_MESSAGE) {
@@ -81,7 +85,7 @@ export function useSessionAttachments() {
       }
       if (file.size > WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
         errors.push(
-          `${file.name || "File"} is too large (images must be under ${formatMegabytes(WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES)})`
+          `${file.name || "File"} is too large (attachments must be under ${formatMegabytes(WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES)})`
         );
         continue;
       }

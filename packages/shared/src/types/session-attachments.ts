@@ -1,16 +1,24 @@
 import { z } from "zod";
 
 export const MAX_SESSION_ATTACHMENTS_PER_MESSAGE = 6;
-/** Per-image byte cap, enforced by the attachment store and every producer. */
-export const SESSION_ATTACHMENT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+/** Per-attachment byte cap, enforced by the attachment store and every producer. */
+export const SESSION_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+/** @deprecated Use {@link SESSION_ATTACHMENT_MAX_BYTES}; retained for callers not yet migrated. */
+export const SESSION_ATTACHMENT_IMAGE_MAX_BYTES = SESSION_ATTACHMENT_MAX_BYTES;
 export const SESSION_ATTACHMENT_IMAGE_MIME_TYPES = [
   "image/png",
   "image/jpeg",
   "image/webp",
   "image/gif",
 ] as const;
+export const SESSION_ATTACHMENT_DOCUMENT_MIME_TYPES = ["application/pdf", "text/markdown"] as const;
+/** Every MIME type accepted as a session attachment (images + documents). */
+export const SESSION_ATTACHMENT_MIME_TYPES = [
+  ...SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  ...SESSION_ATTACHMENT_DOCUMENT_MIME_TYPES,
+] as const;
 
-export const sessionAttachmentMimeTypeSchema = z.enum(SESSION_ATTACHMENT_IMAGE_MIME_TYPES);
+export const sessionAttachmentMimeTypeSchema = z.enum(SESSION_ATTACHMENT_MIME_TYPES);
 export type SessionAttachmentMimeType = z.infer<typeof sessionAttachmentMimeTypeSchema>;
 
 export const sessionAttachmentIdSchema = z
@@ -19,7 +27,7 @@ export const sessionAttachmentIdSchema = z
   .max(128)
   .regex(/^[A-Za-z0-9-]+$/);
 
-/** Client-supplied reference to an image previously uploaded for this session. */
+/** Client-supplied reference to a file previously uploaded for this session. */
 export const sessionAttachmentReferenceSchema = z
   .object({
     attachmentId: sessionAttachmentIdSchema,

@@ -58,7 +58,7 @@ export function resolveSessionAttachments(
     }
     const mimeType = sessionAttachmentMimeTypeSchema.safeParse(row.mime_type);
     if (!mimeType.success) {
-      throw new SessionAttachmentError("Attachment is not a supported image");
+      throw new SessionAttachmentError("Attachment is not a supported type");
     }
     return {
       name: reference.name,

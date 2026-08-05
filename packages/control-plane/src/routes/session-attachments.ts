@@ -1,5 +1,5 @@
 /**
- * Session image attachments added through the chat composer.
+ * Session file attachments (images, PDFs, Markdown) added through the chat composer.
  *
  * POST stores the file in the media bucket keyed by an unguessable attachment id;
  * the prompt then references it as `{ attachmentId, name }` so the message row and
@@ -24,7 +24,7 @@ import {
   detectSessionAttachmentFileType,
   isMultipartFile,
   isSupportedSessionAttachmentMimeType,
-  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  SESSION_ATTACHMENT_MAX_BYTES,
   SESSION_ATTACHMENT_MAX_REQUEST_BYTES,
   sessionAttachmentRequestExceedsLimit,
 } from "../media";
@@ -105,18 +105,18 @@ async function handleAttachmentPost(
     return error("Unsupported attachment MIME type", 400);
   }
 
-  if (fileEntry.size > SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
-    return error(`Images must be ${SESSION_ATTACHMENT_IMAGE_MAX_BYTES} bytes or smaller`, 400);
+  if (fileEntry.size > SESSION_ATTACHMENT_MAX_BYTES) {
+    return error(`Attachments must be ${SESSION_ATTACHMENT_MAX_BYTES} bytes or smaller`, 400);
   }
 
   const bytes = new Uint8Array(await fileEntry.arrayBuffer());
   const detected = detectSessionAttachmentFileType(bytes);
   if (!detected) {
-    return error("Uploaded file is not a supported image format", 400);
+    return error("Uploaded file is not a supported attachment format", 400);
   }
 
-  if (bytes.byteLength > SESSION_ATTACHMENT_IMAGE_MAX_BYTES) {
-    return error(`Images must be ${SESSION_ATTACHMENT_IMAGE_MAX_BYTES} bytes or smaller`, 400);
+  if (bytes.byteLength > SESSION_ATTACHMENT_MAX_BYTES) {
+    return error(`Attachments must be ${SESSION_ATTACHMENT_MAX_BYTES} bytes or smaller`, 400);
   }
 
   if (fileEntry.type && fileEntry.type !== detected.mimeType) {

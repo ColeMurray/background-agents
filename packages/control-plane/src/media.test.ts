@@ -55,14 +55,21 @@ describe("media helpers", () => {
     );
   });
 
-  it("accepts only image session attachment mime types", () => {
-    for (const mimeType of ["image/png", "image/jpeg", "image/webp", "image/gif"]) {
+  it("accepts image, pdf, and markdown session attachment mime types", () => {
+    for (const mimeType of [
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+      "image/gif",
+      "application/pdf",
+      "text/markdown",
+    ]) {
       expect(isSupportedSessionAttachmentMimeType(mimeType)).toBe(true);
     }
     expect(isSupportedSessionAttachmentMimeType("video/mp4")).toBe(false);
     expect(isSupportedSessionAttachmentMimeType("video/quicktime")).toBe(false);
     expect(isSupportedSessionAttachmentMimeType("video/webm")).toBe(false);
-    expect(isSupportedSessionAttachmentMimeType("application/pdf")).toBe(false);
+    expect(isSupportedSessionAttachmentMimeType("text/plain")).toBe(false);
     expect(isSupportedSessionAttachmentMimeType("image/svg+xml")).toBe(false);
   });
 
@@ -100,19 +107,39 @@ describe("media helpers", () => {
     expect(detectSessionAttachmentFileType(gif87)?.mimeType).toBe("image/gif");
   });
 
-  it("rejects video session attachments", () => {
+  it("detects PDF attachments by the %PDF- header", () => {
+    const pdf = Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]);
+    expect(detectSessionAttachmentFileType(pdf)).toEqual({
+      mimeType: "application/pdf",
+      extension: "pdf",
+    });
+  });
+
+  it("detects markdown/text attachments as text/markdown", () => {
+    const markdown = new TextEncoder().encode("# Title\n\nSome **notes** with é unicode.\n");
+    expect(detectSessionAttachmentFileType(markdown)).toEqual({
+      mimeType: "text/markdown",
+      extension: "md",
+    });
+  });
+
+  it("rejects video session attachments (binary, not valid text)", () => {
     expect(detectSessionAttachmentFileType(MP4_SIGNATURE)).toBeNull();
     const mov = Uint8Array.from([
       0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20,
     ]);
     expect(detectSessionAttachmentFileType(mov)).toBeNull();
 
-    const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0x01]);
+    // EBML header followed by an invalid UTF-8 byte (0xff), as real webm bytes are.
+    const webm = Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3, 0xff]);
     expect(detectSessionAttachmentFileType(webm)).toBeNull();
   });
 
-  it("rejects unsupported session attachment bytes", () => {
-    expect(detectSessionAttachmentFileType(Uint8Array.from([0x25, 0x50, 0x44, 0x46]))).toBeNull();
+  it("rejects bytes that are neither a known binary format nor valid UTF-8 text", () => {
+    // Invalid UTF-8 (lone 0xff bytes) with no image/pdf signature.
+    expect(detectSessionAttachmentFileType(Uint8Array.from([0xff, 0xff, 0xff]))).toBeNull();
+    // Contains a NUL byte, so not treated as text.
+    expect(detectSessionAttachmentFileType(Uint8Array.from([0x68, 0x69, 0x00, 0x21]))).toBeNull();
     expect(detectSessionAttachmentFileType(new Uint8Array(0))).toBeNull();
   });
 

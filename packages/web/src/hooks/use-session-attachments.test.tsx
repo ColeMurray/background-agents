@@ -24,8 +24,35 @@ describe("useSessionAttachments", () => {
     });
 
     expect(result.current.attachments).toEqual([]);
-    expect(result.current.attachmentError).toBe("demo.mp4 is not a supported image");
+    expect(result.current.attachmentError).toBe("demo.mp4 is not a supported attachment type");
     expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("accepts pdf and markdown files", () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:doc");
+    const { result } = renderHook(() => useSessionAttachments());
+
+    act(() => {
+      result.current.addFiles([
+        new File(["%PDF-1.7"], "doc.pdf", { type: "application/pdf" }),
+        new File(["# Notes"], "notes.md", { type: "text/markdown" }),
+      ]);
+    });
+
+    expect(result.current.attachments).toHaveLength(2);
+    expect(result.current.attachmentError).toBeNull();
+  });
+
+  it("accepts a markdown file the browser reports with an empty type", () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:md");
+    const { result } = renderHook(() => useSessionAttachments());
+
+    act(() => {
+      result.current.addFiles([new File(["# Notes"], "notes.md", { type: "" })]);
+    });
+
+    expect(result.current.attachments).toHaveLength(1);
+    expect(result.current.attachmentError).toBeNull();
   });
 
   it("rejects images above the portable web request limit", () => {
@@ -42,7 +69,7 @@ describe("useSessionAttachments", () => {
 
     expect(result.current.attachments).toEqual([]);
     expect(result.current.attachmentError).toBe(
-      "large.png is too large (images must be under 4 MB)"
+      "large.png is too large (attachments must be under 4 MB)"
     );
     expect(createObjectURL).not.toHaveBeenCalled();
   });

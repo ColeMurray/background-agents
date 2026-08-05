@@ -9,7 +9,7 @@ from sandbox_runtime.attachment_processor import (
     AttachmentProcessor,
     HydratedSessionAttachment,
     ResolvedSessionAttachment,
-    parse_session_image_attachments,
+    parse_session_attachments,
 )
 
 
@@ -59,17 +59,48 @@ async def test_invalid_attachment_id_is_rejected(processor: AttachmentProcessor)
 
 
 def test_untyped_session_attachments_are_validated() -> None:
-    parsed, rejected = parse_session_image_attachments(
+    parsed, rejected = parse_session_attachments(
         [
             {"name": "shot.png", "mimeType": "image/png", "attachmentId": "up-1"},
+            {"name": "doc.pdf", "mimeType": "application/pdf", "attachmentId": "up-2"},
+            {"name": "notes.md", "mimeType": "text/markdown", "attachmentId": "up-3"},
             {"name": "remote.png", "mimeType": "image/png", "url": "https://example.com"},
-            {"name": "video.mp4", "mimeType": "video/mp4", "attachmentId": "up-2"},
+            {"name": "video.mp4", "mimeType": "video/mp4", "attachmentId": "up-4"},
             "invalid",
         ]
     )
 
-    assert parsed == [{"name": "shot.png", "mimeType": "image/png", "attachmentId": "up-1"}]
+    assert parsed == [
+        {"name": "shot.png", "mimeType": "image/png", "attachmentId": "up-1"},
+        {"name": "doc.pdf", "mimeType": "application/pdf", "attachmentId": "up-2"},
+        {"name": "notes.md", "mimeType": "text/markdown", "attachmentId": "up-3"},
+    ]
     assert rejected == 3
+
+
+def test_pdf_attachment_builds_data_url_file_part() -> None:
+    processor = AttachmentProcessor(
+        control_plane_url="https://control.example",
+        session_id="session-1",
+        auth_token="token",
+        log=TestLogger(),
+        warn_user=_noop_warn,
+    )
+    parts = processor.build_file_parts(
+        [{"name": "doc.pdf", "mimeType": "application/pdf", "content": "QUJD"}]
+    )
+    assert parts == [
+        {
+            "type": "file",
+            "mime": "application/pdf",
+            "filename": "doc.pdf",
+            "url": "data:application/pdf;base64,QUJD",
+        }
+    ]
+
+
+async def _noop_warn(message: str) -> None:
+    pass
 
 
 async def test_processing_concurrency_is_bounded(

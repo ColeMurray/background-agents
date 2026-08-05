@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   SESSION_ATTACHMENT_LIMIT_PER_SESSION,
-  SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
+  SESSION_ATTACHMENT_MAX_BYTES,
   SESSION_ATTACHMENT_TOTAL_BYTES_PER_SESSION,
   SESSION_ATTACHMENT_UNREFERENCED_TTL_MS,
   SESSION_ATTACHMENT_CLEANUP_CLAIM_TTL_MS,
@@ -66,7 +66,7 @@ describe("AttachmentsHandler", () => {
     ["missing mimeType", { ...VALID_BODY, mimeType: "" }],
     ["non-positive size", { ...VALID_BODY, sizeBytes: 0 }],
     ["non-integer size", { ...VALID_BODY, sizeBytes: 1.5 }],
-    ["oversized upload", { ...VALID_BODY, sizeBytes: SESSION_ATTACHMENT_IMAGE_MAX_BYTES + 1 }],
+    ["oversized upload", { ...VALID_BODY, sizeBytes: SESSION_ATTACHMENT_MAX_BYTES + 1 }],
     [
       "caller-supplied objectKey",
       { ...VALID_BODY, objectKey: "sessions/another-session/attachments/up-1" },

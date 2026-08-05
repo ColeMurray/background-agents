@@ -29,7 +29,7 @@ from websockets.exceptions import InvalidStatus
 from .attachment_processor import (
     AttachmentProcessor,
     HydratedSessionAttachment,
-    parse_session_image_attachments,
+    parse_session_attachments,
 )
 from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
@@ -670,7 +670,7 @@ class AgentBridge:
             if not self.opencode_session_id:
                 await self._create_opencode_session()
 
-            session_attachments, rejected_attachments = parse_session_image_attachments(
+            session_attachments, rejected_attachments = parse_session_attachments(
                 raw_attachments
             )
             if rejected_attachments:

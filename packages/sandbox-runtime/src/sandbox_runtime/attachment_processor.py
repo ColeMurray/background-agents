@@ -17,13 +17,29 @@ class MediaLogger(Protocol):
     def warn(self, event: str, **kwargs: Any) -> None: ...
 
 
-SessionAttachmentMimeType = Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
-SESSION_ATTACHMENT_IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+# Mirror of the TypeScript allowlist in
+# packages/shared/src/types/session-attachments.ts. Keep the two in sync.
+SessionAttachmentMimeType = Literal[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+    "text/markdown",
+]
+SESSION_ATTACHMENT_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+    "text/markdown",
+}
 MAX_SESSION_ATTACHMENTS_PER_MESSAGE = 6
 
 
 class ResolvedSessionAttachment(TypedDict):
-    """Trusted image metadata resolved by the control plane."""
+    """Trusted attachment metadata resolved by the control plane."""
 
     attachmentId: str
     name: str
@@ -43,7 +59,7 @@ class OpenCodeFilePart(TypedDict):
     url: str
 
 
-def parse_session_image_attachments(
+def parse_session_attachments(
     value: object,
 ) -> tuple[list[ResolvedSessionAttachment] | None, int]:
     """Validate the untyped WebSocket attachment boundary and count rejected entries."""
@@ -67,7 +83,7 @@ def parse_session_image_attachments(
             or not isinstance(name, str)
             or not 1 <= len(name) <= 255
             or not isinstance(mime_type, str)
-            or mime_type not in SESSION_ATTACHMENT_IMAGE_MIME_TYPES
+            or mime_type not in SESSION_ATTACHMENT_MIME_TYPES
         ):
             rejected += 1
             continue
@@ -82,9 +98,9 @@ def parse_session_image_attachments(
 
 
 class AttachmentProcessor:
-    """Resolve session image attachments with bounded network concurrency."""
+    """Resolve session attachments with bounded network concurrency."""
 
-    MAX_IMAGE_BYTES = 10 * 1024 * 1024
+    MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
     DOWNLOAD_TIMEOUT_SECONDS = 120.0
     MAX_CONCURRENCY = 2
 
@@ -107,7 +123,7 @@ class AttachmentProcessor:
     async def process(
         self, attachments: list[ResolvedSessionAttachment] | None
     ) -> list[HydratedSessionAttachment] | None:
-        """Hydrate stored images in one bounded processing pass."""
+        """Hydrate stored attachments in one bounded processing pass."""
         if attachments is None:
             return None
         if not attachments:
@@ -169,7 +185,7 @@ class AttachmentProcessor:
                 total = 0
                 async for chunk in response.aiter_bytes():
                     total += len(chunk)
-                    if total > self.MAX_IMAGE_BYTES:
+                    if total > self.MAX_ATTACHMENT_BYTES:
                         self.log.warn("attachments.too_large", bytes=total)
                         return None
                     chunks.append(chunk)
@@ -184,7 +200,7 @@ class AttachmentProcessor:
     def build_file_parts(
         self, attachments: list[HydratedSessionAttachment] | None
     ) -> list[OpenCodeFilePart]:
-        """Convert resolved image attachments into OpenCode file parts."""
+        """Convert resolved attachments into OpenCode file parts."""
         parts: list[OpenCodeFilePart] = []
         for attachment in attachments or []:
             parts.append(
