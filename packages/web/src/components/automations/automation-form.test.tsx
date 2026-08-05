@@ -135,6 +135,45 @@ describe("automation cron submission", () => {
     );
   });
 
+  it("associates the repository configuration label with the picker trigger", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    expect(screen.getByLabelText("Repository Configuration")).toBe(
+      screen.getByRole("button", { name: "Repository selection" })
+    );
+  });
+
+  it("groups conditions under an accessible name", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Watch Sentry",
+          triggerType: "sentry",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Triage the alert.",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: /Conditions/ })).toBeInTheDocument();
+  });
+
   it("clears the propagated cron when custom input becomes invalid", () => {
     const onChange = vi.fn();
 

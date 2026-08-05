@@ -75,9 +75,15 @@ function getTerminalVisibilitySnapshot() {
   return localStorage.getItem(TERMINAL_VISIBILITY_KEY) === "true";
 }
 
+function setTerminalVisibility(visible: boolean) {
+  localStorage.setItem(TERMINAL_VISIBILITY_KEY, String(visible));
+  window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
+}
+
 function subscribeToTerminalVisibility(onStoreChange: () => void) {
   const handleStorage = (event: StorageEvent) => {
-    if (event.key === TERMINAL_VISIBILITY_KEY) onStoreChange();
+    // A null key means the entire store was cleared, which drops this key too.
+    if (event.key === TERMINAL_VISIBILITY_KEY || event.key === null) onStoreChange();
   };
   window.addEventListener("storage", handleStorage);
   window.addEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
@@ -180,13 +186,10 @@ function SessionPageContent() {
     () => false
   );
   const toggleTerminal = useCallback(() => {
-    const next = !terminalOpen;
-    localStorage.setItem(TERMINAL_VISIBILITY_KEY, String(next));
-    window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
+    setTerminalVisibility(!terminalOpen);
   }, [terminalOpen]);
   const closeTerminal = useCallback(() => {
-    localStorage.setItem(TERMINAL_VISIBILITY_KEY, "false");
-    window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
+    setTerminalVisibility(false);
   }, []);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;

@@ -420,12 +420,16 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Repository Configuration */}
       <div>
-        <div className="block text-sm font-medium text-foreground mb-1.5">
+        <label
+          htmlFor="automation-repository-configuration"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
           Repository Configuration
-        </div>
+        </label>
         <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
           <PopoverTrigger asChild>
             <button
+              id="automation-repository-configuration"
               type="button"
               className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
               aria-label="Repository selection"
@@ -824,11 +828,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Conditions (for non-schedule types) */}
       {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
-        <div>
-          <div className="block text-sm font-medium text-foreground mb-1.5">
+        <fieldset className="m-0 min-w-0 border-0 p-0">
+          <legend className="block text-sm font-medium text-foreground mb-1.5">
             Conditions
             <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
-          </div>
+          </legend>
           <ConditionBuilder
             conditions={conditions}
             onChange={setConditions}
@@ -843,7 +847,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               Slack triggers require at least one Slack Channel condition.
             </p>
           )}
-        </div>
+        </fieldset>
       )}
 
       {/* Instructions */}
