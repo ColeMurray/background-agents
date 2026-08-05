@@ -35,15 +35,44 @@ const decision = {
   alternatives: [],
 };
 
-function upstreamFunctionCall(argumentsValue = JSON.stringify(decision)): Response {
-  return Response.json({
-    output: [
-      {
-        type: "function_call",
-        name: CLASSIFY_TARGET_TOOL_NAME,
-        arguments: argumentsValue,
-      },
-    ],
+function functionCall(argumentsValue = JSON.stringify(decision)) {
+  return {
+    type: "function_call",
+    call_id: "call-classify",
+    namespace: "functions",
+    name: CLASSIFY_TARGET_TOOL_NAME,
+    arguments: argumentsValue,
+  };
+}
+
+function sseEvent(event: Record<string, unknown>): string {
+  return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
+function fragmentedSseResponse(...events: Array<Record<string, unknown>>): Response {
+  const body = events.map(sseEvent).join("");
+  const encoder = new TextEncoder();
+  const chunkSizes = [1, 2, 7, 3, 19, 5, 11];
+  let offset = 0;
+  let chunkIndex = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      while (offset < body.length) {
+        const size = chunkSizes[chunkIndex % chunkSizes.length];
+        controller.enqueue(encoder.encode(body.slice(offset, offset + size)));
+        offset += size;
+        chunkIndex += 1;
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, { headers: { "Content-Type": "text/event-stream" } });
+}
+
+function completedFunctionCall(argumentsValue = JSON.stringify(decision)): Response {
+  return fragmentedSseResponse({
+    type: "response.completed",
+    response: { id: "resp-classify", output: [functionCall(argumentsValue)] },
   });
 }
 
@@ -71,7 +100,7 @@ describe("POST /internal/classifier/infer", () => {
       expiresIn: 1800,
       accountId: "account-123",
     });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(upstreamFunctionCall()));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(completedFunctionCall()));
   });
 
   it("rejects requests without service authentication", async () => {
@@ -153,26 +182,126 @@ describe("POST /internal/classifier/infer", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer secret-access-token");
     expect(headers.get("ChatGPT-Account-Id")).toBe("account-123");
-    expect(headers.get("originator")).toBe("opencode");
+    expect(headers.get("originator")).toBe("codex_cli_rs");
     expect(headers.get("session_id")).toBeTruthy();
+    expect(headers.get("Accept")).toBe("text/event-stream");
     expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
     const upstreamBody = JSON.parse(String(init?.body));
     expect(upstreamBody).toMatchObject({
       model: "gpt-5.6-luna",
-      input: "route this request",
-      tool_choice: { type: "function", name: CLASSIFY_TARGET_TOOL_NAME },
+      tool_choice: "required",
       parallel_tool_calls: false,
+      reasoning: { context: "all_turns" },
       store: false,
-      stream: false,
+      stream: true,
     });
-    expect(upstreamBody.tools).toEqual([
-      expect.objectContaining({
-        type: "function",
-        name: CLASSIFY_TARGET_TOOL_NAME,
-        strict: true,
-        parameters: expect.objectContaining({ additionalProperties: false }),
-      }),
+    expect(upstreamBody).not.toHaveProperty("tools");
+    expect(upstreamBody.input).toEqual([
+      {
+        type: "additional_tools",
+        role: "developer",
+        tools: [
+          {
+            type: "namespace",
+            name: "functions",
+            description: "",
+            tools: [
+              expect.objectContaining({
+                type: "function",
+                name: CLASSIFY_TARGET_TOOL_NAME,
+                strict: true,
+                parameters: expect.objectContaining({ additionalProperties: false }),
+              }),
+            ],
+          },
+        ],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "route this request" }],
+      },
     ]);
+    await expect(response.json()).resolves.toEqual({ decision });
+  });
+
+  it("uses output_item.done when response.completed has no output", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fragmentedSseResponse(
+        { type: "response.created", response: { id: "resp-classify" } },
+        { type: "response.output_item.done", item: functionCall() },
+        { type: "response.completed", response: { id: "resp-classify", output: [] } }
+      )
+    );
+
+    const response = await classifierRequest({
+      model: "openai/gpt-5.6-luna",
+      prompt: "route this",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ decision });
+  });
+
+  it("rejects malformed authoritative output instead of using completed fallback", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fragmentedSseResponse(
+        {
+          type: "response.output_item.done",
+          item: functionCall("not-json"),
+        },
+        {
+          type: "response.completed",
+          response: { id: "resp-classify", output: [functionCall()] },
+        }
+      )
+    );
+
+    const response = await classifierRequest({
+      model: "openai/gpt-5.6-luna",
+      prompt: "route this",
+    });
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Classifier returned an invalid response",
+    });
+  });
+
+  it("falls back to streamed function-call arguments", async () => {
+    const argumentsValue = JSON.stringify(decision);
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fragmentedSseResponse(
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc-classify",
+            name: CLASSIFY_TARGET_TOOL_NAME,
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc-classify",
+          delta: argumentsValue.slice(0, 17),
+        },
+        {
+          type: "response.function_call_arguments.done",
+          item_id: "fc-classify",
+          arguments: argumentsValue,
+        },
+        { type: "response.completed", response: { id: "resp-classify" } }
+      )
+    );
+
+    const response = await classifierRequest({
+      model: "openai/gpt-5.6-luna",
+      prompt: "route this",
+    });
+
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ decision });
   });
 
@@ -190,13 +319,45 @@ describe("POST /internal/classifier/infer", () => {
   });
 
   it.each([
-    ["refusal", Response.json({ output: [{ type: "message", status: "completed" }] })],
-    ["malformed JSON arguments", upstreamFunctionCall("not-json")],
+    [
+      "missing tool call",
+      fragmentedSseResponse({
+        type: "response.completed",
+        response: { id: "resp-classify", output: [] },
+      }),
+    ],
+    ["malformed JSON arguments", completedFunctionCall("not-json")],
     [
       "invalid decision",
-      upstreamFunctionCall(JSON.stringify({ ...decision, confidence: "certain" })),
+      completedFunctionCall(JSON.stringify({ ...decision, confidence: "certain" })),
     ],
-    ["non-JSON response", new Response("not-json")],
+    [
+      "function call from another namespace",
+      fragmentedSseResponse(
+        {
+          type: "response.output_item.done",
+          item: { ...functionCall(), namespace: "other" },
+        },
+        { type: "response.completed", response: { id: "resp-classify" } }
+      ),
+    ],
+    [
+      "completed fallback from another namespace",
+      fragmentedSseResponse({
+        type: "response.completed",
+        response: {
+          id: "resp-classify",
+          output: [{ ...functionCall(), namespace: "other" }],
+        },
+      }),
+    ],
+    ["malformed SSE", new Response("event: response.completed\ndata: {not-json}\n\n")],
+    [
+      "oversized SSE event",
+      new Response(`data: ${"x".repeat(70 * 1024)}\n\n`, {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    ],
   ])("returns 502 for %s", async (_name, upstreamResponse) => {
     vi.mocked(fetch).mockResolvedValueOnce(upstreamResponse);
 
@@ -209,6 +370,39 @@ describe("POST /internal/classifier/infer", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Classifier returned an invalid response",
     });
+  });
+
+  it.each(["response.failed", "error"])("sanitizes %s events", async (type) => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fragmentedSseResponse({ type, error: { message: "upstream secret details" } })
+    );
+
+    const response = await classifierRequest({
+      model: "openai/gpt-5.6-luna",
+      prompt: "route this",
+    });
+
+    expect(response.status).toBe(502);
+    const responseText = await response.text();
+    expect(responseText).toBe(JSON.stringify({ error: "Classifier upstream unavailable" }));
+    expect(responseText).not.toContain("upstream secret details");
+  });
+
+  it("maps broker authorization failure to 502 for the authenticated caller", async () => {
+    brokerState.refreshGlobal.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      error: "refresh token rejected",
+    });
+
+    const response = await classifierRequest({
+      model: "openai/gpt-5.6-luna",
+      prompt: "route this",
+    });
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth unavailable" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("maps non-OK upstream responses without returning their body", async () => {

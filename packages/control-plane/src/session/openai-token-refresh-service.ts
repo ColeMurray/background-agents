@@ -11,6 +11,11 @@ import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
 
 const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS = 3;
+const OPENAI_TOKEN_PERSIST_RETRY_DELAY_MS = 100;
+const OPENAI_CONCURRENT_ROTATION_DELAY_MS = 500;
+const OPENAI_TOKEN_PERSIST_FAILURE =
+  "OpenAI tokens rotated but could not be saved; reconnect OpenAI OAuth";
 
 /**
  * Where a session's OpenAI OAuth tokens are read from and rotated back to. A
@@ -208,28 +213,25 @@ export class OpenAITokenBroker {
     const accountId = extractOpenAIAccountId(tokens);
     const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
 
-    try {
-      const secretsToWrite: Record<string, string> = {
-        OPENAI_OAUTH_REFRESH_TOKEN: tokens.refresh_token,
-        OPENAI_OAUTH_ACCESS_TOKEN: tokens.access_token,
-        OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(expiresAt),
-      };
+    const secretsToWrite: Record<string, string> = {
+      OPENAI_OAUTH_REFRESH_TOKEN: tokens.refresh_token,
+      OPENAI_OAUTH_ACCESS_TOKEN: tokens.access_token,
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(expiresAt),
+    };
 
-      if (accountId) {
-        secretsToWrite.OPENAI_OAUTH_ACCOUNT_ID = accountId;
-      }
-
-      await this.writeSecretsForSource(tokenState.source, secretsToWrite);
-
-      this.log.info("OpenAI tokens rotated and cached", {
-        source: tokenState.source.kind,
-        has_account_id: !!accountId,
-      });
-    } catch (e) {
-      this.log.error("Failed to store rotated OpenAI tokens", {
-        error: e instanceof Error ? e.message : String(e),
-      });
+    if (accountId) {
+      secretsToWrite.OPENAI_OAUTH_ACCOUNT_ID = accountId;
     }
+
+    const persisted = await this.persistRotatedTokens(tokenState.source, secretsToWrite);
+    if (!persisted) {
+      return { ok: false, status: 500, error: OPENAI_TOKEN_PERSIST_FAILURE };
+    }
+
+    this.log.info("OpenAI tokens rotated and cached", {
+      source: tokenState.source.kind,
+      has_account_id: !!accountId,
+    });
 
     return {
       ok: true,
@@ -237,6 +239,36 @@ export class OpenAITokenBroker {
       expiresIn: tokens.expires_in,
       accountId,
     };
+  }
+
+  private async persistRotatedTokens(
+    source: TokenSecretSource,
+    secrets: Record<string, string>
+  ): Promise<boolean> {
+    for (let attempt = 1; attempt <= OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS; attempt++) {
+      try {
+        await this.writeSecretsForSource(source, secrets);
+        return true;
+      } catch (e) {
+        const finalAttempt = attempt === OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS;
+        const context = {
+          source: source.kind,
+          attempt,
+          max_attempts: OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS,
+          error: e instanceof Error ? e.message : String(e),
+        };
+
+        if (finalAttempt) {
+          this.log.error("Failed to store rotated OpenAI tokens", context);
+          return false;
+        }
+
+        this.log.warn("Failed to store rotated OpenAI tokens; retrying", context);
+        await new Promise((resolve) => setTimeout(resolve, OPENAI_TOKEN_PERSIST_RETRY_DELAY_MS));
+      }
+    }
+
+    return false;
   }
 
   private async handleUnauthorizedRefresh(
@@ -247,7 +279,7 @@ export class OpenAITokenBroker {
       source: tokenState.source.kind,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, OPENAI_CONCURRENT_ROTATION_DELAY_MS));
 
     try {
       const reread = await readTokenState();

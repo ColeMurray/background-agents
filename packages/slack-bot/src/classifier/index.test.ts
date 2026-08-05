@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLASSIFIER_PROMPT_MAX_CHARS } from "@open-inspect/shared";
 import type { Env, Environment, RepoConfig } from "../types";
 
 const {
@@ -195,6 +196,134 @@ describe("RepoClassifier", () => {
     expect(result.needsClarification).toBe(true);
     expect(result.reasoning).toContain("structured model output");
     expect(result.alternatives).toBeUndefined();
+  });
+
+  describe("Anthropic tool-input normalization", () => {
+    it.each([
+      ["blank", { targetId: "   " }],
+      ["missing", {}],
+      ["non-string", { targetId: 42 }],
+    ])("treats %s targetId as null", async (_label, targetFields) => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_normalized_target",
+            name: "classify_target",
+            input: {
+              ...targetFields,
+              confidence: "high",
+              reasoning: "The model could not identify a target.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("an ambiguous request");
+
+      expect(result.target).toBeNull();
+      expect(result.confidence).toBe("high");
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("trims and lowercases confidence, trims and deduplicates alternatives, and ignores extra keys", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_normalized_fields",
+            name: "classify_target",
+            input: {
+              targetId: " acme/prod ",
+              confidence: " Medium ",
+              reasoning: "  The message names the production worker.  ",
+              alternatives: [" acme/web ", "acme/web", " acme/prod "],
+              extra: "ignored",
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("work on production");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.confidence).toBe("medium");
+      expect(result.reasoning).toBe("The message names the production worker.");
+      expect(result.alternatives).toEqual([{ kind: "repository", repo: TEST_REPOS[1] }]);
+      expect(result.needsClarification).toBe(true);
+    });
+  });
+
+  it("bounds the generated prompt consistently for Anthropic and OpenAI while preserving the message and task", async () => {
+    const oversizedCatalog = "catalog-entry ".repeat(10_000);
+    const context = {
+      channelId: "C123",
+      channelName: "engineering",
+      previousMessages: ["thread-context ".repeat(10_000)],
+    };
+    mockBuildRepoDescriptions.mockReturnValue(oversizedCatalog);
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_oversized_anthropic",
+          name: "classify_target",
+          input: {
+            targetId: "acme/prod",
+            confidence: "high",
+            reasoning: "The message names prod.",
+            alternatives: [],
+          },
+        },
+      ],
+    });
+
+    const message = "Current user message must remain intact.";
+    const anthropicClassifier = new RepoClassifier(TEST_ENV);
+    await anthropicClassifier.classify(message, context);
+    const anthropicPrompt = mockMessagesCreate.mock.calls[0][0].messages[0].content;
+
+    mockMessagesCreate.mockClear();
+    mockSignedControlPlaneFetch.mockResolvedValue(
+      Response.json({
+        decision: {
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The message names prod.",
+          alternatives: [],
+        },
+      })
+    );
+    const openAiClassifier = new RepoClassifier({
+      ...TEST_ENV,
+      CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+    });
+    await openAiClassifier.classify(message, context);
+    const openAiPrompt = JSON.parse(mockSignedControlPlaneFetch.mock.calls[0][1].body).prompt;
+
+    expect(anthropicPrompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(openAiPrompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(openAiPrompt).toBe(anthropicPrompt);
+    expect(anthropicPrompt).toContain(message);
+    expect(anthropicPrompt).toContain("## Your Task");
+    expect(anthropicPrompt).toContain("[truncated]");
+  });
+
+  it("returns an actionable error when the current message cannot fit intact", async () => {
+    const classifier = new RepoClassifier(TEST_ENV);
+    const result = await classifier.classify("user-message ".repeat(CLASSIFIER_PROMPT_MAX_CHARS));
+
+    expect(result).toMatchObject({
+      target: null,
+      confidence: "low",
+      reasoning: "This Slack message is too long to classify. Please shorten it and try again.",
+      needsClarification: true,
+    });
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+    expect(mockSignedControlPlaneFetch).not.toHaveBeenCalled();
   });
 
   describe("routing rules", () => {

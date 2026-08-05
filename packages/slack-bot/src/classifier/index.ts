@@ -9,6 +9,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
   CLASSIFY_TARGET_TOOL_NAME,
+  CLASSIFIER_PROMPT_MAX_CHARS,
   classifierInferenceRequestSchema,
   classifierInferenceResponseSchema,
   classificationModelSchema,
@@ -42,6 +43,64 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
     "Use targetId as null when uncertain.",
   input_schema: CLASSIFY_TARGET_INPUT_SCHEMA,
 };
+
+const PROMPT_TRUNCATION_MARKER = "[truncated]";
+const PROMPT_TOO_LONG_REASONING =
+  "This Slack message is too long to classify. Please shorten it and try again.";
+const CLASSIFIER_PROMPT_INTRO =
+  "You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.";
+const CLASSIFIER_PROMPT_TASK = `## Your Task
+
+Analyze the message and context to determine which repository or environment the user is referring to.
+
+Consider:
+1. Explicit mentions of repository or environment names or aliases
+2. Technical keywords that match repository technologies
+3. File paths or code patterns mentioned
+4. Channel associations (some channels are associated with specific repos)
+5. Context from previous messages in the thread
+
+## Response Format
+
+Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
+- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
+- confidence: "high" | "medium" | "low"
+- reasoning: brief explanation
+- alternatives: other possible targets when confidence is not high`;
+
+function truncateWithMarker(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= PROMPT_TRUNCATION_MARKER.length) {
+    return PROMPT_TRUNCATION_MARKER.slice(0, Math.max(0, maxChars));
+  }
+  return `${value.slice(0, maxChars - PROMPT_TRUNCATION_MARKER.length)}${PROMPT_TRUNCATION_MARKER}`;
+}
+
+function boundClassificationPrompt(catalogAndContext: string, message: string): string {
+  const userSection = `## User's Message\n${message}`;
+  const fixedPrompt = `${CLASSIFIER_PROMPT_INTRO}\n\n${userSection}\n\n${CLASSIFIER_PROMPT_TASK}`;
+  const catalogBudget = CLASSIFIER_PROMPT_MAX_CHARS - fixedPrompt.length - 2;
+
+  if (catalogBudget >= 0 && catalogAndContext.length <= catalogBudget) {
+    return `${CLASSIFIER_PROMPT_INTRO}\n\n${catalogAndContext}\n\n${userSection}\n\n${CLASSIFIER_PROMPT_TASK}`;
+  }
+
+  // Keep the current user message and task intact whenever the catalog/context
+  // is the part that made the generated prompt exceed the provider limit.
+  if (fixedPrompt.length <= CLASSIFIER_PROMPT_MAX_CHARS && catalogBudget >= 0) {
+    const boundedCatalog = truncateWithMarker(catalogAndContext, Math.max(0, catalogBudget));
+    return `${CLASSIFIER_PROMPT_INTRO}\n\n${boundedCatalog}\n\n${userSection}\n\n${CLASSIFIER_PROMPT_TASK}`;
+  }
+
+  throw new ClassifierPromptTooLongError();
+}
+
+class ClassifierPromptTooLongError extends Error {
+  constructor() {
+    super(PROMPT_TOO_LONG_REASONING);
+    this.name = "ClassifierPromptTooLongError";
+  }
+}
 
 /**
  * Build the classification prompt for the LLM over the target catalog.
@@ -82,34 +141,12 @@ ${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
 }`;
   }
 
-  return `You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.
-
-## Available Repositories
+  const catalogAndContext = `## Available Repositories
 ${repoDescriptions}
 ${environmentSection}
-${contextSection}
+${contextSection}`;
 
-## User's Message
-${message}
-
-## Your Task
-
-Analyze the message and context to determine which repository or environment the user is referring to.
-
-Consider:
-1. Explicit mentions of repository or environment names or aliases
-2. Technical keywords that match repository technologies
-3. File paths or code patterns mentioned
-4. Channel associations (some channels are associated with specific repos)
-5. Context from previous messages in the thread
-
-## Response Format
-
-Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
-- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
-- confidence: "high" | "medium" | "low"
-- reasoning: brief explanation
-- alternatives: other possible targets when confidence is not high`;
+  return boundClassificationPrompt(catalogAndContext, message);
 }
 
 /**
@@ -119,6 +156,35 @@ function resolveClassificationModel(value: unknown): ClassificationModel | null 
   const raw = (typeof value === "string" ? value.trim() : "") || DEFAULT_CLASSIFICATION_MODEL;
   const parsed = classificationModelSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeAnthropicToolInput(raw: unknown): TargetClassificationDecision {
+  if (!isRecord(raw)) {
+    throw new Error("LLM response was not an object");
+  }
+
+  const rawTargetId = raw.targetId;
+  const targetId =
+    typeof rawTargetId === "string" && rawTargetId.trim().length > 0 ? rawTargetId.trim() : null;
+  const normalized = targetClassificationDecisionSchema.safeParse({
+    targetId,
+    confidence:
+      typeof raw.confidence === "string" ? raw.confidence.trim().toLowerCase() : raw.confidence,
+    reasoning: raw.reasoning,
+    alternatives: raw.alternatives,
+  });
+  if (!normalized.success) {
+    throw new Error("Invalid structured tool input in LLM response");
+  }
+
+  return {
+    ...normalized.data,
+    alternatives: [...new Set(normalized.data.alternatives)],
+  };
 }
 
 function extractStructuredResponse(
@@ -133,11 +199,7 @@ function extractStructuredResponse(
     throw new Error("No structured tool_use classification in LLM response");
   }
 
-  const parsed = targetClassificationDecisionSchema.safeParse(toolUseBlock.input);
-  if (!parsed.success) {
-    throw new Error("Invalid structured classification in LLM response");
-  }
-  return parsed.data;
+  return normalizeAnthropicToolInput(toolUseBlock.input);
 }
 
 /**
@@ -426,7 +488,9 @@ export class RepoClassifier {
         target: null,
         confidence: "low",
         reasoning:
-          "Could not classify a target from structured model output. Please pick one below.",
+          e instanceof ClassifierPromptTooLongError
+            ? PROMPT_TOO_LONG_REASONING
+            : "Could not classify a target from structured model output. Please pick one below.",
         // No basis to suggest specific targets on a classification failure;
         // the picker lets the user search the full list.
         alternatives: undefined,
