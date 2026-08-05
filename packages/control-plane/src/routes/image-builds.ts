@@ -21,6 +21,7 @@ import {
   type ImageBuildScope,
 } from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
+import { repositoryShaEntrySchema } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
@@ -50,12 +51,6 @@ const logger = createLogger("router:image-builds");
 const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 
-const repositoryShaEntrySchema = z.object({
-  repoOwner: z.string().min(1),
-  repoName: z.string().min(1),
-  baseSha: z.string().min(1),
-});
-
 /**
  * Build-complete callback body. Every field is required: all providers bind a
  * provider session before the runtime launches, and the runtime always
@@ -69,7 +64,15 @@ const buildCompleteBodySchema = z.object({
   runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
     message: "must start with v<number>",
   }),
-  build_duration_seconds: z.number().nonnegative(),
+  // The converted milliseconds must stay finite: Infinity would be
+  // canonicalized to null by JSON.stringify inside the completion hash and
+  // the persisted row.
+  build_duration_seconds: z
+    .number()
+    .nonnegative()
+    .refine((value) => Number.isFinite(value * MS_PER_SECOND), {
+      message: "must convert to finite milliseconds",
+    }),
 });
 
 const buildFailedBodySchema = z.object({

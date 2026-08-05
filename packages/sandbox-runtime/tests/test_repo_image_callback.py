@@ -12,6 +12,7 @@ from sandbox_runtime.repo_image_callback import (
     FAILURE_CALLBACK_URL_ENV,
     PROVIDER_SESSION_ID_ENV,
     RepoImageBuildCallback,
+    RepoImageCallbackMisconfigured,
 )
 
 
@@ -33,7 +34,8 @@ def test_from_env_rejects_partial_configuration(monkeypatch):
     monkeypatch.setenv(CALLBACK_TOKEN_ENV, "callback-token")
     monkeypatch.setenv(PROVIDER_SESSION_ID_ENV, "vercel-session-1")
 
-    assert RepoImageBuildCallback.from_env(logger) is None
+    with pytest.raises(RepoImageCallbackMisconfigured):
+        RepoImageBuildCallback.from_env(logger)
     logger.error.assert_called_once()
 
 
@@ -45,7 +47,8 @@ def test_from_env_rejects_missing_failure_callback_url(monkeypatch):
     monkeypatch.setenv(CALLBACK_TOKEN_ENV, "callback-token")
     monkeypatch.setenv(PROVIDER_SESSION_ID_ENV, "vercel-session-1")
 
-    assert RepoImageBuildCallback.from_env(logger) is None
+    with pytest.raises(RepoImageCallbackMisconfigured):
+        RepoImageBuildCallback.from_env(logger)
     logger.error.assert_called_once()
 
 
@@ -60,7 +63,9 @@ def test_from_env_rejects_missing_provider_session_id(monkeypatch):
     monkeypatch.setenv(CALLBACK_TOKEN_ENV, "callback-token")
     monkeypatch.delenv(PROVIDER_SESSION_ID_ENV, raising=False)
 
-    assert RepoImageBuildCallback.from_env(logger) is None
+    with pytest.raises(RepoImageCallbackMisconfigured) as excinfo:
+        RepoImageBuildCallback.from_env(logger)
+    assert PROVIDER_SESSION_ID_ENV in str(excinfo.value)
     logger.error.assert_called_once()
 
 
@@ -164,6 +169,7 @@ async def test_retries_transient_callback_failures(monkeypatch):
         callback_url="https://cp.test/repo-images/build-complete",
         failure_callback_url="https://cp.test/repo-images/build-failed",
         token="callback-token",
+        provider_session_id="vercel-session-1",
         logger=MagicMock(),
     )
 

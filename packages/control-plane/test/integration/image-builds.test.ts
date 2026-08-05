@@ -854,6 +854,9 @@ describe("Image builds", () => {
       ],
       ["missing build_duration_seconds", { build_duration_seconds: undefined }],
       ["negative build_duration_seconds", { build_duration_seconds: -1 }],
+      // Finite seconds whose ×1000 conversion overflows to Infinity, which
+      // JSON.stringify would canonicalize to null downstream.
+      ["overflowing build_duration_seconds", { build_duration_seconds: 1e308 }],
     ])("fails registration closed on %s", async (_label, overrides) => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-invalid");

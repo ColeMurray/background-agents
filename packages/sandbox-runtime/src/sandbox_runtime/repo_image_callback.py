@@ -24,6 +24,16 @@ CALLBACK_TOKEN_ENV = "OI_REPO_IMAGE_CALLBACK_TOKEN"
 PROVIDER_SESSION_ID_ENV = "OI_REPO_IMAGE_PROVIDER_SESSION_ID"
 
 
+class RepoImageCallbackMisconfigured(Exception):
+    """Some but not all build-callback environment variables are set.
+
+    Raised instead of returning None so a build-mode sandbox aborts with a
+    nonzero exit rather than running the build with completion reporting
+    silently disabled (which would leave the control-plane row wedged in
+    `building` until the provider-side timeout reaper fires).
+    """
+
+
 @dataclass(frozen=True)
 class RepoImageBuildCallback:
     """Authenticated callback reporter for image build mode."""
@@ -39,31 +49,37 @@ class RepoImageBuildCallback:
 
     @classmethod
     def from_env(cls, logger: StructuredLogger | None = None) -> RepoImageBuildCallback | None:
-        """Create a callback reporter from build-mode environment variables."""
+        """Create a callback reporter from build-mode environment variables.
+
+        Returns None when no callback variable is set at all (not an
+        image-build callback context). Raises RepoImageCallbackMisconfigured
+        when only some are set: the control plane rejects callbacks missing
+        any field, so a partially configured build must abort at boot instead
+        of running with reporting silently disabled.
+        """
         build_id = os.environ.get(BUILD_ID_ENV, "")
         callback_url = os.environ.get(CALLBACK_URL_ENV, "")
         failure_callback_url = os.environ.get(FAILURE_CALLBACK_URL_ENV, "")
         token = os.environ.get(CALLBACK_TOKEN_ENV, "")
         provider_session_id = os.environ.get(PROVIDER_SESSION_ID_ENV, "")
 
-        if not build_id and not callback_url and not token:
+        values = (
+            (BUILD_ID_ENV, build_id),
+            (CALLBACK_URL_ENV, callback_url),
+            (FAILURE_CALLBACK_URL_ENV, failure_callback_url),
+            (CALLBACK_TOKEN_ENV, token),
+            (PROVIDER_SESSION_ID_ENV, provider_session_id),
+        )
+        if not any(value for _name, value in values):
             return None
 
         log = logger or get_logger("repo_image_callback")
-        missing = [
-            name
-            for name, value in (
-                (BUILD_ID_ENV, build_id),
-                (CALLBACK_URL_ENV, callback_url),
-                (FAILURE_CALLBACK_URL_ENV, failure_callback_url),
-                (CALLBACK_TOKEN_ENV, token),
-                (PROVIDER_SESSION_ID_ENV, provider_session_id),
-            )
-            if not value
-        ]
+        missing = [name for name, value in values if not value]
         if missing:
             log.error("repo_image.callback_misconfigured", missing=missing)
-            return None
+            raise RepoImageCallbackMisconfigured(
+                f"partial build-callback configuration; missing: {', '.join(missing)}"
+            )
 
         return cls(
             build_id=build_id,
