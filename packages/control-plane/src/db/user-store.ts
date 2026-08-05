@@ -1,3 +1,4 @@
+import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
 import { generateId } from "../auth/crypto";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
@@ -36,6 +37,7 @@ export interface UserIdentity {
   providerUserId: string;
   providerLogin: string | null;
   providerEmail: string | null;
+  providerIssuer: string | null;
   createdAt: number;
 }
 
@@ -77,6 +79,7 @@ interface UserIdentityRow {
   provider_user_id: string;
   provider_login: string | null;
   provider_email: string | null;
+  provider_issuer: string | null;
   created_at: number;
 }
 
@@ -101,6 +104,7 @@ function toUserIdentity(row: UserIdentityRow): UserIdentity {
     providerUserId: row.provider_user_id,
     providerLogin: row.provider_login,
     providerEmail: row.provider_email,
+    providerIssuer: row.provider_issuer,
     createdAt: row.created_at,
   };
 }
@@ -206,10 +210,11 @@ export class UserStore {
     const id = generateId();
     const now = Date.now();
     const email = identity.providerEmail?.toLowerCase() ?? null;
+    const issuer = getSignInProviderIssuer(identity.provider);
 
     await this.db
       .prepare(
-        "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_login, provider_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_login, provider_email, provider_issuer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
       )
       .bind(
         id,
@@ -218,6 +223,7 @@ export class UserStore {
         identity.providerUserId,
         identity.providerLogin ?? null,
         email,
+        issuer,
         now
       )
       .run();
@@ -229,6 +235,7 @@ export class UserStore {
       providerUserId: identity.providerUserId,
       providerLogin: identity.providerLogin ?? null,
       providerEmail: email,
+      providerIssuer: issuer,
       createdAt: now,
     };
   }
@@ -357,6 +364,7 @@ export class UserStore {
     const now = Date.now();
     const displayName = identity.displayName ?? null;
     const avatarUrl = identity.avatarUrl ?? null;
+    const issuer = getSignInProviderIssuer(identity.provider);
 
     await this.db.batch([
       this.db
@@ -366,7 +374,7 @@ export class UserStore {
         .bind(userId, displayName, normalizedEmail, avatarUrl, now, now),
       this.db
         .prepare(
-          "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_login, provider_email, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+          "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_login, provider_email, provider_issuer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(
           identityId,
@@ -375,6 +383,7 @@ export class UserStore {
           identity.providerUserId,
           identity.providerLogin ?? null,
           normalizedEmail,
+          issuer,
           now
         ),
     ]);

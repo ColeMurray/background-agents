@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { parseEnabledSignInProviders } from "./sign-in-provider";
+import { getSignInProviderIssuer, parseEnabledSignInProviders } from "./sign-in-provider";
+
+describe("getSignInProviderIssuer", () => {
+  it.each([
+    ["github", "https://github.com"],
+    ["google", "https://accounts.google.com"],
+    ["slack", null],
+    ["linear", null],
+  ])("maps %s to its canonical issuer", (provider, expectedIssuer) => {
+    expect(getSignInProviderIssuer(provider)).toBe(expectedIssuer);
+  });
+});
 
 describe("parseEnabledSignInProviders", () => {
   it("accepts the compiled providers in canonical order", () => {

@@ -4,7 +4,11 @@ import {
   parseAdmissionBoolean,
   type AdmissionPolicyConfig,
 } from "./admission-policy";
-import { SIGN_IN_PROVIDERS, type SignInProvider } from "@open-inspect/shared/sign-in-provider";
+import {
+  SIGN_IN_PROVIDERS,
+  SIGN_IN_PROVIDER_ISSUERS,
+  type SignInProvider,
+} from "@open-inspect/shared/sign-in-provider";
 import { createUserAuth, type UserAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
@@ -12,7 +16,6 @@ import { GoogleSignInProfileResolver } from "./providers/google-profile";
 import { D1CanonicalUserProjection } from "../../db/canonical-user-projection";
 import type { Env } from "../../types";
 
-const GITHUB_ISSUER = "https://github.com";
 const MINIMUM_SECRET_LENGTH = 32;
 
 export class UserAuthConfigurationError extends Error {
@@ -149,7 +152,7 @@ function createGitHubAuthConfig(
 
   const profile = new GitHubSignInProfileResolver({
     identityResolver: new GitHubProviderIdentityResolver({
-      issuer: GITHUB_ISSUER,
+      issuer: SIGN_IN_PROVIDER_ISSUERS.github,
       userAgent: `${appName} Control Plane`,
     }),
     admissionPolicy,

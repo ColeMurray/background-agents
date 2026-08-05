@@ -5,6 +5,18 @@ export const SIGN_IN_PROVIDERS = ["github", "google"] as const;
 
 export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number];
 
+export const SIGN_IN_PROVIDER_ISSUERS = {
+  github: "https://github.com",
+  google: "https://accounts.google.com",
+} as const satisfies Readonly<Record<SignInProvider, string>>;
+
+export function getSignInProviderIssuer(provider: string): string | null {
+  if (provider === "github" || provider === "google") {
+    return SIGN_IN_PROVIDER_ISSUERS[provider];
+  }
+  return null;
+}
+
 export interface EnabledSignInProviders {
   readonly providers: readonly SignInProvider[];
 }

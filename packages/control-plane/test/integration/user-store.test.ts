@@ -3,6 +3,13 @@ import { env } from "cloudflare:test";
 import { UserStore } from "../../src/db/user-store";
 import { cleanD1Tables } from "./cleanup";
 
+const providerIssuers = [
+  ["github", "https://github.com"],
+  ["google", "https://accounts.google.com"],
+  ["slack", null],
+  ["linear", null],
+] as const;
+
 describe("UserStore", () => {
   let store: UserStore;
 
@@ -14,6 +21,16 @@ describe("UserStore", () => {
   // ── resolveOrCreateUser ─────────────────────────────────────────
 
   describe("resolveOrCreateUser", () => {
+    it.each(providerIssuers)("stores the canonical issuer for %s", async (provider, issuer) => {
+      await store.resolveOrCreateUser({
+        provider,
+        providerUserId: `${provider}-subject`,
+      });
+
+      const identity = await store.getIdentity(provider, `${provider}-subject`);
+      expect(identity?.providerIssuer).toBe(issuer);
+    });
+
     it("creates a new user with no email", async () => {
       const result = await store.resolveOrCreateUser({
         provider: "github",
@@ -249,6 +266,23 @@ describe("UserStore", () => {
         cnt: number;
       }>();
       expect(allUsers!.cnt).toBe(1);
+    });
+  });
+
+  // ── createIdentity ──────────────────────────────────────────────
+
+  describe("createIdentity", () => {
+    it.each(providerIssuers)("stores the canonical issuer for %s", async (provider, issuer) => {
+      const user = await store.createUser({ displayName: "Alice" });
+
+      await store.createIdentity({
+        userId: user.id,
+        provider,
+        providerUserId: `${provider}-subject`,
+      });
+
+      const identity = await store.getIdentity(provider, `${provider}-subject`);
+      expect(identity?.providerIssuer).toBe(issuer);
     });
   });
 
