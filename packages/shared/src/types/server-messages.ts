@@ -1,8 +1,23 @@
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
-import { sandboxEventSchema, tolerantSandboxEventsSchema } from "./sandbox-events";
+import { sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
+
+/**
+ * Sandbox event arrays for session hydration — both the initial `subscribed`
+ * replay and paginated `history_page` items, which read from the same event
+ * store. Resilient to unknown/legacy event shapes: each event is validated
+ * individually and dropped if it doesn't match, instead of failing the whole
+ * message. A single unrecognized event must never wedge session hydration and
+ * strand the client on "loading session" forever.
+ */
+const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
+  events.flatMap((event) => {
+    const result = sandboxEventSchema.safeParse(event);
+    return result.success ? [result.data] : [];
+  })
+);
 
 const sessionStateSchema = z.object({
   id: z.string(),
