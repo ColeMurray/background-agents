@@ -73,14 +73,26 @@ def test_finalization_grace_matches_control_plane_contract():
         / "timeouts.ts"
     ).read_text()
     match = re.search(
-        r"export\s+const\s+IMAGE_BUILD_FINALIZATION_GRACE_MS\s*=\s*"
-        r"(\d+)\s*\*\s*(\d+)\s*\*\s*MS_PER_SECOND\s*;",
+        r"export\s+const\s+IMAGE_BUILD_FINALIZATION_GRACE_MS\s*=\s*([^;]+);",
         ts_source,
     )
-
     assert match is not None, "missing TS constant: IMAGE_BUILD_FINALIZATION_GRACE_MS"
-    ts_grace_seconds = int(match.group(1)) * int(match.group(2))
-    assert ts_grace_seconds == IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+
+    ms_per_second_match = re.search(r"const\s+MS_PER_SECOND\s*=\s*(\d+)\s*;", ts_source)
+    assert ms_per_second_match is not None, "missing TS constant: MS_PER_SECOND"
+    ms_per_second = int(ms_per_second_match.group(1))
+
+    ts_grace_ms = 1
+    for factor in (part.strip() for part in match.group(1).split("*")):
+        if factor == "MS_PER_SECOND":
+            ts_grace_ms *= ms_per_second
+        else:
+            assert factor.isdigit(), (
+                "could not evaluate IMAGE_BUILD_FINALIZATION_GRACE_MS: expected a "
+                f"product of integer literals and MS_PER_SECOND, got factor {factor!r}"
+            )
+            ts_grace_ms *= int(factor)
+    assert ts_grace_ms == IMAGE_BUILD_FINALIZATION_GRACE_SECONDS * ms_per_second
 
 
 def _load_callback_env_manifest() -> dict:

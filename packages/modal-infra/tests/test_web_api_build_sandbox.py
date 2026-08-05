@@ -238,6 +238,46 @@ async def test_create_rejects_non_integer_build_timeout(monkeypatch, field):
 
 
 @pytest.mark.asyncio
+async def test_create_reads_legacy_build_timeout_key_during_rename_skew(monkeypatch):
+    """An older control plane sends build_timeout_seconds; honor it until both planes rename."""
+    service = _patch_dependencies(monkeypatch)
+
+    await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            **CALLBACK_CONTEXT,
+            "build_timeout_seconds": 4200,
+        },
+    )
+
+    assert service.create.await_args.kwargs["timeout_seconds"] == 4200
+
+
+@pytest.mark.asyncio
+async def test_create_prefers_renamed_provider_session_timeout_key_over_legacy(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+
+    await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            **CALLBACK_CONTEXT,
+            "provider_session_timeout_seconds": 2400,
+            "build_timeout_seconds": 4200,
+        },
+    )
+
+    assert service.create.await_args.kwargs["timeout_seconds"] == 2400
+
+
+@pytest.mark.asyncio
 async def test_create_clamps_build_timeout_to_provider_maximum(monkeypatch):
     service = _patch_dependencies(monkeypatch)
 
