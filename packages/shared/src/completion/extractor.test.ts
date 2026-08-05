@@ -267,6 +267,28 @@ describe("buildAgentResponseFromEvents", () => {
 });
 
 describe("extractAgentResponse", () => {
+  it("returns a failed response when the events response is malformed", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch() {
+        return Response.json({ events: [{ id: "event-1", type: "token" }], hasMore: false });
+      },
+    };
+
+    await expect(
+      extractAgentResponse(
+        { fetcher, auth: { service: "slack-bot", secret: "test-secret" } },
+        "session-1",
+        "msg-1"
+      )
+    ).resolves.toEqual({
+      textContent: "",
+      toolCalls: [],
+      artifacts: [],
+      mediaArtifacts: [],
+      success: false,
+    });
+  });
+
   it("filters fetched session artifacts to the message event window", async () => {
     const fetcher: ControlPlaneFetcher = {
       async fetch(input) {
@@ -332,5 +354,37 @@ describe("extractAgentResponse", () => {
         metadata: { head: "current" },
       },
     ]);
+  });
+
+  it("ignores a malformed artifacts response", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = String(input);
+        if (url.includes("/events")) {
+          return Response.json({
+            events: [
+              {
+                id: "complete:msg-1",
+                type: "execution_complete",
+                data: { success: true },
+                messageId: "msg-1",
+                createdAt: 200,
+              },
+            ],
+            hasMore: false,
+          });
+        }
+
+        return Response.json({ artifacts: [{ id: "artifact-1", type: "branch" }] });
+      },
+    };
+
+    const response = await extractAgentResponse(
+      { fetcher, auth: { service: "slack-bot", secret: "test-secret" } },
+      "session-1",
+      "msg-1"
+    );
+
+    expect(response).toMatchObject({ success: true, artifacts: [] });
   });
 });

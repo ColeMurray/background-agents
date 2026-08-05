@@ -257,7 +257,7 @@ describe("ImageBuildFinalizer", () => {
       "image-1",
       expect.any(Array),
       "v53-runtime",
-      12_500,
+      12.5,
       expect.any(String)
     );
   });

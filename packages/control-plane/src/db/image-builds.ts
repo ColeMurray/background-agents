@@ -13,8 +13,6 @@ import type {
 import { ImageBuildFinalizationStore } from "./image-build-finalization";
 import type { SqlDatabase } from "./sql-database";
 
-const MS_PER_SECOND = 1000;
-
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
 
@@ -292,7 +290,7 @@ export class ImageBuildStore {
     providerImageId: string,
     repositoryShas: RepositoryShaEntry[],
     runtimeVersion: string,
-    buildDurationMs: number,
+    buildDurationSeconds: number,
     finalizationLeaseToken?: string
   ): Promise<MarkImageBuildReadyResult> {
     const build = await this.db
@@ -337,7 +335,7 @@ export class ImageBuildStore {
         providerImageId,
         JSON.stringify(repositoryShas),
         runtimeVersion,
-        buildDurationMs / MS_PER_SECOND,
+        buildDurationSeconds,
         buildId,
         provider,
         ...(finalizationLeaseToken ? [finalizationLeaseToken] : []),
@@ -359,7 +357,7 @@ export class ImageBuildStore {
           providerSessionId: build.provider_session_id,
           repositoryShas,
           runtimeVersion,
-          buildDurationMs,
+          buildDurationSeconds,
           scopeKind: build.scope_kind,
           scopeId: build.scope_id,
           createdAt: build.created_at,
@@ -426,7 +424,7 @@ export class ImageBuildStore {
     providerSessionId: string | null;
     repositoryShas: RepositoryShaEntry[];
     runtimeVersion: string;
-    buildDurationMs: number;
+    buildDurationSeconds: number;
     scopeKind: ImageBuildScopeKind;
     scopeId: string;
     createdAt: number;
@@ -458,7 +456,7 @@ export class ImageBuildStore {
         params.providerImageId,
         JSON.stringify(params.repositoryShas),
         params.runtimeVersion,
-        params.buildDurationMs / MS_PER_SECOND,
+        params.buildDurationSeconds,
         params.buildId,
         params.provider,
         ...(params.finalizationLeaseToken ? [params.finalizationLeaseToken] : []),

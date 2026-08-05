@@ -93,6 +93,14 @@ export function resolveRepositoryTarget(repo, repositories) {
   return owner.split("/").some((segment) => !segment) ? null : { owner, name };
 }
 
+export function formatPullRequestSuccess(result) {
+  const status =
+    result?.state === "draft"
+      ? "The pull request is in draft mode."
+      : "The pull request is now ready for review.";
+  return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\n${status}`;
+}
+
 async function getCurrentBranch(repoPath) {
   try {
     const gitArgs = repoPath
@@ -140,12 +148,19 @@ export default tool({
         'Target repository as "owner/name". Required when the session spans multiple ' +
           "repositories; may be omitted for single-repository sessions."
       ),
+    draft: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether to open the pull request as a draft. Set to true only when the user explicitly asks for a draft; otherwise omit this field so the pull request is ready for review. Note: repository policy may still require draft mode."
+      ),
   },
   async execute(args, context) {
     console.log(`[create-pull-request] execute() called with args:`, JSON.stringify(args));
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
     const baseBranch = args.baseBranch; // undefined if not provided, server will use default
+    const draft = args.draft; // undefined if not provided, server falls back to repo setting
 
     // Resolve the target repository for multi-repo sessions.
     const repositories = getRepositories();
@@ -200,6 +215,7 @@ export default tool({
           headBranch: headBranch,
           repoOwner: repoOwner,
           repoName: repoName,
+          draft: draft,
           timestamp: Date.now(),
         }),
       });
@@ -237,7 +253,7 @@ export default tool({
       }
 
       console.log(`[create-pull-request] SUCCESS: PR #${result.prNumber} created`);
-      return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\nThe PR is now ready for review.`;
+      return formatPullRequestSuccess(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`[create-pull-request] ERROR: ${message}`);

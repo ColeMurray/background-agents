@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SharedSlack from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 
 const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
@@ -6,9 +7,12 @@ const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
   mockVerifySlackSignature: vi.fn(),
 }));
 
-vi.mock("@open-inspect/shared/slack", () => {
-  return { verifySlackSignature: mockVerifySlackSignature };
-});
+// Only the signature check is stubbed; the payload schemas are the real ones so
+// the test exercises the production validation boundary.
+vi.mock("@open-inspect/shared/slack", async (importOriginal) => ({
+  ...(await importOriginal<typeof SharedSlack>()),
+  verifySlackSignature: mockVerifySlackSignature,
+}));
 
 vi.mock("../events/dispatcher", () => ({
   handleSlackEvent: mockHandleSlackEvent,
@@ -30,6 +34,20 @@ function makeEnv(kvOperation: "get" | "put"): Env {
 }
 
 function eventRequest(): Request {
+  return slackRequest(
+    JSON.stringify({
+      type: "event_callback",
+      event_id: EVENT_ID,
+      event: {
+        type: "app_home_opened",
+        tab: "home",
+        user: "U123",
+      },
+    })
+  );
+}
+
+function slackRequest(body: string): Request {
   return new Request("http://localhost/events", {
     method: "POST",
     headers: {
@@ -39,15 +57,7 @@ function eventRequest(): Request {
       "x-slack-retry-num": "2",
       "x-slack-retry-reason": "http_error",
     },
-    body: JSON.stringify({
-      type: "event_callback",
-      event_id: EVENT_ID,
-      event: {
-        type: "app_home_opened",
-        tab: "home",
-        user: "U123",
-      },
-    }),
+    body,
   });
 }
 
@@ -109,4 +119,63 @@ describe("POST /events deduplication", () => {
       expect(logEntry?.error_stack).toEqual(expect.any(String));
     }
   );
+
+  it("dispatches a valid event with file and attachment fields", async () => {
+    const env = makeEnv("get");
+    const ctx = makeCtx();
+    const response = await eventRoutes.fetch(
+      slackRequest(
+        JSON.stringify({
+          type: "event_callback",
+          event: {
+            type: "message",
+            text: "see attached",
+            user: "U123",
+            channel: "C123",
+            ts: "123.456",
+            files: [{ id: "F123", name: "trace.txt", size: 42, extra: "ignored" }],
+            attachments: [{ is_share: true, text: "shared body", files: [{ id: "F456" }] }],
+          },
+        })
+      ),
+      env,
+      ctx
+    );
+
+    expect(response.status).toBe(200);
+    await ctx.waitUntil.mock.calls[0][0];
+    expect(mockHandleSlackEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          files: [{ id: "F123", name: "trace.txt", size: 42 }],
+          attachments: [{ is_share: true, text: "shared body", files: [{ id: "F456" }] }],
+        }),
+      }),
+      env,
+      expect.any(String),
+      expect.any(Function)
+    );
+  });
+
+  it("rejects malformed JSON", async () => {
+    const env = makeEnv("get");
+    const response = await eventRoutes.fetch(slackRequest("{"), env, makeCtx());
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid payload" });
+    expect(mockHandleSlackEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial payloads without a type", async () => {
+    const env = makeEnv("get");
+    const response = await eventRoutes.fetch(
+      slackRequest(JSON.stringify({ event_id: EVENT_ID })),
+      env,
+      makeCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid payload" });
+    expect(mockHandleSlackEvent).not.toHaveBeenCalled();
+  });
 });

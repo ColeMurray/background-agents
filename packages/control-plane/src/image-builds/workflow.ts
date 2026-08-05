@@ -371,7 +371,7 @@ export class ImageBuildWorkflow {
       completionHash: job.completionHash,
       repositoryShas: completion.repositoryShas,
       runtimeVersion: completion.runtimeVersion,
-      buildDurationMs: completion.buildDurationMs,
+      buildDurationSeconds: completion.buildDurationSeconds,
       now: Date.now(),
     });
     if (acceptance === "rejected") {

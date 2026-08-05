@@ -155,17 +155,18 @@ export interface PullRequest {
   updatedAt: string;
 }
 
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-}
+/**
+ * The `/artifacts` list response is the session artifact shape verbatim — the
+ * producer serializes stored artifact rows, `updatedAt` included. It reuses
+ * `sessionArtifactSchema` rather than restating the fields so the two can never
+ * drift (a restated copy silently stripped `updatedAt`).
+ */
+export const listArtifactsResponseSchema = z.object({
+  artifacts: z.array(sessionArtifactSchema),
+});
 
-export interface ListArtifactsResponse {
-  artifacts: ArtifactResponse[];
-}
+export type ArtifactResponse = z.infer<typeof sessionArtifactSchema>;
+export type ListArtifactsResponse = z.infer<typeof listArtifactsResponseSchema>;
 
 export interface ToolCallSummary {
   tool: string;

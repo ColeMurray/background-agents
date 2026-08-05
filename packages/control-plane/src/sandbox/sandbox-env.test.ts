@@ -1,11 +1,23 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
+  buildImageBuildCallbackEnv,
+  buildImageBuildEnvVars,
   buildSandboxEnvVars,
   buildSessionConfig,
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
+  IMAGE_BUILD_MODE_ENV_VAR,
+  imageBuildSandboxIdentity,
+  REPO_IMAGE_CALLBACK_ENV,
+  RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
 } from "./sandbox-env";
-import { DEFAULT_SANDBOX_TIMEOUT_SECONDS, type CreateSandboxConfig } from "./provider";
+import {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  type CreateSandboxConfig,
+  type ImageBuildProviderTriggerConfig,
+} from "./provider";
 
 const baseInput = {
   sessionId: "session-123",
@@ -251,5 +263,191 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.LLM_KEY).toBe("sk-provider");
     expect(envVars.SANDBOX_ID).toBe("sandbox-456");
     expect(envVars).not.toHaveProperty("IGNORED");
+  });
+});
+
+describe("buildImageBuildEnvVars", () => {
+  const repositories = [
+    { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+    { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+  ];
+
+  it("assembles the full build-mode env on top of user vars", () => {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId: "build-env-env_flagship",
+      repositories,
+      scmIdentity: scmCloneIdentity("github"),
+      cloneToken: "clone-token",
+      baseEnvVars: { USER_SECRET: "value" },
+    });
+
+    expect(envVars).toEqual({
+      USER_SECRET: "value",
+      PYTHONUNBUFFERED: "1",
+      SANDBOX_ID: "build-env-env_flagship",
+      REPO_OWNER: "acme",
+      REPO_NAME: "web",
+      IMAGE_BUILD_MODE: "true",
+      SESSION_CONFIG: expect.any(String),
+      VCS_HOST: "github.com",
+      VCS_CLONE_USERNAME: "x-access-token",
+      VCS_CLONE_TOKEN: "clone-token",
+    });
+  });
+
+  it("serializes a repositories-bearing SESSION_CONFIG anchored to the primary branch", () => {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId: "build-env-env_flagship",
+      repositories,
+      scmIdentity: scmCloneIdentity("github"),
+    });
+
+    expect(JSON.parse(envVars.SESSION_CONFIG)).toEqual({
+      branch: "main",
+      repositories: [
+        { repo_owner: "acme", repo_name: "web", branch: "main" },
+        { repo_owner: "acme", repo_name: "api", branch: "develop" },
+      ],
+    });
+  });
+
+  it("scrubs every reserved callback key from the user layer", () => {
+    const baseEnvVars: Record<string, string> = { SAFE: "kept" };
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      baseEnvVars[key] = "user-controlled";
+    }
+
+    const envVars = buildImageBuildEnvVars({
+      sandboxId: "build-env-env_flagship",
+      repositories,
+      scmIdentity: scmCloneIdentity("github"),
+      baseEnvVars,
+    });
+
+    expect(envVars.SAFE).toBe("kept");
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      expect(envVars).not.toHaveProperty(key);
+    }
+  });
+
+  it("throws when the repository list is empty", () => {
+    expect(() =>
+      buildImageBuildEnvVars({
+        sandboxId: "build-env-env_flagship",
+        repositories: [],
+        scmIdentity: scmCloneIdentity("github"),
+      })
+    ).toThrow("image build requires at least one repository");
+  });
+});
+
+describe("imageBuildSandboxIdentity", () => {
+  const config: ImageBuildProviderTriggerConfig = {
+    buildId: "build-1",
+    scopeKind: "repo",
+    scopeId: "acme/web",
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    callbackUrl: "https://cp.test/image-builds/build-complete",
+    failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+    callbackToken: "callback-token",
+    buildExecutionTimeoutSeconds: 1800,
+    providerSessionTimeoutSeconds: 2400,
+    onProviderSessionCreated: async () => undefined,
+    correlation: { trace_id: "trace-1", request_id: "request-1" },
+  };
+
+  it("derives a stable sandbox id, a per-attempt name, and scope-carrying labels", () => {
+    expect(imageBuildSandboxIdentity(config, 1234)).toEqual({
+      sandboxId: "build-env-acme/web",
+      sandboxName: "build-env-acme/web-1234",
+      labels: {
+        openinspect_framework: "open-inspect",
+        openinspect_kind: "environment-image-build",
+        openinspect_build_id: "build-1",
+        openinspect_scope_kind: "repo",
+        openinspect_scope_id: "acme/web",
+        // Legacy label preserved for existing operator queries.
+        openinspect_environment: "acme/web",
+      },
+    });
+  });
+
+  it("is deterministic for a fixed timestamp", () => {
+    expect(imageBuildSandboxIdentity(config, 99)).toEqual(imageBuildSandboxIdentity(config, 99));
+  });
+});
+
+describe("buildImageBuildCallbackEnv", () => {
+  const values = {
+    buildId: "build-1",
+    callbackUrl: "https://cp.test/image-builds/build-complete",
+    failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+    token: "callback-token",
+  };
+
+  it("assembles the full callback env record from semantic values", () => {
+    expect(buildImageBuildCallbackEnv({ ...values, providerSessionId: "session-9" })).toEqual({
+      OI_REPO_IMAGE_BUILD_ID: "build-1",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://cp.test/image-builds/build-complete",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://cp.test/image-builds/build-failed",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "session-9",
+    });
+  });
+
+  it("omits the provider session id key when the id is not yet known", () => {
+    expect(buildImageBuildCallbackEnv(values)).toEqual({
+      OI_REPO_IMAGE_BUILD_ID: "build-1",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://cp.test/image-builds/build-complete",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://cp.test/image-builds/build-failed",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+    });
+  });
+});
+
+describe("cross-plane env-key contract manifest", () => {
+  // Single source of the cross-plane contract; the Python halves (runtime
+  // constants, Modal's RESERVED_USER_ENV_KEYS) are pinned to the same file in
+  // packages/modal-infra/tests/test_build_sandbox_lifecycle.py. Tests-only
+  // consumption: the runtime constants stay as code.
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json",
+        import.meta.url
+      ),
+      "utf8"
+    )
+  ) as {
+    callback_env: Record<string, string>;
+    build_mode_env_var: string;
+    execution_timeout_env_var: string;
+    reserved_only_control_plane: string[];
+    reserved_only_modal: string[];
+  };
+
+  it("pins REPO_IMAGE_CALLBACK_ENV to the manifest by value", () => {
+    expect(REPO_IMAGE_CALLBACK_ENV).toEqual({
+      buildId: manifest.callback_env.build_id,
+      callbackUrl: manifest.callback_env.callback_url,
+      failureCallbackUrl: manifest.callback_env.failure_callback_url,
+      token: manifest.callback_env.token,
+      providerSessionId: manifest.callback_env.provider_session_id,
+    });
+  });
+
+  it("pins the build-mode marker and execution-timeout key to the manifest", () => {
+    expect(IMAGE_BUILD_MODE_ENV_VAR).toBe(manifest.build_mode_env_var);
+    expect(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY).toBe(manifest.execution_timeout_env_var);
+  });
+
+  it("pins the reserved scrub list to the callback keys plus the control-plane-only extras", () => {
+    expect([...RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS].sort()).toEqual(
+      [...Object.values(manifest.callback_env), ...manifest.reserved_only_control_plane].sort()
+    );
+    // The Modal-only reserved key is scrubbed on the Python side, never here.
+    for (const key of manifest.reserved_only_modal) {
+      expect(RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS).not.toContain(key);
+    }
   });
 });

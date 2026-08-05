@@ -7,6 +7,7 @@ import {
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
 
@@ -146,6 +147,34 @@ describe("normalizeRoutingRules", () => {
       })
     );
     expect(normalizeRoutingRules(many)).toHaveLength(MAX_SLACK_ROUTING_RULES);
+  });
+});
+
+describe("slackIntegrationSettingsRoutingResponseSchema", () => {
+  it("parses a valid routing settings response", () => {
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse({
+      settings: {
+        defaults: {
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("parses a null settings response", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({ settings: null }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed routing rules", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({
+        settings: { defaults: { routingRules: [{ keyword: "frontend" }] } },
+      }).success
+    ).toBe(false);
   });
 });
 

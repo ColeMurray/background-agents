@@ -139,7 +139,12 @@ export function SessionHeader({
               />
             ) : (
               <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
-                <button type="button" onClick={handleStartRename} className="cursor-text">
+                <button
+                  type="button"
+                  className="max-w-full truncate cursor-text text-left"
+                  onClick={handleStartRename}
+                  title="Click to rename"
+                >
                   {resolvedTitle}
                 </button>
               </h1>

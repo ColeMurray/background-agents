@@ -102,6 +102,21 @@ const githubRepositoryLocationSchema = z.object({
   owner: z.object({ login: z.string() }),
 });
 
+/** Wire shape of GET /repos/{owner}/{repo}, limited to fields used for repo metadata. */
+const githubRepositoryInfoSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  full_name: z.string(),
+  default_branch: z.string(),
+  private: z.boolean(),
+  owner: z.object({ login: z.string() }),
+});
+
+/** Wire shape of a GitHub git-ref response, limited to the branch head SHA. */
+const githubBranchRefSchema = z.object({
+  object: z.object({ sha: z.string().min(1) }),
+});
+
 /** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -152,14 +167,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as {
-      id: number;
-      name: string;
-      full_name: string;
-      default_branch: string;
-      private: boolean;
-      owner: { login: string };
-    };
+    const data = await parseProviderResponse(
+      response,
+      githubRepositoryInfoSchema,
+      "Failed to get repository"
+    );
 
     return {
       owner: data.owner.login,
@@ -511,13 +523,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           response.status
         );
       }
-      const data = (await response.json()) as { object?: { sha?: unknown } };
-      if (typeof data.object?.sha !== "string" || !data.object.sha) {
-        throw new SourceControlProviderError(
-          "Failed to resolve branch head: malformed response",
-          "transient"
-        );
-      }
+      const data = await parseProviderResponse(
+        response,
+        githubBranchRefSchema,
+        "Failed to resolve branch head"
+      );
       return data.object.sha;
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;

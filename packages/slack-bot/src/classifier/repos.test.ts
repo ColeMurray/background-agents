@@ -66,6 +66,20 @@ describe("getRoutingRules", () => {
     expect(await getRoutingRules(env)).toEqual([{ keyword: "frontend", target: "acme/web" }]);
   });
 
+  it("fails open when routing rules have a malformed shape", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        settings: {
+          defaults: {
+            routingRules: [{ keyword: "frontend" }],
+          },
+        },
+      })
+    );
+
+    expect(await getRoutingRules(env)).toEqual([]);
+  });
+
   it("fails open to an empty list on a non-OK response", async () => {
     const env = makeEnv(new Response("error", { status: 500 }));
     expect(await getRoutingRules(env)).toEqual([]);
