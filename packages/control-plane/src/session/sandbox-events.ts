@@ -3,7 +3,6 @@ import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "../types";
-import { shouldPersistToolCallEvent } from "./event-persistence";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -156,14 +155,8 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "tool_call") {
       this.updateLastActivity(now);
-      if (shouldPersistToolCallEvent(event.status)) {
-        this.repository.createEvent({
-          id: generateId(),
-          type: event.type,
-          data: JSON.stringify(event),
-          messageId,
-          createdAt: now,
-        });
+      if (messageId) {
+        this.repository.upsertToolCallEvent(messageId, event, now);
       }
       this.messenger.broadcast({ type: "sandbox_event", event });
 

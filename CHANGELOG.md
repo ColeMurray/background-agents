@@ -2,6 +2,12 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 1, 2026
+
+**Grok models with your SuperGrok subscription.** Use Grok 4.5 or Grok Build 0.1 through managed xAI
+OAuth, with opt-in model controls and reasoning-effort settings for Grok 4.5. Refresh credentials
+stay encrypted in the control plane while sandboxes receive only short-lived access tokens.
+
 ## July 31, 2026
 
 **Automatic prebuild refresh.** Repository and environment images now rebuild automatically when
