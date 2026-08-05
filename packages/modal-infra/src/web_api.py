@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
 
+from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
 
 from .app import (
@@ -26,7 +27,6 @@ from .app import (
     internal_api_secret,
     validate_control_plane_url,
 )
-from .auth import AuthConfigurationError, verify_internal_token
 from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
 
