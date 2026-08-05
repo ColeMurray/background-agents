@@ -29,20 +29,30 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-let globalSettings: ScmGlobalConfig | null;
-let repoSettings: RepoSettingsEntry[];
+let globalData: unknown;
+let globalError: unknown;
+let repoSettingsData: unknown;
+let repoSettingsError: unknown;
 
 beforeEach(() => {
-  globalSettings = { defaults: { alwaysUseDraftMode: false } };
-  repoSettings = [{ repo: "acme/web", settings: { alwaysUseDraftMode: false } }];
+  globalData = {
+    settings: { defaults: { alwaysUseDraftMode: false } } satisfies ScmGlobalConfig,
+  };
+  globalError = undefined;
+  repoSettingsData = {
+    repos: [
+      { repo: "acme/web", settings: { alwaysUseDraftMode: false } },
+    ] satisfies RepoSettingsEntry[],
+  };
+  repoSettingsError = undefined;
   mutateMock.mockReset();
   useSWRMock.mockReset();
   useSWRMock.mockImplementation((key: string) => {
     if (key === "/api/scm-settings") {
-      return { data: { settings: globalSettings }, isLoading: false };
+      return { data: globalData, error: globalError, isLoading: false };
     }
     if (key === "/api/scm-settings/repos") {
-      return { data: { repos: repoSettings }, isLoading: false };
+      return { data: repoSettingsData, error: repoSettingsError, isLoading: false };
     }
     if (key === "/api/repos") {
       return { data: { repos: [] }, isLoading: false };
@@ -74,8 +84,10 @@ describe("getScmRepoSettingsPath", () => {
     expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked();
     expect(screen.getAllByRole("checkbox")[1]).not.toBeChecked();
 
-    globalSettings = { defaults: { alwaysUseDraftMode: true } };
-    repoSettings = [{ repo: "acme/web", settings: { alwaysUseDraftMode: true } }];
+    globalData = { settings: { defaults: { alwaysUseDraftMode: true } } };
+    repoSettingsData = {
+      repos: [{ repo: "acme/web", settings: { alwaysUseDraftMode: true } }],
+    };
     rerender(<ScmSettingsPage />);
 
     await waitFor(() => {
@@ -86,11 +98,31 @@ describe("getScmRepoSettingsPath", () => {
     await user.click(screen.getAllByRole("checkbox")[0]);
     await user.click(screen.getAllByRole("checkbox")[1]);
 
-    globalSettings = { defaults: { alwaysUseDraftMode: true } };
-    repoSettings = [{ repo: "acme/web", settings: { alwaysUseDraftMode: true } }];
+    globalData = { settings: { defaults: { alwaysUseDraftMode: true } } };
+    repoSettingsData = {
+      repos: [{ repo: "acme/web", settings: { alwaysUseDraftMode: true } }],
+    };
     rerender(<ScmSettingsPage />);
 
     expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked();
     expect(screen.getAllByRole("checkbox")[1]).not.toBeChecked();
+  });
+
+  it("does not render editable controls when a required settings query fails", () => {
+    globalError = new Error("request failed");
+
+    render(<ScmSettingsPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Unable to load source control settings");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("does not render editable controls for an unexpected settings response", () => {
+    repoSettingsData = { repos: [{ repo: "acme/web", settings: {} }] };
+
+    render(<ScmSettingsPage />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Unable to load source control settings");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 });

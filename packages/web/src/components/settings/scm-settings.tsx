@@ -59,19 +59,71 @@ interface ReposResponse {
   repos: EnrichedRepository[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isGlobalResponse(value: unknown): value is GlobalResponse {
+  if (!isRecord(value) || !("settings" in value)) return false;
+  if (value.settings === null) return true;
+  if (!isRecord(value.settings)) return false;
+  if (Object.keys(value.settings).some((key) => key !== "defaults")) return false;
+  if (value.settings.defaults === undefined) return true;
+  if (!isRecord(value.settings.defaults)) return false;
+  return (
+    Object.keys(value.settings.defaults).every((key) => key === "alwaysUseDraftMode") &&
+    (value.settings.defaults.alwaysUseDraftMode === undefined ||
+      typeof value.settings.defaults.alwaysUseDraftMode === "boolean")
+  );
+}
+
+function isRepoListResponse(value: unknown): value is RepoListResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.repos) &&
+    value.repos.every(
+      (entry) =>
+        isRecord(entry) &&
+        typeof entry.repo === "string" &&
+        isRecord(entry.settings) &&
+        Object.keys(entry.settings).every((key) => key === "alwaysUseDraftMode") &&
+        typeof entry.settings.alwaysUseDraftMode === "boolean"
+    )
+  );
+}
+
 export function ScmSettingsPage() {
-  const { data: globalData, isLoading: globalLoading } =
-    useSWR<GlobalResponse>(GLOBAL_SETTINGS_KEY);
-  const { data: repoSettingsData, isLoading: repoSettingsLoading } =
-    useSWR<RepoListResponse>(REPO_SETTINGS_KEY);
+  const {
+    data: globalData,
+    error: globalError,
+    isLoading: globalLoading,
+  } = useSWR<unknown>(GLOBAL_SETTINGS_KEY);
+  const {
+    data: repoSettingsData,
+    error: repoSettingsError,
+    isLoading: repoSettingsLoading,
+  } = useSWR<unknown>(REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
 
   if (globalLoading || repoSettingsLoading) {
     return <IntegrationSettingsSkeleton />;
   }
 
-  const settings = globalData?.settings;
-  const repoOverrides = repoSettingsData?.repos ?? [];
+  if (
+    globalError ||
+    repoSettingsError ||
+    !isGlobalResponse(globalData) ||
+    !isRepoListResponse(repoSettingsData)
+  ) {
+    return (
+      <div role="alert" className="border border-destructive/40 rounded-md p-5 text-sm">
+        Unable to load source control settings. Refresh the page to try again.
+      </div>
+    );
+  }
+
+  const settings = globalData.settings;
+  const repoOverrides = repoSettingsData.repos;
   const availableRepos = reposData?.repos ?? [];
 
   return (
