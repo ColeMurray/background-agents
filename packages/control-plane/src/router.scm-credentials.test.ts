@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleRequest } from "./router";
+import { handleRequest, isScmAgnosticRoute } from "./router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 function createEnv() {
@@ -145,5 +145,9 @@ describe("SCM credentials router provider gate", () => {
       error: "SCM provider 'gitlab' is not implemented in this deployment.",
     });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("allows GitLab deployments to reach the SCM-independent read-state route", async () => {
+    expect(isScmAgnosticRoute("PATCH", "/sessions/session-1/read-state")).toBe(true);
   });
 });

@@ -13,7 +13,6 @@ import {
   ImageBuildCallbackAuthUnavailableError,
   ImageBuildCompletionNotAcceptedError,
   ImageBuildFailureNotAcceptedError,
-  ImageBuildInvalidCallbackError,
   ImageBuildPlanningError,
   ImageBuildProviderUnconfiguredError,
   ImageBuildScopeNotFoundError,
@@ -21,7 +20,7 @@ import {
   ImageBuildWorkflowUnavailableError,
 } from "./errors";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "./maintenance";
-import { parseRuntimeVersionNumber, type ImageBuildProvider, type ImageBuildScope } from "./model";
+import type { ImageBuildProvider, ImageBuildScope } from "./model";
 import {
   ImageBuildPlanner,
   type PlannedCallbackAuth,
@@ -30,7 +29,6 @@ import {
 import { ImageBuildReaper } from "./reaper";
 import { resolveImageBuildProvider } from "./provider-policy";
 import { createImageBuildAdapterFactory, type ImageBuildAdapterFactory } from "./provider-factory";
-import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type {
   ImageBuildAdapter,
   CompleteImageBuildCallback,
@@ -57,14 +55,6 @@ export interface AcceptBuildFailedCommand {
   failure: FailImageBuildCallback;
   callbackToken?: string | null;
   context: ImageBuildWorkflowContext;
-}
-
-/** Runtime-reported metadata persisted before Queue finalization. */
-interface ValidatedBuildCompletion {
-  buildId: string;
-  repositoryShas: RepositoryShaEntry[];
-  runtimeVersion: string;
-  buildDurationMs: number;
 }
 
 /**
@@ -193,7 +183,19 @@ export class ImageBuildWorkflow {
     // Validate provider configuration before any database work. This keeps a
     // bad deployment from accumulating failed rows and preserves the most
     // actionable configuration error when multiple bindings are absent.
-    const adapter = this.createAdapterForOperation(provider, "trigger_build", ctx, "start");
+    let adapter: ImageBuildAdapter;
+    try {
+      adapter = this.adapterFactory.create(provider, "start");
+    } catch (e) {
+      logger.error("image_build.adapter_config_error", {
+        operation: "trigger_build",
+        provider,
+        error: errorMessage(e),
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
+    }
     if (!this.finalizationQueue) {
       throw new ImageBuildWorkflowUnavailableError("Image build finalization Queue not configured");
     }
@@ -269,7 +271,7 @@ export class ImageBuildWorkflow {
         return { type: "already_building", buildId: winner.id };
       }
 
-      const planned = await planner.planBuild({
+      const plan = await planner.planBuild({
         buildId,
         scope,
         callbackUrl,
@@ -280,7 +282,7 @@ export class ImageBuildWorkflow {
       });
 
       startAdapter = adapter;
-      await adapter.startBuild(planned.plan, {
+      await adapter.startBuild(plan, {
         bindProviderSession: async (providerSessionId) => {
           providerSessionIdForCleanup = providerSessionId;
           const bound = await this.store.bindProviderSession(buildId, provider, providerSessionId);
@@ -294,7 +296,7 @@ export class ImageBuildWorkflow {
         build_id: buildId,
         scope_kind: scope.kind,
         scope_id: scope.id,
-        repositories_fingerprint: planned.plan.repositoriesFingerprint,
+        repositories_fingerprint: plan.repositoriesFingerprint,
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
       });
@@ -350,31 +352,26 @@ export class ImageBuildWorkflow {
     command: AcceptBuildCompleteCommand
   ): Promise<ImageBuildWorkflowResult> {
     const { completion, context: ctx } = command;
-    const providerSessionId = completion.providerSessionId ?? "";
     const authenticated = await this.authorizeCompletionCallback(
       completion.buildId,
-      providerSessionId,
+      completion.providerSessionId,
       command.callbackToken,
       ctx
     );
-    const validated = this.validateCompletion(completion);
-    if (!providerSessionId) {
-      throw new ImageBuildInvalidCallbackError("provider_session_id is required");
-    }
     const job = await createImageBuildFinalizationJob({
       outcome: "success",
-      completion: { ...completion, ...validated, providerSessionId },
+      completion,
     });
 
     const acceptance = await this.store.finalization.acceptSuccessfulCompletion({
       buildId: authenticated.build.id,
       provider: authenticated.build.provider,
-      providerSessionId,
+      providerSessionId: completion.providerSessionId,
       tokenHash: authenticated.tokenHash,
       completionHash: job.completionHash,
-      repositoryShas: validated.repositoryShas,
-      runtimeVersion: validated.runtimeVersion,
-      buildDurationMs: validated.buildDurationMs,
+      repositoryShas: completion.repositoryShas,
+      runtimeVersion: completion.runtimeVersion,
+      buildDurationMs: completion.buildDurationMs,
       now: Date.now(),
     });
     if (acceptance === "rejected") {
@@ -385,12 +382,12 @@ export class ImageBuildWorkflow {
     }
 
     logger.info("image_build.build_complete_received", {
-      build_id: validated.buildId,
+      build_id: completion.buildId,
       scope_kind: authenticated.build.scope.kind,
       scope_id: authenticated.build.scope.id,
       provider: authenticated.build.provider,
-      provider_session_id: providerSessionId,
-      runtime_version: validated.runtimeVersion,
+      provider_session_id: completion.providerSessionId,
+      runtime_version: completion.runtimeVersion,
       replayed: acceptance === "replayed",
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -404,24 +401,20 @@ export class ImageBuildWorkflow {
    */
   async acceptBuildFailed(command: AcceptBuildFailedCommand): Promise<ImageBuildWorkflowResult> {
     const { failure, context: ctx } = command;
-    const providerSessionId = failure.providerSessionId ?? "";
     const authenticated = await this.authorizeCompletionCallback(
       failure.buildId,
-      providerSessionId,
+      failure.providerSessionId,
       command.callbackToken,
       ctx
     );
-    if (!providerSessionId) {
-      throw new ImageBuildInvalidCallbackError("provider_session_id is required");
-    }
     const job = await createImageBuildFinalizationJob({
       outcome: "failure",
-      failure: { ...failure, providerSessionId },
+      failure,
     });
     const acceptance = await this.store.finalization.acceptFailedCompletion({
       buildId: failure.buildId,
       provider: authenticated.build.provider,
-      providerSessionId,
+      providerSessionId: failure.providerSessionId,
       tokenHash: authenticated.tokenHash,
       completionHash: job.completionHash,
       errorMessage: failure.errorMessage,
@@ -438,7 +431,7 @@ export class ImageBuildWorkflow {
       scope_id: authenticated.build.scope.id,
       provider: authenticated.build.provider,
       error_message: failure.errorMessage,
-      provider_session_id: providerSessionId,
+      provider_session_id: failure.providerSessionId,
       replayed: acceptance === "replayed",
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
@@ -452,38 +445,6 @@ export class ImageBuildWorkflow {
     ctx: ImageBuildWorkflowContext
   ): Promise<{ deletedFailed: number; reapedFailed: number; reapedSuperseded: number }> {
     return this.reaper.cleanupImages(failedMaxAgeMs, ctx);
-  }
-
-  private validateCompletion(completion: CompleteImageBuildCallback): ValidatedBuildCompletion {
-    if (!completion.repositoryShas || completion.repositoryShas.length === 0) {
-      throw new ImageBuildInvalidCallbackError("repository_shas is required");
-    }
-    if (
-      typeof completion.runtimeVersion !== "string" ||
-      parseRuntimeVersionNumber(completion.runtimeVersion) === null
-    ) {
-      // Fail closed: an unversioned image must never be registered, or it
-      // could pass spawn selection's floor check.
-      throw new ImageBuildInvalidCallbackError(
-        "runtime_version is required and must start with v<number>"
-      );
-    }
-    if (
-      typeof completion.buildDurationMs !== "number" ||
-      !Number.isFinite(completion.buildDurationMs) ||
-      completion.buildDurationMs < 0
-    ) {
-      throw new ImageBuildInvalidCallbackError(
-        "build_duration_seconds must be a non-negative finite number"
-      );
-    }
-
-    return {
-      buildId: completion.buildId,
-      repositoryShas: completion.repositoryShas,
-      runtimeVersion: completion.runtimeVersion,
-      buildDurationMs: completion.buildDurationMs,
-    };
   }
 
   private async authorizeCompletionCallback(
@@ -558,39 +519,6 @@ export class ImageBuildWorkflow {
       trace_id: params.ctx.trace_id,
     });
     return new ImageBuildCallbackAuthRejectedError("Unauthorized");
-  }
-
-  private createAdapterForOperation(
-    provider: ImageBuildProvider,
-    operation: string,
-    ctx: ImageBuildWorkflowContext,
-    adapterOperation: "start" | "existing_session" = "existing_session"
-  ): ImageBuildAdapter {
-    return this.createAdapterGuarded(provider, operation, ctx, () =>
-      this.adapterFactory.create(provider, adapterOperation)
-    );
-  }
-
-  private createAdapterGuarded<TAdapter>(
-    provider: ImageBuildProvider,
-    operation: string,
-    ctx: ImageBuildWorkflowContext,
-    create: () => TAdapter,
-    buildId?: string
-  ): TAdapter {
-    try {
-      return create();
-    } catch (e) {
-      logger.error("image_build.adapter_config_error", {
-        operation,
-        build_id: buildId,
-        provider,
-        error: errorMessage(e),
-        request_id: ctx.request_id,
-        trace_id: ctx.trace_id,
-      });
-      throw new ImageBuildProviderUnconfiguredError("Image build provider is not configured", e);
-    }
   }
 }
 

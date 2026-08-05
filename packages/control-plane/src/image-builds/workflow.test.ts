@@ -5,7 +5,6 @@ import {
   ImageBuildCallbackAuthRejectedError,
   ImageBuildCompletionNotAcceptedError,
   ImageBuildFailureNotAcceptedError,
-  ImageBuildInvalidCallbackError,
   ImageBuildScopeNotFoundError,
   ImageBuildTriggerFailedError,
   ImageBuildWorkflowUnavailableError,
@@ -15,7 +14,7 @@ import { IMAGE_BUILD_CLEANUP_ATTEMPT_MS } from "./reaper";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import type { ImageBuildFinalizationQueue } from "./finalization-job";
-import type { PlannedImageBuild } from "./types";
+import type { ImageBuildPlan } from "./types";
 import { ImageBuildWorkflow } from "./workflow";
 
 const ENV_SCOPE: ImageBuildScope = { kind: "environment", id: "env_1" };
@@ -79,42 +78,36 @@ function createAdapter() {
   };
 }
 
-function plannedBuild(overrides: Record<string, unknown> = {}): PlannedImageBuild {
+function plannedBuild(overrides: Record<string, unknown> = {}): ImageBuildPlan {
   return {
-    plan: {
-      buildId: "imgb-env_1-1-abcd",
-      scope: ENV_SCOPE,
-      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      repositoriesFingerprint: "fp-1",
-      callbackUrl: "https://worker.test/image-builds/build-complete",
-      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
-      buildTimeoutMs: 1800_000,
-      correlation: { trace_id: "t", request_id: "r" },
-      provider: "modal",
-      callbackToken: MODAL_CALLBACK_TOKEN,
-      cloneAuth: { type: "unavailable" },
-      ...overrides,
-    },
-    callbackAuth: { tokenHash: "hash-modal", expiresAt: 9_999_999_999_999 },
+    buildId: "imgb-env_1-1-abcd",
+    scope: ENV_SCOPE,
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    repositoriesFingerprint: "fp-1",
+    callbackUrl: "https://worker.test/image-builds/build-complete",
+    failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+    buildTimeoutMs: 1800_000,
+    correlation: { trace_id: "t", request_id: "r" },
+    provider: "modal",
+    callbackToken: MODAL_CALLBACK_TOKEN,
+    cloneAuth: { type: "unavailable" },
+    ...overrides,
   };
 }
 
-function vercelPlannedBuild(): PlannedImageBuild {
+function vercelPlannedBuild(): ImageBuildPlan {
   return {
-    plan: {
-      buildId: "imgb-env_1-1-abcd",
-      scope: ENV_SCOPE,
-      repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
-      repositoriesFingerprint: "fp-1",
-      callbackUrl: "https://worker.test/image-builds/build-complete",
-      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
-      buildTimeoutMs: 1800_000,
-      correlation: { trace_id: "t", request_id: "r" },
-      provider: "vercel",
-      callbackToken: "callback-token",
-      cloneAuth: { type: "unavailable" },
-    },
-    callbackAuth: { tokenHash: "hash-1", expiresAt: 9_999_999_999_999 },
+    buildId: "imgb-env_1-1-abcd",
+    scope: ENV_SCOPE,
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    repositoriesFingerprint: "fp-1",
+    callbackUrl: "https://worker.test/image-builds/build-complete",
+    failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+    buildTimeoutMs: 1800_000,
+    correlation: { trace_id: "t", request_id: "r" },
+    provider: "vercel",
+    callbackToken: "callback-token",
+    cloneAuth: { type: "unavailable" },
   };
 }
 
@@ -166,6 +159,7 @@ const ctx = { trace_id: "t", request_id: "r" };
 function validCompletion(overrides: Record<string, unknown> = {}) {
   return {
     buildId: "imgb-env_1-1-abcd",
+    providerSessionId: "vercel-session-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
     runtimeVersion: "v56-managed-provider-runtime",
     buildDurationMs: 12_500,
@@ -650,48 +644,14 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildCompletionNotAcceptedError);
     });
 
-    it("does not consume the token for an authenticated malformed completion", async () => {
-      const store = sessionBuildStore();
-      const { workflow } = createWorkflow({ store });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion({
-            providerSessionId: "vercel-session-1",
-            runtimeVersion: undefined,
-          }),
-          callbackToken: "callback-token",
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
-
-      expect(store.authorizeCompletionCallback).toHaveBeenCalled();
-    });
-
-    it("requires provider_session_id on provider-session completions", async () => {
-      const { workflow } = createWorkflow({ store: sessionBuildStore() });
-
-      await expect(
-        workflow.acceptBuildComplete({
-          completion: validCompletion(),
-          callbackToken: "callback-token",
-          context: ctx,
-        })
-      ).rejects.toBeInstanceOf(ImageBuildInvalidCallbackError);
-    });
-
-    it("authenticates the token before validating the completion payload", async () => {
+    it("rejects completions whose callback token fails authentication", async () => {
       const store = sessionBuildStore();
       store.authorizeCompletionCallback.mockResolvedValue(null);
       const { workflow } = createWorkflow({ store });
 
-      // Malformed payload (no session id, no runtime version) + bad token:
-      // the caller must see the auth failure, not a validation error.
       await expect(
         workflow.acceptBuildComplete({
-          completion: validCompletion({
-            runtimeVersion: undefined,
-          }),
+          completion: validCompletion(),
           callbackToken: "stale-token",
           context: ctx,
         })
@@ -818,7 +778,7 @@ describe("ImageBuildWorkflow", () => {
       ).rejects.toBeInstanceOf(ImageBuildFailureNotAcceptedError);
     });
 
-    it("authenticates the token before requiring provider_session_id on failures", async () => {
+    it("rejects failures whose callback token fails authentication", async () => {
       const store = sessionBuildStore();
       store.authorizeCompletionCallback.mockResolvedValue(null);
       const { workflow } = createWorkflow({ store });
@@ -827,6 +787,7 @@ describe("ImageBuildWorkflow", () => {
         workflow.acceptBuildFailed({
           failure: {
             buildId: "imgb-env_1-1-abcd",
+            providerSessionId: "vercel-session-1",
             errorMessage: "boom",
           },
           callbackToken: "stale-token",

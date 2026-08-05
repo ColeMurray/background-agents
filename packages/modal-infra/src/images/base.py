@@ -37,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v56: upgrade OpenCode for GPT 5.6 Luna max reasoning
-CACHE_BUSTER = "v56-opencode-1-18-11"
+# v57: run Modal image builds through the gated main-process entrypoint
+CACHE_BUSTER = "v57-image-build-stdin-launch"
 
 # Base image with all development tools
 base_image = (

@@ -9,8 +9,8 @@ This package provides the data plane for Open-Inspect:
 - **Sandboxes**: Isolated development environments running OpenCode
 - **Images**: Pre-built container images with all development tools
 - **Snapshots**: Filesystem snapshots for fast startup and session persistence
-- **Scheduler**: Cron-based rebuilds of prebuilt scope images — repositories and environments alike
-  (every 30 minutes)
+- **Image builds**: Short-lived provider sessions that the control plane creates, starts, snapshots,
+  and terminates
 
 ## Architecture
 
@@ -47,7 +47,9 @@ Base image definition with:
 - **bridge.py**: WebSocket bridge to control plane
 - **types.py**: Event and configuration types
 
-### Auth (`src/auth/`)
+### Auth (`sandbox_runtime.auth`)
+
+Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
 - **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
@@ -102,18 +104,20 @@ pip install -e ".[dev]"
 ### Deploy
 
 ```bash
-# Deploy the app (recommended)
-modal deploy deploy.py
+# Build the dynamic Sandbox image, then deploy the app (recommended)
+uv run python deploy.py --build-sandbox-image
+uv run modal deploy deploy.py
 
-# Alternative: deploy the src package directly
-modal deploy -m src
+# Alternative app deployment after the same eager image-build step
+uv run modal deploy -m src
 
 # Run locally for development
 modal run src/
 ```
 
 > **Note**: Never deploy `src/app.py` directly - it only defines the app and shared resources.
-> Use `deploy.py` or `-m src` to ensure all function modules are registered.
+> Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
+> are registered.
 
 ## HTTP API
 

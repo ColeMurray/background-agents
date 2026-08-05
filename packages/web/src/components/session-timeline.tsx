@@ -12,92 +12,21 @@ import {
 } from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
+import { TaskActivityItem } from "@/components/task-activity-item";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
+import {
+  buildTimelineItems,
+  toolCallKey,
+  type FlatTimelineItem,
+  type ToolCallEvent,
+} from "@/lib/timeline-items";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionParticipantProfile } from "@open-inspect/shared";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
-
-type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-
-export type EventGroup =
-  | { type: "tool_group"; events: ToolCallEvent[]; id: string }
-  | { type: "single"; event: SandboxEvent; id: string };
-
-function groupEvents(events: SandboxEvent[]): EventGroup[] {
-  const groups: EventGroup[] = [];
-  let currentToolGroup: ToolCallEvent[] = [];
-  let groupIndex = 0;
-
-  const flushToolGroup = () => {
-    if (currentToolGroup.length > 0) {
-      groups.push({
-        type: "tool_group",
-        events: [...currentToolGroup],
-        id: `tool-group-${groupIndex++}`,
-      });
-      currentToolGroup = [];
-    }
-  };
-
-  for (const event of events) {
-    if (event.type === "tool_call") {
-      if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
-        currentToolGroup.push(event);
-      } else {
-        flushToolGroup();
-        currentToolGroup = [event];
-      }
-    } else {
-      flushToolGroup();
-      groups.push({
-        type: "single",
-        event,
-        id: `single-${event.type}-${("messageId" in event ? event.messageId : undefined) || event.timestamp}-${groupIndex++}`,
-      });
-    }
-  }
-
-  flushToolGroup();
-
-  return groups;
-}
-
-export function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
-  const filteredEvents: Array<SandboxEvent | null> = [];
-  const seenToolCalls = new Map<string, number>();
-  const seenCompletions = new Set<string>();
-  const seenTokens = new Map<string, number>();
-
-  for (const event of events) {
-    if (event.type === "tool_call" && event.callId) {
-      const existingIdx = seenToolCalls.get(event.callId);
-      if (existingIdx !== undefined) {
-        filteredEvents[existingIdx] = event;
-      } else {
-        seenToolCalls.set(event.callId, filteredEvents.length);
-        filteredEvents.push(event);
-      }
-    } else if (event.type === "execution_complete" && event.messageId) {
-      if (!seenCompletions.has(event.messageId)) {
-        seenCompletions.add(event.messageId);
-        filteredEvents.push(event);
-      }
-    } else if (event.type === "token" && event.messageId) {
-      const existingIdx = seenTokens.get(event.messageId);
-      if (existingIdx !== undefined) {
-        filteredEvents[existingIdx] = null;
-      }
-      seenTokens.set(event.messageId, filteredEvents.length);
-      filteredEvents.push(event);
-    } else {
-      filteredEvents.push(event);
-    }
-  }
-
-  return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
-}
+import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
+import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
 
 export function SessionTimeline({
   events,
@@ -109,6 +38,8 @@ export function SessionTimeline({
   showSkeleton,
   onLoadOlder,
   onOpenMedia,
+  terminalMessageReadObservationEnabled = false,
+  onMarkMessageRead,
 }: {
   events: SandboxEvent[];
   sessionId: string;
@@ -119,13 +50,45 @@ export function SessionTimeline({
   showSkeleton: boolean;
   onLoadOlder: () => void;
   onOpenMedia: (artifactId: string) => void;
+  terminalMessageReadObservationEnabled?: boolean;
+  onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
-  const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
+  const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
+  const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
+  const latestTerminalMessageId = useMemo(() => {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.type === "execution_complete" && event.messageId) return event.messageId;
+    }
+    return null;
+  }, [events]);
+  const latestTerminalMessageGroupRange = useMemo(() => {
+    if (!latestTerminalMessageId) return null;
+    const completionIndex = timelineItems.findIndex(
+      (item) =>
+        item.type === "single" &&
+        item.event.type === "execution_complete" &&
+        item.event.messageId === latestTerminalMessageId
+    );
+    if (completionIndex < 0) return null;
+    const outputIndex = timelineItems.findIndex(
+      (item) =>
+        item.type === "single" &&
+        item.event.type === "token" &&
+        item.event.messageId === latestTerminalMessageId
+    );
+    return {
+      start: outputIndex >= 0 ? Math.min(outputIndex, completionIndex) : completionIndex,
+      end: Math.max(outputIndex, completionIndex),
+    };
+  }, [timelineItems, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isPrependingRef = useRef(false);
+  const didPrependRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
 
@@ -166,14 +129,77 @@ export function SessionTimeline({
       const el = scrollContainerRef.current;
       el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
       isPrependingRef.current = false;
+      didPrependRef.current = true;
     }
   }, [events]);
 
   useEffect(() => {
-    if (isNearBottomRef.current && !isPrependingRef.current) {
+    if (didPrependRef.current) {
+      didPrependRef.current = false;
+      return;
+    }
+    if (isNearBottomRef.current) {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }
   }, [events]);
+
+  const toggleToolCall = useCallback((event: ToolCallEvent) => {
+    const key = toolCallKey(event);
+    setExpandedToolCalls((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const toggleToolGroup = useCallback((events: ToolCallEvent[]) => {
+    const keys = events.map(toolCallKey);
+    setExpandedToolGroups((expanded) => {
+      const next = new Set(expanded);
+      if (keys.some((key) => next.has(key))) {
+        for (const key of keys) next.delete(key);
+      } else {
+        for (const key of keys) next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const renderFlatItem = (item: FlatTimelineItem): ReactNode => {
+    if (item.type === "tool_group") {
+      return (
+        <ToolCallGroup
+          key={item.id}
+          events={item.events}
+          groupId={item.id}
+          isExpanded={item.events.some((event) => expandedToolGroups.has(toolCallKey(event)))}
+          expandedToolCallIds={expandedToolCalls}
+          onToggleGroup={() => toggleToolGroup(item.events)}
+          onToggleTool={toggleToolCall}
+        />
+      );
+    }
+    return (
+      <EventItem
+        key={item.id}
+        event={item.event}
+        sessionId={sessionId}
+        currentParticipantId={currentParticipantId}
+        participantProfiles={participantProfiles}
+        onOpenMedia={onOpenMedia}
+      />
+    );
+  };
+
+  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
+    item.type === "task_group" ? (
+      <TaskActivityItem key={item.id} event={item.event} hasActivity={item.activity.length > 0}>
+        {item.activity.map(renderFlatItem)}
+      </TaskActivityItem>
+    ) : (
+      renderFlatItem(item)
+    );
 
   return (
     <div
@@ -189,20 +215,37 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          groupedEvents.map((group) =>
-            group.type === "tool_group" ? (
-              <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-            ) : (
-              <EventItem
-                key={group.id}
-                event={group.event}
-                sessionId={sessionId}
-                currentParticipantId={currentParticipantId}
-                participantProfiles={participantProfiles}
-                onOpenMedia={onOpenMedia}
-              />
-            )
-          )
+          timelineItems.map((item, index) => {
+            if (
+              latestTerminalMessageGroupRange &&
+              onMarkMessageRead &&
+              index === latestTerminalMessageGroupRange.start
+            ) {
+              return (
+                <TerminalMessageReadObserver
+                  key={`terminal-message-${latestTerminalMessageId}`}
+                  messageId={latestTerminalMessageId!}
+                  enabled={terminalMessageReadObservationEnabled}
+                  onMarkMessageRead={onMarkMessageRead}
+                >
+                  {timelineItems
+                    .slice(
+                      latestTerminalMessageGroupRange.start,
+                      latestTerminalMessageGroupRange.end + 1
+                    )
+                    .map(renderTimelineItem)}
+                </TerminalMessageReadObserver>
+              );
+            }
+            if (
+              latestTerminalMessageGroupRange &&
+              index > latestTerminalMessageGroupRange.start &&
+              index <= latestTerminalMessageGroupRange.end
+            ) {
+              return null;
+            }
+            return renderTimelineItem(item);
+          })
         )}
         {isProcessing && <ThinkingIndicator />}
 

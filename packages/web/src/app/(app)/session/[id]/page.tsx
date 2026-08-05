@@ -3,15 +3,7 @@
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import {
-  Suspense,
-  useState,
-  useRef,
-  useEffect,
-  useCallback,
-  useMemo,
-  useSyncExternalStore,
-} from "react";
+import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -59,32 +51,16 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+import {
+  classifySessionReadAttempt,
+  markMessageRead,
+  reconcileSessionReadState,
+  SessionReadRequestError,
+} from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
 const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
-const TERMINAL_VISIBILITY_EVENT = "terminal-visibility-change";
-
-function subscribeTerminalVisibility(onStoreChange: () => void) {
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key === TERMINAL_VISIBLE_STORAGE_KEY || event.key === null) onStoreChange();
-  };
-  window.addEventListener("storage", handleStorage);
-  window.addEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
-  return () => {
-    window.removeEventListener("storage", handleStorage);
-    window.removeEventListener(TERMINAL_VISIBILITY_EVENT, onStoreChange);
-  };
-}
-
-function getTerminalVisibilitySnapshot() {
-  return localStorage.getItem(TERMINAL_VISIBLE_STORAGE_KEY) === "true";
-}
-
-function setTerminalVisibility(visible: boolean) {
-  localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, String(visible));
-  window.dispatchEvent(new Event(TERMINAL_VISIBILITY_EVENT));
-}
 
 export default function SessionPage() {
   return (
@@ -172,18 +148,30 @@ function SessionPageContent() {
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Terminal panel state
-  const terminalOpen = useSyncExternalStore(
-    subscribeTerminalVisibility,
-    getTerminalVisibilitySnapshot,
-    () => false
-  );
-  const toggleTerminal = useCallback(() => {
-    setTerminalVisibility(!terminalOpen);
-  }, [terminalOpen]);
-  const closeTerminal = useCallback(() => {
-    setTerminalVisibility(false);
+  // Terminal panel state. Starts closed so the server and the client render the
+  // same markup, then adopts the stored preference after hydration.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setTerminalOpen(localStorage.getItem(TERMINAL_VISIBLE_STORAGE_KEY) === "true");
+    } catch {
+      // Storage is optional; the terminal stays closed when it is unavailable.
+    }
   }, []);
+  const applyTerminalOpen = useCallback((next: boolean) => {
+    setTerminalOpen(next);
+    try {
+      localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, String(next));
+    } catch {
+      // Continue with the in-memory preference when storage is unavailable.
+    }
+  }, []);
+  const toggleTerminal = useCallback(() => {
+    applyTerminalOpen(!terminalOpen);
+  }, [applyTerminalOpen, terminalOpen]);
+  const closeTerminal = useCallback(() => {
+    applyTerminalOpen(false);
+  }, [applyTerminalOpen]);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
@@ -242,6 +230,24 @@ function SessionPageContent() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
+  const attemptMarkVisibleMessageRead = useCallback(
+    async (messageId: string) => {
+      try {
+        const result = await markMessageRead(sessionId, messageId);
+        await reconcileSessionReadState(result);
+        return classifySessionReadAttempt(result);
+      } catch (error) {
+        if (
+          error instanceof SessionReadRequestError &&
+          [400, 401, 403, 404, 405].includes(error.status)
+        ) {
+          return "permanent_failure" as const;
+        }
+        return "retry" as const;
+      }
+    },
+    [sessionId]
+  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -278,6 +284,14 @@ function SessionPageContent() {
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
+            terminalMessageReadObservationEnabled={
+              !replaying &&
+              !loadingHistory &&
+              !isDetailsOpen &&
+              selectedMediaArtifactId === null &&
+              resolvedDiff === null
+            }
+            onMarkMessageRead={attemptMarkVisibleMessageRead}
           />
         </Panel>
         {showTerminal && (
