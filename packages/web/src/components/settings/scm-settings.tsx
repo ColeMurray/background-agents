@@ -9,12 +9,9 @@ import {
   type ScmSettings,
   type ScmGlobalConfig,
 } from "@open-inspect/shared";
-import {
-  encodeRepositoryPathSegments,
-  parseRepositoryFullName,
-} from "@open-inspect/shared/types/repositories";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { getScmRepoSettingsPath } from "@/lib/scm";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -37,11 +34,6 @@ import {
 const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
 const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
-
-export function getScmRepoSettingsPath(fullName: string): `/api/${string}` | null {
-  const repository = parseRepositoryFullName(fullName);
-  return repository ? `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}` : null;
-}
 
 interface GlobalResponse {
   settings: ScmGlobalConfig | null;

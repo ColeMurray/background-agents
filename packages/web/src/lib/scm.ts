@@ -1,3 +1,8 @@
+import {
+  encodeRepositoryPathSegments,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
+
 /**
  * Source control manager URL utilities.
  *
@@ -13,6 +18,8 @@ const BASE_URLS: Record<ScmProvider, string> = {
   gitlab: "https://gitlab.com",
   bitbucket: "https://bitbucket.org",
 };
+
+const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
 
 function getProvider(): ScmProvider {
   const val = process.env.NEXT_PUBLIC_SCM_PROVIDER?.toLowerCase().trim();
@@ -44,4 +51,9 @@ export function getScmBranchUrl(owner: string, name: string, branch: string): st
   }
   // github (default)
   return `${BASE_URLS[provider]}/${encodedOwner}/${encodedName}/tree/${encodedBranch}`;
+}
+
+export function getScmRepoSettingsPath(fullName: string): `/api/${string}` | null {
+  const repository = parseRepositoryFullName(fullName);
+  return repository ? `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}` : null;
 }
