@@ -142,6 +142,35 @@ describe("SignInReconciliation", () => {
     expect(events.some((entry: string) => entry.includes("auth.email_tier_failed"))).toBe(true);
   });
 
+  it("falls through to the email tier when the materialization batch fails", async () => {
+    const { db, statements } = createFakeDb({
+      firstResults: [
+        null, // no auth account for the subject
+        { user_id: "11111111111111111111111111111111" }, // identity match
+        { count: 0 }, // target auth user bears no accounts
+        null, // no canonical owner of the email
+        null, // no auth owner of the email
+        null, // email tier: no canonical owner -> register proceeds
+      ],
+      throwOn: "batch",
+    });
+    const reconciliation = new SignInReconciliation(db);
+    const wrapped = reconciliation.wrapResolver("github", async () => PROFILE);
+
+    await expect(wrapped({})).resolves.toBe(PROFILE);
+
+    const events = errorSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(
+      events.some((entry: string) => entry.includes("auth.subject_materialization_failed"))
+    ).toBe(true);
+    expect(events.some((entry: string) => entry.includes("auth.email_tier_failed"))).toBe(false);
+    // The email tier's canonical-owner lookup ran after the batch failure.
+    const ownerLookups = statements.filter((entry) =>
+      entry.sql.includes("SELECT id FROM users WHERE email IS NOT NULL")
+    );
+    expect(ownerLookups.length).toBe(2);
+  });
+
   it("propagates inner resolver failures untouched (admission errors must keep failing sign-in)", async () => {
     const { db, statements } = createFakeDb();
     const reconciliation = new SignInReconciliation(db);

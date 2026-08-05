@@ -136,6 +136,7 @@ export class SignInReconciliation {
       logger.warn("Subject and verified email belong to different canonical users", {
         event: "auth.subject_email_collision",
         provider,
+        subject,
         subject_user_id: targetUserId,
         email_owner_user_id: emailOwnerId,
       });

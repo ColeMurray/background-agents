@@ -4,6 +4,19 @@
 -- the unique key it can actually collide with, so the migration completes
 -- against post-cutover drift instead of aborting the deploy.
 --
+-- OPERATOR PREFLIGHT (before the deploy that applies this migration): step
+-- (1) below cascade-deletes stranded auth graphs. Capture a D1 Time Travel
+-- bookmark (`wrangler d1 time-travel info <db>`) and record preflight counts
+-- for review:
+--   SELECT COUNT(*) FROM auth_users a WHERE EXISTS (SELECT 1 FROM users u
+--     WHERE u.id <> a.id AND lower(trim(u.email)) = lower(trim(a.email)));
+--   SELECT COUNT(*) FROM users u WHERE u.email IS NOT NULL AND NOT EXISTS
+--     (SELECT 1 FROM auth_users a WHERE a.id = u.id);
+--   SELECT COUNT(*) FROM auth_users WHERE emailVerified = 0;
+-- Post-deploy, run the identity consistency report (it doubles as this
+-- migration's postcondition suite); treat the first R4 result set as the
+-- backlog merge work list.
+--
 -- Ordering is load-bearing: the sweep (1) clears the UNIQUE-collision space
 -- for the drift repair (2), and (2) runs before account seeding (5) so
 -- repaired reservations are classified while still zero-account.
