@@ -1,4 +1,6 @@
 import type { ScreenshotArtifactMetadata, VideoArtifactMetadata } from "@open-inspect/shared";
+import { artifactTypeSchema, recordSchema } from "@open-inspect/shared";
+import { z } from "zod";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { ObjectStorage } from "../storage/object-storage";
@@ -7,6 +9,25 @@ import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-media");
+
+const artifactResponseSchema = z.object({
+  id: z.string(),
+  type: artifactTypeSchema,
+  url: z.string().nullable(),
+  metadata: recordSchema.nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+const listArtifactsResponseSchema = z.object({
+  artifacts: z.array(artifactResponseSchema),
+});
+
+const getArtifactResponseSchema = z.object({
+  artifact: artifactResponseSchema.nullable(),
+});
+
+type RuntimeArtifactResponse = z.infer<typeof artifactResponseSchema>;
 
 async function parseErrorMessage(response: Response, fallback: string): Promise<string> {
   const responseText = await response.text();
@@ -96,8 +117,10 @@ export async function listSessionArtifactsFromRuntime(
       : error("Failed to list session artifacts", 500);
   }
 
-  const data = (await response.json()) as { artifacts: ArtifactResponse[] };
-  return data.artifacts;
+  const parsed = listArtifactsResponseSchema.safeParse(await response.json());
+  if (!parsed.success) return error("Failed to list session artifacts", 500);
+  const artifacts: RuntimeArtifactResponse[] = parsed.data.artifacts;
+  return artifacts;
 }
 
 export async function getSessionArtifactFromRuntime(
@@ -117,6 +140,8 @@ export async function getSessionArtifactFromRuntime(
       : error("Failed to fetch session artifact", 500);
   }
 
-  const data = (await response.json()) as { artifact: ArtifactResponse | null };
-  return data.artifact;
+  const parsed = getArtifactResponseSchema.safeParse(await response.json());
+  if (!parsed.success) return error("Failed to fetch session artifact", 500);
+  const artifact: RuntimeArtifactResponse | null = parsed.data.artifact;
+  return artifact;
 }
