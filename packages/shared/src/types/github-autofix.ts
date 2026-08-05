@@ -9,6 +9,7 @@ const repositorySchema = z.object({
 const envelopeBaseSchema = z.object({
   version: z.literal(1),
   deliveryId: z.string().min(1),
+  traceId: z.string().min(1),
   repository: repositorySchema,
   pullRequestNumber: z.number().int().positive(),
   receivedAt: z.iso.datetime(),

@@ -35,6 +35,7 @@ interface AutofixIngressInput {
   event: string | undefined;
   payload: unknown;
   deliveryId: string;
+  traceId: string;
   botUsername: string | undefined;
   receivedAt: Date;
 }
@@ -66,6 +67,7 @@ export function toAutofixEnvelope(input: AutofixIngressInput): GitHubAutofixEnve
         eventType: "issue_comment",
         action: "created",
         deliveryId: input.deliveryId,
+        traceId: input.traceId,
         providerObject: {
           kind: "pr_comment",
           id: String(parsed.data.comment.id),
@@ -84,6 +86,7 @@ export function toAutofixEnvelope(input: AutofixIngressInput): GitHubAutofixEnve
         eventType: "pull_request_review",
         action: "submitted",
         deliveryId: input.deliveryId,
+        traceId: input.traceId,
         providerObject: {
           kind: "review",
           id: String(parsed.data.review.id),
