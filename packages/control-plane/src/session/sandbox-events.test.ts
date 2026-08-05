@@ -775,6 +775,7 @@ describe("SessionSandboxEventProcessor", () => {
         type: "ack",
         ackId: "execution_complete:msg-1",
       });
+      expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
     });
 
     it("does not send ACK for non-critical events even with ackId", async () => {

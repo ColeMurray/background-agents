@@ -89,6 +89,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
 /** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
 const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/commit-signing$/, // Public signing configuration and remote signer
+  /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/, // Parent agent follow-up to a direct child
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
   /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
 ];
@@ -175,6 +176,7 @@ export function isScmAgnosticRoute(method: string, path: string): boolean {
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
       path
     ) ||
+    /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
 }

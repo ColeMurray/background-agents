@@ -58,7 +58,11 @@ interface InitRequest {
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "upsertSession" | "replaceSessionRepositories" | "createSandbox" | "createParticipant"
+    | "upsertSession"
+    | "replaceSessionRepositories"
+    | "createSandbox"
+    | "createParticipant"
+    | "getPendingOrProcessingCount"
   >;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -76,7 +80,7 @@ export interface SessionLifecycleHandlerDeps {
     title: string,
     options?: SessionTitleUpdateOptions
   ) => SessionTitleUpdateResult;
-  stopExecution: (options?: { suppressStatusReconcile?: boolean }) => Promise<void>;
+  cancelSession: () => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
@@ -358,6 +362,17 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
+      if (session.status === "cancelled") {
+        return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
+      }
+
+      if (deps.repository.getPendingOrProcessingCount() > 0) {
+        return Response.json(
+          { error: "Cannot archive a session with queued work" },
+          { status: 409 }
+        );
+      }
+
       await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
@@ -388,6 +403,10 @@ export function createSessionLifecycleHandler(
         );
       }
 
+      if (session.status !== "archived") {
+        return Response.json({ error: "Session is not archived" }, { status: 409 });
+      }
+
       await deps.statusService.transition("active");
 
       return Response.json({ status: "active" });
@@ -403,8 +422,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
       }
 
-      await deps.stopExecution({ suppressStatusReconcile: true });
-      await deps.statusService.transition("cancelled");
+      await deps.cancelSession();
 
       const sandbox = deps.getSandbox();
       if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {

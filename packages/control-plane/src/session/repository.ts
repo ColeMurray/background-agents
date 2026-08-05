@@ -780,7 +780,7 @@ export class SessionRepository {
 
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`
+      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
@@ -840,6 +840,13 @@ export class SessionRepository {
       completedAt,
       messageId
     );
+  }
+
+  listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
+    const result = this.sql.exec(
+      `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
+    );
+    return result.toArray() as Array<{ id: string; created_at: number }>;
   }
 
   getMessageTimestamps(

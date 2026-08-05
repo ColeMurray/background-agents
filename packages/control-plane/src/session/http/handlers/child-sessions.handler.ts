@@ -1,8 +1,14 @@
-import type { SpawnContext } from "@open-inspect/shared";
+import { childFollowUpPromptRequestSchema, type SpawnContext } from "@open-inspect/shared";
+import { z } from "zod";
 import type { SessionStatus } from "../../../types";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
+import {
+  ChildFollowUpError,
+  type ChildFollowUpErrorReason,
+  type ChildFollowUpService,
+} from "../../services/child-follow-up.service";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
@@ -21,6 +27,7 @@ export interface ChildSessionsHandlerDeps {
     | "listEventPage"
     | "getLatestTerminalMessage"
     | "getEventTimelinePage"
+    | "getPendingOrProcessingCount"
   >;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
@@ -29,12 +36,31 @@ export interface ChildSessionsHandlerDeps {
     artifact: Pick<ArtifactRow, "id" | "metadata">
   ) => Record<string, unknown> | null;
   messenger: SessionMessenger;
+  childFollowUpService: ChildFollowUpService;
 }
 
 export interface ChildSessionsHandler {
   getSpawnContext: () => Response;
   getChildSummary: (url?: URL) => Response;
+  parentPrompt: (request: Request) => Promise<Response>;
   childSessionUpdate: (request: Request) => Promise<Response>;
+}
+
+const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
+  parentSessionId: z.string().min(1),
+});
+
+function childFollowUpErrorStatus(reason: ChildFollowUpErrorReason): 404 | 409 | 429 | 500 {
+  switch (reason) {
+    case "child_not_found":
+      return 404;
+    case "session_not_promptable":
+      return 409;
+    case "queue_full":
+      return 429;
+    case "owner_missing":
+      return 500;
+  }
 }
 
 export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): ChildSessionsHandler {
@@ -128,11 +154,39 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
           publicSessionId: deps.getPublicSessionId(session),
           artifacts,
           recentEventRows,
+          hasUnfinishedPrompt: deps.repository.getPendingOrProcessingCount() > 0,
           parseArtifactMetadata: deps.parseArtifactMetadata,
           finalResponse,
           trajectory,
         })
       );
+    },
+
+    async parentPrompt(request: Request): Promise<Response> {
+      let raw: unknown;
+      try {
+        raw = await request.json();
+      } catch {
+        return Response.json({ error: "Invalid prompt body" }, { status: 400 });
+      }
+      const parsed = parentPromptRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        const reason = parsed.error.issues[0]?.message;
+        return Response.json(
+          { error: reason ? `Invalid prompt body: ${reason}` : "Invalid prompt body" },
+          { status: 400 }
+        );
+      }
+
+      try {
+        return Response.json(await deps.childFollowUpService.enqueue(parsed.data));
+      } catch (error) {
+        if (!(error instanceof ChildFollowUpError)) throw error;
+        return Response.json(
+          { error: error.message },
+          { status: childFollowUpErrorStatus(error.reason) }
+        );
+      }
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {

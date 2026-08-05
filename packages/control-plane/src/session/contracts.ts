@@ -30,6 +30,7 @@ export const SessionInternalPaths = {
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",
   childSummary: "/internal/child-summary",
+  parentPrompt: "/internal/parent-prompt",
   updateTitle: "/internal/update-title",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",

@@ -681,11 +681,11 @@ describe("SessionRepository", () => {
       const message = { id: "msg-1", created_at: 1000 };
       // The query is dynamic, so we match by result
       mock.setData(
-        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`,
+        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         [message]
       );
       expect(repo.getNextPendingMessage()).toEqual(message);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
     });
   });
 
@@ -779,6 +779,30 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("status = ?");
       expect(mock.calls[0].query).toContain("completed_at");
       expect(mock.calls[0].params).toEqual(["completed", 3000, "msg-1"]);
+    });
+  });
+
+  describe("listPendingMessagesWithCreatedAt", () => {
+    it("returns pending messages in deterministic queue order", () => {
+      mock.setData(
+        `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`,
+        [{ id: "msg-1", created_at: 1000 }]
+      );
+
+      expect(repo.listPendingMessagesWithCreatedAt()).toEqual([{ id: "msg-1", created_at: 1000 }]);
+
+      expect(mock.calls[0].query).toContain("SELECT id, created_at FROM messages");
+      expect(mock.calls[0].query).toContain("WHERE status = 'pending'");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
+      expect(mock.calls[0].params).toEqual([]);
+    });
+  });
+
+  describe("getNextPendingMessage", () => {
+    it("uses rowid as the stable tie-breaker for equal timestamps", () => {
+      repo.getNextPendingMessage();
+
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
     });
   });
 

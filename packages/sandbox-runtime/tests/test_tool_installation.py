@@ -295,6 +295,7 @@ class TestInstallTools:
         (tools_dir / "get-child-status.js").write_text("// get")
         (tools_dir / "get-child-status-format.js").write_text("// format")
         (tools_dir / "cancel-child.js").write_text("// cancel")
+        (tools_dir / "send-child-prompt.js").write_text("// follow-up")
 
         with _patch_paths(legacy=legacy_tool, tools=tools_dir):
             sup._install_tools(workdir)
@@ -306,6 +307,7 @@ class TestInstallTools:
         assert (tool_dest / "get-child-status.js").exists()
         assert (tool_dest / "get-child-status-format.js").exists()
         assert (tool_dest / "cancel-child.js").exists()
+        assert (tool_dest / "send-child-prompt.js").exists()
 
     def test_slack_notify_installed_when_enabled(self, tmp_path):
         """slack-notify.js should be installed when AGENT_SLACK_NOTIFY_ENABLED=true."""

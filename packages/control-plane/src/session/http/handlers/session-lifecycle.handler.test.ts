@@ -85,6 +85,7 @@ function createHandler() {
     replaceSessionRepositories: vi.fn(),
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
+    getPendingOrProcessingCount: vi.fn(() => 0),
   };
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
@@ -106,7 +107,7 @@ function createHandler() {
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
   const statusService = { transition } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
-  const stopExecution = vi.fn();
+  const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
   const updateSandboxStatus = vi.fn();
@@ -126,7 +127,7 @@ function createHandler() {
     getParticipantByUserId,
     statusService,
     applySessionTitleUpdate,
-    stopExecution,
+    cancelSession,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
@@ -155,7 +156,7 @@ function createHandler() {
     getParticipantByUserId,
     transition,
     applySessionTitleUpdate,
-    stopExecution,
+    cancelSession,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
@@ -700,6 +701,39 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
+  it("returns 409 when archiving a session with queued work", async () => {
+    const { handler, getSession, getParticipantByUserId, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getParticipantByUserId.mockReturnValue(createParticipant());
+    repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when archiving a cancelled session", async () => {
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "cancelled" }));
+    getParticipantByUserId.mockReturnValue(createParticipant());
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("unarchives successfully for participant", async () => {
     const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
@@ -719,6 +753,22 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("active");
   });
 
+  it("returns 409 when unarchiving a session that is not archived", async () => {
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "cancelled" }));
+    getParticipantByUserId.mockReturnValue(createParticipant());
+
+    const response = await handler.unarchive(
+      new Request("http://internal/internal/unarchive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("returns 409 when cancelling terminal session", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
@@ -734,8 +784,7 @@ describe("createSessionLifecycleHandler", () => {
       handler,
       getSession,
       getSandbox,
-      stopExecution,
-      transition,
+      cancelSession,
       getSandboxSocket,
       sendToSandbox,
       updateSandboxStatus,
@@ -743,16 +792,14 @@ describe("createSessionLifecycleHandler", () => {
     const ws = {} as WebSocket;
     getSession.mockReturnValue(createSession({ status: "active" }));
     getSandbox.mockReturnValue(createSandbox({ status: "running" }));
-    stopExecution.mockResolvedValue(undefined);
-    transition.mockResolvedValue(true);
+    cancelSession.mockResolvedValue(undefined);
     getSandboxSocket.mockReturnValue(ws);
 
     const response = await handler.cancel();
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
-    expect(stopExecution).toHaveBeenCalledWith({ suppressStatusReconcile: true });
-    expect(transition).toHaveBeenCalledWith("cancelled");
+    expect(cancelSession).toHaveBeenCalledOnce();
     expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });
