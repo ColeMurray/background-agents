@@ -15,7 +15,11 @@ const participantSummarySchema = z.object({
   avatar: z.string().optional(),
 });
 
-const historyCursorSchema = z.object({ timestamp: z.number(), id: z.string() });
+const historyCursorSchema = z.object({
+  timestamp: z.number(),
+  id: z.string(),
+  sequence: z.number().int().nonnegative().optional(),
+});
 
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
