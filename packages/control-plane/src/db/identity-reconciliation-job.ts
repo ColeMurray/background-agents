@@ -32,9 +32,17 @@ export async function runIdentityReconciliation(
     residualSharedSubjectConflicts: report.sharedSubjectConflicts.length,
   };
 
+  for (const failure of repairs.repairFailures) {
+    logger.error("Identity reconciliation repair step failed", {
+      event: "auth.reconciliation_repair_failed",
+      step: failure.step,
+      error: failure.message,
+    });
+  }
   logger.info("Identity reconciliation cycle complete", {
     event: "auth.reconciliation_complete",
     ...stats,
+    repairFailures: stats.repairFailures.length,
   });
   if (stats.residualAccountBearingStrands > 0 || stats.residualSharedSubjectConflicts > 0) {
     logger.warn("Identity registries hold conflicts needing operator merges", {

@@ -156,6 +156,22 @@ describe("R2: auth users inconsistent with their canonical user", () => {
 });
 
 describe("R3: canonical-less auth users", () => {
+  it("leaves fresh strands alone — an in-flight registration looks identical", async () => {
+    // Better Auth defers after-hooks, so a registering user's auth row
+    // briefly has no canonical row and no account; only aged strands sweep.
+    const freshId = "60111111111111111111111111111111";
+    await insertAuthUser({
+      id: freshId,
+      email: "registering@example.com",
+      createdAtIso: new Date().toISOString(),
+    });
+
+    const stats = await store().applySafeRepairs();
+
+    expect(stats.strandsSwept).toBe(0);
+    expect(await getAuthUserRow(freshId)).not.toBeNull();
+  });
+
   it("sweeps zero-account strands and reports account-bearing strands untouched", async () => {
     const zeroAccountStrand = "61111111111111111111111111111111";
     const accountBearingStrand = "62111111111111111111111111111111";

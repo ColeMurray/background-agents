@@ -127,9 +127,9 @@ export async function mergeUsers(
     .bind(loserId)
     .first<LoserAuthUserRow>();
   const survivorAuthUser = await db
-    .prepare(`SELECT id FROM auth_users WHERE id = ?`)
+    .prepare(`SELECT id, email FROM auth_users WHERE id = ?`)
     .bind(survivorId)
-    .first<{ id: string }>();
+    .first<{ id: string; email: string }>();
   const loserAccounts = loserAuthUser
     ? (
         await db
@@ -174,12 +174,17 @@ export async function mergeUsers(
     }
   }
 
+  // The survivor's existing auth email (when it has one) is what any
+  // canonical backfill should propagate — backfilling the loser's email
+  // beside a different active auth email would manufacture standing R2 drift.
+  const backfillEmail = survivorAuthUser?.email ?? survivingEmail;
+
   if (options.dryRun) {
     return {
       survivorId,
       loserId,
       dryRun: true,
-      counts: await previewCounts(db, survivorId, loserId, survivingEmail, survivor.email, {
+      counts: await previewCounts(db, survivorId, loserId, backfillEmail, survivor.email, {
         authUsersDeleted: loserAuthUser ? 1 : 0,
         authUserCreatedForSurvivor: createAuthUserForSurvivor ? 1 : 0,
         authAccountsMoved: loserAccounts.length,
@@ -277,14 +282,21 @@ export async function mergeUsers(
         "authUserCreatedForSurvivor",
         db
           .prepare(
+            // ON CONFLICT: a concurrent sign-in may have created the
+            // survivor's auth row between preload and execution — defer to
+            // it. emailVerified transfers only when the surviving email IS
+            // the loser's OAuth-proven email; any other choice (operator
+            // override, canonical fallback) starts unverified, since
+            // verification is exactly the implicit-linking gate.
             `INSERT INTO auth_users (id, name, email, emailVerified, image, createdAt, updatedAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO NOTHING`
           )
           .bind(
             survivorId,
             loserAuthUser.name,
             survivingEmail,
-            loserAuthUser.emailVerified,
+            survivingEmail === loserAuthUser.email ? loserAuthUser.emailVerified : 0,
             loserAuthUser.image,
             loserAuthUser.createdAt,
             new Date().toISOString()
@@ -299,7 +311,7 @@ export async function mergeUsers(
   }
 
   add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));
-  if (survivingEmail && !survivor.email) {
+  if (backfillEmail && !survivor.email) {
     // A NULL-email survivor (GitHub-first bot row) acquires the verified
     // email freed by the loser's deletion, guarded against any other owner.
     add(
@@ -314,7 +326,7 @@ export async function mergeUsers(
                WHERE other.id <> users.id AND lower(trim(other.email)) = ?
              )`
         )
-        .bind(survivingEmail, Date.now(), survivorId, survivingEmail)
+        .bind(backfillEmail, Date.now(), survivorId, backfillEmail)
     );
   }
 
@@ -362,7 +374,7 @@ async function previewCounts(
   db: SqlDatabase,
   survivorId: string,
   loserId: string,
-  survivingEmail: string | null,
+  backfillEmail: string | null,
   survivorCanonicalEmail: string | null,
   authCounts: Pick<
     UserMergeCounts,
@@ -417,13 +429,13 @@ async function previewCounts(
   // Dry-run parity for the canonical-email backfill: it fires when the
   // survivor has no canonical email and no third user owns the target.
   let canonicalEmailBackfilled = 0;
-  if (survivingEmail && !survivorCanonicalEmail) {
+  if (backfillEmail && !survivorCanonicalEmail) {
     const otherOwner = await db
       .prepare(
         `SELECT COUNT(*) AS count FROM users
          WHERE id NOT IN (?, ?) AND lower(trim(email)) = ?`
       )
-      .bind(survivorId, loserId, survivingEmail)
+      .bind(survivorId, loserId, backfillEmail)
       .first<{ count: number }>();
     canonicalEmailBackfilled = (otherOwner?.count ?? 0) === 0 ? 1 : 0;
   }

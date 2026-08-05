@@ -380,6 +380,38 @@ describe("subject materialization tier (§4e)", () => {
     expect(await countTableRows("users")).toBe(1);
   });
 
+  it("repairs a stale zero-account reservation while materializing the subject", async () => {
+    // The subject owner has a drifted, unverified, zero-account auth row
+    // (e.g. 0057-seeded, canonical email changed since). Materialization is
+    // the last moment before the row becomes account-bearing — it must leave
+    // the row aligned to the proven email, not frozen in drift.
+    const canonicalId = "55111111111111111111111111111111";
+    await insertCanonicalUser({ id: canonicalId, email: "octocat@example.com" });
+    await insertIdentity({
+      id: "i5511111111111111111111111111111",
+      userId: canonicalId,
+      provider: "github",
+      providerUserId: GITHUB_SUBJECT,
+      issuer: "https://github.com",
+    });
+    await insertAuthUser({ id: canonicalId, email: "stale@example.com", emailVerified: 0 });
+
+    const { sessionUser } = await signIn("github");
+
+    expect(sessionUser?.id).toBe(canonicalId);
+    expect(await getAuthUserRow(canonicalId)).toMatchObject({
+      email: "octocat@example.com",
+      emailVerified: 1,
+    });
+    expect(
+      await env.DB.prepare(
+        `SELECT userId FROM auth_accounts WHERE providerId = 'github' AND accountId = ?`
+      )
+        .bind(GITHUB_SUBJECT)
+        .first<{ userId: string }>()
+    ).toEqual({ userId: canonicalId });
+  });
+
   it("resolves a cohort-6 collision by linking to the email owner and preserving the split (test 6)", async () => {
     // U owns the GitHub subject (bot-created, no email); V owns the verified
     // email (Slack-created).

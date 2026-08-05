@@ -37,7 +37,11 @@ WHERE EXISTS (
 -- and the R2 consistency report flags those pairs for operator review. The
 -- sweep above already removed any other auth row holding the canonical email,
 -- so this UPDATE cannot violate auth_users.email's UNIQUE constraint.
-UPDATE auth_users
+-- OR IGNORE: the other-owner guard below sees only pre-statement state, so
+-- two whitespace-variant canonical emails normalizing to one value could
+-- still collide intra-statement; the skipped row surfaces in R2 instead of
+-- aborting the deploy.
+UPDATE OR IGNORE auth_users
 SET
   email = (
     SELECT lower(trim(users.email))

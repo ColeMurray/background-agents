@@ -16,11 +16,11 @@
  * repaired by running the script again.
  *
  * Usage:
- *   node --experimental-strip-types scripts/merge-split-users.ts \
+ *   node --experimental-transform-types scripts/merge-split-users.ts \
  *     --database <d1-database-name> --survivor <user-id> --loser <user-id>
  *
  *   # apply, optionally choosing the surviving auth email:
- *   node --experimental-strip-types scripts/merge-split-users.ts \
+ *   node --experimental-transform-types scripts/merge-split-users.ts \
  *     --database <d1-database-name> --survivor <id> --loser <id> \
  *     [--surviving-email <email>] --execute
  *
@@ -107,6 +107,12 @@ class WranglerD1Database implements SqlDatabase {
     return statement;
   }
 
+  // Deviation from the SqlDatabase.batch contract: all statements go to D1
+  // in one wrangler invocation, but cross-statement atomicity is not
+  // guaranteed by this transport (scripts/d1-migrate.sh documents D1
+  // multi-statement submissions as atomic; we deliberately do not rely on
+  // it). The merge tolerates this: its statement order is loss-free and
+  // idempotent, so a partial application is repaired by re-running.
   async batch<T = unknown>(statements: SqlStatement[]): Promise<SqlResult<T>[]> {
     const rendered = statements.map((entry) => (entry as { render(): string }).render());
     return this.execute(rendered).map((result) => toSqlResult<T>(result));
@@ -208,8 +214,8 @@ async function main(): Promise<void> {
         .first();
       if (survivorAuthRow) {
         console.error(
-          "WARNING: --surviving-email is ignored because the survivor already has an auth row " +
-            "(its existing email is kept)."
+          "WARNING: --surviving-email has no effect because the survivor already has an auth " +
+            "row — its existing email is kept and drives any canonical email backfill."
         );
       }
     }

@@ -211,6 +211,67 @@ describe("mergeUsers", () => {
     expect(report.accountsMissingIdentity).toEqual([]);
   });
 
+  it("keeps the survivor's own auth identity when both sides have auth rows", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: "survivor@example.com" });
+    await insertAuthUser({ id: SURVIVOR, email: "survivor@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "acc31111111111111111111111111111",
+      accountId: "google-s",
+      providerId: "google",
+      userId: SURVIVOR,
+    });
+    await insertCanonicalUser({ id: LOSER, email: "loser@example.com" });
+    await insertAuthUser({ id: LOSER, email: "loser@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "acc32111111111111111111111111111",
+      accountId: "github-l",
+      providerId: "github",
+      userId: LOSER,
+    });
+
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts).toMatchObject({
+      authUsersDeleted: 1,
+      authUserCreatedForSurvivor: 0,
+      authAccountsMoved: 1,
+      usersDeleted: 1,
+    });
+    // The survivor's email is untouched; both accounts now belong to it.
+    expect(await getAuthUserRow(SURVIVOR)).toMatchObject({
+      email: "survivor@example.com",
+      emailVerified: 1,
+    });
+    const accounts = await env.DB.prepare(
+      `SELECT providerId, userId FROM auth_accounts ORDER BY providerId`
+    ).all<{ providerId: string; userId: string }>();
+    expect(accounts.results).toEqual([
+      { providerId: "github", userId: SURVIVOR },
+      { providerId: "google", userId: SURVIVOR },
+    ]);
+    expect(await getAuthUserRow(LOSER)).toBeNull();
+  });
+
+  it("starts the survivor's auth row unverified when the surviving email is not the loser's proven email", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertCanonicalUser({ id: LOSER, email: "proven@example.com" });
+    await insertAuthUser({ id: LOSER, email: "proven@example.com", emailVerified: 1 });
+
+    const result = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      survivingEmail: "chosen@example.com",
+    });
+
+    expect(result.counts.authUserCreatedForSurvivor).toBe(1);
+    // Verification is the implicit-linking gate — it never transfers to an
+    // email that did not complete OAuth.
+    expect(await getAuthUserRow(SURVIVOR)).toMatchObject({
+      email: "chosen@example.com",
+      emailVerified: 0,
+    });
+  });
+
   it("previews all counts without writing in dry-run mode", async () => {
     await insertCanonicalUser({ id: SURVIVOR, email: "person@example.com" });
     await insertCanonicalUser({ id: LOSER, email: null });

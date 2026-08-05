@@ -160,6 +160,21 @@ export class SignInReconciliation {
           nowIso,
           nowIso
         ),
+      // A pre-existing zero-account row (e.g. 0057-seeded, then drifted) is
+      // repaired to the just-proven email before the account attaches — the
+      // row is about to become account-bearing, after which nothing may
+      // re-shape it. OR IGNORE covers a concurrent claim of the email.
+      this.db
+        .prepare(
+          `UPDATE OR IGNORE auth_users
+           SET email = ?, emailVerified = 1, updatedAt = ?
+           WHERE id = ?
+             AND (email <> ? OR emailVerified = 0)
+             AND NOT EXISTS (
+               SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
+             )`
+        )
+        .bind(email, nowIso, targetUserId, email),
       this.db
         .prepare(
           `INSERT INTO auth_accounts (

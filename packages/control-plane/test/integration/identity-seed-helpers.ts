@@ -50,6 +50,7 @@ export async function insertAuthUser(options: {
   email: string;
   emailVerified?: number;
   name?: string;
+  createdAtIso?: string;
 }): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO auth_users (id, name, email, emailVerified, image, createdAt, updatedAt)
@@ -60,8 +61,8 @@ export async function insertAuthUser(options: {
       options.name ?? options.email,
       options.email,
       options.emailVerified ?? 0,
-      SEED_NOW_ISO,
-      SEED_NOW_ISO
+      options.createdAtIso ?? SEED_NOW_ISO,
+      options.createdAtIso ?? SEED_NOW_ISO
     )
     .run();
 }

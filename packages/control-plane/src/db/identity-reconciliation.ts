@@ -86,6 +86,11 @@ export interface IdentityRepairStats {
   identitiesProjected: number;
   emailsAligned: number;
   strandsSwept: number;
+  /**
+   * Steps that threw this cycle. Isolated per step so one poisoned row class
+   * cannot starve the remaining repairs or the residual report.
+   */
+  repairFailures: { step: "sweep" | "align" | "project"; message: string }[];
 }
 
 export interface IdentityReconciliationStats extends IdentityRepairStats {
@@ -183,85 +188,115 @@ export class IdentityReconciliationStore {
    * collide with them, and identity projection is independent of both.
    */
   async applySafeRepairs(): Promise<IdentityRepairStats> {
-    const sweep = await this.db
-      .prepare(
-        `DELETE FROM auth_users
-         WHERE NOT EXISTS (SELECT 1 FROM users WHERE users.id = auth_users.id)
-           AND NOT EXISTS (
-             SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
-           )
-           AND CAST(strftime('%s', auth_users.createdAt) AS INTEGER)
-             < CAST(strftime('%s', 'now') AS INTEGER) - ?`
-      )
-      .bind(STRAND_SWEEP_MIN_AGE_SECONDS)
-      .run();
-
-    const align = await this.db
-      .prepare(
-        `UPDATE auth_users
-         SET
-           email = (
-             SELECT lower(trim(users.email)) FROM users WHERE users.id = auth_users.id
-           ),
-           updatedAt = ?
-         WHERE EXISTS (
-             SELECT 1
-             FROM users
-             WHERE users.id = auth_users.id
-               AND users.email IS NOT NULL
-               AND length(trim(users.email)) > 0
-               AND lower(trim(users.email)) <> auth_users.email
-           )
-           AND NOT EXISTS (
-             SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
-           )
-           AND NOT EXISTS (
-             SELECT 1
-             FROM auth_users AS other
-             WHERE other.id <> auth_users.id
-               AND other.email = (
-                 SELECT lower(trim(users.email)) FROM users WHERE users.id = auth_users.id
-               )
-           )`
-      )
-      .bind(new Date().toISOString())
-      .run();
-
-    const project = await this.db
-      .prepare(
-        `INSERT INTO user_identities (
-           id, user_id, provider, provider_user_id, provider_login,
-           provider_email, provider_issuer, created_at
-         )
-         SELECT
-           lower(hex(randomblob(16))),
-           auth_accounts.userId,
-           auth_accounts.providerId,
-           auth_accounts.accountId,
-           NULL,
-           NULL,
-           IIF(
-             auth_accounts.providerId = 'github',
-             'https://github.com',
-             'https://accounts.google.com'
-           ),
-           CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000
-         FROM auth_accounts
-         JOIN users ON users.id = auth_accounts.userId
-         WHERE auth_accounts.providerId IN (${SIGN_IN_PROVIDER_SQL_LIST})
-           AND NOT EXISTS (
-             SELECT 1
-             FROM user_identities
-             WHERE user_identities.provider = auth_accounts.providerId
-               AND user_identities.provider_user_id = auth_accounts.accountId
-           )`
-      )
-      .run();
-
-    return {
-      strandsSwept: sweep.meta.changes,
-      emailsAligned: align.meta.changes,
-      identitiesProjected: project.meta.changes,
+    const stats: IdentityRepairStats = {
+      strandsSwept: 0,
+      emailsAligned: 0,
+      identitiesProjected: 0,
+      repairFailures: [],
     };
+    const step = async (
+      name: IdentityRepairStats["repairFailures"][number]["step"],
+      run: () => Promise<number>
+    ): Promise<number> => {
+      try {
+        return await run();
+      } catch (error) {
+        stats.repairFailures.push({
+          step: name,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return 0;
+      }
+    };
+
+    stats.strandsSwept = await step("sweep", async () => {
+      const result = await this.db
+        .prepare(
+          `DELETE FROM auth_users
+           WHERE NOT EXISTS (SELECT 1 FROM users WHERE users.id = auth_users.id)
+             AND NOT EXISTS (
+               SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
+             )
+             AND CAST(strftime('%s', auth_users.createdAt) AS INTEGER)
+               < CAST(strftime('%s', 'now') AS INTEGER) - ?`
+        )
+        .bind(STRAND_SWEEP_MIN_AGE_SECONDS)
+        .run();
+      return result.meta.changes;
+    });
+
+    // OR IGNORE: the other-owner guard sees only pre-statement state, so two
+    // whitespace-variant canonical emails normalizing to one value could
+    // still collide intra-statement; the loser of that race stays in R2.
+    stats.emailsAligned = await step("align", async () => {
+      const result = await this.db
+        .prepare(
+          `UPDATE OR IGNORE auth_users
+           SET
+             email = (
+               SELECT lower(trim(users.email)) FROM users WHERE users.id = auth_users.id
+             ),
+             updatedAt = ?
+           WHERE EXISTS (
+               SELECT 1
+               FROM users
+               WHERE users.id = auth_users.id
+                 AND users.email IS NOT NULL
+                 AND length(trim(users.email)) > 0
+                 AND lower(trim(users.email)) <> auth_users.email
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
+             )
+             AND NOT EXISTS (
+               SELECT 1
+               FROM auth_users AS other
+               WHERE other.id <> auth_users.id
+                 AND other.email = (
+                   SELECT lower(trim(users.email)) FROM users WHERE users.id = auth_users.id
+                 )
+             )`
+        )
+        .bind(new Date().toISOString())
+        .run();
+      return result.meta.changes;
+    });
+
+    stats.identitiesProjected = await step("project", async () => {
+      const result = await this.db
+        .prepare(
+          `INSERT INTO user_identities (
+             id, user_id, provider, provider_user_id, provider_login,
+             provider_email, provider_issuer, created_at
+           )
+           SELECT
+             lower(hex(randomblob(16))),
+             auth_accounts.userId,
+             auth_accounts.providerId,
+             auth_accounts.accountId,
+             NULL,
+             NULL,
+             IIF(
+               auth_accounts.providerId = 'github',
+               'https://github.com',
+               'https://accounts.google.com'
+             ),
+             CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000
+           FROM auth_accounts
+           JOIN users ON users.id = auth_accounts.userId
+           WHERE auth_accounts.providerId IN (${SIGN_IN_PROVIDER_SQL_LIST})
+             AND NOT EXISTS (
+               SELECT 1
+               FROM user_identities
+               WHERE user_identities.provider = auth_accounts.providerId
+                 AND user_identities.provider_user_id = auth_accounts.accountId
+             )
+           ON CONFLICT DO NOTHING`
+        )
+        .run();
+      return result.meta.changes;
+    });
+
+    return stats;
   }
 }
