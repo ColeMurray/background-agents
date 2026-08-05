@@ -8,6 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from sandbox_runtime.repo_image_callback import (
+    BUILD_ID_ENV,
+    CALLBACK_TOKEN_ENV,
+    CALLBACK_URL_ENV,
+    FAILURE_CALLBACK_URL_ENV,
+    PROVIDER_SESSION_ID_ENV,
+)
 from src.sandbox.build_session import (
     DEFAULT_BUILD_TIMEOUT_SECONDS,
     MAX_BUILD_TIMEOUT_SECONDS,
@@ -45,6 +53,53 @@ def test_build_timeout_limits_match_shared_contract(constant_name, python_value)
 
     assert match is not None, f"missing numeric shared constant: {constant_name}"
     assert python_value == int(match.group(1))
+
+
+def _read_control_plane_sandbox_env_source() -> str:
+    return (
+        Path(__file__).resolve().parents[2] / "control-plane" / "src" / "sandbox" / "sandbox-env.ts"
+    ).read_text()
+
+
+def test_image_build_callback_env_keys_match_control_plane_contract():
+    """Pin the TS REPO_IMAGE_CALLBACK_ENV_KEYS list (order included) to the runtime constants.
+
+    The control plane assembles build-sandbox env in TypeScript
+    (buildImageBuildEnvVars) while Modal's ModalBuildSessionService.create
+    mirrors it in Python; both must agree on the callback env key names.
+    """
+    ts_source = _read_control_plane_sandbox_env_source()
+    match = re.search(
+        r"export\s+const\s+REPO_IMAGE_CALLBACK_ENV_KEYS\s*=\s*\[(.*?)\]\s*as\s+const",
+        ts_source,
+        re.DOTALL,
+    )
+
+    assert match is not None, "missing TS constant: REPO_IMAGE_CALLBACK_ENV_KEYS"
+    ts_keys = re.findall(r'"([^"]+)"', match.group(1))
+    assert ts_keys == [
+        PROVIDER_SESSION_ID_ENV,
+        BUILD_ID_ENV,
+        CALLBACK_URL_ENV,
+        CALLBACK_TOKEN_ENV,
+        FAILURE_CALLBACK_URL_ENV,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("constant_name", "python_value"),
+    [
+        ("IMAGE_BUILD_MODE_ENV_VAR", "IMAGE_BUILD_MODE"),
+        ("IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY", IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR),
+    ],
+)
+def test_image_build_env_var_names_match_control_plane_contract(constant_name, python_value):
+    """Keep the build-mode marker and execution-timeout key aligned across languages."""
+    ts_source = _read_control_plane_sandbox_env_source()
+    match = re.search(rf'export\s+const\s+{constant_name}\s*=\s*"([^"]+)"\s*;', ts_source)
+
+    assert match is not None, f"missing string TS constant: {constant_name}"
+    assert match.group(1) == python_value
 
 
 @pytest.mark.asyncio

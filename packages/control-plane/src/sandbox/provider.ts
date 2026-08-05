@@ -46,6 +46,31 @@ export interface ImageBuildProviderTriggerConfig {
 }
 
 /**
+ * Naming and provider-object labels shared by the image-build trigger paths.
+ * `sandboxId` is the stable logical id the runtime sees as `SANDBOX_ID`;
+ * `sandboxName` is the per-attempt provider-object name (unique per trigger);
+ * `labels` identify the build sandbox on the provider (tags on Vercel,
+ * labels on OpenComputer). Providers with extra label conventions spread and
+ * extend `labels`.
+ */
+export function imageBuildSandboxIdentity(config: ImageBuildProviderTriggerConfig): {
+  sandboxId: string;
+  sandboxName: string;
+  labels: Record<string, string>;
+} {
+  return {
+    sandboxId: `build-env-${config.scopeId}`,
+    sandboxName: `build-env-${config.scopeId}-${Date.now()}`,
+    labels: {
+      openinspect_framework: "open-inspect",
+      openinspect_kind: "environment-image-build",
+      openinspect_build_id: config.buildId,
+      openinspect_environment: config.scopeId,
+    },
+  };
+}
+
+/**
  * Capabilities supported by a sandbox provider.
  * Providers can support different feature sets.
  */

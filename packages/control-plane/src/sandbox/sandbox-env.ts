@@ -102,6 +102,34 @@ export const SESSION_CONFIG_ENV_VAR = "SESSION_CONFIG";
 /** Build-mode marker checked as `=== "true"` by the runtime entrypoint. */
 export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
 export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
+
+/**
+ * Env keys of the image-build callback contract, mirrored from the runtime
+ * constants in `sandbox_runtime/repo_image_callback.py` (pinned by a contract
+ * test in `packages/modal-infra/tests/test_build_sandbox_lifecycle.py`).
+ * Position is load-bearing where providers index into this list:
+ * [0] provider session id, [1] build id, [2] callback URL, [3] callback
+ * token, [4] failure callback URL.
+ */
+export const REPO_IMAGE_CALLBACK_ENV_KEYS = [
+  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
+  "OI_REPO_IMAGE_BUILD_ID",
+  "OI_REPO_IMAGE_CALLBACK_URL",
+  "OI_REPO_IMAGE_CALLBACK_TOKEN",
+  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
+] as const;
+
+/**
+ * Keys scrubbed from user env vars before a build sandbox launches, so a
+ * user-defined secret can never hijack the build callback contract. Includes
+ * the legacy `OI_REPO_IMAGE_CALLBACK_SECRET` from the pre-token contract —
+ * still reserved so stale user secrets can't reintroduce it.
+ */
+export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
+  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
+  "OI_REPO_IMAGE_CALLBACK_SECRET",
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
+] as const;
 /** One-shot clone token used only by image-build sandboxes. */
 export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 
@@ -232,5 +260,64 @@ export function buildSandboxEnvVars(
   // survives — OpenComputer deliberately preserves one on prebuilt-image
   // boots (see its provider tests).
 
+  return envVars;
+}
+
+/** Provider-specific inputs to {@link buildImageBuildEnvVars}. */
+export interface ImageBuildEnvVarsOptions {
+  /** Logical sandbox id (`build-env-<scopeId>`), surfaced as `SANDBOX_ID`. */
+  sandboxId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: SessionRepositoryInfo[];
+  /** Resolved clone identity — {@link scmCloneIdentity} of the configured SCM provider. */
+  scmIdentity: ScmCloneIdentity;
+  /** One-shot clone token delivered as `VCS_CLONE_TOKEN`. */
+  cloneToken?: string;
+  /**
+   * User env vars (repo secrets), or a provider-composed base layer
+   * (OpenComputer layers provider LLM credentials underneath user secrets).
+   * Reserved image-build keys are scrubbed from this layer so user-defined
+   * secrets can never hijack the build callback contract.
+   */
+  baseEnvVars?: Record<string, string>;
+}
+
+/**
+ * Build the env map for an image-build sandbox — the build-mode sibling of
+ * {@link buildSandboxEnvVars}, shared by the Vercel and OpenComputer
+ * providers (which used to hand-roll byte-identical copies) and mirrored by
+ * Modal's Python `ModalBuildSessionService.create` in
+ * `packages/modal-infra/src/sandbox/build_session.py`.
+ *
+ * Build sandboxes never receive the session-auth system vars: the runtime
+ * boots in image-build mode (`IMAGE_BUILD_MODE=true`) and reports back over
+ * the callback contract instead. Provider-specific additions (platform
+ * paths, callback env timing) are layered on by the caller after this
+ * returns.
+ */
+export function buildImageBuildEnvVars(options: ImageBuildEnvVarsOptions): Record<string, string> {
+  const primary = options.repositories[0];
+  if (!primary) {
+    throw new Error("environment build requires at least one repository");
+  }
+
+  const envVars: Record<string, string> = { ...(options.baseEnvVars ?? {}) };
+  for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+    delete envVars[key];
+  }
+
+  Object.assign(envVars, {
+    PYTHONUNBUFFERED: "1",
+    SANDBOX_ID: options.sandboxId,
+    REPO_OWNER: primary.repoOwner,
+    REPO_NAME: primary.repoName,
+    [IMAGE_BUILD_MODE_ENV_VAR]: "true",
+    [SESSION_CONFIG_ENV_VAR]: JSON.stringify({
+      branch: primary.baseBranch,
+      repositories: options.repositories.map(toRepositoryConfigPayload),
+    }),
+  });
+
+  applyScmCloneEnv(envVars, options.scmIdentity, options.cloneToken);
   return envVars;
 }
