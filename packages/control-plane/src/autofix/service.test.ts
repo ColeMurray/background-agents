@@ -11,7 +11,6 @@ const OPEN_INSPECT_REVIEW_ENVELOPE: GitHubAutofixEnvelope = {
   eventType: "pull_request_review",
   action: "submitted",
   deliveryId: "delivery-2",
-  traceId: "trace-1",
   providerObject: { kind: "review", id: "5678" },
   repository: { id: "99", owner: "acme", name: "widgets" },
   pullRequestNumber: 42,
@@ -120,7 +119,6 @@ describe("AutofixService", () => {
       eventType: "issue_comment",
       action: "created",
       deliveryId: "delivery-1",
-      traceId: "trace-1",
       providerObject: { kind: "pr_comment", id: "1234" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -175,7 +173,6 @@ describe("AutofixService", () => {
       eventType: "issue_comment",
       action: "created",
       deliveryId: "delivery-1",
-      traceId: "trace-1",
       providerObject: { kind: "pr_comment", id: "1234" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -202,7 +199,6 @@ describe("AutofixService", () => {
       eventType: "issue_comment",
       action: "created",
       deliveryId: "delivery-1",
-      traceId: "trace-1",
       providerObject: { kind: "pr_comment", id: "1234" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -226,7 +222,6 @@ describe("AutofixService", () => {
       eventType: "issue_comment",
       action: "created",
       deliveryId: "delivery-1",
-      traceId: "trace-1",
       providerObject: { kind: "pr_comment", id: "1234" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -265,7 +260,6 @@ describe("AutofixService", () => {
       eventType: "pull_request_review",
       action: "submitted",
       deliveryId: "delivery-2",
-      traceId: "trace-1",
       providerObject: { kind: "review", id: "5678" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -330,7 +324,6 @@ describe("AutofixService", () => {
       eventType: "pull_request_review",
       action: "submitted",
       deliveryId: "delivery-2",
-      traceId: "trace-1",
       providerObject: { kind: "review", id: "5678" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -376,7 +369,6 @@ describe("AutofixService", () => {
         eventType: "pull_request_review",
         action: "submitted",
         deliveryId: "delivery-2",
-        traceId: "trace-1",
         providerObject: { kind: "review", id: "5678" },
         repository: { id: "99", owner: "acme", name: "widgets" },
         pullRequestNumber: 42,
@@ -405,7 +397,6 @@ describe("AutofixService", () => {
         eventType: "issue_comment",
         action: "created",
         deliveryId: "delivery-1",
-        traceId: "trace-1",
         providerObject: { kind: "pr_comment", id: "1234" },
         repository: { id: "99", owner: "acme", name: "widgets" },
         pullRequestNumber: 42,
@@ -440,6 +431,28 @@ describe("AutofixService", () => {
         body: expect.stringContaining("Please address this."),
       })
     );
+  });
+
+  it("does not treat a matching human login as the Open Inspect App", async () => {
+    const h = buildService();
+    h.github.hasPullRequestWritePermission.mockResolvedValueOnce(false);
+    h.github.getPullRequestFeedback.mockResolvedValueOnce({
+      ...openInspectReview(),
+      author: { id: "9", login: "Open-Inspect[bot]", type: "User" },
+    });
+
+    const result = await h.service.process(OPEN_INSPECT_REVIEW_ENVELOPE);
+
+    expect(result).toMatchObject({
+      decision: "skipped",
+      reason: "author_lacks_write_permission",
+    });
+    expect(h.github.hasPullRequestWritePermission).toHaveBeenCalledWith({
+      owner: "acme",
+      name: "widgets",
+      authorLogin: "Open-Inspect[bot]",
+    });
+    expect(h.sessions.fetch).not.toHaveBeenCalled();
   });
 
   it("keeps Open Inspect App reviews disabled when the dedicated setting is off", async () => {
@@ -478,7 +491,6 @@ describe("AutofixService", () => {
       eventType: "issue_comment",
       action: "created",
       deliveryId: "delivery-1",
-      traceId: "trace-1",
       providerObject: { kind: "pr_comment", id: "1234" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,
@@ -556,7 +568,6 @@ describe("AutofixService", () => {
       eventType: "issue_comment",
       action: "created",
       deliveryId: "delivery-1",
-      traceId: "trace-1",
       providerObject: { kind: "pr_comment", id: "1234" },
       repository: { id: "99", owner: "acme", name: "widgets" },
       pullRequestNumber: 42,

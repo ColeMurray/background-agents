@@ -104,7 +104,6 @@ app.post("/webhooks/github", async (c) => {
     event,
     payload,
     deliveryId: deliveryId ?? `missing:${traceId}`,
-    traceId,
     botUsername: c.env.GITHUB_BOT_USERNAME,
     receivedAt: new Date(),
   });

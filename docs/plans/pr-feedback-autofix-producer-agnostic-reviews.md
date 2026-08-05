@@ -124,8 +124,7 @@ authoritative. Enabling Open Inspect reviews must not implicitly allow any other
 ### GitHub bot ingress
 
 Keep the existing producer-neutral `pull_request_review.submitted` envelope. It contains stable
-provider identity and routing metadata, not review content. Preserve `traceId` propagation for
-observability.
+provider identity and routing metadata, not review content.
 
 Do not modify built-in review prompts or review publication behavior as part of Autofix. Custom
 automation event consumers require no changes.
@@ -168,7 +167,7 @@ improve review publication idempotency, but Autofix must not depend on it.
 
 ### Retain
 
-- The dedicated versioned Autofix queue envelope and `traceId`.
+- The dedicated versioned Autofix queue envelope.
 - GitHub webhook signature validation and queue delivery.
 - Authoritative GitHub reads for PR state, author identity, review body, and inline comments.
 - `pr_autofix_feedback` as the delivery, decision, and activity ledger.
@@ -238,8 +237,7 @@ remain historical if already deployed.
 ### PR #1182: Human and allowlisted-bot Autofix foundation
 
 - Preserve the current admission, retry, SessionDO, and activity foundations.
-- Move or retain generic `traceId` propagation here if restacking would otherwise make PR #1183
-  carry an unrelated observability fix.
+- Keep the queue envelope limited to the stable fields the consumer uses.
 - Do not add own-review publication concepts.
 
 ### PR #1183: Producer-agnostic Open Inspect reviews
@@ -294,7 +292,7 @@ tests for the revised contract before changing policy.
 ### Ingress and integration tests
 
 - A submitted App review produces the same generic review envelope as any other submitted review.
-- The envelope carries `traceId` and does not carry publication or reconciliation fields.
+- The envelope does not carry publication or reconciliation fields.
 - Author identity and review content come from the provider read, not the webhook body.
 - A representative automation-produced review reaches the same own-App eligibility path without a
   `publish-review` call.
