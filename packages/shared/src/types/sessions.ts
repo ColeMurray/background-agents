@@ -1,10 +1,6 @@
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
-import {
-  sessionRepositoryStateSchema,
-  type SessionListRepository,
-  type SessionRepositoryState,
-} from "./repositories";
+import type { SessionListRepository, SessionRepositoryState } from "./repositories";
 
 export const sessionStatusSchema = z.enum([
   "created",
@@ -65,15 +61,6 @@ export type SpawnSource =
   | "github-bot"
   | "linear-bot"
   | "slack-bot";
-
-export const spawnSourceSchema = z.enum([
-  "user",
-  "agent",
-  "automation",
-  "github-bot",
-  "linear-bot",
-  "slack-bot",
-]);
 
 export interface SessionParticipant {
   id: string;
@@ -249,48 +236,3 @@ export const sessionParticipantProfilesResponseSchema = z.object({
 export type SessionParticipantProfilesResponse = z.infer<
   typeof sessionParticipantProfilesResponseSchema
 >;
-
-/** Internal runtime schema used by the server-message protocol. */
-export const sessionStateSchema = z.object({
-  id: z.string(),
-  title: z.string().nullable(),
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  baseBranch: z.string().nullable(),
-  branchName: z.string().nullable(),
-  status: sessionStatusSchema,
-  sandboxStatus: sandboxStatusSchema,
-  messageCount: z.number(),
-  createdAt: z.number(),
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  isProcessing: z.boolean().optional(),
-  parentSessionId: z.string().nullable().optional(),
-  totalCost: z.number().optional(),
-  codeServerUrl: z.string().nullable().optional(),
-  codeServerPassword: z.string().nullable().optional(),
-  tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
-  ttydUrl: z.string().nullable().optional(),
-  ttydToken: z.string().nullable().optional(),
-  sandboxDashboardUrl: z.string().nullable().optional(),
-  /**
-   * Ordered repository list; [0] = primary. Optional so pre-feature servers
-   * and producers stay valid — consumers default to [] (absent means a
-   * scalar-era session; synthesize from repoOwner/repoName when rendering).
-   */
-  repositories: z.array(sessionRepositoryStateSchema).optional(),
-  // Environment provenance (design §7.6). environmentName resolves live —
-  // null when the environment was deleted after launch.
-  environmentId: z.string().nullable().optional(),
-  environmentName: z.string().nullable().optional(),
-});
-
-/** Internal runtime schema used by the server-message protocol. */
-export const participantPresenceSchema = z.object({
-  participantId: z.string(),
-  userId: z.string(),
-  name: z.string(),
-  avatar: z.string().optional(),
-  status: z.enum(["active", "idle", "away"]),
-  lastSeen: z.number(),
-});
