@@ -291,6 +291,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-123",
         promptingAuth: { authType: "oauth", token: "token" },
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: undefined,
       },
       log
     );
@@ -337,6 +338,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-123",
         promptingAuth: null,
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: undefined,
       },
       log
     );
@@ -374,6 +376,7 @@ describe("createPullRequestHandler", () => {
           body: "desc",
           baseBranch: "release",
           headBranch: "feature/pr",
+          draft: true,
         }),
       })
     );
@@ -395,6 +398,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-1",
         promptingAuth: null,
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: true,
       },
       log
     );

@@ -3,43 +3,8 @@ import { recordSchema } from "./artifacts";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 
-export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
-
-export const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
-
-/**
- * Single source of truth for event types: the runtime enum is canonical and
- * `EventType` is inferred from it, so a new event type can never compile
- * against the type while stale runtime validation rejects it.
- */
-export const eventTypeSchema = z.enum([
-  "heartbeat",
-  "ready",
-  "token",
-  "tool_call",
-  "step_start",
-  "step_finish",
-  "tool_result",
-  "git_sync",
-  "error",
-  "execution_complete",
-  "artifact",
-  "push_complete",
-  "push_error",
-  "warning",
-  "session_title",
-  "user_message",
-]);
-
-export type EventType = z.infer<typeof eventTypeSchema>;
-
-export interface AgentEvent {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
+const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
 const tokenUsageDetailsSchema = z
   .object({
@@ -215,6 +180,15 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+export type EventType = SandboxEvent["type"];
+
+export interface AgentEvent {
+  id: string;
+  type: EventType;
+  data: Record<string, unknown>;
+  messageId: string | null;
+  createdAt: number;
+}
 
 type ToolCallIdentityEvent = Pick<
   Extract<SandboxEvent, { type: "tool_call" }>,
@@ -235,18 +209,12 @@ export function toolCallIdentityKey(event: ToolCallIdentityEvent): string {
 }
 
 /**
- * Sandbox event arrays for session hydration — both the initial `subscribed`
- * replay and paginated `history_page` items, which read from the same event
- * store. Resilient to unknown/legacy event shapes: each event is validated
- * individually and dropped if it doesn't match, instead of failing the whole
- * message. A single unrecognized event must never wedge session hydration and
- * strand the client on "loading session" forever.
+ * Runtime companion to `EventType`: the enum is derived from the canonical
+ * `sandboxEventSchema` discriminator values, so it can never drift from the
+ * event union that owns the contract.
  */
-export const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
-  events.flatMap((event) => {
-    const result = sandboxEventSchema.safeParse(event);
-    return result.success ? [result.data] : [];
-  })
+export const eventTypeSchema = z.enum(
+  sandboxEventSchema.options.map((option) => option.shape.type.value) as [EventType, ...EventType[]]
 );
 
 export const eventResponseSchema = z.object({
