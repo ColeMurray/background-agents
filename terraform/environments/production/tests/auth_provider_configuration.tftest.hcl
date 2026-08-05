@@ -191,3 +191,53 @@ run "combined_with_github_only_admission" {
 
   expect_failures = [terraform_data.sign_in_provider_gate]
 }
+
+run "slack_classification_anthropic" {
+  command = plan
+
+  variables {
+    enable_slack_bot        = true
+    enable_service_bindings = false
+    slack_bot_token         = "test-slack-token"
+    slack_signing_secret    = "test-slack-signing-secret"
+  }
+
+  assert {
+    condition = (
+      var.slack_classification_model == "anthropic/claude-haiku-4-5" &&
+      contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "Anthropic Slack classification must use the canonical default and bind ANTHROPIC_API_KEY."
+  }
+}
+
+run "slack_classification_openai" {
+  command = plan
+
+  variables {
+    enable_slack_bot           = true
+    enable_service_bindings    = false
+    slack_bot_token            = "test-slack-token"
+    slack_signing_secret       = "test-slack-signing-secret"
+    slack_classification_model = "openai/gpt-5.6-luna"
+  }
+
+  assert {
+    condition = (
+      var.slack_classification_model == "openai/gpt-5.6-luna" &&
+      contains(module.slack_bot_worker[0].plain_text_binding_names, "CLASSIFICATION_MODEL") &&
+      !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+    )
+    error_message = "OpenAI Slack classification must bind CLASSIFICATION_MODEL without ANTHROPIC_API_KEY."
+  }
+}
+
+run "slack_classification_invalid_model" {
+  command = plan
+
+  variables {
+    slack_classification_model = "openai/gpt-5.6"
+  }
+
+  expect_failures = [var.slack_classification_model]
+}

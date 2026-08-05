@@ -66,6 +66,22 @@ export type {
   ConfidenceLevel,
 } from "./repository-catalog";
 
+export {
+  CLASSIFY_TARGET_TOOL_NAME,
+  CLASSIFIER_PROMPT_MAX_CHARS,
+  classificationModelSchema,
+  targetClassificationDecisionSchema,
+  classifierInferenceRequestSchema,
+  classifierInferenceResponseSchema,
+  targetClassificationJsonSchema,
+} from "./target-classification";
+export type {
+  ClassificationModel,
+  TargetClassificationDecision,
+  ClassifierInferenceRequest,
+  ClassifierInferenceResponse,
+} from "./target-classification";
+
 export { listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
 export type {
   SessionArtifact,

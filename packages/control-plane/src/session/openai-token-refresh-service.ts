@@ -33,17 +33,34 @@ export type OpenAITokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn?: number; accountId?: string }
   | { ok: false; status: number; error: string };
 
-export class OpenAITokenRefreshService {
+/** Source-aware broker shared by session-scoped and global OAuth consumers. */
+export class OpenAITokenBroker {
   constructor(
     private readonly db: SqlDatabase,
     private readonly encryptionKey: string,
-    private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
     private readonly log: Logger
   ) {}
 
-  async refresh(session: SessionRow): Promise<OpenAITokenRefreshResult> {
-    const readTokenState = () => this.readTokenState(session);
+  refreshGlobal(): Promise<OpenAITokenRefreshResult> {
+    return this.refreshFrom(() => this.readTokenStateForSources([{ kind: "global" }]));
+  }
 
+  refreshSession(
+    session: SessionRow,
+    ensureRepoId: (session: SessionRow) => Promise<number>
+  ): Promise<OpenAITokenRefreshResult> {
+    return this.refreshFrom(async () => {
+      const source = await this.resolveSessionSecretSource(session, ensureRepoId);
+      const sources = source
+        ? [source, { kind: "global" } as const]
+        : [{ kind: "global" } as const];
+      return this.readTokenStateForSources(sources);
+    });
+  }
+
+  private async refreshFrom(
+    readTokenState: () => Promise<OpenAITokenState | null>
+  ): Promise<OpenAITokenRefreshResult> {
     let tokenState: OpenAITokenState | null;
     try {
       tokenState = await readTokenState();
@@ -114,12 +131,15 @@ export class OpenAITokenRefreshService {
    * environment (global-only). Environment-launched sessions resolve to the
    * environment and never read member repo secrets (§6.4/§7.4).
    */
-  private async resolveSessionSecretSource(session: SessionRow): Promise<TokenSecretSource | null> {
+  private async resolveSessionSecretSource(
+    session: SessionRow,
+    ensureRepoId: (session: SessionRow) => Promise<number>
+  ): Promise<TokenSecretSource | null> {
     if (session.environment_id) {
       return { kind: "environment", environmentId: session.environment_id };
     }
     if (session.repo_owner && session.repo_name) {
-      const repoId = await this.ensureRepoId(session);
+      const repoId = await ensureRepoId(session);
       return {
         kind: "repo",
         repoId,
@@ -168,18 +188,17 @@ export class OpenAITokenRefreshService {
     }
   }
 
-  private async readTokenState(session: SessionRow): Promise<OpenAITokenState | null> {
-    const source = await this.resolveSessionSecretSource(session);
-    if (source) {
+  private async readTokenStateForSources(
+    sources: readonly TokenSecretSource[]
+  ): Promise<OpenAITokenState | null> {
+    for (const source of sources) {
       const secrets = await this.readSecretsForSource(source);
       const state = this.getTokenStateFromSecrets(secrets, source);
       if (state) {
         return state;
       }
     }
-
-    const globalSecrets = await this.readSecretsForSource({ kind: "global" });
-    return this.getTokenStateFromSecrets(globalSecrets, { kind: "global" });
+    return null;
   }
 
   private async attemptRefresh(
@@ -254,5 +273,23 @@ export class OpenAITokenRefreshService {
     }
 
     return { ok: false, status: 401, error: "OpenAI token refresh failed: unauthorized" };
+  }
+}
+
+/** Backwards-compatible session facade used by the Durable Object. */
+export class OpenAITokenRefreshService {
+  private readonly broker: OpenAITokenBroker;
+
+  constructor(
+    db: SqlDatabase,
+    encryptionKey: string,
+    private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
+    log: Logger
+  ) {
+    this.broker = new OpenAITokenBroker(db, encryptionKey, log);
+  }
+
+  refresh(session: SessionRow): Promise<OpenAITokenRefreshResult> {
+    return this.broker.refreshSession(session, this.ensureRepoId);
   }
 }
