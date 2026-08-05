@@ -172,7 +172,6 @@ export function SessionTimeline({
         <ToolCallGroup
           key={item.id}
           events={item.events}
-          groupId={item.id}
           isExpanded={item.events.some((event) => expandedToolGroups.has(toolCallKey(event)))}
           expandedToolCallIds={expandedToolCalls}
           onToggleGroup={() => toggleToolGroup(item.events)}

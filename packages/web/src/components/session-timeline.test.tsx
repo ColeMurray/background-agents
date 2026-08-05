@@ -794,4 +794,40 @@ describe("task activity grouping", () => {
     expect(screen.getByText(/Bash zeroth/)).toBeInTheDocument();
     expect(screen.getByText(/Bash third/)).toBeInTheDocument();
   });
+
+  it("keeps rows distinct when the same callId repeats across messages", async () => {
+    const user = userEvent.setup();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(
+      <SessionTimeline
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+        events={[
+          toolEvent("Bash", "call-1", 1, {
+            messageId: "message-1",
+            args: { command: "first" },
+          }),
+          toolEvent("Bash", "call-1", 2, {
+            messageId: "message-2",
+            args: { command: "second" },
+          }),
+        ]}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Bash2 commands/ }));
+    expect(screen.getByText(/Bash first/)).toBeInTheDocument();
+    expect(screen.getByText(/Bash second/)).toBeInTheDocument();
+    expect(consoleError.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(
+      false
+    );
+    consoleError.mockRestore();
+  });
 });
