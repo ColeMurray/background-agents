@@ -29,8 +29,17 @@ async function handleGetGlobal(
   ctx: RequestContext
 ): Promise<Response> {
   const store = new ScmSettingsStore(ctx.db);
-  const settings = await store.getGlobal();
-  return json({ settings });
+  try {
+    const settings = await store.getGlobal();
+    return json({ settings });
+  } catch (e) {
+    logger.error("Failed to fetch SCM settings", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("SCM settings storage unavailable", 503);
+  }
 }
 
 async function handleSetGlobal(
@@ -102,8 +111,17 @@ async function handleListRepoSettings(
   ctx: RequestContext
 ): Promise<Response> {
   const store = new ScmSettingsStore(ctx.db);
-  const repos = await store.listRepoSettings();
-  return json({ repos });
+  try {
+    const repos = await store.listRepoSettings();
+    return json({ repos });
+  } catch (e) {
+    logger.error("Failed to list SCM repo settings", {
+      error: e instanceof Error ? e.message : String(e),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("SCM settings storage unavailable", 503);
+  }
 }
 
 async function handleSetRepoSettings(
