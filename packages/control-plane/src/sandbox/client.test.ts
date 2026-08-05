@@ -498,8 +498,6 @@ describe("ModalClient", () => {
     await client.startImageBuildSandbox({
       buildId: "imgb-1",
       providerSessionId: "modal-session-1",
-      callbackUrl: "https://cp.test/image-builds/build-complete",
-      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
       callbackToken: "cb-token-1",
     });
 
@@ -511,8 +509,6 @@ describe("ModalClient", () => {
     expect(body).toEqual({
       build_id: "imgb-1",
       provider_session_id: "modal-session-1",
-      callback_url: "https://cp.test/image-builds/build-complete",
-      failure_callback_url: "https://cp.test/image-builds/build-failed",
       callback_token: "cb-token-1",
     });
   });

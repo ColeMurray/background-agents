@@ -101,8 +101,6 @@ export type {
   SessionParticipant,
   Session,
   SessionMessage,
-  SessionState,
-  ParticipantPresence,
   PullRequestSummary,
   SessionReadState,
   SessionReadAction,
@@ -126,7 +124,7 @@ export {
 } from "./sessions";
 
 export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage } from "./server-messages";
+export type { ServerMessage, SessionState, ParticipantPresence } from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
