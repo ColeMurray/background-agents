@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { artifactTypeSchema } from "./statuses";
-import type { ArtifactType } from "./statuses";
+
+export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
+
+export const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
 
 export const recordSchema = z.record(z.string(), z.unknown());
 

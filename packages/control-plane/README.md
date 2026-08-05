@@ -154,14 +154,12 @@ statuses are `building | ready | failed | superseded`.
 | -------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/image-builds/build-complete`               | POST   | Success callback from image builders (public route, callback-authenticated)                                                                                          |
 | `/image-builds/build-failed`                 | POST   | Failure callback from image builders (public route, callback-authenticated)                                                                                          |
-| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build (cron, save-hooks, manual rebuild)                                                                                                        |
-| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build                                                                                                                                   |
+| `/image-builds/trigger/repo/:owner/:name`    | POST   | Trigger a repo-scope build manually                                                                                                                                  |
+| `/image-builds/trigger/environment/:id`      | POST   | Trigger an environment-scope build manually                                                                                                                          |
 | `/image-builds/toggle/repo/:owner/:name`     | PUT    | Toggle repo prebuilds (`repo_metadata.image_build_enabled`); toggling on triggers a build. The environment toggle stays on the environments CRUD (`prebuildEnabled`) |
 | `/image-builds/status`                       | GET    | Cross-scope aggregate over every prebuild-enabled scope — excludes superseded, includes failed                                                                       |
 | `/image-builds/status?scope_kind=&scope_id=` | GET    | One scope's recent non-superseded builds (settings/debug view)                                                                                                       |
-| `/image-builds/enabled`                      | GET    | Cron feed: enabled scope units with repositories + fingerprint, plus the runtime floor                                                                               |
-| `/image-builds/mark-stale`                   | POST   | Mark old `building` rows failed (called by the scheduler)                                                                                                            |
-| `/image-builds/cleanup`                      | POST   | Delete old failed rows and reap superseded rows' provider artifacts                                                                                                  |
+| `/image-builds/enabled`                      | GET    | Settings feed: enabled scope identities with their current repository-set fingerprints                                                                               |
 
 Every provider uses the same callback contract. The control plane creates a dormant provider
 session, binds its opaque id to the build row, and only then starts the runtime. The runtime calls
@@ -300,7 +298,8 @@ sessions index, repo metadata, and encrypted secrets:
   repositories fingerprint for spawn matching, the runtime version for the compatibility-floor
   check, callback-token state, Queue-finalization lease state, and provider-session cleanup state.
   Replaces the former `repo_images` and `environment_images` tables (dropped in migrations
-  0039/0040; environment rows were copied over, repo rows are rebuilt by the cron).
+  0039/0040). The control-plane scheduler naturally rebuilds enabled scopes; no legacy backfill job
+  is required.
 - `integration_environment_settings`: environment-level integration-setting overrides (sandbox,
   code-server), the top layer above `integration_settings` (global) and `integration_repo_settings`
   (per-repo).
@@ -437,6 +436,7 @@ for the complete list.
 | Token encryption works             | Store/retrieve token, verify matches  |
 | Prompt queue ordering              | Enqueue 3 prompts, verify FIFO        |
 | Session survives DO eviction       | Create, wait, reconnect, verify state |
+| Sandbox survives WebSocket close   | Close with 1000/1001, reconnect       |
 | Ping/pong WebSocket health         | Send ping, verify pong                |
 | Typing triggers sandbox warm       | Send typing, verify warming event     |
 | Presence sync on connect           | Connect 2 clients, verify presence    |

@@ -8,7 +8,7 @@
  * repository and image rows (design §7.2).
  */
 
-import type { Environment, EnvironmentRepository } from "@open-inspect/shared";
+import type { Environment, EnvironmentRepository } from "@open-inspect/shared/types/environments";
 import { parseJsonStringArray } from "./json-columns";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 

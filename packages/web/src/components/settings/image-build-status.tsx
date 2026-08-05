@@ -1,6 +1,6 @@
 "use client";
 
-import type { ImageBuildStatus as ImageBuildStatusValue } from "@open-inspect/shared";
+import type { ImageBuildStatus as ImageBuildStatusValue } from "@open-inspect/shared/types/image-builds";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/time";
 

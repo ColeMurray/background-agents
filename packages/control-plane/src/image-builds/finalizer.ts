@@ -8,6 +8,7 @@ import { ImageBuildReaper } from "./reaper";
 import { ImageBuildSessionCleanup } from "./session-cleanup";
 import type { ImageBuildAdapter } from "./types";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
+import { parseRepositoryShasJson } from "./provenance";
 
 export { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
@@ -191,7 +192,17 @@ export class ImageBuildFinalizer {
       }
     }
 
-    const repositoryShas = parseRepositoryShas(build.repository_shas);
+    const repositoryShas = parseRepositoryShasJson(build.repository_shas);
+    if (!repositoryShas) {
+      await this.store.finalization.markFailed({
+        buildId: build.id,
+        leaseToken,
+        error: "Stored repository_shas is invalid",
+      });
+      const failed = await this.store.finalization.getBuild(build.id);
+      if (failed) await this.cleanupTerminalBuild(failed, correlation);
+      return completed();
+    }
     const ready = await this.store.tryMarkImageBuildReady(
       build.id,
       build.provider,
@@ -291,12 +302,6 @@ export class ImageBuildFinalizer {
   ): Promise<void> {
     await this.sessionCleanup.run(build, correlation);
   }
-}
-
-function parseRepositoryShas(value: string) {
-  const parsed: unknown = JSON.parse(value);
-  if (!Array.isArray(parsed)) throw new Error("Stored repository_shas is not an array");
-  return parsed as Array<{ repoOwner: string; repoName: string; baseSha: string }>;
 }
 
 function errorMessage(error: unknown): string {

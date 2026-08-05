@@ -101,9 +101,15 @@ any of the following holds:
 - **Outdated runtime** — the image was built on a sandbox runtime older than the current
   compatibility floor (such images are also skipped at spawn time)
 
-The scheduler starts a bounded number of builds per tick across all scopes (`TRIGGER_CAP_PER_TICK`,
-currently 8); anything beyond the cap is picked up on the next tick. Sessions fall back to the
-normal startup flow while a scope waits for its build.
+The provider-neutral control-plane scheduler scans every enabled scope on each tick and starts every
+required rebuild it finds. Maintenance selects every pending terminal provider build session and old
+artifact, while bounding concurrent cleanup calls. Sessions fall back to the normal startup flow
+while a scope waits for its build.
+
+When changing `sandbox_provider`, keep the previous provider's credentials configured until its
+terminal build-session cleanup backlog reaches zero. Maintenance dispatches cleanup from each row's
+recorded provider, independently of which provider is currently active; removing old credentials
+early leaves those rows pending until the provider's own timeout or credentials are restored.
 
 Builds also trigger immediately, outside the schedule, when:
 
@@ -172,13 +178,11 @@ shared one-hour limit.
 
 Modal follows the same lifecycle as the other providers: the control plane creates a dormant
 sandbox, records its id, starts the runtime, and snapshots it only after the callback has been
-durably accepted. New builds no longer invoke the long-running Modal `build_image` function; the
-legacy function and cron remain deployed only until the final cleanup step in the rollout.
+durably accepted. The retired long-running Modal `build_image` function and Modal-side rebuild cron
+have been removed; rebuild evaluation now runs only in the provider-neutral control-plane scheduler.
 
 Terraform deploys the Modal app before the control-plane Worker so a one-shot upgrade cannot expose
-the new Worker until Modal's provider-session endpoints are available. The repository history keeps
-that cutover reviewable as three changes: add the compatible Modal endpoints, switch the Worker to
-Queue finalization, then remove the legacy Modal builder.
+the Worker until Modal's provider-session endpoints are available.
 
 ### What Happens When You Start a Session
 

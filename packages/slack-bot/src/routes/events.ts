@@ -1,60 +1,14 @@
-import { verifySlackSignature } from "@open-inspect/shared";
+import { verifySlackSignature } from "@open-inspect/shared/slack";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { Hono } from "hono";
-import { z } from "zod";
-import { handleSlackEvent, type SlackEventPayload } from "../events/dispatcher";
+import { handleSlackEvent } from "../events/dispatcher";
+import { slackEventPayloadSchema } from "../events/payload";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 
 const log = createLogger("handler");
 const EVENT_DEDUPE_TTL_MS = 60 * 60 * 1000;
 export const eventRoutes = new Hono<{ Bindings: Env }>();
-
-const slackMessageFileSchema = z.object({
-  id: z.string().optional(),
-  name: z.string().optional(),
-  title: z.string().optional(),
-  mimetype: z.string().optional(),
-  url_private: z.string().optional(),
-  url_private_download: z.string().optional(),
-  size: z.number().optional(),
-  mode: z.string().optional(),
-});
-
-const slackMessageAttachmentSchema = z.object({
-  is_share: z.boolean().optional(),
-  is_msg_unfurl: z.boolean().optional(),
-  text: z.string().optional(),
-  fallback: z.string().optional(),
-  author_name: z.string().optional(),
-  channel_name: z.string().optional(),
-  channel_id: z.string().optional(),
-  ts: z.string().optional(),
-  from_url: z.string().optional(),
-  files: z.array(slackMessageFileSchema).optional(),
-});
-
-const slackEventPayloadSchema = z.object({
-  type: z.string(),
-  challenge: z.string().optional(),
-  event_id: z.string().optional(),
-  event: z
-    .object({
-      type: z.string(),
-      text: z.string().optional(),
-      user: z.string().optional(),
-      channel: z.string().optional(),
-      ts: z.string().optional(),
-      thread_ts: z.string().optional(),
-      bot_id: z.string().optional(),
-      tab: z.string().optional(),
-      channel_type: z.string().optional(),
-      subtype: z.string().optional(),
-      files: z.array(slackMessageFileSchema).optional(),
-      attachments: z.array(slackMessageAttachmentSchema).optional(),
-    })
-    .optional(),
-}) satisfies z.ZodType<SlackEventPayload & { challenge?: string; event_id?: string }>;
 
 eventRoutes.post("/events", async (c) => {
   const startTime = Date.now();

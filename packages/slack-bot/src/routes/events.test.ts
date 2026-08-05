@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type * as SharedSlack from "@open-inspect/shared/slack";
 import type { Env } from "../types";
 
 const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
@@ -6,9 +7,12 @@ const { mockHandleSlackEvent, mockVerifySlackSignature } = vi.hoisted(() => ({
   mockVerifySlackSignature: vi.fn(),
 }));
 
-vi.mock("@open-inspect/shared", () => {
-  return { verifySlackSignature: mockVerifySlackSignature };
-});
+// Only the signature check is stubbed; the payload schemas are the real ones so
+// the test exercises the production validation boundary.
+vi.mock("@open-inspect/shared/slack", async (importOriginal) => ({
+  ...(await importOriginal<typeof SharedSlack>()),
+  verifySlackSignature: mockVerifySlackSignature,
+}));
 
 vi.mock("../events/dispatcher", () => ({
   handleSlackEvent: mockHandleSlackEvent,

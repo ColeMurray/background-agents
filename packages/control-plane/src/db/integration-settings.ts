@@ -1,13 +1,13 @@
+import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
+import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
-  isEnvironmentId,
   ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
-  DEFAULT_MENTIONS_POLICY,
   MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
   normalizeRoutingRules,
-  parseRepositoryFullName,
   type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
@@ -17,7 +17,7 @@ import {
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
 import type { SqlDatabase } from "./sql-database";

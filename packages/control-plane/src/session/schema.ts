@@ -120,7 +120,8 @@ CREATE TABLE IF NOT EXISTS events (
   type TEXT NOT NULL,                               -- 'tool_call', 'tool_result', 'token', 'error', 'git_sync'
   data TEXT NOT NULL,                               -- JSON payload
   message_id TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  timeline_sequence INTEGER NOT NULL UNIQUE
 );
 
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
@@ -485,6 +486,17 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 37,
     description: "Add canonical D1 user reference to participants",
     run: `ALTER TABLE participants ADD COLUMN canonical_user_id TEXT`,
+  },
+  {
+    id: 38,
+    description: "Add stable event timeline sequence",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE events ADD COLUMN timeline_sequence INTEGER`);
+      sql.exec(`UPDATE events SET timeline_sequence = rowid WHERE timeline_sequence IS NULL`);
+      sql.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence)`
+      );
+    },
   },
 ];
 

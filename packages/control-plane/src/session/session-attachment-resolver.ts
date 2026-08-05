@@ -3,7 +3,7 @@ import {
   sessionAttachmentMimeTypeSchema,
   type SessionAttachmentReference,
   type ResolvedSessionAttachment,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 
 export class SessionAttachmentError extends Error {}

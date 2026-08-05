@@ -1,4 +1,4 @@
-"""Tests for the additive Modal provider-session image-build APIs."""
+"""Tests for the Modal provider-session image-build APIs."""
 
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -6,7 +6,13 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 
 from src import web_api
-from src.sandbox.manager import DEFAULT_BUILD_TIMEOUT_SECONDS
+from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS
+
+REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
+CALLBACK_CONTEXT = {
+    "callback_url": "https://cp.test/image-builds/build-complete",
+    "failure_callback_url": "https://cp.test/image-builds/build-failed",
+}
 
 
 def _patch_dependencies(monkeypatch: pytest.MonkeyPatch):
@@ -46,7 +52,9 @@ async def _call_generic_snapshot(request: dict) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_create_returns_provider_session_without_removing_legacy_endpoint(monkeypatch):
+async def test_create_build_sandbox_forwards_callback_context_and_returns_provider_session(
+    monkeypatch,
+):
     service = _patch_dependencies(monkeypatch)
 
     result = await _call(
@@ -55,29 +63,93 @@ async def test_create_returns_provider_session_without_removing_legacy_endpoint(
             "scope_kind": "repo",
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
-            "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            "repositories": REPOSITORIES,
             "clone_token": "clone-token",
-            "clone_host": "gitlab.com",
-            "clone_username": "oauth2",
+            "callback_url": "https://worker.test/image-builds/build-complete",
+            "failure_callback_url": "https://worker.test/image-builds/build-failed",
+            "user_env_vars": {"FOO": "bar"},
+            "build_timeout_seconds": 2400,
         },
     )
 
-    assert result["data"]["provider_session_id"] == "modal-session-1"
+    assert result == {
+        "success": True,
+        "data": {"provider_session_id": "modal-session-1"},
+    }
     service.create.assert_awaited_once_with(
         build_id="imgb-1",
         scope_kind="repo",
         scope_id="acme/repo",
-        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        repositories=REPOSITORIES,
+        callback_url="https://worker.test/image-builds/build-complete",
+        failure_callback_url="https://worker.test/image-builds/build-failed",
         clone_token="clone-token",
-        clone_host="gitlab.com",
-        clone_username="oauth2",
-        user_env_vars=None,
+        clone_host=None,
+        clone_username=None,
+        user_env_vars={"FOO": "bar"},
         build_execution_timeout_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
-        timeout_seconds=(
-            DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
-        ),
+        timeout_seconds=2400,
     )
-    assert hasattr(web_api, "api_build_image")
+
+
+@pytest.mark.asyncio
+async def test_create_build_sandbox_adds_finalization_grace_to_default_timeout(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+
+    await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            **CALLBACK_CONTEXT,
+        },
+    )
+
+    assert service.create.await_args.kwargs["build_execution_timeout_seconds"] == (
+        DEFAULT_BUILD_TIMEOUT_SECONDS
+    )
+    assert service.create.await_args.kwargs["timeout_seconds"] == (
+        DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload_callbacks", "missing_field"),
+    [
+        ({}, "callback_url"),
+        (
+            {"callback_url": "https://worker.test/image-builds/build-complete"},
+            "failure_callback_url",
+        ),
+        (
+            {"failure_callback_url": "https://worker.test/image-builds/build-failed"},
+            "callback_url",
+        ),
+    ],
+)
+async def test_create_build_sandbox_rejects_missing_callback_urls(
+    monkeypatch, payload_callbacks, missing_field
+):
+    service = _patch_dependencies(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                **payload_callbacks,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == f"{missing_field} is required"
+    service.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -96,6 +168,7 @@ async def test_create_rejects_non_string_clone_fields(monkeypatch, field, value)
         "scope_id": "acme/repo",
         "build_id": "imgb-1",
         "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+        **CALLBACK_CONTEXT,
         field: value,
     }
 
@@ -120,6 +193,7 @@ async def test_create_logs_http_outcome(monkeypatch):
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
             "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            **CALLBACK_CONTEXT,
         },
     )
 
@@ -154,6 +228,7 @@ async def test_create_rejects_non_integer_build_timeout(monkeypatch, field):
                 "scope_id": "acme/repo",
                 "build_id": "imgb-1",
                 "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+                **CALLBACK_CONTEXT,
                 field: "1800",
             },
         )
@@ -173,6 +248,7 @@ async def test_create_clamps_build_timeout_to_provider_maximum(monkeypatch):
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
             "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
+            **CALLBACK_CONTEXT,
             "build_timeout_seconds": 99999,
         },
     )
@@ -203,6 +279,7 @@ async def test_create_rejects_case_insensitive_repository_path_collisions(monkey
                         "branch": "develop",
                     },
                 ],
+                **CALLBACK_CONTEXT,
             },
         )
 
@@ -212,33 +289,29 @@ async def test_create_rejects_case_insensitive_repository_path_collisions(monkey
 
 
 @pytest.mark.asyncio
-async def test_start_passes_bound_identity_and_callbacks(monkeypatch):
+async def test_start_passes_bound_identity_and_callback_token(monkeypatch):
     service = _patch_dependencies(monkeypatch)
 
-    await _call(
+    result = await _call(
         web_api.api_start_build_sandbox,
         {
             "build_id": "imgb-1",
             "provider_session_id": "modal-session-1",
-            "callback_url": "https://cp.test/image-builds/build-complete",
-            "failure_callback_url": "https://cp.test/image-builds/build-failed",
             "callback_token": "callback-token",
         },
     )
 
+    assert result["success"] is True
     service.start.assert_awaited_once_with(
         build_id="imgb-1",
         provider_session_id="modal-session-1",
-        callback_url="https://cp.test/image-builds/build-complete",
-        failure_callback_url="https://cp.test/image-builds/build-failed",
         callback_token="callback-token",
     )
 
 
 @pytest.mark.asyncio
-async def test_start_logs_callback_validation_failure(monkeypatch):
+async def test_start_logs_missing_callback_token_validation_failure(monkeypatch):
     service = _patch_dependencies(monkeypatch)
-    monkeypatch.setattr(web_api, "validate_control_plane_url", lambda _url: False)
     info = MagicMock()
     monkeypatch.setattr(web_api.log, "info", info)
 
@@ -248,9 +321,6 @@ async def test_start_logs_callback_validation_failure(monkeypatch):
             {
                 "build_id": "imgb-1",
                 "provider_session_id": "modal-session-1",
-                "callback_url": "https://attacker.test/complete",
-                "failure_callback_url": "https://attacker.test/failed",
-                "callback_token": "callback-token",
             },
         )
 
@@ -279,6 +349,29 @@ async def test_terminate_passes_bound_identity_and_reason(monkeypatch):
         provider_session_id="modal-session-1",
         reason="image_build_failed",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint_name", "payload"),
+    [
+        ("api_create_build_sandbox", {"build_id": "imgb-1", "repositories": []}),
+        (
+            "api_start_build_sandbox",
+            {"build_id": "imgb-1", "provider_session_id": "modal-session-1"},
+        ),
+        ("api_terminate_build_sandbox", {"build_id": "imgb-1"}),
+    ],
+)
+async def test_build_session_endpoints_reject_missing_core_fields(
+    monkeypatch, endpoint_name, payload
+):
+    _patch_dependencies(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc_info:
+        await _call(getattr(web_api, endpoint_name), payload)
+
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -334,7 +427,7 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
     handle = SimpleNamespace()
     manager = SimpleNamespace(
         get_sandbox_by_id=AsyncMock(return_value=handle),
-        take_snapshot=MagicMock(return_value="im-session-1"),
+        take_snapshot=AsyncMock(return_value="im-session-1"),
     )
     monkeypatch.setattr("src.sandbox.manager.SandboxManager", lambda: manager)
 
@@ -348,3 +441,4 @@ async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkey
 
     assert result["data"]["image_id"] == "im-session-1"
     manager.get_sandbox_by_id.assert_awaited_once_with("modal-session-1")
+    manager.take_snapshot.assert_awaited_once_with(handle)

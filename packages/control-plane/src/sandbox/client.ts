@@ -5,9 +5,9 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
 import { generateInternalToken } from "@open-inspect/shared/auth";
-import type { ImageBuildScopeKind, McpServerConfig } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
@@ -121,7 +121,6 @@ export interface CreateSandboxRequest {
   repoName: string | null;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  snapshotId?: string;
   opencodeSessionId?: string;
   provider?: string;
   model?: string;
@@ -209,10 +208,12 @@ export interface CreateImageBuildSandboxRequest {
   cloneToken?: string;
   cloneHost?: string;
   cloneUsername?: string;
+  callbackUrl: string;
+  failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
   buildExecutionTimeoutSeconds: number;
   /** Provider-session lifetime, including deferred Queue finalization headroom. */
-  providerSessionTimeoutSeconds?: number;
+  providerSessionTimeoutSeconds: number;
 }
 
 export interface CreateImageBuildSandboxResponse {
@@ -222,8 +223,6 @@ export interface CreateImageBuildSandboxResponse {
 export interface StartImageBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
-  callbackUrl: string;
-  failureCallbackUrl: string;
   callbackToken: string;
 }
 
@@ -339,7 +338,6 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          snapshot_id: request.snapshotId || null,
           opencode_session_id: request.opencodeSessionId || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
@@ -613,9 +611,11 @@ export class ModalClient {
           clone_token: request.cloneToken,
           clone_host: request.cloneHost,
           clone_username: request.cloneUsername,
+          callback_url: request.callbackUrl,
+          failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
-          build_timeout_seconds: request.providerSessionTimeoutSeconds ?? null,
+          build_timeout_seconds: request.providerSessionTimeoutSeconds,
         }),
       });
 
@@ -665,8 +665,6 @@ export class ModalClient {
       {
         build_id: request.buildId,
         provider_session_id: request.providerSessionId,
-        callback_url: request.callbackUrl,
-        failure_callback_url: request.failureCallbackUrl,
         callback_token: request.callbackToken,
       },
       correlation

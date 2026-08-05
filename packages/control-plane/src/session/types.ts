@@ -125,6 +125,7 @@ export interface EventRow {
   data: string; // JSON
   message_id: string | null;
   created_at: number;
+  timeline_sequence?: number;
 }
 
 export interface ArtifactRow {

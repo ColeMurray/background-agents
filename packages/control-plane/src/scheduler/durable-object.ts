@@ -11,15 +11,14 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   automationEventSchema,
-  nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
-  type AutomationCallbackContext,
-  type AutomationInvocationSource,
   type SlackAutomationEvent,
-  type SlackCallbackContext,
   type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import { nextCronOccurrence } from "@open-inspect/shared/cron";
+import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import type { AutomationCallbackContext, SlackCallbackContext } from "@open-inspect/shared";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
@@ -1362,6 +1361,9 @@ export class SchedulerDO extends DurableObject<Env> {
       repoFullName: formatRunRepositoryLabel(run),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
+      // Marks the turn as automation-owned: a follow-up completes through the
+      // interactive callback, which would otherwise treat it as a user request.
+      automationId: automation.id,
     };
 
     try {

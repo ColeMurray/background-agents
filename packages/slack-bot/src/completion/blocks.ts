@@ -9,7 +9,8 @@ import type {
   SlackContextBlock,
   SlackSectionBlock,
 } from "../slack-blocks";
-import { escapeMrkdwnText, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
+import { escapeMrkdwnText } from "@open-inspect/shared/slack";
+import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
 
 type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
 

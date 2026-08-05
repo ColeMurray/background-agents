@@ -4,7 +4,7 @@ import {
   parseAdmissionBoolean,
   type AdmissionPolicyConfig,
 } from "./admission-policy";
-import { SIGN_IN_PROVIDERS, type SignInProvider } from "@open-inspect/shared";
+import { SIGN_IN_PROVIDERS, type SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { createUserAuth, type UserAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";

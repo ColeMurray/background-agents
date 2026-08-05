@@ -31,10 +31,9 @@ export class VercelImageBuildAdapter implements ImageBuildAdapter {
       plan.buildTimeoutMs,
       VERCEL_MAX_SANDBOX_TIMEOUT_MS - IMAGE_BUILD_FINALIZATION_GRACE_MS
     );
-    await this.provider.triggerEnvironmentImageBuild({
-      // The provider build API is keyed by environmentId (used only for
-      // sandbox naming/labels); scope.id fills it for every scope kind.
-      environmentId: plan.scope.id,
+    await this.provider.triggerImageBuild({
+      scopeKind: plan.scope.kind,
+      scopeId: plan.scope.id,
       repositories: plan.repositories,
       buildId: plan.buildId,
       callbackUrl: plan.callbackUrl,

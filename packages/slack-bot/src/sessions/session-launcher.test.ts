@@ -9,14 +9,14 @@ import { createSession } from "./control-plane-client";
 import { getSlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
-import { getUserInfo, postMessage } from "@open-inspect/shared";
+import { getUserInfo, postMessage } from "@open-inspect/shared/slack";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
   type SlackImageAttachment,
 } from "../attachments";
 
-vi.mock("@open-inspect/shared", () => ({
+vi.mock("@open-inspect/shared/slack", () => ({
   getUserInfo: vi.fn(),
   postMessage: vi.fn(),
 }));

@@ -1,18 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { MAX_TARGET_REPOSITORIES, parseRepositoryFullName } from "@open-inspect/shared";
+import {
+  MAX_TARGET_REPOSITORIES,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { RepoIcon, FolderIcon, SearchIcon, ChevronDownIcon } from "@/components/ui/icons";
 import type { Repo } from "@/hooks/use-repos";
+import { repositorySelectionKey } from "@/lib/repository-selection";
 import { cn } from "@/lib/utils";
-
-/** Selection key for a repository: the lowercase full name, as the API stores it. */
-export function repositorySelectionKey(repoOwner: string, repoName: string): string {
-  return `${repoOwner}/${repoName}`.toLowerCase();
-}
 
 /**
  * Ordered multi-select of repositories behind a searchable popover (the
@@ -27,6 +26,7 @@ export function RepositoryMultiSelect({
   selected,
   onChange,
   disabled = false,
+  triggerId,
   triggerLabel,
   triggerClassName,
 }: {
@@ -36,6 +36,7 @@ export function RepositoryMultiSelect({
   selected: string[];
   onChange: (next: string[]) => void;
   disabled?: boolean;
+  triggerId?: string;
   triggerLabel: string;
   triggerClassName?: string;
 }) {
@@ -78,6 +79,7 @@ export function RepositoryMultiSelect({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
+          id={triggerId}
           type="button"
           disabled={disabled}
           className={cn(

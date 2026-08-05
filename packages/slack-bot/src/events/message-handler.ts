@@ -7,10 +7,9 @@ import {
   postMessage,
   resolveUserNames,
   updateMessage,
-  type CallbackContext,
-  type SlackMessageAttachment,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
+import type { CallbackContext } from "@open-inspect/shared";
+import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
   prepareImageAttachments,

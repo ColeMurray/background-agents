@@ -3,7 +3,7 @@
  * workflow and planner throw these instead of returning Responses.
  */
 
-import type { ImageBuildScopeKind } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 
 export type ImageBuildErrorCode =
   | "scope_not_found"
@@ -11,7 +11,6 @@ export type ImageBuildErrorCode =
   | "workflow_unavailable"
   | "provider_unconfigured"
   | "trigger_failed"
-  | "invalid_callback"
   | "callback_auth_rejected"
   | "callback_auth_unavailable"
   | "completion_not_accepted"
@@ -55,10 +54,6 @@ export class ImageBuildTriggerFailedError extends ImageBuildError {
   constructor(message = "Failed to trigger build", cause?: unknown) {
     super(message, cause);
   }
-}
-
-export class ImageBuildInvalidCallbackError extends ImageBuildError {
-  readonly code = "invalid_callback";
 }
 
 export class ImageBuildCallbackAuthRejectedError extends ImageBuildError {

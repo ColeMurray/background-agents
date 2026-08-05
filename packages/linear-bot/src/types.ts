@@ -79,9 +79,11 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
+} from "@open-inspect/shared/types/repository-catalog";
+export type {
   Environment,
   ListEnvironmentsResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/environments";
 
 /**
  * Project→target mapping stored in KV under "config:project-repos".
@@ -138,7 +140,10 @@ export interface ToolCallCallback {
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
-export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
+export type {
+  ClassificationResult,
+  ConfidenceLevel,
+} from "@open-inspect/shared/types/repository-catalog";
 
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 

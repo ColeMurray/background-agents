@@ -16,7 +16,8 @@
  * deletes them from storage.
  */
 
-import { readBodyCapped, sessionAttachmentIdSchema } from "@open-inspect/shared";
+import { readBodyCapped } from "@open-inspect/shared";
+import { sessionAttachmentIdSchema } from "@open-inspect/shared/types/session-attachments";
 import { generateId } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {

@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import { sessionAttachmentReferencesSchema } from "@open-inspect/shared";
+import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 

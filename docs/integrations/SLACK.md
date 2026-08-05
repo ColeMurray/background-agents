@@ -325,6 +325,15 @@ condition to filter by content. See
 - When the run finishes, the agent's final response is posted into the triggering message's thread
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
+- A run can **decline to reply**. If the agent's entire final message is `NO_REPLY` (or empty),
+  nothing is posted and only the 👀 reaction is cleared. This lets an automation that watches a busy
+  channel stay quiet on messages that turn out to need nothing from it — chatter between people, or
+  a follow-up addressed to someone else — instead of posting its reasoning about why it has nothing
+  to say. It applies to thread follow-ups as much as to the first trigger, which is where it matters
+  most: every reply in the thread wakes the automation. Tell the agent about the sentinel in the
+  automation's instructions; without an explicit instruction it will answer every message it is
+  woken for. A run that opened a pull request or produced other artifacts always posts, and
+  interactive `@mention` sessions never decline — a person is waiting on a visible answer there.
 - Every reply in a thread continues the same session — during the run and after it finishes — for up
   to 7 days after the thread's first trigger, like replying in an `@mention` thread. The reply is
   routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),

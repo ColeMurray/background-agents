@@ -5,7 +5,7 @@ import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   type SessionAttachmentReference,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 

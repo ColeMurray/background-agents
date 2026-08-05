@@ -1,8 +1,29 @@
 import { z } from "zod";
 import { recordSchema } from "./artifacts";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
-import { gitSyncStatusSchema, type EventType } from "./statuses";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
+
+export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+
+export type EventType =
+  | "heartbeat"
+  | "ready"
+  | "token"
+  | "tool_call"
+  | "step_start"
+  | "step_finish"
+  | "tool_result"
+  | "git_sync"
+  | "error"
+  | "execution_complete"
+  | "artifact"
+  | "push_complete"
+  | "push_error"
+  | "warning"
+  | "session_title"
+  | "user_message";
 
 export interface AgentEvent {
   id: string;
@@ -74,10 +95,15 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     callId: z.string(),
     status: z.string().optional(),
     output: z.string().optional(),
+    isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_start"),
     isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("step_finish"),
@@ -85,6 +111,8 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     tokens: tokenUsageSchema.optional(),
     reason: z.string().optional(),
     isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("tool_result"),
@@ -100,6 +128,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
   messageSandboxEventBaseSchema.extend({
     type: z.literal("error"),
     error: z.string(),
+    isSubtask: z.boolean().optional(),
+    childSessionId: z.string().optional(),
+    taskCallId: z.string().optional(),
   }),
   messageSandboxEventBaseSchema.extend({
     type: z.literal("execution_complete"),
@@ -176,6 +207,24 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+
+type ToolCallIdentityEvent = Pick<
+  Extract<SandboxEvent, { type: "tool_call" }>,
+  "messageId" | "callId" | "isSubtask" | "childSessionId" | "taskCallId"
+>;
+
+export function toolCallIdentityTuple(
+  event: ToolCallIdentityEvent
+): readonly [messageId: string, scope: string, callId: string] {
+  const scope = event.isSubtask
+    ? event.childSessionId || event.taskCallId || "unassociated-subtask"
+    : "parent";
+  return [event.messageId, scope, event.callId];
+}
+
+export function toolCallIdentityKey(event: ToolCallIdentityEvent): string {
+  return JSON.stringify(toolCallIdentityTuple(event));
+}
 
 /**
  * Sandbox event arrays for session hydration — both the initial `subscribed`

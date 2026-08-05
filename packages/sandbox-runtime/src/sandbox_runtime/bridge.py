@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -31,7 +32,14 @@ from .attachment_processor import (
     HydratedSessionAttachment,
     parse_session_image_attachments,
 )
-from .constants import BOOT_WARNINGS_FILE_PATH, REPO_MANIFEST_FILE_PATH
+from .constants import (
+    BOOT_WARNINGS_FILE_PATH,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+    MAX_SNAPSHOT_RESERVE_SECONDS,
+    REPO_MANIFEST_FILE_PATH,
+    SANDBOX_TIMEOUT_ENV_VAR,
+    SNAPSHOT_RESERVE_FRACTION,
+)
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
 from .git_signing import UNSIGNED_GIT_USER, GitSigningError, GitSigningRuntime
@@ -167,7 +175,6 @@ class AgentBridge:
     SSE_INACTIVITY_TIMEOUT_MAX = 3600.0
     GIT_PUSH_TIMEOUT_SECONDS = 300.0
     GIT_PUSH_TERMINATE_GRACE_SECONDS = 5.0
-    PROMPT_MAX_DURATION = 5400.0
     DIFF_REFRESH_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 
     def __init__(
@@ -206,6 +213,22 @@ class AgentBridge:
             default=self.SSE_INACTIVITY_TIMEOUT,
             min_value=self.SSE_INACTIVITY_TIMEOUT_MIN,
             max_value=self.SSE_INACTIVITY_TIMEOUT_MAX,
+        )
+        sandbox_timeout_seconds = self._resolve_positive_timeout_seconds(
+            name=SANDBOX_TIMEOUT_ENV_VAR,
+            default=DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+        )
+        snapshot_reserve_seconds = min(
+            MAX_SNAPSHOT_RESERVE_SECONDS,
+            sandbox_timeout_seconds * SNAPSHOT_RESERVE_FRACTION,
+        )
+        self.prompt_cleanup_timeout_seconds = snapshot_reserve_seconds
+        self.prompt_max_duration_seconds = sandbox_timeout_seconds - snapshot_reserve_seconds
+        self.log.info(
+            "bridge.prompt_timeout_config",
+            timeout_ms=int(self.prompt_max_duration_seconds * 1000),
+            sandbox_timeout_ms=int(sandbox_timeout_seconds * 1000),
+            snapshot_reserve_ms=int(snapshot_reserve_seconds * 1000),
         )
 
         self.ws: ClientConnection | None = None
@@ -760,7 +783,8 @@ class AgentBridge:
                 attachment_processor=self.attachment_processor,
                 log=self.log,
                 sse_inactivity_timeout_seconds=self.sse_inactivity_timeout,
-                prompt_max_duration_seconds=self.PROMPT_MAX_DURATION,
+                prompt_max_duration_seconds=self.prompt_max_duration_seconds,
+                prompt_cleanup_timeout_seconds=self.prompt_cleanup_timeout_seconds,
             )
         return self._prompt_stream
 
@@ -1108,6 +1132,28 @@ class AgentBridge:
             timeout_ms=int(value * 1000),
             min_ms=int(min_value * 1000),
             max_ms=int(max_value * 1000),
+        )
+        return value
+
+    def _resolve_positive_timeout_seconds(self, name: str, default: float) -> float:
+        raw = os.environ.get(name)
+        try:
+            value = default if raw is None or raw == "" else float(raw)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError
+        except ValueError:
+            self.log.warn(
+                "bridge.timeout_invalid",
+                timeout_name=name,
+                timeout_ms=int(default * 1000),
+                detail=f"invalid value '{raw}', using default",
+            )
+            value = default
+
+        self.log.info(
+            "bridge.timeout_config",
+            timeout_name=name,
+            timeout_ms=int(value * 1000),
         )
         return value
 
