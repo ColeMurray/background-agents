@@ -36,6 +36,7 @@ import {
 
 const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
 const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
+const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
 
 export function getScmRepoSettingsPath(fullName: string): `/api/${string}` | null {
   const repository = parseRepositoryFullName(fullName);
@@ -144,7 +145,7 @@ export function ScmSettingsPage() {
         <RepoOverridesSection
           overrides={repoOverrides}
           availableRepos={availableRepos}
-          globalDefault={settings?.defaults?.alwaysUseDraftMode ?? false}
+          globalDefault={settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE}
         />
       </Section>
     </div>
@@ -153,7 +154,7 @@ export function ScmSettingsPage() {
 
 function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null | undefined }) {
   const [alwaysUseDraftMode, setAlwaysUseDraftMode] = useState(
-    settings?.defaults?.alwaysUseDraftMode ?? false
+    settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE
   );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -161,7 +162,9 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
 
   useEffect(() => {
     if (settings !== undefined && !dirty) {
-      setAlwaysUseDraftMode(settings?.defaults?.alwaysUseDraftMode ?? false);
+      setAlwaysUseDraftMode(
+        settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE
+      );
     }
   }, [settings, dirty]);
 
@@ -175,7 +178,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
 
       if (res.ok) {
         await mutate(GLOBAL_SETTINGS_KEY);
-        setAlwaysUseDraftMode(false);
+        setAlwaysUseDraftMode(DEFAULT_ALWAYS_USE_DRAFT_MODE);
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
