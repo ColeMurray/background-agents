@@ -16,8 +16,8 @@ export interface ImageBuildFinalizationQueue {
 }
 
 type FinalizationOutcome =
-  | { outcome: "success"; completion: CompleteImageBuildCallback & { providerSessionId: string } }
-  | { outcome: "failure"; failure: FailImageBuildCallback & { providerSessionId: string } };
+  | { outcome: "success"; completion: CompleteImageBuildCallback }
+  | { outcome: "failure"; failure: FailImageBuildCallback };
 
 /**
  * Creates a deterministic command whose hash binds the accepted callback
@@ -34,7 +34,7 @@ export async function createImageBuildFinalizationJob(
           providerSessionId: result.completion.providerSessionId,
           outcome: result.outcome,
           repositoryShas: result.completion.repositoryShas
-            ?.map((repository) => ({
+            .map((repository) => ({
               repoOwner: repository.repoOwner.toLowerCase(),
               repoName: repository.repoName.toLowerCase(),
               baseSha: repository.baseSha,

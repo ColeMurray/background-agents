@@ -179,7 +179,7 @@ export function SessionSidebar({
       <div className="px-3 py-2">
         <ToggleGroup
           type="single"
-          value={sessionCreatorFilter}
+          value={sessionCreatorFilter ?? ""}
           onValueChange={(value) => {
             if (value === "all" || value === "mine") {
               setSessionCreatorFilter(value);

@@ -483,10 +483,95 @@ describe("task activity grouping", () => {
       }),
     ]);
 
-    expect(groups.some((group) => group.type === "task_group")).toBe(false);
+    expect(groups.filter((group) => group.type === "task_group")).toMatchObject([
+      { event: { callId: "task-a" }, activity: [] },
+      { event: { callId: "task-b" }, activity: [] },
+    ]);
     expect(
       groups.flatMap((group) => (group.type === "tool_group" ? group.events : []))
     ).toContainEqual(expect.objectContaining({ callId: "child-call" }));
+  });
+
+  it("renders completed Tasks without child events using focused details", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionTimeline
+        events={[
+          toolEvent("task", "task-call", 1, {
+            args: {
+              description: "Review code",
+              prompt: "Inspect the implementation.",
+            },
+            output:
+              '<task id="ses_complete" state="completed">\n<task_result>\nReview complete.\n</task_result>\n</task>',
+          }),
+        ]}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.queryByText("Arguments:")).not.toBeInTheDocument();
+    expect(screen.queryByText("Output:")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Instructions" })).toBeInTheDocument();
+    const result = screen.getByRole("button", { name: "Result" });
+    await user.click(result);
+    expect(screen.getByText("Review complete.")).toBeInTheDocument();
+    expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+    expect(container.querySelector(".border-l-2")).not.toBeInTheDocument();
+  });
+
+  it("cleans failed Task envelopes without child events", async () => {
+    const user = userEvent.setup();
+    render(
+      <SessionTimeline
+        events={[
+          toolEvent("task", "task-call", 1, {
+            args: { description: "Investigate failure" },
+            output:
+              '<task id="ses_failed" state="failed">\n<task_error>\nAgent could not finish.\n</task_error>\n</task>',
+          }),
+        ]}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    expect(screen.queryByText("Output:")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Result" }));
+    expect(screen.getByText("Agent could not finish.")).toBeInTheDocument();
+    expect(screen.queryByText(/<task_error>/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+  });
+
+  it("does not treat lifecycle-only child events as displayable activity", () => {
+    const groups = buildTimelineItems([
+      toolEvent("task", "task-call", 1),
+      {
+        type: "step_finish",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 2,
+        isSubtask: true,
+        taskCallId: "task-call",
+      },
+    ]);
+
+    expect(groups).toMatchObject([
+      { type: "task_group", event: { callId: "task-call" }, activity: [] },
+    ]);
   });
 
   it("renders focused Task details with independent stable disclosures", async () => {

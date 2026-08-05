@@ -47,7 +47,9 @@ Base image definition with:
 - **bridge.py**: WebSocket bridge to control plane
 - **types.py**: Event and configuration types
 
-### Auth (`src/auth/`)
+### Auth (`sandbox_runtime.auth`)
+
+Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
 - **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
