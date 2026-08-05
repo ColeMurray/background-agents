@@ -37,6 +37,7 @@ const sessionStateSchema = z.object({
   environmentId: z.string().nullable().optional(),
   environmentName: z.string().nullable().optional(),
 });
+export type SessionState = z.infer<typeof sessionStateSchema>;
 
 const participantPresenceSchema = z.object({
   participantId: z.string(),
@@ -46,6 +47,7 @@ const participantPresenceSchema = z.object({
   status: z.enum(["active", "idle", "away"]),
   lastSeen: z.number(),
 });
+export type ParticipantPresence = z.infer<typeof participantPresenceSchema>;
 
 const participantSummarySchema = z.object({
   participantId: z.string(),

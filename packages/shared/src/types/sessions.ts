@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ResolvedSessionAttachment } from "./session-attachments";
-import type { SessionListRepository, SessionRepositoryState } from "./repositories";
+import type { SessionListRepository } from "./repositories";
 
 export const sessionStatusSchema = z.enum([
   "created",
@@ -173,52 +173,6 @@ export interface SessionMessage {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-}
-
-export interface SessionState {
-  id: string;
-  title: string | null;
-  repoOwner: string | null;
-  repoName: string | null;
-  baseBranch: string | null;
-  branchName: string | null;
-  status: SessionStatus;
-  sandboxStatus: SandboxStatus;
-  messageCount: number;
-  createdAt: number;
-  model?: string;
-  reasoningEffort?: string;
-  isProcessing?: boolean;
-  parentSessionId?: string | null;
-  totalCost?: number;
-  codeServerUrl?: string | null;
-  codeServerPassword?: string | null;
-  tunnelUrls?: Record<string, string> | null;
-  ttydUrl?: string | null;
-  ttydToken?: string | null;
-  sandboxDashboardUrl?: string | null;
-  /**
-   * Ordered repository list; [0] = primary. Absent on scalar-era producers —
-   * consumers default to [] / synthesize from repoOwner/repoName.
-   */
-  repositories?: SessionRepositoryState[];
-  /**
-   * The environment this session was launched from (provenance), or null for
-   * repo-launched/ad-hoc sessions. `environmentName` is resolved live and is
-   * null when the environment has since been deleted (design §7.6) — the UI
-   * renders "environment deleted" in that case.
-   */
-  environmentId?: string | null;
-  environmentName?: string | null;
-}
-
-export interface ParticipantPresence {
-  participantId: string;
-  userId: string;
-  name: string;
-  avatar?: string;
-  status: "active" | "idle" | "away";
-  lastSeen: number;
 }
 
 export const sessionParticipantProfileSchema = z.object({
