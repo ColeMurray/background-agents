@@ -21,10 +21,17 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
  * - `automations.created_by` is re-pointed value-conditionally: legacy rows
  *   store GitHub numeric ids, which must never be rewritten.
  * - Idempotent: re-running a completed merge is a zero-count no-op.
- * - The loser's `auth_users` row is deleted (their sessions cascade — one
- *   sign-out; they land unified on the next sign-in); its accounts are
- *   re-created under the survivor, seeding the survivor's auth row from the
- *   loser's when the survivor has none.
+ * - The auth graph moves loss-free: the loser's email is first parked on a
+ *   recognizable placeholder (freeing the UNIQUE slot), the survivor's auth
+ *   row is created from the loser's if missing, the accounts are
+ *   **re-pointed** (never deleted), and only then is the loser's emptied
+ *   auth row deleted (their sessions cascade — one sign-out; they land
+ *   unified on the next sign-in). Every intermediate state keeps the OAuth
+ *   accounts intact and is resumable by re-running, which matters because
+ *   the wrangler CLI transport executes statements sequentially rather than
+ *   atomically.
+ * - The surviving email is validated against every other auth row before any
+ *   write (Appendix A: validate before delete).
  */
 
 export class UserMergeError extends Error {
@@ -138,15 +145,41 @@ export async function mergeUsers(
     : [];
 
   const createAuthUserForSurvivor = Boolean(loserAuthUser) && !survivorAuthUser;
+  const placeholderEmail = mergePlaceholderEmail(loserId);
+  const loserEmailIsPlaceholder = loserAuthUser?.email === placeholderEmail;
   const survivingEmail =
-    options.survivingEmail?.trim().toLowerCase() || loserAuthUser?.email || null;
+    options.survivingEmail?.trim().toLowerCase() ||
+    (loserEmailIsPlaceholder ? null : (loserAuthUser?.email ?? null)) ||
+    survivor.email?.trim().toLowerCase() ||
+    null;
+  if (createAuthUserForSurvivor && !survivingEmail) {
+    // Only reachable when resuming a partial run that already parked the
+    // loser's email and the survivor has no canonical email to fall back to.
+    throw new UserMergeError(
+      "Cannot determine the surviving email; pass survivingEmail explicitly"
+    );
+  }
+  if (survivingEmail) {
+    // Appendix A: validate before any delete. The surviving email must not be
+    // owned by a third auth user, or the auth-row creation would fail after
+    // rows have already moved.
+    const otherOwner = await db
+      .prepare(`SELECT id FROM auth_users WHERE lower(trim(email)) = ? AND id NOT IN (?, ?)`)
+      .bind(survivingEmail, survivorId, loserId)
+      .first<{ id: string }>();
+    if (otherOwner) {
+      throw new UserMergeError(
+        `Surviving email is owned by a different auth user (${otherOwner.id}); resolve that row first or pass a different survivingEmail`
+      );
+    }
+  }
 
   if (options.dryRun) {
     return {
       survivorId,
       loserId,
       dryRun: true,
-      counts: await previewCounts(db, survivorId, loserId, {
+      counts: await previewCounts(db, survivorId, loserId, survivingEmail, survivor.email, {
         authUsersDeleted: loserAuthUser ? 1 : 0,
         authUserCreatedForSurvivor: createAuthUserForSurvivor ? 1 : 0,
         authAccountsMoved: loserAccounts.length,
@@ -226,12 +259,20 @@ export async function mergeUsers(
   );
 
   if (loserAuthUser) {
-    // Deleting the loser's auth user first frees its UNIQUE email for the
-    // survivor's row and cascades the loser's accounts and sessions; the
-    // accounts are then re-created under the survivor inside the same atomic
-    // batch, so no interleaved sign-in can observe the gap.
-    add("authUsersDeleted", db.prepare(`DELETE FROM auth_users WHERE id = ?`).bind(loserId));
+    // Loss-free ordering — the OAuth accounts are never deleted, so a
+    // failure between any two statements (the CLI transport is sequential,
+    // not atomic) leaves a resumable state:
+    // 1. park the loser's email on a placeholder, freeing the UNIQUE slot;
+    // 2. create the survivor's auth row from the loser's if missing;
+    // 3. re-point the loser's accounts to the survivor;
+    // 4. delete the loser's now-empty auth row (sessions cascade — the one
+    //    sign-out).
     if (createAuthUserForSurvivor) {
+      statements.push(
+        db
+          .prepare(`UPDATE auth_users SET email = ?, updatedAt = ? WHERE id = ?`)
+          .bind(placeholderEmail, new Date().toISOString(), loserId)
+      );
       add(
         "authUserCreatedForSurvivor",
         db
@@ -250,35 +291,11 @@ export async function mergeUsers(
           )
       );
     }
-    for (const account of loserAccounts) {
-      const statement = db
-        .prepare(
-          `INSERT INTO auth_accounts (
-             id, accountId, providerId, userId, accessToken, refreshToken,
-             idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope,
-             password, createdAt, updatedAt
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          account.id,
-          account.accountId,
-          account.providerId,
-          survivorId,
-          account.accessToken,
-          account.refreshToken,
-          account.idToken,
-          account.accessTokenExpiresAt,
-          account.refreshTokenExpiresAt,
-          account.scope,
-          account.password,
-          account.createdAt,
-          account.updatedAt
-        );
-      if (track.authAccountsMoved === undefined) {
-        track.authAccountsMoved = statements.length;
-      }
-      statements.push(statement);
-    }
+    add(
+      "authAccountsMoved",
+      db.prepare(`UPDATE auth_accounts SET userId = ? WHERE userId = ?`).bind(survivorId, loserId)
+    );
+    add("authUsersDeleted", db.prepare(`DELETE FROM auth_users WHERE id = ?`).bind(loserId));
   }
 
   add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));
@@ -308,12 +325,19 @@ export async function mergeUsers(
     counts[key] = results[index]?.meta.changes ?? 0;
   }
   if (loserAuthUser) {
-    // The auth-user delete's reported `changes` includes cascaded account and
-    // session rows; the row counts here are known exactly from the preload.
+    // The auth-user delete's reported `changes` includes cascaded session
+    // rows; the row count here is known exactly from the preload.
     counts.authUsersDeleted = 1;
-    counts.authAccountsMoved = loserAccounts.length;
   }
   return { survivorId, loserId, dryRun: false, counts };
+}
+
+/**
+ * Recognizable parking address for a mid-merge loser email. Deterministic per
+ * loser so a resumed run can identify (and never propagate) it.
+ */
+function mergePlaceholderEmail(loserId: string): string {
+  return `merged-${loserId}@merge.invalid`;
 }
 
 function emptyCounts(): UserMergeCounts {
@@ -338,6 +362,8 @@ async function previewCounts(
   db: SqlDatabase,
   survivorId: string,
   loserId: string,
+  survivingEmail: string | null,
+  survivorCanonicalEmail: string | null,
   authCounts: Pick<
     UserMergeCounts,
     "authUsersDeleted" | "authUserCreatedForSurvivor" | "authAccountsMoved"
@@ -387,6 +413,21 @@ async function previewCounts(
   ]);
 
   const count = (result: { results: { count: number }[] }) => result.results[0]?.count ?? 0;
+
+  // Dry-run parity for the canonical-email backfill: it fires when the
+  // survivor has no canonical email and no third user owns the target.
+  let canonicalEmailBackfilled = 0;
+  if (survivingEmail && !survivorCanonicalEmail) {
+    const otherOwner = await db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM users
+         WHERE id NOT IN (?, ?) AND lower(trim(email)) = ?`
+      )
+      .bind(survivorId, loserId, survivingEmail)
+      .first<{ count: number }>();
+    canonicalEmailBackfilled = (otherOwner?.count ?? 0) === 0 ? 1 : 0;
+  }
+
   return {
     ...emptyCounts(),
     ...authCounts,
@@ -398,6 +439,7 @@ async function previewCounts(
     automationsOwnedRepointed: count(automationsOwned),
     automationsCreatedRepointed: count(automationsCreated),
     scmTokensRepointed: count(scmTokens),
+    canonicalEmailBackfilled,
     usersDeleted: count(users),
   };
 }

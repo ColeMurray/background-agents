@@ -304,6 +304,46 @@ describe("verified-email tier (§4c)", () => {
 });
 
 describe("subject materialization tier (§4e)", () => {
+  it("leaves account-bearing subject owners to Better Auth's own linking gate", async () => {
+    // The subject's canonical user already has an active auth row (another
+    // provider's account) that is unverified. Materializing would attach the
+    // GitHub subject behind Better Auth's back; instead both tiers must step
+    // aside and the framework's requireLocalEmailVerified gate refuses.
+    const canonicalId = "45111111111111111111111111111111";
+    await insertCanonicalUser({ id: canonicalId, email: "octocat@example.com" });
+    await insertIdentity({
+      id: "i4511111111111111111111111111111",
+      userId: canonicalId,
+      provider: "github",
+      providerUserId: GITHUB_SUBJECT,
+      issuer: "https://github.com",
+    });
+    await insertAuthUser({ id: canonicalId, email: "octocat@example.com", emailVerified: 0 });
+    await insertAuthAccount({
+      id: "a4511111111111111111111111111111",
+      accountId: "google-other",
+      providerId: "google",
+      userId: canonicalId,
+    });
+
+    const { callbackResponse, sessionUser } = await signIn("github");
+
+    expect(sessionUser).toBeNull();
+    expect(callbackResponse.headers.get("Location")).toContain("error");
+    // Neither tier touched the account-bearing row or attached the subject.
+    expect(await getAuthUserRow(canonicalId)).toMatchObject({
+      email: "octocat@example.com",
+      emailVerified: 0,
+    });
+    expect(
+      await env.DB.prepare(
+        `SELECT id FROM auth_accounts WHERE providerId = 'github' AND accountId = ?`
+      )
+        .bind(GITHUB_SUBJECT)
+        .first()
+    ).toBeNull();
+  });
+
   it("signs a GitHub-bot-created NULL-email user into their canonical id (cohort 3 NULL-email)", async () => {
     const canonicalId = "51111111111111111111111111111111";
     await insertCanonicalUser({ id: canonicalId, email: null, displayName: "GitHub Person" });

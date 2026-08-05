@@ -13,11 +13,21 @@
 -- is owned by a different canonical user. Foreign keys cascade the stranded
 -- accounts and sessions; the affected user is signed out once and recovers
 -- through implicit linking on their next sign-in.
+-- The second guard protects whitespace-variant email pairs (idx_users_email
+-- is COLLATE NOCASE but not whitespace-normalizing, so two canonical users
+-- can normalize to one email): an auth row whose OWN canonical user matches
+-- its normalized email is healthy, not stranded, and must survive.
 DELETE FROM auth_users
 WHERE EXISTS (
     SELECT 1
     FROM users
     WHERE users.id <> auth_users.id
+      AND lower(trim(users.email)) = lower(trim(auth_users.email))
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM users
+    WHERE users.id = auth_users.id
       AND lower(trim(users.email)) = lower(trim(auth_users.email))
   );
 
@@ -48,6 +58,17 @@ WHERE EXISTS (
     SELECT 1
     FROM auth_accounts
     WHERE auth_accounts.userId = auth_users.id
+  )
+  -- Belt-and-braces for whitespace-variant canonical emails the sweep now
+  -- preserves: never move onto an email another auth row still holds — a
+  -- failing statement here would abort the deploy.
+  AND NOT EXISTS (
+    SELECT 1
+    FROM auth_users AS other
+    WHERE other.id <> auth_users.id
+      AND other.email = (
+        SELECT lower(trim(users.email)) FROM users WHERE users.id = auth_users.id
+      )
   );
 
 -- (3) Seed missing auth_users rows for emailed canonical users, guarded on
@@ -85,7 +106,12 @@ WHERE users.email IS NOT NULL
     SELECT 1
     FROM auth_users
     WHERE auth_users.email = lower(trim(users.email))
-  );
+  )
+-- The guards see only pre-statement state; two whitespace-variant canonical
+-- users normalizing to one email would collide intra-statement without this.
+-- The skipped variant lands in the R2 drift report instead of aborting the
+-- deploy.
+ON CONFLICT DO NOTHING;
 
 -- (4) Verify the backlog: unverified reservations whose email matches their
 -- canonical user were seeded by 0049 (or reserved before this design) and are
@@ -161,7 +187,10 @@ WHERE (
     FROM auth_accounts
     WHERE auth_accounts.providerId = user_identities.provider
       AND auth_accounts.accountId = user_identities.provider_user_id
-  );
+  )
+-- Deploy-abort safety net: any unforeseen collision skips instead of failing
+-- the Terraform apply; skipped rows surface in the consistency report.
+ON CONFLICT DO NOTHING;
 
 -- (6) Backfill user_identities from auth_accounts (the one-time half of the
 -- forward bridge), guarded on the enforced (provider, provider_user_id)
@@ -200,4 +229,6 @@ WHERE auth_accounts.providerId IN ('github', 'google')
     FROM user_identities
     WHERE user_identities.provider = auth_accounts.providerId
       AND user_identities.provider_user_id = auth_accounts.accountId
-  );
+  )
+-- Deploy-abort safety net, as above.
+ON CONFLICT DO NOTHING;

@@ -36,16 +36,21 @@ export async function runIdentityReconciliation(
     event: "auth.reconciliation_complete",
     ...stats,
   });
-  if (
-    stats.residualAccountBearingDrift > 0 ||
-    stats.residualAccountBearingStrands > 0 ||
-    stats.residualSharedSubjectConflicts > 0
-  ) {
+  if (stats.residualAccountBearingStrands > 0 || stats.residualSharedSubjectConflicts > 0) {
     logger.warn("Identity registries hold conflicts needing operator merges", {
       event: "auth.reconciliation_conflicts",
-      account_bearing_drift: stats.residualAccountBearingDrift,
       account_bearing_strands: stats.residualAccountBearingStrands,
       shared_subject_conflicts: stats.residualSharedSubjectConflicts,
+    });
+  }
+  if (stats.residualAccountBearingDrift > 0) {
+    // Distinct event: same-id email divergence can be a legitimate standing
+    // state (e.g. a Slack-attributed canonical email beside a personal
+    // verified sign-in email) with nothing to merge — keep it separately
+    // routable so it doesn't drown the actionable conflict alarm.
+    logger.warn("Auth users hold account-bearing email drift for operator review", {
+      event: "auth.reconciliation_account_drift",
+      account_bearing_drift: stats.residualAccountBearingDrift,
     });
   }
   return stats;

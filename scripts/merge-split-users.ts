@@ -196,6 +196,25 @@ async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const db = new WranglerD1Database(options.database, !options.local, options.verbose);
 
+  if (options.execute) {
+    console.error(
+      "Note: the wrangler transport executes statements sequentially (not atomically). " +
+        "The merge is ordered loss-free and idempotent — if a run fails partway, re-run it."
+    );
+    if (options.survivingEmail) {
+      const survivorAuthRow = await db
+        .prepare(`SELECT id FROM auth_users WHERE id = ?`)
+        .bind(options.survivorId)
+        .first();
+      if (survivorAuthRow) {
+        console.error(
+          "WARNING: --surviving-email is ignored because the survivor already has an auth row " +
+            "(its existing email is kept)."
+        );
+      }
+    }
+  }
+
   const result = await mergeUsers(db, {
     survivorId: options.survivorId,
     loserId: options.loserId,

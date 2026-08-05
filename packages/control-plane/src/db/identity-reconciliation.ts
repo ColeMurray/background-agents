@@ -1,4 +1,30 @@
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import type { SqlDatabase } from "./sql-database";
+
+/**
+ * Sign-in providers as SQL literals. Kept as literals (not built from the
+ * shared constants) so the operator merge script can import this module
+ * without runtime dependencies; the type-level exhaustiveness check below
+ * fails compilation if a provider is ever added to SIGN_IN_PROVIDERS without
+ * updating this list — and the IIF issuer expressions in the queries below
+ * with it.
+ */
+const SQL_SIGN_IN_PROVIDERS = ["github", "google"] as const satisfies readonly SignInProvider[];
+type _AllSignInProvidersListed =
+  Exclude<SignInProvider, (typeof SQL_SIGN_IN_PROVIDERS)[number]> extends never ? true : never;
+const _allSignInProvidersListed: _AllSignInProvidersListed = true;
+void _allSignInProvidersListed;
+
+/** Interpolated into queries below; trusted literals from the checked list. */
+const SIGN_IN_PROVIDER_SQL_LIST = SQL_SIGN_IN_PROVIDERS.map((entry) => `'${entry}'`).join(", ");
+
+/**
+ * Grace period before a canonical-less zero-account auth row is swept.
+ * Better Auth defers after-hooks to the end of the sign-in flow, so during
+ * registration a legitimate auth row briefly exists with no canonical user
+ * and no account; sweeping it mid-flight would fail that sign-in.
+ */
+const STRAND_SWEEP_MIN_AGE_SECONDS = 300;
 
 /**
  * Consistency reporting and scheduled reconciliation between the canonical
@@ -90,7 +116,7 @@ export class IdentityReconciliationStore {
            EXISTS (SELECT 1 FROM users WHERE users.id = auth_accounts.userId)
              AS hasCanonicalUser
          FROM auth_accounts
-         WHERE auth_accounts.providerId IN ('github', 'google')
+         WHERE auth_accounts.providerId IN (${SIGN_IN_PROVIDER_SQL_LIST})
            AND NOT EXISTS (
              SELECT 1
              FROM user_identities
@@ -163,8 +189,11 @@ export class IdentityReconciliationStore {
          WHERE NOT EXISTS (SELECT 1 FROM users WHERE users.id = auth_users.id)
            AND NOT EXISTS (
              SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
-           )`
+           )
+           AND CAST(strftime('%s', auth_users.createdAt) AS INTEGER)
+             < CAST(strftime('%s', 'now') AS INTEGER) - ?`
       )
+      .bind(STRAND_SWEEP_MIN_AGE_SECONDS)
       .run();
 
     const align = await this.db
@@ -219,7 +248,7 @@ export class IdentityReconciliationStore {
            CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000
          FROM auth_accounts
          JOIN users ON users.id = auth_accounts.userId
-         WHERE auth_accounts.providerId IN ('github', 'google')
+         WHERE auth_accounts.providerId IN (${SIGN_IN_PROVIDER_SQL_LIST})
            AND NOT EXISTS (
              SELECT 1
              FROM user_identities

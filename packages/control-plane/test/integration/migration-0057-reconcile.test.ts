@@ -269,6 +269,36 @@ describe("migration 0057: canonical/auth identity reconciliation", () => {
     expect(await countTableRows("user_identities")).toBe(1);
   });
 
+  it("preserves healthy whitespace-variant email pairs instead of sweeping or aborting", async () => {
+    // idx_users_email is COLLATE NOCASE but not whitespace-normalizing, so
+    // two canonical users can normalize to one email. The active user whose
+    // auth row matches their own canonical email must survive the sweep, and
+    // seeding the variant must skip rather than abort the deploy.
+    const activeId = "91111111111111111111111111111111";
+    const variantId = "92111111111111111111111111111111";
+    await insertCanonicalUser({ id: activeId, email: " person@example.com" });
+    await insertAuthUser({ id: activeId, email: "person@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "a9111111111111111111111111111111",
+      accountId: "gh-91",
+      providerId: "github",
+      userId: activeId,
+    });
+    await insertCanonicalUser({ id: variantId, email: "person@example.com" });
+
+    await applyReconcileMigration();
+
+    // The active user's auth graph is intact.
+    expect(await getAuthUserRow(activeId)).toMatchObject({
+      email: "person@example.com",
+      emailVerified: 1,
+    });
+    expect(await countTableRows("auth_accounts")).toBe(1);
+    // The variant is skipped (its email slot is taken) — R2 work, not a
+    // deploy abort.
+    expect(await getAuthUserRow(variantId)).toBeNull();
+  });
+
   it("is idempotent: a second run leaves the database unchanged", async () => {
     const emailedId = "81111111111111111111111111111111";
     await insertCanonicalUser({ id: emailedId, email: "repeat@example.com" });
@@ -281,14 +311,28 @@ describe("migration 0057: canonical/auth identity reconciliation", () => {
     });
 
     await applyReconcileMigration();
-    const firstAuthUsers = await countTableRows("auth_users");
-    const firstAccounts = await countTableRows("auth_accounts");
-    const firstIdentities = await countTableRows("user_identities");
+    const snapshot = async () => ({
+      authUsers: (
+        await env.DB.prepare(
+          `SELECT id, name, email, emailVerified, image FROM auth_users ORDER BY id`
+        ).all()
+      ).results,
+      authAccounts: (
+        await env.DB.prepare(
+          `SELECT id, accountId, providerId, userId FROM auth_accounts ORDER BY id`
+        ).all()
+      ).results,
+      identities: (
+        await env.DB.prepare(
+          `SELECT user_id, provider, provider_user_id, provider_issuer
+           FROM user_identities ORDER BY provider, provider_user_id`
+        ).all()
+      ).results,
+    });
+    const first = await snapshot();
 
     await applyReconcileMigration();
 
-    expect(await countTableRows("auth_users")).toBe(firstAuthUsers);
-    expect(await countTableRows("auth_accounts")).toBe(firstAccounts);
-    expect(await countTableRows("user_identities")).toBe(firstIdentities);
+    expect(await snapshot()).toEqual(first);
   });
 });

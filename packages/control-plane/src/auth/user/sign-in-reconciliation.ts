@@ -101,6 +101,16 @@ export class SignInReconciliation {
     if (!identity) return false;
     const targetUserId = identity.user_id;
 
+    // Email authority rule: once the target's auth row bears accounts,
+    // Better Auth is authoritative for it — attaching this subject behind its
+    // back would bypass the framework's own linking gate. Fall through to the
+    // email tier, which respects the same rule.
+    const targetAccounts = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM auth_accounts WHERE userId = ?`)
+      .bind(targetUserId)
+      .first<{ count: number }>();
+    if ((targetAccounts?.count ?? 0) > 0) return false;
+
     const canonicalOwner = await this.db
       .prepare(`SELECT id FROM users WHERE email IS NOT NULL AND lower(trim(email)) = ?`)
       .bind(email)
@@ -197,10 +207,16 @@ export class SignInReconciliation {
 
     const nowIso = new Date().toISOString();
     if (!authRow) {
-      await this.db
+      // ON CONFLICT DO NOTHING keeps the two documented edges quiet instead
+      // of erroring on every sign-in: a concurrent duplicate seed, and an
+      // email still reserved by a canonical-less strand (Better Auth's email
+      // fallback then links into the strand until the reconciliation sweep
+      // clears it — the accepted §4e edge).
+      const seeded = await this.db
         .prepare(
           `INSERT INTO auth_users (id, name, email, emailVerified, image, createdAt, updatedAt)
-           VALUES (?, ?, ?, 1, ?, ?, ?)`
+           VALUES (?, ?, ?, 1, ?, ?, ?)
+           ON CONFLICT DO NOTHING`
         )
         .bind(
           owner.id,
@@ -211,11 +227,13 @@ export class SignInReconciliation {
           nowIso
         )
         .run();
-      logger.info("Seeded auth user for canonical email owner at sign-in", {
-        event: "auth.email_tier_seeded",
-        user_id: owner.id,
-        mode: "seeded",
-      });
+      if (seeded.meta.changes > 0) {
+        logger.info("Seeded auth user for canonical email owner at sign-in", {
+          event: "auth.email_tier_seeded",
+          user_id: owner.id,
+          mode: "seeded",
+        });
+      }
       return;
     }
 

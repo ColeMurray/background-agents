@@ -277,6 +277,35 @@ describe("mergeUsers", () => {
     expect(await countTableRows("users")).toBe(1);
   });
 
+  it("rejects a surviving email owned by a third auth user before writing anything", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com" });
+    await insertAuthUser({ id: LOSER, email: "person@example.com", emailVerified: 1 });
+    await insertSession("session-1", LOSER);
+    // A third auth user owns the requested surviving email.
+    await insertAuthUser({
+      id: "cccc3333333333333333333333333333",
+      email: "taken@example.com",
+      emailVerified: 1,
+    });
+
+    await expect(
+      mergeUsers(env.DB, {
+        survivorId: SURVIVOR,
+        loserId: LOSER,
+        survivingEmail: "taken@example.com",
+      })
+    ).rejects.toThrow(UserMergeError);
+
+    // Validate-before-delete: nothing moved.
+    expect(
+      await env.DB.prepare(`SELECT user_id FROM sessions WHERE id = 'session-1'`).first<{
+        user_id: string;
+      }>()
+    ).toEqual({ user_id: LOSER });
+    expect(await getAuthUserRow(LOSER)).not.toBeNull();
+  });
+
   it("rejects a missing survivor and a self-merge", async () => {
     await insertCanonicalUser({ id: LOSER, email: null });
 
