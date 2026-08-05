@@ -135,7 +135,7 @@ function GlobalSettingsSection({
       if (settings) {
         setEnabled(settings.defaults?.enabled ?? false);
         setEnabledRepos(settings.enabledRepos ?? []);
-        setRepoScopeMode(settings.enabledRepos === undefined ? "all" : "selected");
+        setRepoScopeMode(settings.enabledRepos == null ? "all" : "selected");
       }
       setInitialized(true);
     }
@@ -230,7 +230,7 @@ function GlobalSettingsSection({
         <p className="text-sm font-medium text-foreground mb-2">Repository Scope</p>
         <div className="grid sm:grid-cols-2 gap-2 mb-3">
           <RadioCard
-            name="cs-repo-scope"
+            name={`${copy.id}-repo-scope`}
             checked={repoScopeMode === "all"}
             onChange={() => {
               setRepoScopeMode("all");
@@ -240,7 +240,7 @@ function GlobalSettingsSection({
             description={copy.allRepositoriesDescription}
           />
           <RadioCard
-            name="cs-repo-scope"
+            name={`${copy.id}-repo-scope`}
             checked={repoScopeMode === "selected"}
             onChange={() => {
               setRepoScopeMode("selected");

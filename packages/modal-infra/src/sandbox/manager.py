@@ -30,6 +30,7 @@ from sandbox_runtime.constants import (
     TUNNEL_ENV_FILE_PATH,
     TUNNEL_ENV_SANDBOX_ID_KEY,
     VNC_PASSWORD_ENV_VAR,
+    VNC_PASSWORD_MAX_BYTES,
     VNC_PORT,
 )
 from sandbox_runtime.log_config import get_logger
@@ -43,6 +44,7 @@ log = get_logger("manager")
 
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
+DEFAULT_VNC_ENABLED = False
 
 
 def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
@@ -91,7 +93,7 @@ class SandboxConfig:
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
     code_server_enabled: bool = False  # Whether to start code-server in the sandbox
-    vnc_enabled: bool = False  # Whether to start the browser-accessible VNC desktop
+    vnc_enabled: bool = DEFAULT_VNC_ENABLED  # Whether to start the browser-accessible VNC desktop
     agent_slack_notify_enabled: bool = (
         False  # Whether to install the agent-initiated slack-notify tool
     )
@@ -143,7 +145,7 @@ class SandboxManager:
     @staticmethod
     def _generate_vnc_password() -> str:
         """Generate a random VNC password."""
-        return secrets.token_urlsafe(16)
+        return secrets.token_urlsafe(VNC_PASSWORD_MAX_BYTES * 3 // 4)
 
     @staticmethod
     async def _resolve_tunnels(
@@ -564,7 +566,7 @@ class SandboxManager:
         user_env_vars: dict[str, str] | None = None,
         timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS,
         code_server_enabled: bool = False,
-        vnc_enabled: bool = False,
+        vnc_enabled: bool = DEFAULT_VNC_ENABLED,
         agent_slack_notify_enabled: bool = False,
         settings: dict[str, Any] | None = None,
     ) -> SandboxHandle:

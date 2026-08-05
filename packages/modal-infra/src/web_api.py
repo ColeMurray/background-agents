@@ -174,6 +174,7 @@ async def api_create_sandbox(
     try:
         from .sandbox.manager import (
             DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            DEFAULT_VNC_ENABLED,
             SandboxConfig,
             SandboxManager,
         )
@@ -201,7 +202,7 @@ async def api_create_sandbox(
             repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
             code_server_enabled=bool(request.get("code_server_enabled", False)),
-            vnc_enabled=bool(request.get("vnc_enabled", False)),
+            vnc_enabled=bool(request.get("vnc_enabled", DEFAULT_VNC_ENABLED)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
             settings=request.get("sandbox_settings") or None,
             timeout_seconds=_timeout_seconds_from_request(request, DEFAULT_SANDBOX_TIMEOUT_SECONDS),
@@ -476,7 +477,11 @@ async def api_restore_sandbox(
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
     try:
-        from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
+        from .sandbox.manager import (
+            DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            DEFAULT_VNC_ENABLED,
+            SandboxManager,
+        )
 
         session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
@@ -498,7 +503,7 @@ async def api_restore_sandbox(
         clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
-        vnc_enabled = bool(request.get("vnc_enabled", False))
+        vnc_enabled = bool(request.get("vnc_enabled", DEFAULT_VNC_ENABLED))
         agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))
         sandbox_settings = request.get("sandbox_settings") or None
 

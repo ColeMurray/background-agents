@@ -1,5 +1,6 @@
 """Focused tests for the optional VNC/noVNC runtime sidecar."""
 
+import asyncio
 import os
 import stat
 from pathlib import Path
@@ -9,6 +10,8 @@ import pytest
 
 from sandbox_runtime.constants import NOVNC_PORT, VNC_DISPLAY, VNC_PORT
 from sandbox_runtime.entrypoint import SandboxSupervisor
+
+_ORIGINAL_ASYNCIO_SLEEP = asyncio.sleep
 
 
 def _make_supervisor() -> SandboxSupervisor:
@@ -34,6 +37,10 @@ def _process(returncode=None) -> MagicMock:
     return process
 
 
+async def _yielding_sleep(_delay: float) -> None:
+    await _ORIGINAL_ASYNCIO_SLEEP(0)
+
+
 class TestStartVnc:
     def test_configures_display_for_workload_processes(self):
         with patch.dict(
@@ -50,10 +57,13 @@ class TestStartVnc:
             assert os.environ["DISPLAY"] == VNC_DISPLAY
 
     @pytest.mark.asyncio
-    async def test_skips_entire_stack_without_password(self):
+    async def test_skips_entire_stack_without_password(self, tmp_path):
         supervisor = _make_supervisor()
+        password_path = tmp_path / "vnc-password"
+        password_path.write_text("stale")
         with (
             patch.dict(os.environ, {}, clear=True),
+            patch("sandbox_runtime.entrypoint.VNC_PASSWORD_FILE_PATH", str(password_path)),
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
@@ -62,6 +72,7 @@ class TestStartVnc:
             await supervisor.start_vnc()
 
         create_process.assert_not_called()
+        assert not password_path.exists()
 
     @pytest.mark.asyncio
     async def test_starts_dependencies_in_order_with_internal_raw_vnc(self, tmp_path):
@@ -90,7 +101,7 @@ class TestStartVnc:
         with (
             patch.dict(
                 os.environ,
-                {"VNC_PASSWORD": "secret-value", "NOVNC_PORT": "6099"},
+                {"VNC_PASSWORD": "secret12", "NOVNC_PORT": "6099"},
                 clear=True,
             ),
             patch(
@@ -129,11 +140,29 @@ class TestStartVnc:
         )
         assert x11vnc_args[3:5] == ("-rfbport", str(VNC_PORT))
         assert x11vnc_args[5:7] == ("-listen", "127.0.0.1")
-        assert "secret-value" not in x11vnc_args
+        assert "secret12" not in x11vnc_args
         assert "0.0.0.0:6099" in novnc_args
         assert f"127.0.0.1:{VNC_PORT}" in novnc_args
-        assert password_path.read_text() == "secret-value"
+        assert password_path.read_text() == "secret12"
         assert stat.S_IMODE(password_path.stat().st_mode) == 0o600
+
+    @pytest.mark.asyncio
+    async def test_rejects_passwords_over_eight_bytes(self, tmp_path):
+        supervisor = _make_supervisor()
+        password_path = tmp_path / "vnc-password"
+        with (
+            patch.dict(os.environ, {"VNC_PASSWORD": "ninebytes"}, clear=True),
+            patch("sandbox_runtime.entrypoint.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+            ) as create_process,
+            pytest.raises(ValueError, match="must not exceed 8 bytes"),
+        ):
+            await supervisor.start_vnc()
+
+        create_process.assert_not_called()
+        assert not password_path.exists()
 
     @pytest.mark.asyncio
     async def test_uses_default_novnc_port(self, tmp_path):
@@ -221,7 +250,7 @@ class TestVncLifecycle:
         supervisor.start_vnc = AsyncMock(side_effect=restart)
         supervisor._report_fatal_error = AsyncMock()
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("sandbox_runtime.entrypoint.asyncio.sleep", side_effect=_yielding_sleep):
             await supervisor.monitor_processes()
 
         supervisor._stop_vnc.assert_awaited_once()
@@ -244,7 +273,7 @@ class TestVncLifecycle:
         supervisor._start_vnc_with_retries = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("sandbox_runtime.entrypoint.asyncio.sleep", side_effect=_yielding_sleep):
             await supervisor.monitor_processes()
 
         supervisor._start_vnc_with_retries.assert_not_awaited()
@@ -266,12 +295,31 @@ class TestVncLifecycle:
         supervisor.start_vnc = AsyncMock(side_effect=restart)
         supervisor._report_fatal_error = AsyncMock()
 
-        with patch("asyncio.sleep", new_callable=AsyncMock):
+        with patch("sandbox_runtime.entrypoint.asyncio.sleep", side_effect=_yielding_sleep):
             await supervisor.monitor_processes()
 
         assert supervisor.start_vnc.await_count == 2
         assert supervisor._stop_vnc.await_count == 2
         supervisor._report_fatal_error.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_continues_when_a_process_exits_before_terminate(self, tmp_path):
+        supervisor = _make_supervisor()
+        password_path = tmp_path / "vnc-password"
+        password_path.write_text("secret")
+        supervisor.novnc_process = _process()
+        supervisor.novnc_process.terminate.side_effect = ProcessLookupError
+        x11vnc_process = _process()
+        supervisor.x11vnc_process = x11vnc_process
+
+        with (
+            patch("sandbox_runtime.entrypoint.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch.object(supervisor, "_clear_vnc_display_artifacts"),
+        ):
+            await supervisor._stop_vnc()
+
+        x11vnc_process.terminate.assert_called_once()
+        assert not password_path.exists()
 
     @pytest.mark.asyncio
     async def test_cleanup_is_reverse_order_and_removes_password(self, tmp_path):

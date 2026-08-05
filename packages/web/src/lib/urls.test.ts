@@ -67,4 +67,10 @@ describe("buildVncUrl", () => {
     expect(buildVncUrl("javascript:alert(1)", "secret")).toBeNull();
     expect(buildVncUrl("http://desktop.example", "secret")).toBeNull();
   });
+
+  it("strips a password query parameter from the base URL", () => {
+    expect(buildVncUrl("https://desktop.example/?password=leaked", "secret")).toBe(
+      "https://desktop.example/vnc.html?autoconnect=true&resize=scale#password=secret"
+    );
+  });
 });

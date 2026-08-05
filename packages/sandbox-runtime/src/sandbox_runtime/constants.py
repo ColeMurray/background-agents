@@ -22,6 +22,7 @@ NOVNC_PORT = 6080
 VNC_PORT = 5900
 VNC_DISPLAY = ":1"
 VNC_PASSWORD_FILE_PATH = "/tmp/oi-vnc-password"
+VNC_PASSWORD_MAX_BYTES = 8
 NOVNC_WEB_ROOT = "/usr/share/novnc"
 
 # Env vars carrying per-session port overrides for the in-sandbox runtime, set by

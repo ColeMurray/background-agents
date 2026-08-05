@@ -48,6 +48,7 @@ from .constants import (
     VNC_DISPLAY,
     VNC_PASSWORD_ENV_VAR,
     VNC_PASSWORD_FILE_PATH,
+    VNC_PASSWORD_MAX_BYTES,
     VNC_PORT,
 )
 from .diff_baseline import resolve_session_diff_baselines
@@ -152,6 +153,7 @@ class SandboxSupervisor:
         self.fluxbox_process: asyncio.subprocess.Process | None = None
         self.x11vnc_process: asyncio.subprocess.Process | None = None
         self.novnc_process: asyncio.subprocess.Process | None = None
+        self._vnc_restart_task: asyncio.Task[bool] | None = None
         self.shutdown_event = shutdown_event or asyncio.Event()
         self.git_sync_complete = asyncio.Event()
         self.opencode_ready = asyncio.Event()
@@ -1277,6 +1279,10 @@ class SandboxSupervisor:
             self.log.info("vnc.skip", reason="no_password")
             return
 
+        password_bytes = password.encode()
+        if len(password_bytes) > VNC_PASSWORD_MAX_BYTES:
+            raise ValueError(f"VNC password must not exceed {VNC_PASSWORD_MAX_BYTES} bytes")
+
         self._clear_vnc_display_artifacts()
 
         password_path = Path(VNC_PASSWORD_FILE_PATH)
@@ -1286,7 +1292,7 @@ class SandboxSupervisor:
             0o600,
         )
         try:
-            os.write(password_fd, password.encode())
+            os.write(password_fd, password_bytes)
         finally:
             os.close(password_fd)
 
@@ -1420,11 +1426,13 @@ class SandboxSupervisor:
         ):
             if process and process.returncode is None:
                 self.log.info(f"{process_name}.terminating")
-                process.terminate()
+                with contextlib.suppress(ProcessLookupError):
+                    process.terminate()
                 try:
                     await asyncio.wait_for(process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
                 except TimeoutError:
-                    process.kill()
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
                     await process.wait()
             setattr(self, f"{process_name}_process", None)
         Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
@@ -1815,7 +1823,9 @@ class SandboxSupervisor:
                 ),
                 None,
             )
-            if crashed_vnc_process:
+            if crashed_vnc_process and (
+                self._vnc_restart_task is None or self._vnc_restart_task.done()
+            ):
                 process_name, process = crashed_vnc_process
                 vnc_restart_count += 1
                 self.log.warn(
@@ -1826,7 +1836,7 @@ class SandboxSupervisor:
                 )
                 await self._stop_vnc()
                 if vnc_restart_count <= self.MAX_RESTARTS:
-                    await self._start_vnc_with_retries()
+                    self._vnc_restart_task = asyncio.create_task(self._start_vnc_with_retries())
                 else:
                     self.log.warn("vnc.max_restarts", restart_count=vnc_restart_count)
 
@@ -2409,6 +2419,11 @@ class SandboxSupervisor:
     async def shutdown(self) -> None:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
+
+        if self._vnc_restart_task and not self._vnc_restart_task.done():
+            self._vnc_restart_task.cancel()
+            await asyncio.gather(self._vnc_restart_task, return_exceptions=True)
+        self._vnc_restart_task = None
 
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:

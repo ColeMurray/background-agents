@@ -9,6 +9,7 @@ import { SWRConfig } from "swr";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
 } from "@open-inspect/shared/types/integrations";
 import { SandboxSettingsEditor, SandboxSettingsPage } from "./sandbox-settings";
@@ -281,7 +282,10 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     );
 
     await user.type(screen.getByPlaceholderText("8080"), "8081");
-    await user.type(screen.getByPlaceholderText("6080"), "6081");
+    await user.type(
+      screen.getByPlaceholderText(String(DEFAULT_VNC_PORT)),
+      String(DEFAULT_VNC_PORT + 1)
+    );
     await user.type(screen.getByPlaceholderText("7680"), "7000");
     await user.click(screen.getByText("Save Settings"));
 
@@ -296,7 +300,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
                 tunnelPorts: [],
                 terminalEnabled: false,
                 codeServerPort: 8081,
-                vncPort: 6081,
+                vncPort: DEFAULT_VNC_PORT + 1,
                 terminalPort: 7000,
                 maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
                 maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
@@ -329,7 +333,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     );
 
     await user.click(screen.getByText("Add port"));
-    await user.type(screen.getByPlaceholderText("e.g. 3000"), "6080");
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), String(DEFAULT_VNC_PORT));
     await user.click(screen.getByText("Save Settings"));
 
     expect(screen.getByText(/must all be different/)).toBeInTheDocument();

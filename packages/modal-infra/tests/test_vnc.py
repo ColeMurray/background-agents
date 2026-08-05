@@ -8,6 +8,7 @@ from sandbox_runtime.constants import (
     NOVNC_PORT,
     NOVNC_PORT_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
+    VNC_PASSWORD_MAX_BYTES,
     VNC_PORT,
 )
 from src.sandbox.manager import CODE_SERVER_PORT, TTYD_PROXY_PORT, SandboxConfig, SandboxManager
@@ -51,6 +52,7 @@ class TestCreateSandboxVnc:
 
         assert handle.vnc_url == "https://vnc.example.com"
         assert handle.vnc_password
+        assert len(handle.vnc_password.encode()) == VNC_PASSWORD_MAX_BYTES
         assert captured["env"][VNC_PASSWORD_ENV_VAR] == handle.vnc_password
         assert captured["env"][NOVNC_PORT_ENV_VAR] == "6081"
         assert captured["encrypted_ports"] == [6081]
