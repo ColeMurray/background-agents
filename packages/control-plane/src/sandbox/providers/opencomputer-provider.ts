@@ -26,13 +26,13 @@ import {
   deriveCodeServerPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
+  imageBuildSandboxIdentity,
   REPO_IMAGE_CALLBACK_ENV_KEYS,
   RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
   VCS_CLONE_TOKEN_ENV_VAR,
 } from "../sandbox-env";
 import {
-  imageBuildSandboxIdentity,
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -348,7 +348,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
-      const identity = imageBuildSandboxIdentity(config);
+      const identity = imageBuildSandboxIdentity(config, Date.now());
       const environment = this.buildBuildEnvironment(config, identity.sandboxId);
       secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
       const sandbox = await this.client.createSandbox({

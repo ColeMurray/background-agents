@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
+  buildImageBuildEnvVars,
   buildSandboxEnvVars,
   buildSessionConfig,
+  imageBuildSandboxIdentity,
+  RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
 } from "./sandbox-env";
-import { DEFAULT_SANDBOX_TIMEOUT_SECONDS, type CreateSandboxConfig } from "./provider";
+import {
+  DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+  type CreateSandboxConfig,
+  type ImageBuildProviderTriggerConfig,
+} from "./provider";
 
 const baseInput = {
   sessionId: "session-123",
@@ -251,5 +258,116 @@ describe("buildSandboxEnvVars", () => {
     expect(envVars.LLM_KEY).toBe("sk-provider");
     expect(envVars.SANDBOX_ID).toBe("sandbox-456");
     expect(envVars).not.toHaveProperty("IGNORED");
+  });
+});
+
+describe("buildImageBuildEnvVars", () => {
+  const repositories = [
+    { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+    { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+  ];
+
+  it("assembles the full build-mode env on top of user vars", () => {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId: "build-env-env_flagship",
+      repositories,
+      scmIdentity: scmCloneIdentity("github"),
+      cloneToken: "clone-token",
+      baseEnvVars: { USER_SECRET: "value" },
+    });
+
+    expect(envVars).toEqual({
+      USER_SECRET: "value",
+      PYTHONUNBUFFERED: "1",
+      SANDBOX_ID: "build-env-env_flagship",
+      REPO_OWNER: "acme",
+      REPO_NAME: "web",
+      IMAGE_BUILD_MODE: "true",
+      SESSION_CONFIG: expect.any(String),
+      VCS_HOST: "github.com",
+      VCS_CLONE_USERNAME: "x-access-token",
+      VCS_CLONE_TOKEN: "clone-token",
+    });
+  });
+
+  it("serializes a repositories-bearing SESSION_CONFIG anchored to the primary branch", () => {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId: "build-env-env_flagship",
+      repositories,
+      scmIdentity: scmCloneIdentity("github"),
+    });
+
+    expect(JSON.parse(envVars.SESSION_CONFIG)).toEqual({
+      branch: "main",
+      repositories: [
+        { repo_owner: "acme", repo_name: "web", branch: "main" },
+        { repo_owner: "acme", repo_name: "api", branch: "develop" },
+      ],
+    });
+  });
+
+  it("scrubs every reserved callback key from the user layer", () => {
+    const baseEnvVars: Record<string, string> = { SAFE: "kept" };
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      baseEnvVars[key] = "user-controlled";
+    }
+
+    const envVars = buildImageBuildEnvVars({
+      sandboxId: "build-env-env_flagship",
+      repositories,
+      scmIdentity: scmCloneIdentity("github"),
+      baseEnvVars,
+    });
+
+    expect(envVars.SAFE).toBe("kept");
+    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
+      expect(envVars).not.toHaveProperty(key);
+    }
+  });
+
+  it("throws when the repository list is empty", () => {
+    expect(() =>
+      buildImageBuildEnvVars({
+        sandboxId: "build-env-env_flagship",
+        repositories: [],
+        scmIdentity: scmCloneIdentity("github"),
+      })
+    ).toThrow("image build requires at least one repository");
+  });
+});
+
+describe("imageBuildSandboxIdentity", () => {
+  const config: ImageBuildProviderTriggerConfig = {
+    buildId: "build-1",
+    scopeKind: "repo",
+    scopeId: "acme/web",
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    callbackUrl: "https://cp.test/image-builds/build-complete",
+    failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+    callbackToken: "callback-token",
+    buildExecutionTimeoutSeconds: 1800,
+    providerSessionTimeoutSeconds: 2400,
+    onProviderSessionCreated: async () => undefined,
+    correlation: { trace_id: "trace-1", request_id: "request-1" },
+  };
+
+  it("derives a stable sandbox id, a per-attempt name, and scope-carrying labels", () => {
+    expect(imageBuildSandboxIdentity(config, 1234)).toEqual({
+      sandboxId: "build-env-acme/web",
+      sandboxName: "build-env-acme/web-1234",
+      labels: {
+        openinspect_framework: "open-inspect",
+        openinspect_kind: "environment-image-build",
+        openinspect_build_id: "build-1",
+        openinspect_scope_kind: "repo",
+        openinspect_scope_id: "acme/web",
+        // Legacy label preserved for existing operator queries.
+        openinspect_environment: "acme/web",
+      },
+    });
+  });
+
+  it("is deterministic for a fixed timestamp", () => {
+    expect(imageBuildSandboxIdentity(config, 99)).toEqual(imageBuildSandboxIdentity(config, 99));
   });
 });

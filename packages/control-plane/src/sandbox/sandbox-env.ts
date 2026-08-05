@@ -4,6 +4,7 @@ import type { SourceControlProviderName } from "../source-control";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   type CreateSandboxConfig,
+  type ImageBuildProviderTriggerConfig,
   type RestoreConfig,
   type SessionRepositoryInfo,
 } from "./provider";
@@ -263,6 +264,46 @@ export function buildSandboxEnvVars(
   return envVars;
 }
 
+/**
+ * Naming and provider-object labels shared by the image-build trigger paths.
+ * `sandboxId` is the stable logical id the runtime sees as `SANDBOX_ID`;
+ * `sandboxName` is the per-attempt provider-object name — pass the trigger
+ * timestamp (`Date.now()`) as `now` so the impure input is visible at the
+ * call site and one config yields one name per trigger attempt;
+ * `labels` identify the build sandbox on the provider (tags on Vercel,
+ * labels on OpenComputer). Providers with extra label conventions spread and
+ * extend `labels`.
+ *
+ * The `build-env-` prefix is deliberately scope-agnostic legacy: it predates
+ * scoped builds and is kept verbatim so repo-scoped builds keep the same
+ * `SANDBOX_ID`/name shape operators already query for.
+ */
+export function imageBuildSandboxIdentity(
+  config: ImageBuildProviderTriggerConfig,
+  now: number
+): {
+  sandboxId: string;
+  sandboxName: string;
+  labels: Record<string, string>;
+} {
+  return {
+    sandboxId: `build-env-${config.scopeId}`,
+    sandboxName: `build-env-${config.scopeId}-${now}`,
+    labels: {
+      openinspect_framework: "open-inspect",
+      openinspect_kind: "environment-image-build",
+      openinspect_build_id: config.buildId,
+      // Canonical scope labels, mirroring Modal's Python tags in
+      // packages/modal-infra/src/sandbox/build_session.py.
+      openinspect_scope_kind: config.scopeKind,
+      openinspect_scope_id: config.scopeId,
+      // Legacy label kept alongside the scope pair so existing operator
+      // label queries keep matching; builds are no longer environment-only.
+      openinspect_environment: config.scopeId,
+    },
+  };
+}
+
 /** Provider-specific inputs to {@link buildImageBuildEnvVars}. */
 export interface ImageBuildEnvVarsOptions {
   /** Logical sandbox id (`build-env-<scopeId>`), surfaced as `SANDBOX_ID`. */
@@ -298,7 +339,7 @@ export interface ImageBuildEnvVarsOptions {
 export function buildImageBuildEnvVars(options: ImageBuildEnvVarsOptions): Record<string, string> {
   const primary = options.repositories[0];
   if (!primary) {
-    throw new Error("environment build requires at least one repository");
+    throw new Error("image build requires at least one repository");
   }
 
   const envVars: Record<string, string> = { ...(options.baseEnvVars ?? {}) };

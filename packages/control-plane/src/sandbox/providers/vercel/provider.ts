@@ -11,12 +11,12 @@ import {
   buildSandboxEnvVars,
   deriveCodeServerPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
+  imageBuildSandboxIdentity,
   REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
 } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
-  imageBuildSandboxIdentity,
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
@@ -258,7 +258,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         );
       }
 
-      const identity = imageBuildSandboxIdentity(config);
+      const identity = imageBuildSandboxIdentity(config, Date.now());
       const env = this.buildBuildEnvVars(config, identity.sandboxId);
       const created = await this.client.createSandbox(
         {

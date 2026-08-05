@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from sandbox_runtime.constants import IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from sandbox_runtime.modal_image_build_start import MODAL_SANDBOX_ID_ENV
 from sandbox_runtime.repo_image_callback import (
     BUILD_ID_ENV,
     CALLBACK_TOKEN_ENV,
@@ -19,6 +20,7 @@ from sandbox_runtime.repo_image_callback import (
 from src.sandbox.build_session import (
     DEFAULT_BUILD_TIMEOUT_SECONDS,
     MAX_BUILD_TIMEOUT_SECONDS,
+    RESERVED_USER_ENV_KEYS,
     BuildSessionNotFoundError,
     ModalBuildSessionService,
 )
@@ -84,6 +86,61 @@ def test_image_build_callback_env_keys_match_control_plane_contract():
         CALLBACK_TOKEN_ENV,
         FAILURE_CALLBACK_URL_ENV,
     ]
+
+
+def test_reserved_callback_env_scrub_sets_align_across_languages():
+    """Pin the reserved-key scrub — the hijack-prevention half of the contract.
+
+    The TS RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS list (buildImageBuildEnvVars)
+    and Python's RESERVED_USER_ENV_KEYS (ModalBuildSessionService.create) both
+    scrub user env vars before a build sandbox launches. They intentionally
+    diverge at the edges; this test pins the shared core and the exact
+    divergence so neither side can silently drop a scrubbed key.
+    """
+    ts_source = _read_control_plane_sandbox_env_source()
+    match = re.search(
+        r"export\s+const\s+RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS\s*=\s*\[(.*?)\]\s*as\s+const",
+        ts_source,
+        re.DOTALL,
+    )
+    assert match is not None, "missing TS constant: RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS"
+    body = match.group(1)
+    ts_reserved = set(re.findall(r'"([^"]+)"', body))
+    # Resolve the two identifier references in the TS array literal.
+    assert "...REPO_IMAGE_CALLBACK_ENV_KEYS" in body
+    callback_keys = re.search(
+        r"export\s+const\s+REPO_IMAGE_CALLBACK_ENV_KEYS\s*=\s*\[(.*?)\]\s*as\s+const",
+        ts_source,
+        re.DOTALL,
+    )
+    assert callback_keys is not None
+    ts_reserved.update(re.findall(r'"([^"]+)"', callback_keys.group(1)))
+    assert "IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY" in body
+    ts_reserved.add(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
+
+    python_reserved = set(RESERVED_USER_ENV_KEYS)
+    shared_callback_keys = {
+        PROVIDER_SESSION_ID_ENV,
+        BUILD_ID_ENV,
+        CALLBACK_URL_ENV,
+        CALLBACK_TOKEN_ENV,
+        FAILURE_CALLBACK_URL_ENV,
+    }
+    assert shared_callback_keys <= ts_reserved
+    assert shared_callback_keys <= python_reserved
+    # Intended divergence, pinned:
+    # - the legacy pre-token secret key is scrubbed only in TS (never read by
+    #   the Modal runtime);
+    # - the execution-timeout key is scrubbed only in TS — safe on Modal only
+    #   because create() unconditionally re-sets it after the scrub (asserted
+    #   in test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env);
+    # - the Modal stdin-launch sandbox-id key is scrubbed only in Python
+    #   (meaningless off-Modal).
+    assert ts_reserved - python_reserved == {
+        "OI_REPO_IMAGE_CALLBACK_SECRET",
+        IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+    }
+    assert python_reserved - ts_reserved == {MODAL_SANDBOX_ID_ENV}
 
 
 @pytest.mark.parametrize(
