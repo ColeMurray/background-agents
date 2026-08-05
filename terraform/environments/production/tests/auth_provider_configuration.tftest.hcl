@@ -205,10 +205,24 @@ run "slack_classification_anthropic" {
   assert {
     condition = (
       var.slack_classification_model == "anthropic/claude-haiku-4-5" &&
+      module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"] == "anthropic/claude-haiku-4-5" &&
       contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
     )
-    error_message = "Anthropic Slack classification must use the canonical default and bind ANTHROPIC_API_KEY."
+    error_message = "Anthropic Slack classification must use the canonical model binding and bind ANTHROPIC_API_KEY."
   }
+}
+
+run "slack_classification_anthropic_missing_key" {
+  command = plan
+
+  variables {
+    enable_slack_bot     = true
+    slack_bot_token      = "test-slack-token"
+    slack_signing_secret = "test-slack-signing-secret"
+    anthropic_api_key    = "  "
+  }
+
+  expect_failures = [var.anthropic_api_key]
 }
 
 run "slack_classification_openai" {
@@ -220,15 +234,16 @@ run "slack_classification_openai" {
     slack_bot_token            = "test-slack-token"
     slack_signing_secret       = "test-slack-signing-secret"
     slack_classification_model = "openai/gpt-5.6-luna"
+    anthropic_api_key          = ""
   }
 
   assert {
     condition = (
       var.slack_classification_model == "openai/gpt-5.6-luna" &&
-      contains(module.slack_bot_worker[0].plain_text_binding_names, "CLASSIFICATION_MODEL") &&
+      module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"] == "openai/gpt-5.6-luna" &&
       !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
     )
-    error_message = "OpenAI Slack classification must bind CLASSIFICATION_MODEL without ANTHROPIC_API_KEY."
+    error_message = "OpenAI Slack classification must use the canonical model binding without ANTHROPIC_API_KEY."
   }
 }
 

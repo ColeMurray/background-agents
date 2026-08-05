@@ -69,6 +69,8 @@ export type {
 export {
   CLASSIFY_TARGET_TOOL_NAME,
   CLASSIFIER_PROMPT_MAX_CHARS,
+  ANTHROPIC_CLASSIFICATION_MODEL_ID,
+  OPENAI_CLASSIFICATION_MODEL_ID,
   classificationModelSchema,
   targetClassificationDecisionSchema,
   classifierInferenceRequestSchema,

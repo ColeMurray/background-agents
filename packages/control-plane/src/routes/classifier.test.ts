@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as OpenAITokenRefreshModule from "../session/openai-token-refresh-service";
 import { handleRequest } from "../router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "../router.test-support";
+import { CLASSIFIER_UPSTREAM_TIMEOUT_MS } from "./classifier";
 
 const brokerState = vi.hoisted(() => ({
   refreshGlobal: vi.fn(),
@@ -74,6 +75,22 @@ function completedFunctionCall(argumentsValue = JSON.stringify(decision)): Respo
     type: "response.completed",
     response: { id: "resp-classify", output: [functionCall(argumentsValue)] },
   });
+}
+
+function openStreamResponse(
+  initialBody: string | undefined,
+  cancel: () => void | Promise<void>
+): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (initialBody !== undefined) controller.enqueue(encoder.encode(initialBody));
+      },
+      cancel,
+    }),
+    { headers: { "Content-Type": "text/event-stream" } }
+  );
 }
 
 async function classifierRequest(
@@ -179,6 +196,7 @@ describe("POST /internal/classifier/infer", () => {
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(init?.method).toBe("POST");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer secret-access-token");
     expect(headers.get("ChatGPT-Account-Id")).toBe("account-123");
@@ -386,6 +404,75 @@ describe("POST /internal/classifier/infer", () => {
     const responseText = await response.text();
     expect(responseText).toBe(JSON.stringify({ error: "Classifier upstream unavailable" }));
     expect(responseText).not.toContain("upstream secret details");
+  });
+
+  it("times out a never-ending upstream stream and cancels its reader", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    vi.mocked(fetch).mockResolvedValueOnce(openStreamResponse(undefined, cancel));
+
+    try {
+      const responsePromise = classifierRequest({
+        model: "openai/gpt-5.6-luna",
+        prompt: "route this",
+      });
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(CLASSIFIER_UPSTREAM_TIMEOUT_MS);
+
+      const response = await responsePromise;
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error: "Classifier upstream unavailable",
+      });
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("times out even when the fetch implementation ignores abort", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>(() => undefined));
+
+    try {
+      const responsePromise = classifierRequest({
+        model: "openai/gpt-5.6-luna",
+        prompt: "route this",
+      });
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(CLASSIFIER_UPSTREAM_TIMEOUT_MS);
+
+      const response = await responsePromise;
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error: "Classifier upstream unavailable",
+      });
+      expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores reader cancellation failures and releases the lock", async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error("cancel failed with secret details"));
+    const upstream = openStreamResponse(
+      sseEvent({
+        type: "response.completed",
+        response: { id: "resp-classify", output: [functionCall()] },
+      }),
+      cancel
+    );
+    vi.mocked(fetch).mockResolvedValueOnce(upstream);
+
+    const response = await classifierRequest({
+      model: "openai/gpt-5.6-luna",
+      prompt: "route this",
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ decision });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(upstream.body?.locked).toBe(false);
   });
 
   it("maps broker authorization failure to 502 for the authenticated caller", async () => {

@@ -3,17 +3,17 @@ import { z } from "zod";
 export const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 export const CLASSIFIER_PROMPT_MAX_CHARS = 128_000;
 
+export const ANTHROPIC_CLASSIFICATION_MODEL_ID = "anthropic/claude-haiku-4-5";
+export const OPENAI_CLASSIFICATION_MODEL_ID = "openai/gpt-5.6-luna";
+
 export const classificationModelSchema = z.enum([
-  "anthropic/claude-haiku-4-5",
-  "openai/gpt-5.6-luna",
+  ANTHROPIC_CLASSIFICATION_MODEL_ID,
+  OPENAI_CLASSIFICATION_MODEL_ID,
 ]);
 
 export type ClassificationModel = z.infer<typeof classificationModelSchema>;
 
-const nonEmptyTrimmedStringSchema = z
-  .string()
-  .trim()
-  .refine((value) => value.length > 0, "Must not be empty");
+const nonEmptyTrimmedStringSchema = z.string().trim().min(1, "Must not be empty");
 
 export const targetClassificationDecisionSchema = z
   .object({

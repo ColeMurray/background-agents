@@ -10,6 +10,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   CLASSIFY_TARGET_TOOL_NAME,
   CLASSIFIER_PROMPT_MAX_CHARS,
+  ANTHROPIC_CLASSIFICATION_MODEL_ID,
+  OPENAI_CLASSIFICATION_MODEL_ID,
   classifierInferenceRequestSchema,
   classifierInferenceResponseSchema,
   classificationModelSchema,
@@ -29,8 +31,8 @@ import { createLogger } from "../logger";
 import { signedControlPlaneFetch } from "../internal-auth";
 
 const log = createLogger("classifier");
-const DEFAULT_CLASSIFICATION_MODEL: ClassificationModel = "anthropic/claude-haiku-4-5";
-const ANTHROPIC_CLASSIFICATION_MODEL = "claude-haiku-4-5";
+const DEFAULT_CLASSIFICATION_MODEL: ClassificationModel = ANTHROPIC_CLASSIFICATION_MODEL_ID;
+const ANTHROPIC_API_MODEL = "claude-haiku-4-5";
 const CLASSIFIER_INFERENCE_URL = "https://internal/internal/classifier/infer";
 const CLASSIFY_TARGET_INPUT_SCHEMA: Anthropic.Messages.Tool.InputSchema = {
   ...targetClassificationJsonSchema,
@@ -227,7 +229,7 @@ export class RepoClassifier {
 
   private async inferWithAnthropic(prompt: string): Promise<TargetClassificationDecision> {
     const response = await this.getAnthropicClient().messages.create({
-      model: ANTHROPIC_CLASSIFICATION_MODEL,
+      model: ANTHROPIC_API_MODEL,
       max_tokens: 500,
       temperature: 0,
       tools: [CLASSIFY_TARGET_TOOL],
@@ -284,10 +286,10 @@ export class RepoClassifier {
     prompt: string,
     traceId?: string
   ): Promise<TargetClassificationDecision> {
-    if (model === "anthropic/claude-haiku-4-5") {
+    if (model === ANTHROPIC_CLASSIFICATION_MODEL_ID) {
       return this.inferWithAnthropic(prompt);
     }
-    if (model === "openai/gpt-5.6-luna") {
+    if (model === OPENAI_CLASSIFICATION_MODEL_ID) {
       return this.inferWithControlPlane(model, prompt, traceId);
     }
     throw new Error(`Unsupported classifier model: ${model}`);

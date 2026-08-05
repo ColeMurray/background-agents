@@ -1,5 +1,6 @@
 import {
   CLASSIFY_TARGET_TOOL_NAME,
+  OPENAI_CLASSIFICATION_MODEL_ID,
   classifierInferenceRequestSchema,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
@@ -17,9 +18,9 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:classifier");
-const CLASSIFIER_MODEL = "openai/gpt-5.6-luna";
 const OPENAI_MODEL = "gpt-5.6-luna";
 const CODEX_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+export const CLASSIFIER_UPSTREAM_TIMEOUT_MS = 30_000;
 const MAX_SSE_BYTES = 1024 * 1024;
 const MAX_SSE_EVENT_BYTES = 64 * 1024;
 const MAX_SSE_EVENTS = 1_000;
@@ -43,6 +44,30 @@ type ClassifierStreamResult =
   | { kind: "completed"; decision: unknown }
   | { kind: "failed" }
   | { kind: "invalid" };
+
+class ClassifierUpstreamAbortError extends Error {}
+
+function waitForUpstream<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new ClassifierUpstreamAbortError());
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new ClassifierUpstreamAbortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (caught: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(caught);
+      }
+    );
+  });
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -85,7 +110,10 @@ function parseFunctionCallItem(value: unknown): unknown {
   return parseFunctionArguments(functionCallFromItem(value));
 }
 
-async function parseClassifierStream(response: Response): Promise<ClassifierStreamResult> {
+async function parseClassifierStream(
+  response: Response,
+  signal: AbortSignal
+): Promise<ClassifierStreamResult> {
   if (!response.body) return { kind: "invalid" };
 
   const reader = response.body.getReader();
@@ -167,7 +195,7 @@ async function parseClassifierStream(response: Response): Promise<ClassifierStre
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await waitForUpstream(reader.read(), signal);
       if (done) break;
       totalBytes += value.byteLength;
       if (totalBytes > MAX_SSE_BYTES) return { kind: "invalid" };
@@ -206,9 +234,12 @@ async function parseClassifierStream(response: Response): Promise<ClassifierStre
         return { kind: "invalid" };
       }
     }
-  } catch {
-    return { kind: "invalid" };
+  } catch (caught) {
+    return caught instanceof ClassifierUpstreamAbortError || signal.aborted
+      ? { kind: "failed" }
+      : { kind: "invalid" };
   } finally {
+    await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 
@@ -230,7 +261,7 @@ export async function handleClassifierInference(
 
   const parsedRequest = classifierInferenceRequestSchema.safeParse(rawBody);
   if (!parsedRequest.success) return error("Invalid classifier inference request", 400);
-  if (parsedRequest.data.model !== CLASSIFIER_MODEL) {
+  if (parsedRequest.data.model !== OPENAI_CLASSIFICATION_MODEL_ID) {
     return error("Unsupported classifier model", 400);
   }
 
@@ -257,76 +288,86 @@ export async function handleClassifierInference(
   });
   if (tokenResult.accountId) headers.set("ChatGPT-Account-Id", tokenResult.accountId);
 
-  let upstream: Response;
+  const abortController = new AbortController();
+  const upstreamTimeout = setTimeout(() => abortController.abort(), CLASSIFIER_UPSTREAM_TIMEOUT_MS);
   try {
-    upstream = await fetch(CODEX_RESPONSES_ENDPOINT, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: [
-          {
-            type: "additional_tools",
-            role: "developer",
-            tools: [
+    let upstream: Response;
+    try {
+      upstream = await waitForUpstream(
+        fetch(CODEX_RESPONSES_ENDPOINT, {
+          method: "POST",
+          headers,
+          signal: abortController.signal,
+          body: JSON.stringify({
+            model: OPENAI_MODEL,
+            input: [
               {
-                type: "namespace",
-                name: "functions",
-                description: "",
+                type: "additional_tools",
+                role: "developer",
                 tools: [
                   {
-                    type: "function",
-                    name: CLASSIFY_TARGET_TOOL_NAME,
-                    description: "Select the best target for the Slack request.",
-                    parameters: targetClassificationJsonSchema,
-                    strict: true,
+                    type: "namespace",
+                    name: "functions",
+                    description: "",
+                    tools: [
+                      {
+                        type: "function",
+                        name: CLASSIFY_TARGET_TOOL_NAME,
+                        description: "Select the best target for the Slack request.",
+                        parameters: targetClassificationJsonSchema,
+                        strict: true,
+                      },
+                    ],
                   },
                 ],
               },
+              {
+                type: "message",
+                role: "user",
+                content: [{ type: "input_text", text: parsedRequest.data.prompt }],
+              },
             ],
-          },
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: parsedRequest.data.prompt }],
-          },
-        ],
-        tool_choice: "required",
-        parallel_tool_calls: false,
-        reasoning: { context: "all_turns" },
-        store: false,
-        stream: true,
-      }),
-    });
-  } catch {
-    logger.error("Classifier upstream request failed", {
-      event: "classifier.upstream_failed",
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Classifier upstream unavailable", 502);
+            tool_choice: "required",
+            parallel_tool_calls: false,
+            reasoning: { context: "all_turns" },
+            store: false,
+            stream: true,
+          }),
+        }),
+        abortController.signal
+      );
+    } catch {
+      logger.error("Classifier upstream request failed", {
+        event: "classifier.upstream_failed",
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Classifier upstream unavailable", 502);
+    }
+
+    if (!upstream.ok) {
+      logger.warn("Classifier upstream returned an error", {
+        event: "classifier.upstream_error",
+        upstream_status: upstream.status,
+        request_id: ctx.request_id,
+        trace_id: ctx.trace_id,
+      });
+      return error("Classifier upstream unavailable", 502);
+    }
+
+    const streamResult = await parseClassifierStream(upstream, abortController.signal);
+    if (streamResult.kind === "failed") return error("Classifier upstream unavailable", 502);
+    if (streamResult.kind === "invalid") {
+      return error("Classifier returned an invalid response", 502);
+    }
+
+    const decision = targetClassificationDecisionSchema.safeParse(streamResult.decision);
+    if (!decision.success) return error("Classifier returned an invalid response", 502);
+
+    return json({ decision: decision.data });
+  } finally {
+    clearTimeout(upstreamTimeout);
   }
-
-  if (!upstream.ok) {
-    logger.warn("Classifier upstream returned an error", {
-      event: "classifier.upstream_error",
-      upstream_status: upstream.status,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Classifier upstream unavailable", 502);
-  }
-
-  const streamResult = await parseClassifierStream(upstream);
-  if (streamResult.kind === "failed") return error("Classifier upstream unavailable", 502);
-  if (streamResult.kind === "invalid") {
-    return error("Classifier returned an invalid response", 502);
-  }
-
-  const decision = targetClassificationDecisionSchema.safeParse(streamResult.decision);
-  if (!decision.success) return error("Classifier returned an invalid response", 502);
-
-  return json({ decision: decision.data });
 }
 
 export const classifierRoutes: Route[] = [
