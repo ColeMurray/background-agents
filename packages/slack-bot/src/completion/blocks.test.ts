@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildCompletionBlocks, splitIntoSlackSections } from "./blocks";
+import { buildCompletionBlocks } from "./blocks";
+import { splitIntoSlackSections } from "@open-inspect/shared/slack";
 import type { AgentResponse, SlackCallbackContext } from "../types";
 
 const BASE_CONTEXT: SlackCallbackContext = {

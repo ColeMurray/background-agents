@@ -43,6 +43,7 @@ export {
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
+export { splitIntoSlackSections, SECTION_TEXT_MAX_CHARS, MAX_RESPONSE_SECTIONS } from "./sections";
 export {
   SLACK_DENIAL_REASONS,
   SLACK_DENIAL_STATUS,

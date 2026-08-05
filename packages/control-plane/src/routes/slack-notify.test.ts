@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionStatus } from "@open-inspect/shared";
+import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
@@ -318,6 +319,41 @@ describe("handleSlackNotify", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("empty_message_after_sanitization");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("splits a message longer than one section instead of truncating it", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
+    });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "12345.67890" } });
+    mockSlackResponse({
+      body: { ok: true, permalink: "https://x.slack.com/archives/C1/p1", channel: "C1" },
+    });
+
+    // Findings then recommendations: the tail is the part a reader needs, and
+    // it is exactly what a hard cut used to remove.
+    const findings = Array.from({ length: 40 }, (_, i) => `Finding ${i}: ${"x".repeat(70)}`).join(
+      "\n\n"
+    );
+    const text = `${findings}\n\nRECOMMENDATION: do the thing.`;
+    expect(text.length).toBeGreaterThan(SECTION_TEXT_MAX_CHARS);
+
+    const res = await callHandler({ channel: "#ops", text });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { truncated: boolean }).truncated).toBe(false);
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as {
+      blocks: Array<{ type: string; text?: { text: string } }>;
+    };
+    const sections = body.blocks.filter((b) => b.type === "section");
+    expect(sections.length).toBeGreaterThan(1);
+    for (const section of sections) {
+      expect(section.text!.text.length).toBeLessThanOrEqual(SECTION_TEXT_MAX_CHARS);
+    }
+    // Nothing lost: the closing recommendation survives.
+    expect(sections.map((b) => b.text!.text).join("")).toContain("RECOMMENDATION: do the thing.");
   });
 
   it("strips broadcasts, sanitizes links, applies mentions policy, and reports metadata", async () => {
