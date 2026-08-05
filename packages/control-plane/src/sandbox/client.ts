@@ -79,7 +79,8 @@ const createImageBuildSandboxModalResponseSchema = z.discriminatedUnion("success
   z.object({
     success: z.literal(true),
     data: z.object({
-      provider_session_id: z.string(),
+      // Non-empty: the previous hand-rolled check rejected a blank id.
+      provider_session_id: z.string().min(1),
     }),
   }),
   modalErrorResponseSchema,
