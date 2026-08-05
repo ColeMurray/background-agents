@@ -124,7 +124,7 @@ function createRepositoryRow(overrides: Partial<SessionRepositoryRow> = {}): Ses
   };
 }
 
-function createTestHarness() {
+function createTestHarness(options: { alwaysDraftDefault?: boolean } = {}) {
   const log = createMockLogger();
   const provider = createMockProvider();
   const artifacts: ArtifactRow[] = [];
@@ -182,6 +182,7 @@ function createTestHarness() {
     messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
     appName: "Open-Inspect",
     sessionPullRequests,
+    resolveAlwaysDraftDefault: vi.fn(async () => options.alwaysDraftDefault ?? false),
   };
 
   const service = new SessionPullRequestService(deps);
@@ -323,6 +324,62 @@ describe("SessionPullRequestService", () => {
       repoOwner: "acme",
       repoName: "web",
     });
+  });
+
+  it("passes draft=false to the provider by default", async () => {
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: false })
+    );
+  });
+
+  it("forwards an explicit draft flag from the request", async () => {
+    await harness.service.createPullRequest(createInput({ draft: true }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("falls back to the always-draft default when draft is unspecified", async () => {
+    harness = createTestHarness({ alwaysDraftDefault: true });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("forces draft when always-draft is enabled, even if the request sets draft=false", async () => {
+    harness = createTestHarness({ alwaysDraftDefault: true });
+
+    await harness.service.createPullRequest(createInput({ draft: false }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("fails before push when the draft policy cannot be resolved", async () => {
+    vi.mocked(harness.deps.resolveAlwaysDraftDefault).mockRejectedValueOnce(
+      new Error("D1 unavailable")
+    );
+
+    const result = await harness.service.createPullRequest(createInput());
+
+    expect(result).toEqual({
+      kind: "error",
+      status: 503,
+      error: "Pull request draft policy is temporarily unavailable",
+    });
+    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {
@@ -483,6 +540,25 @@ describe("SessionPullRequestService", () => {
       });
       expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
         expect.objectContaining({ owner: "acme", name: "backend" })
+      );
+    });
+
+    it("resolves the draft policy for the target member repository", async () => {
+      vi.mocked(harness.deps.resolveAlwaysDraftDefault).mockImplementation(
+        async (repo) => repo.repoName === "backend"
+      );
+
+      await harness.service.createPullRequest(
+        createInput({ repoOwner: "acme", repoName: "backend", draft: false })
+      );
+
+      expect(harness.deps.resolveAlwaysDraftDefault).toHaveBeenCalledWith({
+        repoOwner: "acme",
+        repoName: "backend",
+      });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ draft: true })
       );
     });
 

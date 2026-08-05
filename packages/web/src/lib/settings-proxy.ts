@@ -18,13 +18,13 @@ type RouteHandler<P> = (
 
 /**
  * The GET/PUT/DELETE handler trio for a BFF route that proxies an
- * integration-settings scope (global, per-repo, per-environment) to the
- * control plane. Each scope's route file only supplies its control-plane path
+ * settings scope (global, per-repo, per-environment) to the control plane.
+ * Each scope's route file only supplies its control-plane path
  * (from already-decoded segments — encode them) and a label for error
  * messages; auth-first (session → 401 before any control-plane call), body
  * forwarding, and error translation live here once.
  */
-export function integrationSettingsProxy<P>(
+export function settingsProxy<P>(
   buildPath: (params: P) => string,
   label: string
 ): { GET: RouteHandler<P>; PUT: RouteHandler<P>; DELETE: RouteHandler<P> } {

@@ -3,35 +3,8 @@ import { recordSchema } from "./artifacts";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 
-export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
-
-export const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
-
-export type EventType =
-  | "heartbeat"
-  | "ready"
-  | "token"
-  | "tool_call"
-  | "step_start"
-  | "step_finish"
-  | "tool_result"
-  | "git_sync"
-  | "error"
-  | "execution_complete"
-  | "artifact"
-  | "push_complete"
-  | "push_error"
-  | "warning"
-  | "session_title"
-  | "user_message";
-
-export interface AgentEvent {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
+const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
 const tokenUsageDetailsSchema = z
   .object({
@@ -207,6 +180,15 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+export type EventType = SandboxEvent["type"];
+
+export interface AgentEvent {
+  id: string;
+  type: EventType;
+  data: Record<string, unknown>;
+  messageId: string | null;
+  createdAt: number;
+}
 
 type ToolCallIdentityEvent = Pick<
   Extract<SandboxEvent, { type: "tool_call" }>,
@@ -225,21 +207,6 @@ export function toolCallIdentityTuple(
 export function toolCallIdentityKey(event: ToolCallIdentityEvent): string {
   return JSON.stringify(toolCallIdentityTuple(event));
 }
-
-/**
- * Sandbox event arrays for session hydration — both the initial `subscribed`
- * replay and paginated `history_page` items, which read from the same event
- * store. Resilient to unknown/legacy event shapes: each event is validated
- * individually and dropped if it doesn't match, instead of failing the whole
- * message. A single unrecognized event must never wedge session hydration and
- * strand the client on "loading session" forever.
- */
-export const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
-  events.flatMap((event) => {
-    const result = sandboxEventSchema.safeParse(event);
-    return result.success ? [result.data] : [];
-  })
-);
 
 export interface EventResponse {
   id: string;
