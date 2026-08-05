@@ -105,6 +105,11 @@ function sendSandboxAccessMessages(socket: FakeWebSocket, sandboxId: string) {
     password: "secret",
   });
   socket.receive({
+    type: "vnc_info",
+    url: `https://desktop.example/${sandboxId}`,
+    password: "desktop-secret",
+  });
+  socket.receive({
     type: "sandbox_dashboard_url",
     url: `https://provider.example/${sandboxId}`,
   });
@@ -734,6 +739,7 @@ describe("useSessionSocket", () => {
         "https://provider.example/old-sandbox"
       );
       expect(result.current.sessionState?.codeServerUrl).toBe("https://code.example/old-sandbox");
+      expect(result.current.sessionState?.vncUrl).toBe("https://desktop.example/old-sandbox");
     });
 
     act(() => {
@@ -746,6 +752,7 @@ describe("useSessionSocket", () => {
         "https://provider.example/old-sandbox"
       );
       expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
+      expect(result.current.sessionState?.vncUrl).toBeUndefined();
     });
 
     act(() => {
@@ -756,6 +763,7 @@ describe("useSessionSocket", () => {
       expect(result.current.sessionState?.sandboxStatus).toBe("spawning");
       expect(result.current.sessionState?.sandboxDashboardUrl).toBeUndefined();
       expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
+      expect(result.current.sessionState?.vncUrl).toBeUndefined();
     });
 
     act(() => {
@@ -769,6 +777,7 @@ describe("useSessionSocket", () => {
         "https://provider.example/new-sandbox"
       );
       expect(result.current.sessionState?.codeServerUrl).toBeUndefined();
+      expect(result.current.sessionState?.vncUrl).toBeUndefined();
     });
   });
 

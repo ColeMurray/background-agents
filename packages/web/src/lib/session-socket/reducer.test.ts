@@ -59,6 +59,10 @@ describe("sessionSocketReducer", () => {
   describe("subscribed", () => {
     it("hydrates the projection and ends replay", () => {
       const state = subscribedState({
+        state: createSessionState({
+          vncUrl: "https://desktop.example",
+          vncPassword: "desktop-secret",
+        }),
         replay: {
           events: [
             {
@@ -75,7 +79,13 @@ describe("sessionSocketReducer", () => {
 
       expect(state.replaying).toBe(false);
       expect(state.sessionState).toEqual(
-        expect.objectContaining({ id: "session-1", isProcessing: false, totalCost: 0 })
+        expect.objectContaining({
+          id: "session-1",
+          isProcessing: false,
+          totalCost: 0,
+          vncUrl: "https://desktop.example",
+          vncPassword: "desktop-secret",
+        })
       );
       expect(state.currentParticipantId).toBe("participant-1");
       expect(state.events).toHaveLength(1);
@@ -264,6 +274,7 @@ describe("sessionSocketReducer", () => {
       reduce(
         subscribedState(),
         serverMessage({ type: "code_server_info", url: "https://code.example", password: "pw" }),
+        serverMessage({ type: "vnc_info", url: "https://desktop.example", password: "vnc-pw" }),
         serverMessage({ type: "ttyd_info", url: "https://ttyd.example", token: "tok" }),
         serverMessage({ type: "tunnel_urls", urls: { "3000": "https://tunnel.example" } }),
         serverMessage({ type: "sandbox_dashboard_url", url: "https://provider.example" })
@@ -275,6 +286,8 @@ describe("sessionSocketReducer", () => {
         expect.objectContaining({
           codeServerUrl: "https://code.example",
           codeServerPassword: "pw",
+          vncUrl: "https://desktop.example",
+          vncPassword: "vnc-pw",
           ttydUrl: "https://ttyd.example",
           ttydToken: "tok",
           tunnelUrls: { "3000": "https://tunnel.example" },
@@ -290,6 +303,7 @@ describe("sessionSocketReducer", () => {
       );
       expect(state.sessionState?.sandboxStatus).toBe("spawning");
       expect(state.sessionState?.codeServerUrl).toBeUndefined();
+      expect(state.sessionState?.vncUrl).toBeUndefined();
       expect(state.sessionState?.ttydUrl).toBeUndefined();
       expect(state.sessionState?.tunnelUrls).toBeUndefined();
       expect(state.sessionState?.sandboxDashboardUrl).toBeUndefined();
@@ -300,6 +314,7 @@ describe("sessionSocketReducer", () => {
         const state = reduce(withAccessState(), serverMessage({ type: "sandbox_status", status }));
         expect(state.sessionState?.sandboxStatus).toBe(status);
         expect(state.sessionState?.codeServerUrl).toBeUndefined();
+        expect(state.sessionState?.vncUrl).toBeUndefined();
         expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
       }
     });
@@ -310,6 +325,7 @@ describe("sessionSocketReducer", () => {
         serverMessage({ type: "sandbox_status", status: "ready" })
       );
       expect(state.sessionState?.codeServerUrl).toBe("https://code.example");
+      expect(state.sessionState?.vncUrl).toBe("https://desktop.example");
       expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
     });
 
@@ -320,6 +336,7 @@ describe("sessionSocketReducer", () => {
       );
       expect(state.sessionState?.sandboxStatus).toBe("failed");
       expect(state.sessionState?.codeServerUrl).toBeUndefined();
+      expect(state.sessionState?.vncUrl).toBeUndefined();
       expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
     });
 

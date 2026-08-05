@@ -54,6 +54,8 @@ export type SessionSocketAction =
 const CLEARED_SANDBOX_ACCESS_STATE = {
   codeServerUrl: undefined,
   codeServerPassword: undefined,
+  vncUrl: undefined,
+  vncPassword: undefined,
   tunnelUrls: undefined,
   ttydUrl: undefined,
   ttydToken: undefined,
@@ -221,6 +223,13 @@ function reduceServerMessage(
         ...prev,
         codeServerUrl: message.url,
         codeServerPassword: message.password,
+      }));
+
+    case "vnc_info":
+      return updateSessionState(state, (prev) => ({
+        ...prev,
+        vncUrl: message.url,
+        vncPassword: message.password,
       }));
 
     case "ttyd_info":
