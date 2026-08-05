@@ -7,12 +7,12 @@ import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
 import {
+  buildImageBuildCallbackEnv,
   buildImageBuildEnvVars,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   imageBuildSandboxIdentity,
-  REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
 } from "../../sandbox-env";
 import {
@@ -544,11 +544,13 @@ export class VercelSandboxProvider implements SandboxProvider {
     sessionId: string
   ): Record<string, string> {
     return {
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sessionId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
+      ...buildImageBuildCallbackEnv({
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
+        token: config.callbackToken,
+        providerSessionId: sessionId,
+      }),
       [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
     };
   }

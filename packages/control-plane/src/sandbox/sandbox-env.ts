@@ -105,20 +105,54 @@ export const IMAGE_BUILD_MODE_ENV_VAR = "IMAGE_BUILD_MODE";
 export const IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS";
 
 /**
- * Env keys of the image-build callback contract, mirrored from the runtime
- * constants in `sandbox_runtime/repo_image_callback.py` (pinned by a contract
- * test in `packages/modal-infra/tests/test_build_sandbox_lifecycle.py`).
- * Position is load-bearing where providers index into this list:
- * [0] provider session id, [1] build id, [2] callback URL, [3] callback
- * token, [4] failure callback URL.
+ * Env vars of the image-build callback contract, keyed by semantic name and
+ * mirrored from the runtime constants in
+ * `sandbox_runtime/repo_image_callback.py`. Both language sides are pinned by
+ * value to the shared manifest
+ * `packages/sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json`
+ * (TS: `sandbox-env.test.ts`; Python:
+ * `packages/modal-infra/tests/test_build_sandbox_lifecycle.py`).
  */
-export const REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
-  "OI_REPO_IMAGE_BUILD_ID",
-  "OI_REPO_IMAGE_CALLBACK_URL",
-  "OI_REPO_IMAGE_CALLBACK_TOKEN",
-  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
-] as const;
+export const REPO_IMAGE_CALLBACK_ENV = {
+  buildId: "OI_REPO_IMAGE_BUILD_ID",
+  callbackUrl: "OI_REPO_IMAGE_CALLBACK_URL",
+  failureCallbackUrl: "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
+  token: "OI_REPO_IMAGE_CALLBACK_TOKEN",
+  providerSessionId: "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
+} as const;
+
+/** Values of the image-build callback contract, delivered as env vars. */
+export interface ImageBuildCallbackEnvValues {
+  buildId: string;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  token: string;
+  /**
+   * Omitted from the returned map when absent: OpenComputer bakes the
+   * callback env at create time, before the provider session id exists, and
+   * delivers the id separately at runtime start.
+   */
+  providerSessionId?: string;
+}
+
+/**
+ * Assemble the callback-contract env map from semantic values, so provider
+ * call sites never pair names with values by hand (or by list position).
+ */
+export function buildImageBuildCallbackEnv(
+  values: ImageBuildCallbackEnvValues
+): Record<string, string> {
+  const envVars: Record<string, string> = {
+    [REPO_IMAGE_CALLBACK_ENV.buildId]: values.buildId,
+    [REPO_IMAGE_CALLBACK_ENV.callbackUrl]: values.callbackUrl,
+    [REPO_IMAGE_CALLBACK_ENV.failureCallbackUrl]: values.failureCallbackUrl,
+    [REPO_IMAGE_CALLBACK_ENV.token]: values.token,
+  };
+  if (values.providerSessionId !== undefined) {
+    envVars[REPO_IMAGE_CALLBACK_ENV.providerSessionId] = values.providerSessionId;
+  }
+  return envVars;
+}
 
 /**
  * Keys scrubbed from user env vars before a build sandbox launches, so a
@@ -126,11 +160,11 @@ export const REPO_IMAGE_CALLBACK_ENV_KEYS = [
  * the legacy `OI_REPO_IMAGE_CALLBACK_SECRET` from the pre-token contract —
  * still reserved so stale user secrets can't reintroduce it.
  */
-export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
+export const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS: readonly string[] = [
+  ...Object.values(REPO_IMAGE_CALLBACK_ENV),
   "OI_REPO_IMAGE_CALLBACK_SECRET",
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-] as const;
+];
 /** One-shot clone token used only by image-build sandboxes. */
 export const VCS_CLONE_TOKEN_ENV_VAR = "VCS_CLONE_TOKEN";
 

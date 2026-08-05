@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   applyScmCloneEnv,
+  buildImageBuildCallbackEnv,
   buildImageBuildEnvVars,
   buildSandboxEnvVars,
   buildSessionConfig,
+  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
+  IMAGE_BUILD_MODE_ENV_VAR,
   imageBuildSandboxIdentity,
+  REPO_IMAGE_CALLBACK_ENV,
   RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
 } from "./sandbox-env";
@@ -369,5 +374,80 @@ describe("imageBuildSandboxIdentity", () => {
 
   it("is deterministic for a fixed timestamp", () => {
     expect(imageBuildSandboxIdentity(config, 99)).toEqual(imageBuildSandboxIdentity(config, 99));
+  });
+});
+
+describe("buildImageBuildCallbackEnv", () => {
+  const values = {
+    buildId: "build-1",
+    callbackUrl: "https://cp.test/image-builds/build-complete",
+    failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+    token: "callback-token",
+  };
+
+  it("assembles the full callback env record from semantic values", () => {
+    expect(buildImageBuildCallbackEnv({ ...values, providerSessionId: "session-9" })).toEqual({
+      OI_REPO_IMAGE_BUILD_ID: "build-1",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://cp.test/image-builds/build-complete",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://cp.test/image-builds/build-failed",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+      OI_REPO_IMAGE_PROVIDER_SESSION_ID: "session-9",
+    });
+  });
+
+  it("omits the provider session id key when the id is not yet known", () => {
+    expect(buildImageBuildCallbackEnv(values)).toEqual({
+      OI_REPO_IMAGE_BUILD_ID: "build-1",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://cp.test/image-builds/build-complete",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://cp.test/image-builds/build-failed",
+      OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+    });
+  });
+});
+
+describe("cross-plane env-key contract manifest", () => {
+  // Single source of the cross-plane contract; the Python halves (runtime
+  // constants, Modal's RESERVED_USER_ENV_KEYS) are pinned to the same file in
+  // packages/modal-infra/tests/test_build_sandbox_lifecycle.py. Tests-only
+  // consumption: the runtime constants stay as code.
+  const manifest = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../../sandbox-runtime/src/sandbox_runtime/image_build_callback_env.json",
+        import.meta.url
+      ),
+      "utf8"
+    )
+  ) as {
+    callback_env: Record<string, string>;
+    build_mode_env_var: string;
+    execution_timeout_env_var: string;
+    reserved_only_control_plane: string[];
+    reserved_only_modal: string[];
+  };
+
+  it("pins REPO_IMAGE_CALLBACK_ENV to the manifest by value", () => {
+    expect(REPO_IMAGE_CALLBACK_ENV).toEqual({
+      buildId: manifest.callback_env.build_id,
+      callbackUrl: manifest.callback_env.callback_url,
+      failureCallbackUrl: manifest.callback_env.failure_callback_url,
+      token: manifest.callback_env.token,
+      providerSessionId: manifest.callback_env.provider_session_id,
+    });
+  });
+
+  it("pins the build-mode marker and execution-timeout key to the manifest", () => {
+    expect(IMAGE_BUILD_MODE_ENV_VAR).toBe(manifest.build_mode_env_var);
+    expect(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY).toBe(manifest.execution_timeout_env_var);
+  });
+
+  it("pins the reserved scrub list to the callback keys plus the control-plane-only extras", () => {
+    expect([...RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS].sort()).toEqual(
+      [...Object.values(manifest.callback_env), ...manifest.reserved_only_control_plane].sort()
+    );
+    // The Modal-only reserved key is scrubbed on the Python side, never here.
+    for (const key of manifest.reserved_only_modal) {
+      expect(RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS).not.toContain(key);
+    }
   });
 });

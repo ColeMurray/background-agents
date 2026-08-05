@@ -21,13 +21,14 @@ import {
   type OpenComputerSecretStoreResponse,
 } from "../opencomputer-rest-client";
 import {
+  buildImageBuildCallbackEnv,
   buildImageBuildEnvVars,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
   imageBuildSandboxIdentity,
-  REPO_IMAGE_CALLBACK_ENV_KEYS,
+  REPO_IMAGE_CALLBACK_ENV,
   RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
   VCS_CLONE_TOKEN_ENV_VAR,
@@ -367,7 +368,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       await config.onProviderSessionCreated(sandbox.id);
 
       await this.client.startRuntime(sandbox.id, {
-        [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sandbox.id,
+        [REPO_IMAGE_CALLBACK_ENV.providerSessionId]: sandbox.id,
       });
       // The OpenComputer REST client takes no correlation argument, so the
       // trace cannot be forwarded downstream yet — it is recorded on this
@@ -484,13 +485,18 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       baseEnvVars,
     });
 
-    Object.assign(envVars, {
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
-      [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
-    });
+    Object.assign(
+      envVars,
+      // No providerSessionId: the sandbox does not exist yet at create time;
+      // OpenComputer delivers the id separately at startRuntime.
+      buildImageBuildCallbackEnv({
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
+        token: config.callbackToken,
+      }),
+      { [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds) }
+    );
 
     return { envVars, secretEnvVars };
   }

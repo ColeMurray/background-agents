@@ -57,106 +57,65 @@ def test_build_timeout_limits_match_shared_contract(constant_name, python_value)
     assert python_value == int(match.group(1))
 
 
-def _read_control_plane_sandbox_env_source() -> str:
-    return (
-        Path(__file__).resolve().parents[2] / "control-plane" / "src" / "sandbox" / "sandbox-env.ts"
-    ).read_text()
+def _load_callback_env_manifest() -> dict:
+    """Language-neutral manifest of the cross-plane image-build env-key contract.
 
-
-def test_image_build_callback_env_keys_match_control_plane_contract():
-    """Pin the TS REPO_IMAGE_CALLBACK_ENV_KEYS list (order included) to the runtime constants.
-
-    The control plane assembles build-sandbox env in TypeScript
-    (buildImageBuildEnvVars) while Modal's ModalBuildSessionService.create
-    mirrors it in Python; both must agree on the callback env key names.
+    The same file is pinned by value on the TypeScript side
+    (packages/control-plane/src/sandbox/sandbox-env.test.ts), so neither plane
+    can drift without failing its own test suite. Tests-only consumption: the
+    runtime constants stay as code.
     """
-    ts_source = _read_control_plane_sandbox_env_source()
-    match = re.search(
-        r"export\s+const\s+REPO_IMAGE_CALLBACK_ENV_KEYS\s*=\s*\[(.*?)\]\s*as\s+const",
-        ts_source,
-        re.DOTALL,
+    manifest_path = (
+        Path(__file__).resolve().parents[2]
+        / "sandbox-runtime"
+        / "src"
+        / "sandbox_runtime"
+        / "image_build_callback_env.json"
     )
-
-    assert match is not None, "missing TS constant: REPO_IMAGE_CALLBACK_ENV_KEYS"
-    ts_keys = re.findall(r'"([^"]+)"', match.group(1))
-    assert ts_keys == [
-        PROVIDER_SESSION_ID_ENV,
-        BUILD_ID_ENV,
-        CALLBACK_URL_ENV,
-        CALLBACK_TOKEN_ENV,
-        FAILURE_CALLBACK_URL_ENV,
-    ]
+    return json.loads(manifest_path.read_text())
 
 
-def test_reserved_callback_env_scrub_sets_align_across_languages():
+def test_runtime_callback_env_constants_match_manifest():
+    """Pin the runtime callback env-var constants to the shared manifest by value."""
+    manifest = _load_callback_env_manifest()
+
+    assert manifest["callback_env"] == {
+        "build_id": BUILD_ID_ENV,
+        "callback_url": CALLBACK_URL_ENV,
+        "failure_callback_url": FAILURE_CALLBACK_URL_ENV,
+        "token": CALLBACK_TOKEN_ENV,
+        "provider_session_id": PROVIDER_SESSION_ID_ENV,
+    }
+    assert manifest["execution_timeout_env_var"] == IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+    # The runtime entrypoint reads the build-mode marker as a literal
+    # (os.environ.get("IMAGE_BUILD_MODE") == "true" in entrypoint.py).
+    assert manifest["build_mode_env_var"] == "IMAGE_BUILD_MODE"
+
+
+def test_reserved_user_env_scrub_matches_manifest():
     """Pin the reserved-key scrub — the hijack-prevention half of the contract.
 
-    The TS RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS list (buildImageBuildEnvVars)
-    and Python's RESERVED_USER_ENV_KEYS (ModalBuildSessionService.create) both
-    scrub user env vars before a build sandbox launches. They intentionally
-    diverge at the edges; this test pins the shared core and the exact
-    divergence so neither side can silently drop a scrubbed key.
+    Modal's RESERVED_USER_ENV_KEYS (ModalBuildSessionService.create) and the
+    control plane's RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS both scrub user env
+    vars before a build sandbox launches. They intentionally diverge at the
+    edges; each side pins its own half against the manifest so neither can
+    silently drop a scrubbed key. Intended divergence:
+    - the legacy pre-token secret key and the execution-timeout key are
+      scrubbed only in TS (the timeout scrub is safe on Modal only because
+      create() unconditionally re-sets the key after the scrub — asserted in
+      test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env);
+    - the Modal stdin-launch sandbox-id key is scrubbed only in Python
+      (meaningless off-Modal).
     """
-    ts_source = _read_control_plane_sandbox_env_source()
-    match = re.search(
-        r"export\s+const\s+RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS\s*=\s*\[(.*?)\]\s*as\s+const",
-        ts_source,
-        re.DOTALL,
-    )
-    assert match is not None, "missing TS constant: RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS"
-    body = match.group(1)
-    ts_reserved = set(re.findall(r'"([^"]+)"', body))
-    # Resolve the two identifier references in the TS array literal.
-    assert "...REPO_IMAGE_CALLBACK_ENV_KEYS" in body
-    callback_keys = re.search(
-        r"export\s+const\s+REPO_IMAGE_CALLBACK_ENV_KEYS\s*=\s*\[(.*?)\]\s*as\s+const",
-        ts_source,
-        re.DOTALL,
-    )
-    assert callback_keys is not None
-    ts_reserved.update(re.findall(r'"([^"]+)"', callback_keys.group(1)))
-    assert "IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY" in body
-    ts_reserved.add(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
-
+    manifest = _load_callback_env_manifest()
+    callback_env_values = set(manifest["callback_env"].values())
     python_reserved = set(RESERVED_USER_ENV_KEYS)
-    shared_callback_keys = {
-        PROVIDER_SESSION_ID_ENV,
-        BUILD_ID_ENV,
-        CALLBACK_URL_ENV,
-        CALLBACK_TOKEN_ENV,
-        FAILURE_CALLBACK_URL_ENV,
-    }
-    assert shared_callback_keys <= ts_reserved
-    assert shared_callback_keys <= python_reserved
-    # Intended divergence, pinned:
-    # - the legacy pre-token secret key is scrubbed only in TS (never read by
-    #   the Modal runtime);
-    # - the execution-timeout key is scrubbed only in TS — safe on Modal only
-    #   because create() unconditionally re-sets it after the scrub (asserted
-    #   in test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_env);
-    # - the Modal stdin-launch sandbox-id key is scrubbed only in Python
-    #   (meaningless off-Modal).
-    assert ts_reserved - python_reserved == {
-        "OI_REPO_IMAGE_CALLBACK_SECRET",
-        IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
-    }
-    assert python_reserved - ts_reserved == {MODAL_SANDBOX_ID_ENV}
 
-
-@pytest.mark.parametrize(
-    ("constant_name", "python_value"),
-    [
-        ("IMAGE_BUILD_MODE_ENV_VAR", "IMAGE_BUILD_MODE"),
-        ("IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY", IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR),
-    ],
-)
-def test_image_build_env_var_names_match_control_plane_contract(constant_name, python_value):
-    """Keep the build-mode marker and execution-timeout key aligned across languages."""
-    ts_source = _read_control_plane_sandbox_env_source()
-    match = re.search(rf'export\s+const\s+{constant_name}\s*=\s*"([^"]+)"\s*;', ts_source)
-
-    assert match is not None, f"missing string TS constant: {constant_name}"
-    assert match.group(1) == python_value
+    assert python_reserved == callback_env_values | set(manifest["reserved_only_modal"])
+    assert set(manifest["reserved_only_modal"]) == {MODAL_SANDBOX_ID_ENV}
+    # The TS-only extras never enter the Python scrub set.
+    assert set(manifest["reserved_only_control_plane"]) & python_reserved == set()
+    assert IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR in manifest["reserved_only_control_plane"]
 
 
 @pytest.mark.asyncio
