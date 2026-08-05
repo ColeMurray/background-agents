@@ -62,6 +62,7 @@ export function TriggerTypeSelector({ value, onChange, disabled }: TriggerTypeSe
             type="button"
             onClick={() => !isDisabled && onChange(option.type)}
             disabled={isDisabled}
+            aria-pressed={isSelected}
             className={`relative rounded-md border p-3 text-left transition text-sm ${
               isSelected
                 ? "border-accent bg-accent/5 ring-1 ring-accent"

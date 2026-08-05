@@ -109,6 +109,32 @@ const openRepositoryPicker = () =>
   fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
 
 describe("automation cron submission", () => {
+  it("exposes trigger types as a named group with selected state", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: "Trigger Type" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Schedule/ })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+    expect(screen.getByRole("button", { name: /^Sentry / })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    );
+  });
+
   it("clears the propagated cron when custom input becomes invalid", () => {
     const onChange = vi.fn();
 

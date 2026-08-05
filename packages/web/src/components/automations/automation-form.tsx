@@ -370,14 +370,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
     <form onSubmit={handleSubmit} className="space-y-6">
       {/* Trigger Type */}
       {mode === "create" ? (
-        <div>
-          <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
+        <fieldset className="m-0 min-w-0 border-0 p-0">
+          <legend className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</legend>
           <FieldDescription className="my-1">
             Scheduled automations run on a repeating timer. Other types run when the connected
             service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
           <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
-        </div>
+        </fieldset>
       ) : (
         <div>
           <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
