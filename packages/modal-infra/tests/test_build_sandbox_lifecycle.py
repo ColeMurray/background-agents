@@ -25,6 +25,7 @@ from src.sandbox.build_session import (
     ModalBuildSessionService,
 )
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from src.web_api import IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
 
 
 def _async_method(return_value=None):
@@ -55,6 +56,43 @@ def test_build_timeout_limits_match_shared_contract(constant_name, python_value)
 
     assert match is not None, f"missing numeric shared constant: {constant_name}"
     assert python_value == int(match.group(1))
+
+
+def test_finalization_grace_matches_control_plane_contract():
+    """Pin IMAGE_BUILD_FINALIZATION_GRACE_SECONDS to the control-plane grace window.
+
+    web_api.py mirrors IMAGE_BUILD_FINALIZATION_GRACE_MS from the control
+    plane's image-builds/timeouts.ts; both planes must reserve the same
+    finalization headroom on top of the build-execution budget.
+    """
+    ts_source = (
+        Path(__file__).resolve().parents[2]
+        / "control-plane"
+        / "src"
+        / "image-builds"
+        / "timeouts.ts"
+    ).read_text()
+    match = re.search(
+        r"export\s+const\s+IMAGE_BUILD_FINALIZATION_GRACE_MS\s*=\s*([^;]+);",
+        ts_source,
+    )
+    assert match is not None, "missing TS constant: IMAGE_BUILD_FINALIZATION_GRACE_MS"
+
+    ms_per_second_match = re.search(r"const\s+MS_PER_SECOND\s*=\s*(\d+)\s*;", ts_source)
+    assert ms_per_second_match is not None, "missing TS constant: MS_PER_SECOND"
+    ms_per_second = int(ms_per_second_match.group(1))
+
+    ts_grace_ms = 1
+    for factor in (part.strip() for part in match.group(1).split("*")):
+        if factor == "MS_PER_SECOND":
+            ts_grace_ms *= ms_per_second
+        else:
+            assert factor.isdigit(), (
+                "could not evaluate IMAGE_BUILD_FINALIZATION_GRACE_MS: expected a "
+                f"product of integer literals and MS_PER_SECOND, got factor {factor!r}"
+            )
+            ts_grace_ms *= int(factor)
+    assert ts_grace_ms == IMAGE_BUILD_FINALIZATION_GRACE_SECONDS * ms_per_second
 
 
 def _load_callback_env_manifest() -> dict:

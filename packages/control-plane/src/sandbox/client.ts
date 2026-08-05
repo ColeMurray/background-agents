@@ -615,6 +615,11 @@ export class ModalClient {
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
+          provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
+          // Transitional duplicate under the pre-rename key: the control plane
+          // and Modal deploy the same commit via independent pipelines, so an
+          // older Modal may still read only build_timeout_seconds during the
+          // skew window. Drop once both planes are known to be past the rename.
           build_timeout_seconds: request.providerSessionTimeoutSeconds,
         }),
       });
