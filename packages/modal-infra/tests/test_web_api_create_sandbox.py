@@ -95,7 +95,6 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio
@@ -182,38 +181,6 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_repo_image_boot(m
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].fallback_clone_token is None
-
-
-@pytest.mark.asyncio
-async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch):
-    """Session snapshot boots still receive a legacy fallback token."""
-    captured = {}
-    calls = []
-
-    _patch_auth(monkeypatch)
-    _patch_manager(monkeypatch, captured)
-
-    def resolve_clone_token() -> str:
-        calls.append(True)
-        return "ghs_snapshot"
-
-    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
-
-    result = await _call_create_sandbox(
-        {
-            "session_id": "sess-1",
-            "repo_owner": "acme",
-            "repo_name": "repo",
-            "control_plane_url": "https://control-plane.example",
-            "sandbox_auth_token": "sandbox-token",
-            "snapshot_id": "snap-1",
-        }
-    )
-
-    assert result["success"] is True
-    assert calls == [True]
-    assert captured["config"].fallback_clone_token == "ghs_snapshot"
 
 
 @pytest.mark.asyncio
@@ -223,7 +190,6 @@ async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
 
     _patch_auth(monkeypatch)
     _patch_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: "unused")
 
     result = await _call_create_sandbox(
         {
@@ -240,31 +206,6 @@ async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
     assert config.repo_name is None
     assert config.session_config.repo_owner is None
     assert config.session_config.repo_name is None
-    assert config.fallback_clone_token is None
-
-
-@pytest.mark.asyncio
-async def test_create_sandbox_snapshot_without_repo_does_not_resolve_clone_token(monkeypatch):
-    """No-repository snapshot boots must not mint a repository clone token."""
-    captured = {}
-    calls = []
-
-    _patch_auth(monkeypatch)
-    _patch_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
-
-    result = await _call_create_sandbox(
-        {
-            "session_id": "sess-1",
-            "control_plane_url": "https://control-plane.example",
-            "sandbox_auth_token": "sandbox-token",
-            "snapshot_id": "snap-1",
-        }
-    )
-
-    assert result["success"] is True
-    assert calls == []
-    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio

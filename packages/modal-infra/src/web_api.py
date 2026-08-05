@@ -134,7 +134,7 @@ def _session_config_from_create_request(
 
 @app.function(
     image=function_image,
-    secrets=[github_app_secrets, internal_api_secret],
+    secrets=[internal_api_secret],
 )
 @fastapi_endpoint(method="POST")
 async def api_create_sandbox(
@@ -158,7 +158,6 @@ async def api_create_sandbox(
         "repo_name": "...",
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
-        "snapshot_id": null,
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -181,14 +180,10 @@ async def api_create_sandbox(
 
         manager = SandboxManager()
 
-        snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
         repo_owner, repo_name = _normalize_optional_repository_context(
             request.get("repo_owner"),
             request.get("repo_name"),
-        )
-        fallback_clone_token = (
-            resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
 
         session_config = _session_config_from_create_request(
@@ -199,11 +194,9 @@ async def api_create_sandbox(
             repo_owner=repo_owner,
             repo_name=repo_name,
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
-            snapshot_id=snapshot_id,
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
-            fallback_clone_token=fallback_clone_token,
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
