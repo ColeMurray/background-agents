@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchUser, getOAuthTokenOrThrow } from "./linear-client";
+import {
+  emitAgentActivity,
+  fetchIssueDetails,
+  fetchUser,
+  getRepoSuggestions,
+  postIssueComment,
+} from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
-import { createFakeKV, makeLinearBotEnv } from "../test-helpers";
 
-const client: LinearApiClient = { accessToken: "test-token" };
-const FRESH_TOKEN_EXPIRES_IN_MS = 10 * 60 * 1000;
-const EXPIRED_TOKEN_AGE_MS = 60 * 1000;
+const client: LinearApiClient = {
+  accessToken: "test-token",
+  organizationId: "org-1",
+  renewAccessToken: vi.fn(async () => "renewed-token"),
+};
 
 function mockFetchResponse(data: unknown): void {
   vi.stubGlobal(
@@ -85,190 +92,174 @@ describe("fetchUser", () => {
     const result = await fetchUser(client, "user-1");
     expect(result).toBeNull();
   });
+
+  it("returns null when the user payload is malformed", async () => {
+    mockFetchResponse({ data: { user: { id: "user-1", email: "alice@example.com" } } });
+
+    const result = await fetchUser(client, "user-1");
+    expect(result).toBeNull();
+  });
 });
 
-describe("getOAuthTokenOrThrow", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
+describe("fetchIssueDetails", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  function envWithToken(raw?: string) {
-    const { kv, store } = createFakeKV(raw === undefined ? {} : { "oauth:token:org-1": raw });
-    return { env: makeLinearBotEnv(kv), store };
-  }
-
-  function expectAuthFailure(promise: Promise<unknown>, failure: Record<string, unknown>) {
-    return expect(promise).rejects.toMatchObject({
-      name: "LinearAuthError",
-      ...failure,
+  it("returns issue details with nullable fields", async () => {
+    mockFetchResponse({
+      data: {
+        issue: {
+          id: "issue-1",
+          identifier: "ENG-1",
+          title: "Fix bug",
+          description: null,
+          url: "https://linear.app/acme/issue/ENG-1",
+          priority: 2,
+          priorityLabel: "High",
+          labels: { nodes: [{ id: "label-1", name: "bug" }] },
+          project: null,
+          assignee: null,
+          team: { id: "team-1", key: "ENG", name: "Engineering" },
+          comments: { nodes: [{ body: "please fix", user: null }] },
+        },
+      },
     });
-  }
 
-  it("throws an auth error when the workspace token is missing", async () => {
-    const { env } = envWithToken();
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "missing_token",
-    });
-  });
-
-  it("throws an auth error when the workspace token is malformed", async () => {
-    const { env } = envWithToken("{not-json");
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "malformed_token",
-    });
-  });
-
-  it("throws an auth error when the workspace token shape is invalid", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        refresh_token: "refresh-token",
-        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
-      })
-    );
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "malformed_token",
+    await expect(fetchIssueDetails(client, "issue-1")).resolves.toEqual({
+      id: "issue-1",
+      identifier: "ENG-1",
+      title: "Fix bug",
+      description: null,
+      url: "https://linear.app/acme/issue/ENG-1",
+      priority: 2,
+      priorityLabel: "High",
+      labels: [{ id: "label-1", name: "bug" }],
+      project: null,
+      assignee: null,
+      team: { id: "team-1", key: "ENG", name: "Engineering" },
+      comments: [{ body: "please fix", user: null }],
     });
   });
 
-  it("throws an auth error when the token read fails", async () => {
-    const { env } = envWithToken();
-    const kvGet = env.LINEAR_KV.get as unknown as ReturnType<typeof vi.fn>;
-    kvGet.mockRejectedValueOnce(new Error("kv down"));
+  it("returns null when the issue payload is malformed", async () => {
+    mockFetchResponse({ data: { issue: { id: "issue-1", title: "missing fields" } } });
 
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "token_read_error",
+    await expect(fetchIssueDetails(client, "issue-1")).resolves.toBeNull();
+  });
+});
+
+describe("getRepoSuggestions", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns parsed repo suggestions", async () => {
+    mockFetchResponse({
+      data: {
+        issueRepositorySuggestions: {
+          suggestions: [{ repositoryFullName: "acme/api", confidence: 0.92 }],
+        },
+      },
     });
+
+    await expect(getRepoSuggestions(client, "issue-1", "agent-1", [])).resolves.toEqual([
+      { repositoryFullName: "acme/api", confidence: 0.92 },
+    ]);
   });
 
-  it("returns a fresh token without refreshing", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        access_token: "fresh-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() + FRESH_TOKEN_EXPIRES_IN_MS,
-      })
-    );
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+  it("returns an empty list when suggestions are null", async () => {
+    mockFetchResponse({ data: { issueRepositorySuggestions: null } });
 
-    await expect(getOAuthTokenOrThrow(env, "org-1")).resolves.toBe("fresh-token");
-    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(getRepoSuggestions(client, "issue-1", "agent-1", [])).resolves.toEqual([]);
   });
 
-  it("throws an auth error when an expired token has no refresh token", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        access_token: "expired-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      })
-    );
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "missing_refresh_token",
+  it("returns an empty list when suggestions are malformed", async () => {
+    mockFetchResponse({
+      data: { issueRepositorySuggestions: { suggestions: [{ repositoryFullName: "acme/api" }] } },
     });
+
+    await expect(getRepoSuggestions(client, "issue-1", "agent-1", [])).resolves.toEqual([]);
+  });
+});
+
+describe("emitAgentActivity", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  it("classifies invalid_grant refresh failures", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        access_token: "expired-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      })
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 400,
-        text: () =>
-          Promise.resolve(
-            JSON.stringify({
-              error: "invalid_grant",
-              error_description: "Refresh token has expired.",
-            })
-          ),
-      })
-    );
+  it("reports a failed terminal activity delivery", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
 
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "refresh_invalid_grant",
-      status: 400,
-      oauthError: "invalid_grant",
-      oauthErrorDescription: "Refresh token has expired.",
-    });
+    await expect(
+      emitAgentActivity(client, "agent-session-1", {
+        type: "response",
+        body: "Finished",
+      })
+    ).resolves.toBe(false);
+  });
+});
+
+describe("postIssueComment", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
-  it("classifies other refresh HTTP failures", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        access_token: "expired-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      })
-    );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 503,
-        text: () => Promise.resolve("temporarily unavailable"),
-      })
-    );
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "refresh_failed",
-      status: 503,
-    });
-  });
-
-  it("classifies refresh exceptions", async () => {
-    const { env } = envWithToken(
-      JSON.stringify({
-        access_token: "expired-token",
-        refresh_token: "refresh-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      })
-    );
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
-
-    await expectAuthFailure(getOAuthTokenOrThrow(env, "org-1"), {
-      reason: "refresh_error",
-    });
-  });
-
-  it("stores and returns refreshed tokens", async () => {
-    const { env, store } = envWithToken(
-      JSON.stringify({
-        access_token: "expired-token",
-        refresh_token: "old-refresh-token",
-        expires_at: Date.now() - EXPIRED_TOKEN_AGE_MS,
-      })
-    );
+  it("returns success from a valid comment mutation response", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: () =>
-          Promise.resolve({
-            access_token: "new-access-token",
-            refresh_token: "new-refresh-token",
-            expires_in: 3600,
-          }),
+        json: () => Promise.resolve({ data: { commentCreate: { success: true } } }),
       })
     );
 
-    await expect(getOAuthTokenOrThrow(env, "org-1")).resolves.toBe("new-access-token");
-    expect(JSON.parse(store.get("oauth:token:org-1") ?? "{}")).toMatchObject({
-      access_token: "new-access-token",
-      refresh_token: "new-refresh-token",
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: true,
+    });
+  });
+
+  it("returns false when the nullable comment mutation result is absent", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { commentCreate: null } }),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
+    });
+  });
+
+  it("returns false when the comment mutation response is malformed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ data: { commentCreate: { success: "yes" } } }),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
+    });
+  });
+
+  it("returns false when the comment mutation response is not valid JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      })
+    );
+
+    await expect(postIssueComment("token", "issue-1", "hello")).resolves.toEqual({
+      success: false,
     });
   });
 });

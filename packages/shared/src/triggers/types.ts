@@ -1,10 +1,59 @@
 /**
- * Core types for the trigger-based automation event system.
+ * Core types for trigger-based automation configuration and events.
  */
 
-import type { AutomationTriggerType } from "../types";
-import type { ConditionType } from "./conditions";
 import { z } from "zod";
+
+// ─── Trigger Configuration ───────────────────────────────────────────────────
+
+export type AutomationTriggerType =
+  | "schedule"
+  | "github_event"
+  | "linear_event"
+  | "sentry"
+  | "webhook"
+  | "slack_event";
+
+export interface ConditionConfigMap {
+  branch: { operator: "glob_match" | "exact"; value: string[] };
+  target_branch: { operator: "glob_match" | "exact"; value: string[] };
+  label: { operator: "any_of" | "none_of"; value: string[] };
+  path_glob: { operator: "any_match"; value: string[] };
+  actor: { operator: "include" | "exclude"; value: string[] };
+  check_conclusion: { operator: "eq"; value: string };
+  linear_status: { operator: "any_of"; value: string[] };
+  sentry_project: { operator: "any_of"; value: string[] };
+  sentry_level: { operator: "any_of"; value: string[] };
+  jsonpath: { operator: "all_match"; value: JsonPathFilter[] };
+  text_match: { operator: "contains" | "exact" | "regex"; value: TextMatchValue };
+  slack_channel: { operator: "any_of"; value: string[] };
+  slack_actor: { operator: "include" | "exclude"; value: string[] };
+}
+
+export interface JsonPathFilter {
+  path: string;
+  comparison: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
+  value?: string | number | boolean;
+}
+
+/** Value shape for the `text_match` condition (keyword / substring / regex). */
+export interface TextMatchValue {
+  /** Keyword/substring (contains/exact) or regular-expression source (regex). */
+  pattern: string;
+  /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
+  flags?: string;
+}
+
+export type TriggerCondition = {
+  [K in keyof ConditionConfigMap]: { type: K } & ConditionConfigMap[K];
+}[keyof ConditionConfigMap];
+
+export type ConditionType = keyof ConditionConfigMap;
+
+/** Trigger settings stored as JSON in D1. */
+export interface TriggerConfig {
+  conditions: TriggerCondition[];
+}
 
 // ─── Event Sources ────────────────────────────────────────────────────────────
 
@@ -44,6 +93,40 @@ interface BaseAutomationEvent {
 
 // ─── Source-Specific Variants ─────────────────────────────────────────────────
 
+/**
+ * Typed pull-request facts carried on pull_request events. Every field beyond
+ * the number is optional and reflects only what the webhook payload actually
+ * said — consumers fall back to a provider read when a field is absent.
+ */
+export interface GitHubPullRequestEventFacts {
+  number: number;
+  /** Raw provider state; merged-vs-closed is disambiguated by `merged`. */
+  state?: "open" | "closed";
+  draft?: boolean;
+  merged?: boolean;
+  headSha?: string;
+  /**
+   * True when the head branch lives in a different repository than the base
+   * (fork PR). Undefined when the payload lacks repo identity to compare.
+   */
+  isCrossRepository?: boolean;
+  /** Web URL of the pull request (html_url). */
+  url?: string;
+  /**
+   * Stable id of the repository the PR lives in (the base repo) — the
+   * canonical PR-record identity used for webhook correlation.
+   */
+  repositoryExternalId?: string;
+  /** Provider's created_at (epoch ms) — analytics cohort bucketing. */
+  providerCreatedAt?: number;
+  /** Provider's updated_at (epoch ms) — the monotonic write guard source. */
+  providerUpdatedAt?: number;
+  /** Provider's merged_at (epoch ms); only meaningful when merged. */
+  mergedAt?: number;
+  /** Provider's closed_at (epoch ms); only meaningful when not open. */
+  closedAt?: number;
+}
+
 export interface GitHubAutomationEvent extends BaseAutomationEvent {
   source: "github";
   repoOwner: string;
@@ -56,6 +139,8 @@ export interface GitHubAutomationEvent extends BaseAutomationEvent {
   actor?: string;
   changedFiles?: string[];
   checkConclusion?: string;
+  /** Present only on pull_request events. */
+  pullRequest?: GitHubPullRequestEventFacts;
 }
 
 export interface LinearAutomationEvent extends BaseAutomationEvent {
@@ -123,6 +208,22 @@ export const automationEventSchema = z.discriminatedUnion("source", [
     actor: z.string().optional(),
     changedFiles: z.array(z.string()).optional(),
     checkConclusion: z.string().optional(),
+    pullRequest: z
+      .object({
+        number: z.number(),
+        state: z.enum(["open", "closed"]).optional(),
+        draft: z.boolean().optional(),
+        merged: z.boolean().optional(),
+        headSha: z.string().optional(),
+        isCrossRepository: z.boolean().optional(),
+        url: z.string().optional(),
+        repositoryExternalId: z.string().optional(),
+        providerCreatedAt: z.number().optional(),
+        providerUpdatedAt: z.number().optional(),
+        mergedAt: z.number().optional(),
+        closedAt: z.number().optional(),
+      })
+      .optional(),
   }),
   z.object({
     ...baseAutomationEventSchema,

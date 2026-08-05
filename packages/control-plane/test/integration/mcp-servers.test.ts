@@ -1,15 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
-import { generateInternalToken } from "../../src/auth/internal";
+import { SELF } from "cloudflare:test";
 import { cleanD1Tables } from "./cleanup";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-}
+import { serviceFetch } from "./helpers";
 
 interface McpServerMetadata {
   id: string;
@@ -28,10 +20,8 @@ describe("MCP Servers API", () => {
 
   describe("POST /mcp-servers", () => {
     it("creates a local server", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "playwright",
           type: "local",
@@ -50,10 +40,8 @@ describe("MCP Servers API", () => {
     });
 
     it("creates a remote server", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "remote-api",
           type: "remote",
@@ -73,59 +61,48 @@ describe("MCP Servers API", () => {
     });
 
     it("returns 400 for missing name", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({ type: "local", command: ["npx", "x"] }),
       });
       expect(response.status).toBe(400);
     });
 
     it("returns 400 for invalid type", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({ name: "test", type: "invalid" }),
       });
       expect(response.status).toBe(400);
     });
 
     it("returns 400 for local without command", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({ name: "test", type: "local" }),
       });
       expect(response.status).toBe(400);
     });
 
     it("returns 400 for remote without url", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({ name: "test", type: "remote" }),
       });
       expect(response.status).toBe(400);
     });
 
     it("returns 400 for duplicate name", async () => {
-      const headers = await authHeaders();
-      await SELF.fetch("https://test.local/mcp-servers", {
+      await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "duplicate",
           type: "remote",
           url: "https://first.example.com",
         }),
       });
-      const response = await SELF.fetch("https://test.local/mcp-servers", {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "duplicate",
           type: "remote",
@@ -147,21 +124,17 @@ describe("MCP Servers API", () => {
 
   describe("GET /mcp-servers", () => {
     it("lists all servers", async () => {
-      const headers = await authHeaders();
-
       // Create two servers
-      await SELF.fetch("https://test.local/mcp-servers", {
+      await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "server-a",
           type: "remote",
           url: "https://a.example.com",
         }),
       });
-      await SELF.fetch("https://test.local/mcp-servers", {
+      await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "server-b",
           type: "local",
@@ -169,7 +142,7 @@ describe("MCP Servers API", () => {
         }),
       });
 
-      const response = await SELF.fetch("https://test.local/mcp-servers", { headers });
+      const response = await serviceFetch("https://test.local/mcp-servers");
       expect(response.status).toBe(200);
       const body = await response.json<McpServerMetadata[]>();
       expect(body).toHaveLength(2);
@@ -179,18 +152,15 @@ describe("MCP Servers API", () => {
     });
 
     it("returns empty list when no servers exist", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers", { headers });
+      const response = await serviceFetch("https://test.local/mcp-servers");
       expect(response.status).toBe(200);
       const body = await response.json<McpServerMetadata[]>();
       expect(body).toEqual([]);
     });
 
     it("never includes credentials in response", async () => {
-      const headers = await authHeaders();
-      await SELF.fetch("https://test.local/mcp-servers", {
+      await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "with-creds",
           type: "remote",
@@ -199,7 +169,7 @@ describe("MCP Servers API", () => {
         }),
       });
 
-      const response = await SELF.fetch("https://test.local/mcp-servers", { headers });
+      const response = await serviceFetch("https://test.local/mcp-servers");
       const body = await response.json<McpServerMetadata[]>();
       const server = body[0];
       expect(server.hasHeaders).toBe(true);
@@ -210,10 +180,8 @@ describe("MCP Servers API", () => {
 
   describe("GET /mcp-servers/:id", () => {
     it("returns a server by id", async () => {
-      const headers = await authHeaders();
-      const createRes = await SELF.fetch("https://test.local/mcp-servers", {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "get-test",
           type: "remote",
@@ -222,27 +190,22 @@ describe("MCP Servers API", () => {
       });
       const created = await createRes.json<McpServerMetadata>();
 
-      const response = await SELF.fetch(`https://test.local/mcp-servers/${created.id}`, {
-        headers,
-      });
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`);
       expect(response.status).toBe(200);
       const body = await response.json<McpServerMetadata>();
       expect(body.name).toBe("get-test");
     });
 
     it("returns 404 for missing server", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers/nonexistent", { headers });
+      const response = await serviceFetch("https://test.local/mcp-servers/nonexistent");
       expect(response.status).toBe(404);
     });
   });
 
   describe("PUT /mcp-servers/:id", () => {
     it("updates server fields", async () => {
-      const headers = await authHeaders();
-      const createRes = await SELF.fetch("https://test.local/mcp-servers", {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "to-update",
           type: "remote",
@@ -251,9 +214,8 @@ describe("MCP Servers API", () => {
       });
       const created = await createRes.json<McpServerMetadata>();
 
-      const response = await SELF.fetch(`https://test.local/mcp-servers/${created.id}`, {
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ name: "updated-name", url: "https://new.example.com" }),
       });
       expect(response.status).toBe(200);
@@ -263,20 +225,16 @@ describe("MCP Servers API", () => {
     });
 
     it("returns 404 for missing server", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers/nonexistent", {
+      const response = await serviceFetch("https://test.local/mcp-servers/nonexistent", {
         method: "PUT",
-        headers,
         body: JSON.stringify({ name: "nope" }),
       });
       expect(response.status).toBe(404);
     });
 
     it("returns 400 for invalid type change without required field", async () => {
-      const headers = await authHeaders();
-      const createRes = await SELF.fetch("https://test.local/mcp-servers", {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "type-change",
           type: "remote",
@@ -286,9 +244,8 @@ describe("MCP Servers API", () => {
       const created = await createRes.json<McpServerMetadata>();
 
       // Change to local without providing command
-      const response = await SELF.fetch(`https://test.local/mcp-servers/${created.id}`, {
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
         method: "PUT",
-        headers,
         body: JSON.stringify({ type: "local" }),
       });
       expect(response.status).toBe(400);
@@ -297,10 +254,8 @@ describe("MCP Servers API", () => {
 
   describe("DELETE /mcp-servers/:id", () => {
     it("deletes a server", async () => {
-      const headers = await authHeaders();
-      const createRes = await SELF.fetch("https://test.local/mcp-servers", {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
         method: "POST",
-        headers,
         body: JSON.stringify({
           name: "to-delete",
           type: "remote",
@@ -309,22 +264,19 @@ describe("MCP Servers API", () => {
       });
       const created = await createRes.json<McpServerMetadata>();
 
-      const response = await SELF.fetch(`https://test.local/mcp-servers/${created.id}`, {
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
         method: "DELETE",
-        headers,
       });
       expect(response.status).toBe(200);
 
       // Verify it's gone
-      const getRes = await SELF.fetch(`https://test.local/mcp-servers/${created.id}`, { headers });
+      const getRes = await serviceFetch(`https://test.local/mcp-servers/${created.id}`);
       expect(getRes.status).toBe(404);
     });
 
     it("returns 404 for missing server", async () => {
-      const headers = await authHeaders();
-      const response = await SELF.fetch("https://test.local/mcp-servers/nonexistent", {
+      const response = await serviceFetch("https://test.local/mcp-servers/nonexistent", {
         method: "DELETE",
-        headers,
       });
       expect(response.status).toBe(404);
     });

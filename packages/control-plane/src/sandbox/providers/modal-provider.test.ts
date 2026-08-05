@@ -15,9 +15,12 @@ import type {
   RestoreSandboxRequest,
   RestoreSandboxResponse,
   SnapshotSandboxRequest,
+  SnapshotBuildSandboxRequest,
   SnapshotSandboxResponse,
-  BuildRepoImageRequest,
-  BuildRepoImageResponse,
+  CreateImageBuildSandboxRequest,
+  CreateImageBuildSandboxResponse,
+  StartImageBuildSandboxRequest,
+  TerminateImageBuildSandboxRequest,
   DeleteProviderImageRequest,
   DeleteProviderImageResponse,
 } from "../client";
@@ -29,7 +32,12 @@ function createMockModalClient(
     createSandbox: (req: CreateSandboxRequest) => Promise<CreateSandboxResponse>;
     restoreSandbox: (req: RestoreSandboxRequest) => Promise<RestoreSandboxResponse>;
     snapshotSandbox: (req: SnapshotSandboxRequest) => Promise<SnapshotSandboxResponse>;
-    buildRepoImage: (req: BuildRepoImageRequest) => Promise<BuildRepoImageResponse>;
+    snapshotBuildSandbox: (req: SnapshotBuildSandboxRequest) => Promise<SnapshotSandboxResponse>;
+    createImageBuildSandbox: (
+      req: CreateImageBuildSandboxRequest
+    ) => Promise<CreateImageBuildSandboxResponse>;
+    startImageBuildSandbox: (req: StartImageBuildSandboxRequest) => Promise<void>;
+    terminateImageBuildSandbox: (req: TerminateImageBuildSandboxRequest) => Promise<void>;
     deleteProviderImage: (req: DeleteProviderImageRequest) => Promise<DeleteProviderImageResponse>;
   }> = {}
 ): ModalClient {
@@ -55,12 +63,19 @@ function createMockModalClient(
         imageId: "image-123",
       })
     ),
-    buildRepoImage: vi.fn(
-      async (): Promise<BuildRepoImageResponse> => ({
-        buildId: "build-123",
-        status: "building",
+    snapshotBuildSandbox: vi.fn(
+      async (): Promise<SnapshotSandboxResponse> => ({
+        success: true,
+        imageId: "build-image-123",
       })
     ),
+    createImageBuildSandbox: vi.fn(
+      async (): Promise<CreateImageBuildSandboxResponse> => ({
+        providerSessionId: "modal-session-123",
+      })
+    ),
+    startImageBuildSandbox: vi.fn(async () => undefined),
+    terminateImageBuildSandbox: vi.fn(async () => undefined),
     deleteProviderImage: vi.fn(
       async (req: DeleteProviderImageRequest): Promise<DeleteProviderImageResponse> => ({
         providerImageId: req.providerImageId,
@@ -93,7 +108,6 @@ describe("ModalSandboxProvider", () => {
       expect(provider.name).toBe("modal");
       expect(provider.capabilities.supportsSnapshots).toBe(true);
       expect(provider.capabilities.supportsRestore).toBe(true);
-      expect(provider.capabilities.supportsWarm).toBe(true);
     });
   });
 
@@ -484,35 +498,59 @@ describe("ModalSandboxProvider", () => {
     });
   });
 
-  describe("repo image builds", () => {
-    it("triggers repo image builds through the Modal client", async () => {
+  describe("image builds", () => {
+    it("binds a created image-build sandbox before starting it", async () => {
       const client = createMockModalClient();
       const provider = new ModalSandboxProvider(client);
       const correlation = { request_id: "request-1", trace_id: "trace-1" };
+      const onProviderSessionCreated = vi.fn(async () => undefined);
 
-      const result = await provider.triggerRepoImageBuild({
+      await provider.triggerImageBuild({
         buildId: "build-123",
-        repoOwner: "acme",
-        repoName: "repo",
-        defaultBranch: "develop",
-        callbackUrl: "https://worker.test/repo-images/build-complete",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
+        repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+        cloneToken: "clone-token",
         userEnvVars: { FOO: "bar" },
-        buildTimeoutMs: 1_800_000,
+        buildExecutionTimeoutSeconds: 1800,
+        providerSessionTimeoutSeconds: 2400,
+        callbackUrl: "https://worker.test/image-builds/build-complete",
+        failureCallbackUrl: "https://worker.test/image-builds/build-failed",
+        callbackToken: "callback-token",
+        onProviderSessionCreated,
         correlation,
       });
 
-      expect(result).toEqual({ buildId: "build-123", status: "building" });
-      expect(client.buildRepoImage).toHaveBeenCalledWith(
+      expect(client.createImageBuildSandbox).toHaveBeenCalledWith(
         {
-          repoOwner: "acme",
-          repoName: "repo",
-          defaultBranch: "develop",
+          scopeKind: "repo",
+          scopeId: "acme/repo",
           buildId: "build-123",
-          callbackUrl: "https://worker.test/repo-images/build-complete",
+          repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+          cloneToken: "clone-token",
+          callbackUrl: "https://worker.test/image-builds/build-complete",
+          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
           userEnvVars: { FOO: "bar" },
-          buildTimeoutSeconds: 1800,
+          buildExecutionTimeoutSeconds: 1800,
+          providerSessionTimeoutSeconds: 2400,
         },
         correlation
+      );
+      expect(onProviderSessionCreated).toHaveBeenCalledWith("modal-session-123");
+      expect(client.startImageBuildSandbox).toHaveBeenCalledWith(
+        {
+          buildId: "build-123",
+          providerSessionId: "modal-session-123",
+          callbackToken: "callback-token",
+          correlation,
+        },
+        correlation
+      );
+      expect(vi.mocked(client.createImageBuildSandbox).mock.invocationCallOrder[0]).toBeLessThan(
+        onProviderSessionCreated.mock.invocationCallOrder[0]
+      );
+      expect(onProviderSessionCreated.mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(client.startImageBuildSandbox).mock.invocationCallOrder[0]
       );
     });
 
@@ -604,6 +642,70 @@ describe("ModalSandboxProvider", () => {
         expect(e).toBeInstanceOf(SandboxProviderError);
         expect((e as SandboxProviderError).errorType).toBe("transient");
       }
+    });
+
+    it("does not infer artifact absence from an explicit snapshot failure", async () => {
+      const provider = new ModalSandboxProvider(
+        createMockModalClient({
+          snapshotSandbox: vi.fn(async () => ({
+            success: false,
+            error: "snapshot rejected",
+          })),
+        })
+      );
+
+      await expect(
+        provider.takeSnapshot({
+          providerObjectId: "obj-123",
+          sessionId: "session-123",
+          reason: "test",
+        })
+      ).resolves.toEqual({
+        success: false,
+        error: "snapshot rejected",
+      });
+    });
+
+    it("uses the identity-bound snapshot operation for image builds", async () => {
+      const snapshotBuildSandbox = vi.fn(async () => ({
+        success: true,
+        imageId: "build-image-123",
+      }));
+      const provider = new ModalSandboxProvider(createMockModalClient({ snapshotBuildSandbox }));
+
+      await expect(
+        provider.snapshotImageBuildSandbox({
+          buildId: "imgb-1",
+          providerSessionId: "modal-session-1",
+        })
+      ).resolves.toEqual({ success: true, imageId: "build-image-123" });
+      expect(snapshotBuildSandbox).toHaveBeenCalledWith(
+        {
+          buildId: "imgb-1",
+          providerSessionId: "modal-session-1",
+        },
+        undefined
+      );
+    });
+
+    it("preserves Modal API errors from image-build snapshots as the provider cause", async () => {
+      const modalError = new ModalApiError("Modal API error: 429 Too Many Requests", 429);
+      const provider = new ModalSandboxProvider(
+        createMockModalClient({
+          snapshotBuildSandbox: vi.fn(async () => {
+            throw modalError;
+          }),
+        })
+      );
+
+      await expect(
+        provider.snapshotImageBuildSandbox({
+          buildId: "imgb-1",
+          providerSessionId: "modal-session-1",
+        })
+      ).rejects.toMatchObject({
+        cause: modalError,
+      });
     });
 
     it("returns providerObjectId from restoreFromSnapshot", async () => {

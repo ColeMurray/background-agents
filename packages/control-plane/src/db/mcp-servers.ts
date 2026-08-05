@@ -1,6 +1,8 @@
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
+import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
+import { isUniqueConstraintError } from "./errors";
+import type { SqlDatabase } from "./sql-database";
 
 const log = createLogger("db:mcp-servers");
 
@@ -85,15 +87,9 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
   };
 }
 
-/** D1 doesn't expose structured error codes — string-match the SQLite message. */
-function isUniqueConstraintError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.toLowerCase().includes("unique constraint failed");
-}
-
 export class McpServerStore {
   constructor(
-    private readonly db: D1Database,
+    private readonly db: SqlDatabase,
     private readonly encryptionKey?: string
   ) {}
 
@@ -289,11 +285,17 @@ export class McpServerStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Servers applicable to a session's member repositories: unscoped servers
+   * always apply; scoped servers apply when ANY member matches a scope.
+   * Pass an empty list for repo-less sessions (unscoped servers only).
+   */
   async getDecryptedForSession(
-    repoOwner: string | null,
-    repoName: string | null
+    repositories: Array<{ repoOwner: string; repoName: string }>
   ): Promise<McpServerConfig[]> {
-    const repoFullName = repoOwner && repoName ? `${repoOwner}/${repoName}`.toLowerCase() : null;
+    const repoFullNames = new Set(
+      repositories.map((repo) => `${repo.repoOwner}/${repo.repoName}`.toLowerCase())
+    );
     const { results } = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE enabled = 1 ORDER BY name")
       .all<McpServerRow>();
@@ -301,8 +303,7 @@ export class McpServerStore {
     const filtered = results.filter((row) => {
       const scopes = parseRepoScopes(row.repo_scope);
       if (!scopes) return true;
-      if (!repoFullName) return false;
-      return scopes.some((s) => s.toLowerCase() === repoFullName);
+      return scopes.some((s) => repoFullNames.has(s.toLowerCase()));
     });
 
     return Promise.all(filtered.map((r) => this.decryptRow(r)));

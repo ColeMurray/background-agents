@@ -2,12 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   getTeamRepoMapping,
   getProjectRepoMapping,
-  getTriggerConfig,
   getUserPreferences,
   lookupIssueSession,
   storeIssueSession,
   isDuplicateEvent,
-  DEFAULT_TRIGGER_CONFIG,
 } from "./kv-store";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
@@ -55,38 +53,6 @@ describe("getProjectRepoMapping", () => {
   });
 });
 
-// ─── getTriggerConfig ────────────────────────────────────────────────────────
-
-describe("getTriggerConfig", () => {
-  it("returns defaults when KV has no data", async () => {
-    const { kv } = createFakeKV();
-    expect(await getTriggerConfig(makeLinearBotEnv(kv))).toEqual(DEFAULT_TRIGGER_CONFIG);
-  });
-
-  it("merges partial config with defaults", async () => {
-    const partial = { autoTriggerOnCreate: true };
-    const { kv } = createFakeKV({ "config:triggers": JSON.stringify(partial) });
-    expect(await getTriggerConfig(makeLinearBotEnv(kv))).toEqual({
-      ...DEFAULT_TRIGGER_CONFIG,
-      autoTriggerOnCreate: true,
-    });
-  });
-
-  it("returns full override when all fields set", async () => {
-    const full = {
-      triggerLabel: "bot",
-      autoTriggerOnCreate: true,
-      triggerCommand: "@bot",
-    };
-    const { kv } = createFakeKV({ "config:triggers": JSON.stringify(full) });
-    expect(await getTriggerConfig(makeLinearBotEnv(kv))).toEqual(full);
-  });
-
-  it("returns defaults when KV throws", async () => {
-    expect(await getTriggerConfig(makeLinearBotEnv(errorKv))).toEqual(DEFAULT_TRIGGER_CONFIG);
-  });
-});
-
 // ─── getUserPreferences ──────────────────────────────────────────────────────
 
 describe("getUserPreferences", () => {
@@ -126,6 +92,14 @@ describe("lookupIssueSession", () => {
     };
     const { kv } = createFakeKV({ "issue:issue-1": JSON.stringify(session) });
     expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toEqual(session);
+  });
+
+  it("returns null for malformed stored sessions", async () => {
+    const { kv } = createFakeKV({
+      "issue:issue-1": JSON.stringify({ sessionId: "sess-1", issueId: "issue-1" }),
+    });
+
+    expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toBeNull();
   });
 
   it("returns null when KV throws", async () => {

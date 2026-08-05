@@ -99,6 +99,7 @@ async def test_user_env_vars_override_order(monkeypatch):
 
     env_vars = captured["env"]
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
+    assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     assert env_vars["CUSTOM_SECRET"] == "value"
 
 
@@ -148,6 +149,7 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     # System vars must override user-provided values
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
     assert env_vars["SANDBOX_AUTH_TOKEN"] == "token-456"
+    assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     # User vars that don't collide are preserved
     assert env_vars["CUSTOM_SECRET"] == "value"
 
@@ -204,6 +206,7 @@ async def test_restore_uses_custom_timeout(monkeypatch):
 
     async def fake_create_aio(*args, **kwargs):
         captured["timeout"] = kwargs.get("timeout")
+        captured["env"] = kwargs.get("env")
 
         class FakeSandbox:
             object_id = "obj-789"
@@ -229,6 +232,7 @@ async def test_restore_uses_custom_timeout(monkeypatch):
     )
 
     assert captured["timeout"] == 14400
+    assert captured["env"]["SANDBOX_TIMEOUT_SECONDS"] == "14400"
 
 
 @pytest.mark.asyncio
@@ -390,8 +394,7 @@ def _fake_sandbox_create(captured):
 
 
 # Note: fresh and repo-image sandboxes never receive SCM tokens in the
-# environment. Callers only set fallback_clone_token for snapshot paths that
-# still need VCS_CLONE_TOKEN for legacy entrypoints.
+# environment; created sandboxes rely on brokered credentials only.
 
 
 @pytest.mark.asyncio
@@ -516,56 +519,54 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
 
 
 @pytest.mark.asyncio
-async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
-    """A session-snapshot boot keeps the legacy fallback token."""
-    captured = {}
+async def test_no_repo_sandbox_gets_provider_host_scoping(monkeypatch):
+    """No-repository sandboxes still get provider host scoping.
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
+    Without VCS_HOST, a GitLab/Bitbucket deployment's repo-less sandboxes
+    fall back to github.com credential-helper behavior.
+    """
+    captured = {}
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+    monkeypatch.setenv("SCM_PROVIDER", "gitlab")
 
     manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner="acme",
-        repo_name="repo",
-        fallback_clone_token="ghs_snapshot_token",
-        snapshot_id="snap-1",
-    )
-    await manager.create_sandbox(config)
+    await manager.create_sandbox(SandboxConfig(repo_owner=None, repo_name=None))
 
     env = captured["env"]
-    assert env["VCS_CLONE_TOKEN"] == "ghs_snapshot_token"
-    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
+    assert env["VCS_HOST"] == "gitlab.com"
+    assert env["VCS_CLONE_USERNAME"] == "oauth2"
+    assert "VCS_CLONE_TOKEN" not in env
 
 
 @pytest.mark.asyncio
-async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
-    """A no-repository snapshot boot does not expose fallback VCS credentials."""
+async def test_restore_no_repo_gets_host_scoping_without_tokens(monkeypatch):
+    """No-repository snapshot restores get host scoping but never a clone token."""
     captured = {}
 
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
+    class FakeImage:
+        object_id = "img-123"
+
+    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **kw: FakeImage())
     monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
+    monkeypatch.setenv("SCM_PROVIDER", "bitbucket")
 
     manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner=None,
-        repo_name=None,
-        fallback_clone_token="ghs_snapshot_token",
-        snapshot_id="snap-1",
+    await manager.restore_from_snapshot(
+        snapshot_image_id="img-abc",
+        session_config={
+            "session_id": "sess-1",
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+        },
+        clone_token="bb_token_xyz",
     )
-    await manager.create_sandbox(config)
 
     env = captured["env"]
-    assert "REPOSITORY_MODE" not in env
-    assert env["REPO_OWNER"] == ""
-    assert env["REPO_NAME"] == ""
-    assert "VCS_HOST" not in env
-    assert "VCS_CLONE_USERNAME" not in env
+    assert env["VCS_HOST"] == "bitbucket.org"
+    assert env["VCS_CLONE_USERNAME"] == "x-token-auth"
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env
-    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
 
 
 @pytest.mark.asyncio
@@ -648,7 +649,7 @@ async def test_restore_github_includes_gh_cli_aliases(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_repo_restore_omits_clone_token(monkeypatch):
-    """No-repository snapshot restores must not expose VCS credentials."""
+    """No-repository snapshot restores get host scoping but no VCS credentials."""
     captured = {}
 
     class FakeImage:
@@ -675,8 +676,8 @@ async def test_no_repo_restore_omits_clone_token(monkeypatch):
     assert "REPOSITORY_MODE" not in env
     assert env["REPO_OWNER"] == ""
     assert env["REPO_NAME"] == ""
-    assert "VCS_HOST" not in env
-    assert "VCS_CLONE_USERNAME" not in env
+    assert env["VCS_HOST"] == "github.com"
+    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
     assert "VCS_CLONE_TOKEN" not in env
     assert "GITHUB_TOKEN" not in env
     assert "GITHUB_APP_TOKEN" not in env

@@ -43,8 +43,8 @@ describe("buildAppHomeView", () => {
 
     const modelSelect = modelActionsBlock.elements[0];
     expect(modelSelect.type).toBe("static_select");
-    if (modelSelect.type !== "static_select") {
-      throw new Error("Missing model static select");
+    if (modelSelect.type !== "static_select" || !("options" in modelSelect)) {
+      throw new Error("Missing model static select with flat options");
     }
 
     expect(modelSelect.options[0].text.text).toHaveLength(75);

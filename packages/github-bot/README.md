@@ -76,7 +76,7 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 | `GITHUB_APP_PRIVATE_KEY`     | Secret                | GitHub App private key (must be PKCS#8 format)                                      |
 | `GITHUB_APP_INSTALLATION_ID` | Secret                | GitHub App installation ID for token exchange                                       |
 | `GITHUB_WEBHOOK_SECRET`      | Secret                | Shared secret for verifying webhook signatures                                      |
-| `INTERNAL_CALLBACK_SECRET`   | Secret                | Shared secret for HMAC auth to the control plane                                    |
+| `SERVICE_AUTH_SECRET`        | Secret                | Per-service sig1 signing secret for control-plane requests                          |
 | `LOG_LEVEL`                  | Plain text (optional) | Log level override (`debug`, `info`, `warn`, `error`)                               |
 
 ### GitHub App Configuration
@@ -99,9 +99,9 @@ For the agent to interact with GitHub from the sandbox, these prerequisites must
 2. **Git credential helper** configured in the sandbox image/runtime so git operations can request
    short-lived SCM credentials from the control plane
 
-Fresh and repo-image sandboxes get GitHub CLI credentials through the helper rather than spawn-time
-token injection. `GITHUB_TOKEN` and `GITHUB_APP_TOKEN` env fallbacks are only used for legacy
-snapshots when the user has not provided an explicit GitHub CLI token. One-shot image-build
+Fresh and prebuilt-image sandboxes get GitHub CLI credentials through the helper rather than
+spawn-time token injection. `GITHUB_TOKEN` and `GITHUB_APP_TOKEN` env fallbacks are only used for
+legacy snapshots when the user has not provided an explicit GitHub CLI token. One-shot image-build
 sandboxes use only the narrower `VCS_CLONE_TOKEN` fallback because they cannot call the
 control-plane credential broker. For git operations, the helper keeps the existing installation-wide
 access model and can authenticate auxiliary private repos on the configured SCM host.
@@ -123,10 +123,12 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 **Pull Request Opened (Auto-Review):**
 
 1. Check `pull_request.draft` — skip draft PRs
-2. Check `pull_request.user.login !== GITHUB_BOT_USERNAME` — prevent loops on bot-created PRs
+2. Apply the configured trigger-user gate — bot-created PRs are reviewed when the bot login is
+   explicitly listed in `allowedTriggerUsers`
 3. Post eyes reaction on the PR (fire-and-forget)
 4. Create session via control plane
-5. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
+   PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
 
@@ -147,6 +149,23 @@ people to request the GitHub App bot through the PR reviewer picker.
 
 **Review Comment:** Same as issue comment, but the prompt additionally includes `filePath`,
 `diffHunk`, and `commentId` for thread-specific context and reply threading.
+
+### Session Target
+
+Sessions are repo-bound by default: they open the webhook payload's repository. A repository can opt
+into launching a saved environment instead by setting `defaultEnvironmentId` in its repo metadata
+(`PUT /repos/:owner/:name/metadata` on the control plane) — a PR review or @mention on that repo
+then opens the environment's full multi-repository workspace.
+
+The environment must still contain the trigger repository — the session has to check out the PR
+under review — and the sender must be authorized for the whole workspace: caller gating's semantics
+extend from the trigger repo to every environment repository. An `allowedTriggerUsers` allowlist
+vouches for the sender as it already does today; without one, the sender needs write permission on
+each repository in the environment, so an environment launch never widens what the sender can reach.
+The bot falls back to the plain repo-bound session (with a `target.*` warning log) when the metadata
+or environment lookup fails, the environment was deleted, it no longer contains the trigger repo, or
+the sender lacks permission on any of its repositories. Integration settings (model, enabled repos,
+instructions) always resolve from the trigger repository either way.
 
 ## Authentication
 
@@ -172,8 +191,10 @@ for RSA key import.
 
 ### Control Plane Auth
 
-Requests to the control plane use HMAC tokens generated from `INTERNAL_CALLBACK_SECRET` (same
-mechanism as the Slack bot). The token is sent as a `Bearer` token in the `Authorization` header.
+Requests to the control plane are signed per-request with the bot's `SERVICE_AUTH_SECRET` (the
+`sig1` per-service signature, same mechanism as the Slack bot). The signature binds the method, URL,
+body, and asserted actor, and is sent in the `X-OpenInspect-Service-Signature` header alongside
+`X-OpenInspect-Service: github-bot`.
 
 ## Prompt Construction
 

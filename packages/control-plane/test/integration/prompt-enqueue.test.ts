@@ -73,7 +73,12 @@ describe("POST /internal/prompt", () => {
     const res = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: "Refactor auth", authorId: "user-1", source: "web" }),
+      body: JSON.stringify({
+        content: "Refactor auth",
+        authorId: "slack:U123",
+        canonicalUserId: "canonical-bot",
+        source: "slack",
+      }),
     });
 
     const { messageId } = await res.json<{ messageId: string }>();
@@ -88,14 +93,25 @@ describe("POST /internal/prompt", () => {
     const data = JSON.parse(matching[0].data);
     expect(data.content).toBe("Refactor auth");
     expect(data.messageId).toBe(messageId);
-    expect(data.author).toBeDefined();
+    expect(data.author).toEqual(
+      expect.objectContaining({ participantId: expect.any(String), userId: "canonical-bot" })
+    );
   });
 
   it("stores attachments as JSON", async () => {
     const { stub } = await initSession();
-    const attachments = [
-      { type: "file", name: "screenshot.png", url: "https://example.com/img.png" },
-    ];
+    const attachmentId = "attachment-1";
+    const uploadResponse = await stub.fetch("http://internal/internal/attachments", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "record",
+        attachmentId,
+        mimeType: "image/png",
+        sizeBytes: 1024,
+      }),
+    });
+    expect(uploadResponse.status).toBe(200);
 
     const res = await stub.fetch("http://internal/internal/prompt", {
       method: "POST",
@@ -104,10 +120,11 @@ describe("POST /internal/prompt", () => {
         content: "See attachment",
         authorId: "user-1",
         source: "web",
-        attachments,
+        attachments: [{ name: "screenshot.png", attachmentId }],
       }),
     });
 
+    expect(res.status).toBe(200);
     const { messageId } = await res.json<{ messageId: string }>();
     const messages = await queryDO<{ attachments: string }>(
       stub,
@@ -117,8 +134,13 @@ describe("POST /internal/prompt", () => {
 
     expect(messages[0].attachments).not.toBeNull();
     const parsed = JSON.parse(messages[0].attachments);
-    expect(parsed).toHaveLength(1);
-    expect(parsed[0].name).toBe("screenshot.png");
+    expect(parsed).toEqual([{ name: "screenshot.png", attachmentId, mimeType: "image/png" }]);
+    const attachments = await queryDO<{ message_id: string }>(
+      stub,
+      "SELECT message_id FROM attachments WHERE id = ?",
+      attachmentId
+    );
+    expect(attachments).toEqual([{ message_id: messageId }]);
   });
 
   it("stores callback_context for Slack", async () => {

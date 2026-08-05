@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { TriggerCondition } from "@open-inspect/shared";
+import type { TriggerCondition } from "@open-inspect/shared/triggers";
 import { ConditionBuilder } from "./condition-builder";
 
 type ChannelListing = { id: string; name: string; isPrivate: boolean; isMember: boolean };

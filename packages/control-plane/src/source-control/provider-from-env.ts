@@ -1,4 +1,5 @@
-import { createKvCacheStore, resolveAppName } from "@open-inspect/shared";
+import { resolveAppName } from "@open-inspect/shared/app-name";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { getGitHubAppConfig } from "../auth/github-app";
 import type { Env } from "../types";
 import { resolveScmProviderFromEnv } from "./config";

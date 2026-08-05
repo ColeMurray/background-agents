@@ -115,8 +115,14 @@ starts.
 When a session starts, Linear receives a **View Session** link. If the agent opens a pull request,
 Linear receives a **Pull Request** link when the session finishes.
 
-Open the web session for live output, logs, artifacts, and file changes. Linear does not currently
-update issue status, labels, assignee, priority, or project.
+Open the web session for live output, logs, artifacts, and file changes. For a human-initiated
+session, Open-Inspect moves an unstarted issue to the team's lowest-position `started` workflow
+state only after the initial prompt reaches a live sandbox. It leaves automation-initiated,
+already-started, completed, and canceled issues unchanged. Follow-up prompts do not change issue
+status.
+
+Open-Inspect does not update labels, assignee, priority, or project. Pull-request workflow changes
+remain the responsibility of Linear's GitHub integration and the team's PR automation settings.
 
 ---
 
@@ -151,7 +157,12 @@ Linear user preferences are currently admin/API-managed, not set from a self-ser
 ## Admin and Safety Notes
 
 - Linear webhooks are verified before Open-Inspect acts on them.
-- Linear OAuth tokens, webhook secrets, and callback secrets stay server-side.
+- Linear client credentials, runtime access tokens, webhook secrets, and callback secrets stay
+  server-side. Runtime access tokens are cached and replaced automatically; refresh tokens are not
+  used for runtime API access.
+- Runtime tokens are cached under `oauth:client-credentials:{organizationId}` with their verified
+  workspace/app identity and expire with the provider lease. Do not edit cached token values
+  manually.
 - Linear does not provide Git credentials. Repository access still comes from the deployment's
   configured source-control integration, such as the GitHub App installation.
 - Repository scope in Linear settings controls which resolved repositories can receive
@@ -174,6 +185,12 @@ agent scopes required for mentions and assignment. Setup details live in the
 Make sure the request mentions or assigns the Linear Agent on an issue. Also check that the issue
 belongs to a repo Open-Inspect can resolve and access.
 
+If the Worker logs a client-credentials failure, confirm **Client credentials tokens** is enabled
+for the application in **Linear Settings → API → Applications**. Existing eligible installations do
+not need to be uninstalled and reinstalled. A client-credentials viewer-organization mismatch means
+the application credentials resolve to a different workspace than the incoming webhook and must be
+corrected before the deployment is eligible.
+
 ### Open-Inspect asks which repository to use
 
 Reply with `owner/repo`. To avoid future prompts, add the repo to the issue or ask an admin to map
@@ -183,6 +200,30 @@ the Linear project or team.
 
 Open **View Session**. Linear shows status and completion activity, while detailed logs,
 transcripts, artifacts, and file changes live in the Open-Inspect web session.
+
+### Linear stays Working after the web session completes
+
+Linear leaves Working only after the bot delivers a terminal `response` or `error` activity. If the
+web session has completed but Linear has not:
+
+1. Find the Open-Inspect session ID from **View Session**.
+2. Confirm the Linear bot logged `agent_session.followup` for the follow-up webhook.
+3. In control-plane logs, find `prompt.enqueue` for the follow-up message. A healthy Linear prompt
+   has `has_callback_context:true`; `false` means completion had no Linear callback destination.
+4. Confirm control-plane `prompt.complete`, followed by linear-bot `callback.complete`. If the first
+   exists without the second, inspect callback routing and context. If both exist, inspect
+   `delivery_outcome`, `linear.emit_activity_failed`, credential identity failures, and GraphQL
+   errors. Only `delivery_outcome:success` confirms the terminal activity reached Linear.
+
+A completion that was skipped cannot repair itself later. After deploying a callback-context fix,
+send another follow-up through the same Linear Agent session to produce a new terminal activity, or
+start a new Agent session if the issue mapping has expired.
+
+### Linear client secret was rotated
+
+Deploy the replacement `LINEAR_CLIENT_SECRET` promptly. Linear invalidates tokens minted with the
+old secret; the Worker replaces the cached token after a cache miss, expiry, or HTTP 401 and retries
+the rejected API request once. A reinstall is not normally required.
 
 ### The wrong model was used
 

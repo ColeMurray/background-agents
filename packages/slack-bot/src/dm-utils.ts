@@ -1,4 +1,4 @@
-import { applyMentionPolicy } from "@open-inspect/shared";
+import { applyMentionPolicy } from "@open-inspect/shared/slack";
 
 /**
  * Strip Slack user mention tokens (e.g. <@U12345>) from text and collapse
@@ -12,7 +12,10 @@ export function stripMentions(text: string): string {
 /**
  * Returns true if a Slack message event should be dispatched as a DM.
  * Filters out subtypes (bot_message, message_changed, message_deleted, etc.)
- * to prevent processing bot replies and edit/delete notifications.
+ * to prevent processing bot replies and edit/delete notifications. Messages
+ * with file uploads arrive as the `file_share` subtype and may carry no text,
+ * so they dispatch on their files instead; a forwarded message with no comment
+ * likewise carries its content in `attachments` and no text at all.
  */
 export function isDmDispatchable(event: {
   type: string;
@@ -22,12 +25,17 @@ export function isDmDispatchable(event: {
   channel?: string;
   ts?: string;
   user?: string;
+  files?: unknown[];
+  attachments?: unknown[];
 }): boolean {
+  const subtypeOk = !event.subtype || event.subtype === "file_share";
+  const hasContent =
+    !!event.text || (event.files?.length ?? 0) > 0 || (event.attachments?.length ?? 0) > 0;
   return (
     event.type === "message" &&
-    !event.subtype &&
+    subtypeOk &&
     event.channel_type === "im" &&
-    !!event.text &&
+    hasContent &&
     !!event.channel &&
     !!event.ts &&
     !!event.user

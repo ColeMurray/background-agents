@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { AutomationTriggerType } from "@open-inspect/shared";
+import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 import {
   automationTemplates,
   getVisibleCategories,

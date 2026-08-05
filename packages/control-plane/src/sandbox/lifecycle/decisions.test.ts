@@ -13,6 +13,7 @@ import {
   evaluateConnectingTimeout,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
+  isSandboxReconnectBlockedStatus,
   DEFAULT_CIRCUIT_BREAKER_CONFIG,
   DEFAULT_SPAWN_CONFIG,
   DEFAULT_INACTIVITY_CONFIG,
@@ -30,6 +31,19 @@ import {
   type WarmState,
   type ExecutionTimeoutConfig,
 } from "./decisions";
+
+describe("isSandboxReconnectBlockedStatus", () => {
+  it.each(["stopped", "stale"] as const)("blocks reconnects for %s sandboxes", (status) => {
+    expect(isSandboxReconnectBlockedStatus(status)).toBe(true);
+  });
+
+  it.each(["pending", "spawning", "connecting", "ready", "running", "failed"] as const)(
+    "allows reconnects for %s sandboxes",
+    (status) => {
+      expect(isSandboxReconnectBlockedStatus(status)).toBe(false);
+    }
+  );
+});
 
 // ==================== Circuit Breaker Tests ====================
 
@@ -315,6 +329,44 @@ describe("evaluateSpawnDecision", () => {
     };
 
     const decision = evaluateSpawnDecision(state, config, now, true);
+
+    expect(decision.action).toBe("skip");
+    if (decision.action === "skip") {
+      expect(decision.reason).toContain("in-memory flag");
+    }
+  });
+
+  it("skips restore when a spawn is already in progress in-memory", () => {
+    // A restore sets the in-memory flag synchronously but persists the
+    // "spawning" status only after its first await; a concurrent evaluation in
+    // that window still sees "stopped" and must not start a second restore.
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, true);
+
+    expect(decision.action).toBe("skip");
+    if (decision.action === "skip") {
+      expect(decision.reason).toContain("in-memory flag");
+    }
+  });
+
+  it("skips resume when a spawn is already in progress in-memory", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: null,
+      providerObjectId: "sb-123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, true, true);
 
     expect(decision.action).toBe("skip");
     if (decision.action === "skip") {

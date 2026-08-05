@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { SELF, env } from "cloudflare:test";
+import { ModelPreferencesStore } from "../../src/db/model-preferences";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, seedSandboxAuth } from "./helpers";
+import { initNamedSession, queryDO, seedSandboxAuth } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -15,7 +16,12 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     scmLogin?: string;
     spawnDepth?: number;
     parentSessionId?: string;
-    spawnSource?: "user" | "agent";
+    spawnSource?: "user" | "agent" | "automation";
+    automationId?: string;
+    automationRunId?: string;
+    environmentId?: string | null;
+    model?: string;
+    reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const { stub } = await initNamedSession(parentName, {
@@ -24,6 +30,8 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       ...(opts?.repoId != null && { repoId: opts.repoId }),
       ...(opts?.userId != null && { userId: opts.userId }),
       ...(opts?.scmLogin != null && { scmLogin: opts.scmLogin }),
+      ...(opts?.model != null && { model: opts.model }),
+      ...(opts?.reasoningEffort != null && { reasoningEffort: opts.reasoningEffort }),
     });
 
     const sandboxToken = `sb-tok-${Date.now()}`;
@@ -36,13 +44,16 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
       title: "Parent",
       repoOwner: "acme",
       repoName: "web-app",
-      model: "anthropic/claude-sonnet-4-6",
-      reasoningEffort: null,
+      model: opts?.model ?? "anthropic/claude-sonnet-4-6",
+      reasoningEffort: opts?.reasoningEffort ?? null,
       baseBranch: null,
       status: "active",
       parentSessionId: opts?.parentSessionId ?? null,
       spawnSource: opts?.spawnSource ?? "user",
       spawnDepth: opts?.spawnDepth ?? 0,
+      automationId: opts?.automationId ?? null,
+      automationRunId: opts?.automationRunId ?? null,
+      environmentId: opts?.environmentId ?? null,
       userId: opts?.canonicalUserId ?? null,
       createdAt: now,
       updatedAt: now,
@@ -95,6 +106,244 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     expect(state.repoOwner).toBe("acme");
     // Child spawn immediately enqueues the initial prompt, which transitions session to active.
     expect(state.status).toBe("active");
+  });
+
+  it("inherits automation lineage from the parent", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      userId: "user-1",
+      canonicalUserId: "canonical-abc123",
+      spawnSource: "automation",
+      automationId: "automation-1",
+      automationRunId: "run-1",
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Investigate", prompt: "Investigate the failure" }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+    const child = await store.get(body.sessionId);
+    expect(child?.automationId).toBe("automation-1");
+    expect(child?.automationRunId).toBe("run-1");
+  });
+
+  it("persists environment provenance for spawned children", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      environmentId: "env_parent",
+    });
+
+    const res = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Child with environment",
+        prompt: "Verify environment provenance is inherited",
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json<{ sessionId: string }>();
+
+    const child = await store.get(body.sessionId);
+    expect(child?.environmentId).toBe("env_parent");
+
+    const childDoId = env.SESSION.idFromName(body.sessionId);
+    const childStub = env.SESSION.get(childDoId);
+    const [session] = await queryDO<{ environment_id: string | null }>(
+      childStub,
+      "SELECT environment_id FROM session"
+    );
+    expect(session.environment_id).toBe("env_parent");
+  });
+
+  it("preserves environment provenance for grandchildren", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      repoId: 12345,
+      userId: "user-1",
+      environmentId: "env_parent",
+    });
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({
+        title: "Child with environment",
+        prompt: "Spawn another child",
+      }),
+    });
+    expect(childRes.status).toBe(201);
+    const childBody = await childRes.json<{ sessionId: string }>();
+
+    const childDoId = env.SESSION.idFromName(childBody.sessionId);
+    const childStub = env.SESSION.get(childDoId);
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${childBody.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Grandchild with environment",
+          prompt: "Verify inherited provenance",
+        }),
+      }
+    );
+
+    expect(grandchildRes.status).toBe(201);
+    const grandchildBody = await grandchildRes.json<{ sessionId: string }>();
+
+    const grandchild = await store.get(grandchildBody.sessionId);
+    expect(grandchild?.environmentId).toBe("env_parent");
+    expect(grandchild?.spawnDepth).toBe(2);
+
+    const grandchildDoId = env.SESSION.idFromName(grandchildBody.sessionId);
+    const grandchildStub = env.SESSION.get(grandchildDoId);
+    const [session] = await queryDO<{ environment_id: string | null }>(
+      grandchildStub,
+      "SELECT environment_id FROM session"
+    );
+    expect(session.environment_id).toBe("env_parent");
+  });
+
+  it("persists inherited reasoning effort for children and grandchildren", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({ reasoningEffort: "high" });
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Spawn another child" }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = await childRes.json<{ sessionId: string }>();
+    expect((await store.get(child.sessionId))?.reasoningEffort).toBe("high");
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(child.sessionId));
+    const [childSession] = await queryDO<{ reasoning_effort: string | null }>(
+      childStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(childSession.reasoning_effort).toBe("high");
+
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${child.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({ title: "Grandchild", prompt: "Verify inherited reasoning" }),
+      }
+    );
+    expect(grandchildRes.status).toBe(201);
+    const grandchild = await grandchildRes.json<{ sessionId: string }>();
+    expect((await store.get(grandchild.sessionId))?.reasoningEffort).toBe("high");
+
+    const grandchildStub = env.SESSION.get(env.SESSION.idFromName(grandchild.sessionId));
+    const [grandchildSession] = await queryDO<{ reasoning_effort: string | null }>(
+      grandchildStub,
+      "SELECT reasoning_effort FROM session"
+    );
+    expect(grandchildSession.reasoning_effort).toBe("high");
+  });
+
+  it("rejects a disabled model override for grandchildren", async () => {
+    const { parentName, sandboxToken } = await setupParent();
+
+    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-sonnet-4-6"]);
+
+    const childRes = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Spawn another child" }),
+    });
+    expect(childRes.status).toBe(201);
+    const child = await childRes.json<{ sessionId: string }>();
+
+    const childStub = env.SESSION.get(env.SESSION.idFromName(child.sessionId));
+    const childSandboxToken = `child-sb-tok-${Date.now()}`;
+    await seedSandboxAuth(childStub, {
+      authToken: childSandboxToken,
+      sandboxId: `child-sb-${Date.now()}`,
+    });
+
+    const grandchildRes = await SELF.fetch(
+      `https://test.local/sessions/${child.sessionId}/children`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${childSandboxToken}`,
+        },
+        body: JSON.stringify({
+          title: "Grandchild",
+          prompt: "Use a disabled model",
+          model: "opencode/kimi-k2.5",
+        }),
+      }
+    );
+
+    expect(grandchildRes.status).toBe(400);
+    await expect(grandchildRes.json()).resolves.toEqual({
+      error: 'Model "opencode/kimi-k2.5" is not enabled',
+    });
+  });
+
+  it("uses an enabled fallback when the inherited parent model was disabled", async () => {
+    const { parentName, sandboxToken, store } = await setupParent({
+      model: "openai/gpt-5.5",
+      reasoningEffort: "xhigh",
+    });
+
+    await new ModelPreferencesStore(env.DB).setEnabledModels(["anthropic/claude-haiku-4-5"]);
+
+    const response = await SELF.fetch(`https://test.local/sessions/${parentName}/children`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${sandboxToken}`,
+      },
+      body: JSON.stringify({ title: "Child", prompt: "Use an enabled model" }),
+    });
+
+    expect(response.status).toBe(201);
+    const child = await response.json<{ sessionId: string }>();
+    const storedChild = await store.get(child.sessionId);
+    expect(storedChild?.model).toBe("anthropic/claude-haiku-4-5");
+    expect(storedChild?.reasoningEffort).toBeNull();
   });
 
   it("propagates null userId from parent to child", async () => {

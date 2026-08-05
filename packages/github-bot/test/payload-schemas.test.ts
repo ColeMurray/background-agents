@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   issueCommentPayloadSchema,
   pullRequestOpenedPayloadSchema,
+  requestedReviewerPayloadSchema,
   reviewCommentPayloadSchema,
   reviewRequestedPayloadSchema,
+  webhookActionPayloadSchema,
+  webhookSummaryPayloadSchema,
 } from "../src/payload-schemas";
 
 const sender = { login: "octocat", id: 123, avatar_url: "https://example.com/avatar.png" };
@@ -74,5 +77,59 @@ describe("GitHub bot payload schemas", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("parses consumed webhook summary fields", () => {
+    const result = webhookSummaryPayloadSchema.safeParse({
+      action: "review_requested",
+      repository: { owner: { login: "open-inspect" }, name: "background-agents" },
+      sender: { login: "octocat" },
+      pull_request: { number: 42 },
+      extra: "ignored",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.repository?.owner.login).toBe("open-inspect");
+  });
+
+  it("rejects malformed webhook summary object fields", () => {
+    const result = webhookSummaryPayloadSchema.safeParse({
+      action: "opened",
+      repository: { owner: {}, name: "background-agents" },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("parses nullable webhook summary repository and requested reviewer", () => {
+    const summary = webhookSummaryPayloadSchema.safeParse({
+      action: "opened",
+      repository: null,
+      sender: null,
+      pull_request: null,
+      issue: null,
+    });
+    const reviewer = requestedReviewerPayloadSchema.safeParse({ requested_reviewer: null });
+
+    expect(summary.success).toBe(true);
+    expect(reviewer.success).toBe(true);
+  });
+
+  it("rejects malformed requested reviewer payloads", () => {
+    const result = requestedReviewerPayloadSchema.safeParse({
+      requested_reviewer: { id: 123 },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("parses action without requiring the rest of the webhook summary", () => {
+    const result = webhookActionPayloadSchema.safeParse({
+      action: "opened",
+      repository: { owner: {}, name: "background-agents" },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.success && result.data.action).toBe("opened");
   });
 });

@@ -1,8 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { INTERNAL_TTYD_PORT } from "@open-inspect/shared";
-import { normalizeSandboxSettings, SandboxSettingsValidationError } from "./settings";
+import { INTERNAL_TTYD_PORT } from "@open-inspect/shared/types/integrations";
+import {
+  normalizeSandboxSettings,
+  parsePersistedSandboxSettings,
+  SandboxSettingsValidationError,
+} from "./settings";
 
 class CustomSettingsValidationError extends Error {}
+
+describe("parsePersistedSandboxSettings", () => {
+  it("returns empty settings when no snapshot is stored", () => {
+    expect(parsePersistedSandboxSettings(null)).toEqual({});
+  });
+
+  it("parses and normalizes persisted settings", () => {
+    expect(
+      parsePersistedSandboxSettings('{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000,"bad"]}')
+    ).toEqual({ sandboxTimeoutMs: 14_400_000, tunnelPorts: [3000] });
+  });
+
+  it.each(["", "not-json"])("throws when persisted blob %j is not valid JSON", (settingsJson) => {
+    expect(() => parsePersistedSandboxSettings(settingsJson)).toThrow(SyntaxError);
+  });
+});
 
 describe("normalizeSandboxSettings", () => {
   it("throws for invalid settings by default", () => {
@@ -72,6 +92,32 @@ describe("normalizeSandboxSettings", () => {
         { buildTimeoutSeconds: -5, terminalEnabled: true },
         { invalid: "omit" }
       )
+    ).toEqual({ terminalEnabled: true });
+  });
+
+  it("accepts a positive integer sandboxTimeoutMs", () => {
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 14_400_000 })).toEqual({
+      sandboxTimeoutMs: 14_400_000,
+    });
+  });
+
+  it("requires sandboxTimeoutMs to be a positive whole number of seconds", () => {
+    expect(() => normalizeSandboxSettings({ sandboxTimeoutMs: 0 })).toThrow(
+      SandboxSettingsValidationError
+    );
+    for (const sandboxTimeoutMs of [1, 999, 1500, 1000.5]) {
+      expect(() => normalizeSandboxSettings({ sandboxTimeoutMs })).toThrow(
+        SandboxSettingsValidationError
+      );
+    }
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 })).toEqual({
+      sandboxTimeoutMs: 1000,
+    });
+  });
+
+  it("omits an invalid sandboxTimeoutMs while preserving valid fields", () => {
+    expect(
+      normalizeSandboxSettings({ sandboxTimeoutMs: -1, terminalEnabled: true }, { invalid: "omit" })
     ).toEqual({ terminalEnabled: true });
   });
 

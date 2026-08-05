@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   applyTitleUpdate,
+  applySessionReadState,
+  buildSessionSearchValue,
   buildSessionsPageKey,
   CURRENT_USER_CREATED_BY,
   isArchivedSessionListKey,
@@ -34,8 +36,14 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
 describe("buildSessionsPageKey", () => {
   it("adds the current-user creator filter", () => {
     expect(
-      buildSessionsPageKey({ excludeStatus: "archived", createdBy: [CURRENT_USER_CREATED_BY] })
-    ).toBe("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me");
+      buildSessionsPageKey({
+        excludeStatus: "archived",
+        excludeAutomationLineage: true,
+        createdBy: [CURRENT_USER_CREATED_BY],
+      })
+    ).toBe(
+      "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+    );
   });
 
   it("adds repeated creator filters", () => {
@@ -47,6 +55,68 @@ describe("buildSessionsPageKey", () => {
     ).toBe(
       "/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&createdBy=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     );
+  });
+});
+
+describe("applySessionReadState", () => {
+  it("does not let an older mutation response overwrite a newer terminal message", () => {
+    const data: SessionListResponse = {
+      sessions: [
+        session("session-1", {
+          readState: {
+            unread: true,
+            latestMessageId: "message-b",
+          },
+        }),
+      ],
+      hasMore: false,
+    };
+
+    expect(
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-a",
+      })?.sessions[0].readState
+    ).toEqual({
+      unread: true,
+      latestMessageId: "message-b",
+    });
+    expect(
+      applySessionReadState(data, "session-1", {
+        unread: false,
+        latestMessageId: "message-b",
+      })?.sessions[0].readState
+    ).toEqual({
+      unread: false,
+      latestMessageId: "message-b",
+    });
+  });
+});
+
+describe("buildSessionSearchValue", () => {
+  it("includes every repository attached to a multi-repository session", () => {
+    const value = buildSessionSearchValue(
+      session("multi", {
+        title: "Update services",
+        repositories: [
+          {
+            repoOwner: "open-inspect",
+            repoName: "background-agents",
+            repoId: 1,
+            baseBranch: "main",
+          },
+          { repoOwner: "acme", repoName: "api", repoId: 2, baseBranch: "main" },
+        ],
+      })
+    );
+
+    expect(value).toContain("Update services");
+    expect(value).toContain("open-inspect/background-agents");
+    expect(value).toContain("acme/api");
+  });
+
+  it("falls back to the scalar repository fields", () => {
+    expect(buildSessionSearchValue(session("legacy"))).toContain("open-inspect/background-agents");
   });
 });
 
@@ -134,7 +204,7 @@ describe("applyTitleUpdate", () => {
       sessions: [session("a")],
       hasMore: false,
     };
-    const beforeSnapshot = JSON.parse(JSON.stringify(before));
+    const beforeSnapshot = structuredClone(before);
 
     applyTitleUpdate(before, "a", "Mutated", 9999);
 

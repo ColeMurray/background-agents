@@ -1,13 +1,17 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import { getValidModelOrDefault, isValidModel, type SandboxSettings } from "@open-inspect/shared";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
 import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
 import type { SessionRepository } from "../../repository";
+import type { SessionStatusService } from "../../session-status-service";
 import {
   normalizeSessionTitle,
   type SessionTitleUpdateOptions,
   type SessionTitleUpdateResult,
 } from "../../title";
+import { z } from "zod";
 
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
@@ -23,10 +27,19 @@ interface InitRequest {
   repoId?: number | null;
   defaultBranch?: string | null;
   branch?: string | null;
+  /**
+   * Ordered member list ([0] = primary, matching the scalar fields).
+   * initialize.ts always sends it for repository sessions (synthesizing a
+   * one-entry list for scalar callers) and an empty list for repo-less ones.
+   */
+  repositories?: RepositoryRef[];
+  /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
+  environmentId?: string | null;
   title?: string;
   model?: string;
   reasoningEffort?: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmLogin?: string;
   scmName?: string;
   scmEmail?: string;
@@ -43,7 +56,10 @@ interface InitRequest {
 }
 
 export interface SessionLifecycleHandlerDeps {
-  repository: Pick<SessionRepository, "upsertSession" | "createSandbox" | "createParticipant">;
+  repository: Pick<
+    SessionRepository,
+    "upsertSession" | "replaceSessionRepositories" | "createSandbox" | "createParticipant"
+  >;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
   encryptToken: (token: string, encryptionKey: string) => Promise<string>;
@@ -51,12 +67,11 @@ export interface SessionLifecycleHandlerDeps {
   generateId: (bytes?: number) => string;
   now: () => number;
   scheduleWarmSandbox: () => void;
-  getLog: () => Logger;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
   getParticipantByUserId: (userId: string) => ParticipantRow | null;
-  transitionSessionStatus: (status: SessionStatus) => Promise<boolean>;
+  statusService: SessionStatusService;
   applySessionTitleUpdate: (
     title: string,
     options?: SessionTitleUpdateOptions
@@ -81,7 +96,7 @@ function sessionTitleUpdateStatus(
 }
 
 export interface SessionLifecycleHandler {
-  init: (request: Request) => Promise<Response>;
+  init: (request: Request, log: Logger) => Promise<Response>;
   getState: () => Response;
   updateTitle: (request: Request) => Promise<Response>;
   archive: (request: Request) => Promise<Response>;
@@ -93,11 +108,18 @@ function parseUserIdBody(body: unknown): { userId?: string } {
   return body as { userId?: string };
 }
 
+const titleUpdateBodySchema = z.object({
+  userId: z.string().optional(),
+  title: z.string().optional(),
+});
+
+type TitleUpdateBody = z.infer<typeof titleUpdateBodySchema>;
+
 export function createSessionLifecycleHandler(
   deps: SessionLifecycleHandlerDeps
 ): SessionLifecycleHandler {
   return {
-    async init(request: Request): Promise<Response> {
+    async init(request: Request, log: Logger): Promise<Response> {
       const body = (await request.json()) as InitRequest;
 
       const sessionId = deps.getDurableObjectId();
@@ -123,9 +145,9 @@ export function createSessionLifecycleHandler(
       if (body.scmToken && deps.tokenEncryptionKey) {
         try {
           encryptedToken = await deps.encryptToken(body.scmToken, deps.tokenEncryptionKey);
-          deps.getLog().debug("Encrypted SCM token for storage");
+          log.debug("Encrypted SCM token for storage");
         } catch (error) {
-          deps.getLog().error("Failed to encrypt SCM token", {
+          log.error("Failed to encrypt SCM token", {
             error: error instanceof Error ? error : String(error),
           });
         }
@@ -133,7 +155,7 @@ export function createSessionLifecycleHandler(
 
       const model = getValidModelOrDefault(body.model);
       if (body.model && !isValidModel(body.model)) {
-        deps.getLog().warn("Invalid model name, using default", {
+        log.warn("Invalid model name, using default", {
           requested_model: body.model,
           default_model: model,
         });
@@ -141,6 +163,30 @@ export function createSessionLifecycleHandler(
 
       const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
       const baseBranch = hasRepoOwner ? body.branch || body.defaultBranch || "main" : null;
+
+      const repositories = body.repositories ?? [];
+      if (repositories.length > 0) {
+        const primary = repositories[0];
+        if (
+          !hasRepoOwner ||
+          primary.repoOwner !== repoOwner ||
+          primary.repoName !== repoName ||
+          primary.repoId !== body.repoId ||
+          primary.baseBranch !== baseBranch
+        ) {
+          return Response.json(
+            { error: "repositories[0] must match the scalar repository mirror" },
+            { status: 400 }
+          );
+        }
+      } else if (hasRepoOwner && body.repositories !== undefined) {
+        // An explicit empty list alongside scalar context is a producer bug —
+        // initialize.ts synthesizes a one-entry list for scalar callers.
+        return Response.json(
+          { error: "repositories must include the scalar repository" },
+          { status: 400 }
+        );
+      }
 
       deps.repository.upsertSession({
         id: sessionId,
@@ -158,10 +204,28 @@ export function createSessionLifecycleHandler(
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
         sandboxSettings: body.sandboxSettings ? JSON.stringify(body.sandboxSettings) : null,
+        environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,
       });
 
+      // Legacy scalar producers (spawn paths not yet list-aware) still get a
+      // member row so spawn/read paths have one source of truth.
+      const memberRepositories: RepositoryRef[] =
+        repositories.length > 0
+          ? repositories
+          : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
+            ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
+            : [];
+      deps.repository.replaceSessionRepositories(
+        memberRepositories.map((repo, position) => ({
+          position,
+          repoOwner: repo.repoOwner,
+          repoName: repo.repoName,
+          repoId: repo.repoId,
+          baseBranch: repo.baseBranch,
+        }))
+      );
       const sandboxId = deps.generateId();
       deps.repository.createSandbox({
         id: sandboxId,
@@ -174,6 +238,7 @@ export function createSessionLifecycleHandler(
       deps.repository.createParticipant({
         id: participantId,
         userId: body.userId,
+        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
@@ -185,7 +250,7 @@ export function createSessionLifecycleHandler(
         joinedAt: now,
       });
 
-      deps.getLog().info("Triggering sandbox spawn for new session");
+      log.info("Triggering sandbox spawn for new session");
       deps.scheduleWarmSandbox();
 
       return Response.json({ sessionId, status: "created" });
@@ -232,12 +297,19 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      let body: { userId?: string; title?: string };
+      let raw: unknown;
       try {
-        body = (await request.json()) as { userId?: string; title?: string };
+        raw = await request.json();
       } catch {
         return Response.json({ error: "Invalid request body" }, { status: 400 });
       }
+
+      const parseResult = titleUpdateBodySchema.safeParse(raw);
+      if (!parseResult.success) {
+        return Response.json({ error: "Invalid request body" }, { status: 400 });
+      }
+
+      const body: TitleUpdateBody = parseResult.data;
 
       if (!body.userId) {
         return Response.json({ error: "userId is required" }, { status: 400 });
@@ -286,7 +358,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
-      await deps.transitionSessionStatus("archived");
+      await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
     },
@@ -316,7 +388,7 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      await deps.transitionSessionStatus("active");
+      await deps.statusService.transition("active");
 
       return Response.json({ status: "active" });
     },
@@ -332,7 +404,7 @@ export function createSessionLifecycleHandler(
       }
 
       await deps.stopExecution({ suppressStatusReconcile: true });
-      await deps.transitionSessionStatus("cancelled");
+      await deps.statusService.transition("cancelled");
 
       const sandbox = deps.getSandbox();
       if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {

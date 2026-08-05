@@ -30,6 +30,32 @@ def _auth_file(tmp_path: Path) -> Path:
 class TestCodexAuthPluginSetup:
     """Cases for codex auth proxy plugin deployment."""
 
+    def test_oauth_proxy_allows_gpt_5_6_models(self):
+        """The OAuth model filter should retain all GPT-5.6 variants."""
+        plugin_source = (
+            Path(__file__).parents[1]
+            / "src"
+            / "sandbox_runtime"
+            / "plugins"
+            / "codex-auth-plugin.js"
+        ).read_text()
+
+        for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
+            assert f'"{model}"' in plugin_source
+
+    def test_oauth_proxy_excludes_unsupported_gpt_5_2_models(self):
+        """The OAuth model filter should remove unsupported GPT-5.2 variants."""
+        plugin_source = (
+            Path(__file__).parents[1]
+            / "src"
+            / "sandbox_runtime"
+            / "plugins"
+            / "codex-auth-plugin.js"
+        ).read_text()
+
+        for model in ("gpt-5.2", "gpt-5.2-codex"):
+            assert f'"{model}"' not in plugin_source
+
     def test_auth_json_uses_sentinel_token(self, tmp_path):
         """auth.json should contain the sentinel, not the real refresh token."""
         sup = _make_supervisor()
@@ -37,12 +63,12 @@ class TestCodexAuthPluginSetup:
         with (
             patch.dict(
                 "os.environ",
-                {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret"},
+                {"OPENAI_OAUTH_MANAGED": "1"},
                 clear=False,
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
         ):
-            sup._setup_openai_oauth()
+            sup._setup_managed_oauth()
 
         data = json.loads(_auth_file(tmp_path).read_text())
         assert data["openai"]["refresh"] == "managed-by-control-plane"
@@ -50,32 +76,33 @@ class TestCodexAuthPluginSetup:
         assert data["openai"]["access"] == ""
         assert data["openai"]["expires"] == 0
 
-    def test_auth_json_still_includes_account_id(self, tmp_path):
-        """Account ID should still be written if present."""
+    def test_auth_json_does_not_include_account_id(self, tmp_path):
+        """The broker returns account IDs with access tokens when needed."""
         sup = _make_supervisor()
 
         with (
             patch.dict(
                 "os.environ",
                 {
-                    "OPENAI_OAUTH_REFRESH_TOKEN": "rt_abc",
+                    "OPENAI_OAUTH_MANAGED": "1",
                     "OPENAI_OAUTH_ACCOUNT_ID": "acct_xyz",
                 },
                 clear=False,
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
         ):
-            sup._setup_openai_oauth()
+            sup._setup_managed_oauth()
 
         data = json.loads(_auth_file(tmp_path).read_text())
         assert data["openai"]["refresh"] == "managed-by-control-plane"
-        assert data["openai"]["accountId"] == "acct_xyz"
+        assert "accountId" not in data["openai"]
 
     async def test_start_opencode_copies_js_plugin(self, tmp_path):
         """start_opencode() should deploy the precompiled JS plugin into .opencode/plugins."""
         sup = _make_supervisor()
         sup.workspace_path = tmp_path / "workspace"
         sup.workspace_path.mkdir()
+        (sup.workspace_path / ".git").mkdir()
         sup.repo_path = sup.workspace_path / "app"
 
         plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "codex-auth-plugin.js"
@@ -88,9 +115,10 @@ class TestCodexAuthPluginSetup:
         original_path = Path
 
         with (
-            patch.dict("os.environ", {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret"}, clear=False),
+            patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
             patch("sandbox_runtime.entrypoint.Path") as mock_path,
             patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
+            patch("sandbox_runtime.entrypoint.install_runtime_git_excludes") as mock_excludes,
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
                 AsyncMock(return_value=fake_proc),
@@ -105,7 +133,7 @@ class TestCodexAuthPluginSetup:
                 if p == "/app/sandbox_runtime/plugins/codex-auth-plugin.js"
                 else original_path(p)
             )
-            sup._setup_openai_oauth = MagicMock()
+            sup._setup_managed_oauth = MagicMock()
             sup._install_tools = MagicMock()
             sup._install_skills = MagicMock()
             sup._install_bin_scripts = MagicMock()
@@ -116,4 +144,8 @@ class TestCodexAuthPluginSetup:
         mock_copy.assert_called_once_with(
             plugin_source,
             sup.workspace_path / ".opencode" / "plugins" / "codex-auth-plugin.js",
+        )
+        mock_excludes.assert_called_once_with(
+            sup.workspace_path,
+            {".opencode/plugins/codex-auth-plugin.js"},
         )

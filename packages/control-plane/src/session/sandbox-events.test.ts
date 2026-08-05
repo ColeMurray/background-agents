@@ -1,17 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent, ServerMessage } from "../types";
+import type { CallbackNotificationService } from "./callback-notification-service";
+import type { SessionDiffService } from "./diffs/service";
+import type { SessionRepository } from "./repository";
+import type { SessionStatusService } from "./session-status-service";
+import type { SessionWebSocketManager } from "./websocket-manager";
+
+function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
+  return {
+    remoteUrl: `https://token@example.com/${repoOwner}/${repoName}.git`,
+    redactedRemoteUrl: `https://***@example.com/${repoOwner}/${repoName}.git`,
+    refspec: `HEAD:refs/heads/${targetBranch}`,
+    targetBranch,
+    repoOwner,
+    repoName,
+    force: false,
+  };
+}
 
 function createProcessor() {
+  const getProcessingMessage = vi.fn(() => null as { id: string } | null);
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
-    getProcessingMessage: vi.fn(() => null as { id: string } | null),
+    getProcessingMessage,
     upsertTokenEvent: vi.fn(),
+    upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
     addSessionCost: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
-    updateMessageCompletion: vi.fn(),
+    // The real repository stops reporting a processing message once it is
+    // completed; the processing_status broadcast derives from that.
+    updateMessageCompletion: vi.fn(() => {
+      getProcessingMessage.mockReturnValue(null);
+    }),
     getMessageTimestamps: vi.fn(
       () => null as { created_at: number; started_at: number | null } | null
     ),
@@ -30,36 +54,40 @@ function createProcessor() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
+  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
-  const reconcileSessionStatusAfterExecution = vi.fn(async (_success: boolean) => {});
+  const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
-  const getIsProcessing = vi.fn(() => false);
+  const recordTerminalMessage = vi.fn(async () => {});
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const waitUntil = vi.fn();
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  };
 
-  const processor = new SessionSandboxEventProcessor({
-    ctx: { waitUntil } as unknown as DurableObjectState,
-    log: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      child: vi.fn(),
-    },
-    repository: repository as never,
-    callbackService: callbackService as never,
-    wsManager: wsManager as never,
-    broadcast,
+  const processor = new SessionSandboxEventProcessor(
+    { waitUntil } as unknown as DurableObjectState,
+    () => log,
+    repository as unknown as SessionRepository,
+    callbackService as unknown as CallbackNotificationService,
+    wsManager as unknown as SessionWebSocketManager,
+    messenger,
+    diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,
-    getIsProcessing,
     triggerSnapshot,
-    reconcileSessionStatusAfterExecution,
+    statusService as unknown as SessionStatusService,
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue,
-  });
+    recordTerminalMessage
+  );
 
   return {
     processor,
@@ -67,17 +95,36 @@ function createProcessor() {
     wsManager,
     callbackService,
     broadcast,
+    diffService,
     triggerSnapshot,
-    reconcileSessionStatusAfterExecution,
+    statusService,
     scheduleInactivityCheck,
     processMessageQueue,
     updateLastActivity,
     applySessionTitleUpdate,
     waitUntil,
+    recordTerminalMessage,
   };
 }
 
 describe("SessionSandboxEventProcessor", () => {
+  it("releases the next prompt without waiting for diff work", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageTimestamps.mockReturnValue({ created_at: 1000, started_at: 1100 });
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
+  });
+
   it("updates heartbeat without broadcasting", async () => {
     const h = createProcessor();
     const event: SandboxEvent = {
@@ -110,6 +157,19 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.updateLastActivity).not.toHaveBeenCalled();
+  });
+
+  it("pins diff baselines on ready", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "ready",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+    };
+
+    await h.processor.processSandboxEvent(event);
+
+    expect(h.diffService.pinBaselines).toHaveBeenCalledWith(event);
   });
 
   it("persists token event and broadcasts it", async () => {
@@ -176,6 +236,7 @@ describe("SessionSandboxEventProcessor", () => {
           sizeBytes: 512,
         },
         createdAt: expect.any(Number),
+        updatedAt: expect.any(Number),
       },
     });
     expect(h.broadcast).toHaveBeenNthCalledWith(2, {
@@ -282,13 +343,59 @@ describe("SessionSandboxEventProcessor", () => {
       "completed",
       expect.any(Number)
     );
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
+      messageId: "msg-1",
+      messageCreatedAt: 1000,
+      terminalMessageCompletedAt: expect.any(Number),
+    });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.reconcileSessionStatusAfterExecution).toHaveBeenCalledWith(true);
+    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
     expect(h.waitUntil).toHaveBeenCalled();
+  });
+
+  it("does not project a duplicate terminal event after the message already stopped", async () => {
+    const h = createProcessor();
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: false,
+      sandboxId: "sb-1",
+      timestamp: 2_000,
+    });
+
+    expect(h.recordTerminalMessage).not.toHaveBeenCalled();
+    expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
+  });
+
+  it("projects a failed sandbox completion", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-failed" });
+    h.repository.getMessageTimestamps.mockReturnValue({ created_at: 900, started_at: 1_000 });
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-failed",
+      success: false,
+      error: "Agent failed",
+      sandboxId: "sb-1",
+      timestamp: 2_000,
+    });
+
+    expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
+      "msg-failed",
+      "failed",
+      expect.any(Number)
+    );
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
+      messageId: "msg-failed",
+      messageCreatedAt: 900,
+      terminalMessageCompletedAt: expect.any(Number),
+    });
   });
 
   it("resolves pending push when push_complete event arrives", async () => {
@@ -296,17 +403,15 @@ describe("SessionSandboxEventProcessor", () => {
     const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    const pushPromise = h.processor.pushBranchToRemote("feature/test", {
-      remoteUrl: "https://token@example.com/repo.git",
-      redactedRemoteUrl: "https://***@example.com/repo.git",
-      refspec: "feature/test:feature/test",
-      targetBranch: "feature/test",
-      force: false,
-    });
+    const pushPromise = h.processor.pushBranchToRemote(
+      createPushSpec("acme", "web", "feature/test")
+    );
 
     await h.processor.processSandboxEvent({
       type: "push_complete",
       branchName: "feature/test",
+      repoOwner: "acme",
+      repoName: "web",
       timestamp: 1000,
     });
 
@@ -315,6 +420,154 @@ describe("SessionSandboxEventProcessor", () => {
       sandboxWs,
       expect.objectContaining({ type: "push" })
     );
+  });
+
+  describe("push resolver keying", () => {
+    function connectSandbox(h: ReturnType<typeof createProcessor>) {
+      const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+      h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+      return sandboxWs;
+    }
+
+    it("settles the matching push when two repos push the same branch name", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const webPush = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "open-inspect/session-1")
+      );
+      const backendPush = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "backend", "open-inspect/session-1")
+      );
+
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        branchName: "open-inspect/session-1",
+        repoOwner: "acme",
+        repoName: "backend",
+        error: "remote rejected",
+        timestamp: 1000,
+      });
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "open-inspect/session-1",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+
+      await expect(webPush).resolves.toEqual({ success: true });
+      await expect(backendPush).resolves.toEqual({
+        success: false,
+        error: expect.stringContaining("remote rejected"),
+      });
+    });
+
+    it("settles the sole pending push on a terminal event without repo identity", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // Legacy single-repo runtimes echo no repo identity.
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/test",
+        timestamp: 1000,
+      });
+
+      await expect(pushPromise).resolves.toEqual({ success: true });
+    });
+
+    it("rejects the sole pending push on a branch-less push_error", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // The bridge's "no repository found" path emits push_error with no
+      // branchName at all; it must reject the pending push instead of
+      // leaking it to the 360 s timeout.
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        error: "No repository found for push",
+        timestamp: 1000,
+      });
+
+      await expect(pushPromise).resolves.toEqual({
+        success: false,
+        error: expect.stringContaining("No repository found for push"),
+      });
+    });
+
+    it("drops a fully identified event that mismatches the sole pending push", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const pushPromise = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "web", "feature/test")
+      );
+
+      // A stale event for a different repo must not settle the pending push
+      // just because it is the only one in flight.
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "backend",
+        error: "remote rejected",
+        timestamp: 1000,
+      });
+
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/test",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+
+      await expect(pushPromise).resolves.toEqual({ success: true });
+    });
+
+    it("drops an identity-less terminal event when several pushes are pending", async () => {
+      const h = createProcessor();
+      connectSandbox(h);
+
+      const webPush = h.processor.pushBranchToRemote(createPushSpec("acme", "web", "feature/a"));
+      const backendPush = h.processor.pushBranchToRemote(
+        createPushSpec("acme", "backend", "feature/b")
+      );
+
+      await h.processor.processSandboxEvent({
+        type: "push_error",
+        error: "ambiguous",
+        timestamp: 1000,
+      });
+
+      // Neither push settles from the ambiguous event; identified events do.
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/a",
+        repoOwner: "acme",
+        repoName: "web",
+        timestamp: 1001,
+      });
+      await h.processor.processSandboxEvent({
+        type: "push_complete",
+        branchName: "feature/b",
+        repoOwner: "acme",
+        repoName: "backend",
+        timestamp: 1002,
+      });
+
+      await expect(webPush).resolves.toEqual({ success: true });
+      await expect(backendPush).resolves.toEqual({ success: true });
+    });
   });
 
   describe("activity tracking for intermediate events", () => {
@@ -332,6 +585,11 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+      expect(h.repository.upsertToolCallEvent).toHaveBeenCalledWith(
+        "msg-1",
+        expect.objectContaining({ callId: "call-1", status: "running" }),
+        expect.any(Number)
+      );
     });
 
     it("notifies tool_call regardless of status (provider-agnostic)", async () => {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
-import { DEFAULT_MODEL } from "@open-inspect/shared";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import NewAutomationPage from "./page";
 
 expect.extend(matchers);
@@ -26,6 +26,10 @@ vi.mock("@/components/sidebar-layout", () => ({
 
 vi.mock("@/hooks/use-repos", () => ({
   useRepos: () => ({ repos: [], loading: false }),
+}));
+
+vi.mock("@/hooks/use-environments", () => ({
+  useEnvironments: () => ({ environments: [], loading: false }),
 }));
 
 vi.mock("@/hooks/use-branches", () => ({
@@ -64,7 +68,7 @@ describe("NewAutomationPage template pre-fill", () => {
     expect(screen.getByDisplayValue("Find bugs")).toBeInTheDocument();
     expect(screen.getByDisplayValue(/Review the most recent commits/)).toBeInTheDocument();
     // Repository is intentionally not pre-filled.
-    expect(screen.getByText("Select repository")).toBeInTheDocument();
+    expect(screen.getByText("No repository")).toBeInTheDocument();
     // A hint tells the user the form was prefilled from a template.
     expect(screen.getByText(/prefilled from/i)).toBeInTheDocument();
   });

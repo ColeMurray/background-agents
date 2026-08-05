@@ -3,7 +3,7 @@
  */
 
 import type {
-  Attachment,
+  ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
   GitSyncStatus,
@@ -17,6 +17,14 @@ import type {
 import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
+
+export type PromptGitIdentity =
+  | {
+      mode: "attributed-user";
+      name: string;
+      email: string;
+    }
+  | { mode: "agent-only" };
 
 export interface SessionRow {
   id: string;
@@ -39,6 +47,7 @@ export interface SessionRow {
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
+  environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
   created_at: number;
   updated_at: number;
 }
@@ -48,6 +57,20 @@ export type RepositorySessionRow = SessionRow & {
   repo_name: string;
 };
 
+/**
+ * One member repository row, in position order (position 0 = primary).
+ */
+export interface SessionRepositoryRow {
+  position: number;
+  repo_owner: string;
+  repo_name: string;
+  repo_id: number | null;
+  base_branch: string;
+  branch_name: string | null;
+  base_sha: string | null;
+  current_sha: string | null;
+}
+
 export function sessionHasRepository(session: SessionRow): session is RepositorySessionRow {
   return Boolean(session.repo_owner && session.repo_name);
 }
@@ -55,10 +78,12 @@ export function sessionHasRepository(session: SessionRow): session is Repository
 export interface ParticipantRow {
   id: string;
   user_id: string;
+  canonical_user_id?: string | null;
   scm_user_id: string | null;
   scm_login: string | null;
   scm_email: string | null;
   scm_name: string | null;
+  auth_name: string | null;
   role: ParticipantRole;
   scm_access_token_encrypted: string | null;
   scm_refresh_token_encrypted: string | null;
@@ -84,12 +109,23 @@ export interface MessageRow {
   completed_at: number | null;
 }
 
+export interface SessionAttachmentRow {
+  id: string;
+  mime_type: string;
+  size_bytes: number;
+  object_key: string;
+  message_id: string | null; // Set once a prompt references this upload
+  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
+  created_at: number;
+}
+
 export interface EventRow {
   id: string;
   type: EventType;
   data: string; // JSON
   message_id: string | null;
   created_at: number;
+  timeline_sequence?: number;
 }
 
 export interface ArtifactRow {
@@ -98,6 +134,8 @@ export interface ArtifactRow {
   url: string | null;
   metadata: string | null; // JSON
   created_at: number;
+  /** Last content change; migration 34 backfills it to created_at. */
+  updated_at: number;
 }
 
 export interface SandboxRow {
@@ -132,10 +170,9 @@ export interface PromptCommand {
   reasoningEffort?: string; // Reasoning effort level
   author: {
     userId: string;
-    scmName: string | null;
-    scmEmail: string | null;
+    gitIdentity: PromptGitIdentity;
   };
-  attachments?: Attachment[];
+  attachments?: ResolvedSessionAttachment[];
 }
 
 export interface StopCommand {
@@ -160,13 +197,18 @@ export interface PushCommand {
   pushSpec: GitPushSpec;
 }
 
+export interface RefreshDiffCommand {
+  type: "refresh_diff";
+}
+
 export type SandboxCommand =
   | PromptCommand
   | StopCommand
   | SnapshotCommand
   | ShutdownCommand
   | AckCommand
-  | PushCommand;
+  | PushCommand
+  | RefreshDiffCommand;
 
 // Internal session update types
 

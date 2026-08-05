@@ -1,23 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import useSWR, { mutate } from "swr";
+import { mutate } from "swr";
 import { toast } from "sonner";
-import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
-import { MODEL_PREFERENCES_KEY } from "@/hooks/use-enabled-models";
+import { MODEL_OPTIONS, DEFAULT_ENABLED_MODELS } from "@open-inspect/shared/models";
+import { MODEL_PREFERENCES_KEY, useEnabledModels } from "@/hooks/use-enabled-models";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export function ModelsSettings() {
-  const { data, isLoading: loading } = useSWR<{ enabledModels: string[] }>(MODEL_PREFERENCES_KEY);
-  const [enabledModels, setEnabledModels] = useState<Set<string>>(new Set(DEFAULT_ENABLED_MODELS));
+  const { enabledModels: storedEnabledModels, loading } = useEnabledModels();
+  const [enabledModels, setEnabledModels] = useState<Set<string>>(
+    () => new Set(DEFAULT_ENABLED_MODELS)
+  );
   const [initialized, setInitialized] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   // Sync SWR data into local state once on initial load
-  if (data?.enabledModels && !initialized) {
-    setEnabledModels(new Set(data.enabledModels));
+  if (!loading && !initialized) {
+    setEnabledModels(new Set(storedEnabledModels));
     setInitialized(true);
   }
 
@@ -55,7 +58,7 @@ export function ModelsSettings() {
     setSaving(true);
 
     try {
-      const res = await fetch("/api/model-preferences", {
+      const res = await browserApiFetch("/api/model-preferences", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabledModels: Array.from(enabledModels) }),

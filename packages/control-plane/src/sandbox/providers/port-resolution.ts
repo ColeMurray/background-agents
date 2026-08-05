@@ -10,7 +10,7 @@ import {
   DEFAULT_TERMINAL_PORT,
   MAX_TUNNEL_PORTS,
   type SandboxSettings,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 
 /** Effective code-server / terminal ports from settings, with shared defaults. */
 export function resolveServicePorts(sandboxSettings: SandboxSettings | undefined): {

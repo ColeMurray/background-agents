@@ -2,8 +2,7 @@
  * Normalize generic webhook payloads into WebhookAutomationEvent.
  */
 
-import type { WebhookAutomationEvent } from "../types";
-import type { JsonPathFilter } from "../conditions";
+import type { JsonPathFilter, WebhookAutomationEvent } from "../types";
 import { buildWebhookContextBlock } from "./context";
 
 /**

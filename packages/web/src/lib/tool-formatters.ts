@@ -278,12 +278,13 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       };
     }
 
+    case "get-child-status":
     case "get-task-status": {
-      const taskId = getStringArg(args, "taskId");
+      const childId = getStringArg(args, "childId", "taskId");
 
       return {
-        toolName: "Task Status",
-        summary: taskId ? truncate(taskId, 20) : "List Tasks",
+        toolName: "Child Status",
+        summary: childId ? truncate(childId, 20) : "List Children",
         icon: "box",
         getDetails: () => ({ args, output }),
       };

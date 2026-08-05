@@ -1,7 +1,9 @@
 // Integration settings types
 
 import { escapeRegExp } from "../regex";
+import { z } from "zod";
 
+/** Third-party integrations, each surfaced as a card in the Integrations settings list. */
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
@@ -26,6 +28,21 @@ export interface GitHubBotSettings {
   commentActionInstructions?: string;
 }
 
+/**
+ * Source-control (SCM) behavior settings.
+ *
+ * Provider-agnostic: applies to both GitHub and GitLab.
+ */
+export interface ScmSettings {
+  /** Always open pull/merge requests created by sessions as drafts. */
+  alwaysUseDraftMode?: boolean;
+}
+
+/** A repository override must choose an explicit value rather than inherit. */
+export interface ScmRepoSettings extends ScmSettings {
+  alwaysUseDraftMode: boolean;
+}
+
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
   model?: string;
@@ -35,6 +52,13 @@ export interface LinearBotSettings {
   emitToolProgressActivities?: boolean;
   issueSessionInstructions?: string;
 }
+
+/**
+ * Maximum length of a custom session-instructions value (Linear
+ * `issueSessionInstructions`, Slack `sessionInstructions`). Bounds the
+ * settings blob and the prompt section built from it.
+ */
+export const MAX_SESSION_INSTRUCTIONS_LENGTH = 10000;
 
 /** Overridable behavior settings for the code-server integration. */
 export interface CodeServerSettings {
@@ -103,17 +127,29 @@ export const DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS = 5;
 /** Default maximum agent-spawned child sessions per parent session. */
 export const DEFAULT_MAX_TOTAL_CHILD_SESSIONS = 15;
 
+/** Minimum configurable sandbox session lifetime, in milliseconds. */
+export const MIN_SANDBOX_TIMEOUT_MS = 1000;
+
+/** Whether a sandbox lifetime is a safe positive whole-second millisecond value. */
+export function isValidSandboxTimeoutMs(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= MIN_SANDBOX_TIMEOUT_MS &&
+    value % MIN_SANDBOX_TIMEOUT_MS === 0
+  );
+}
+
 /**
  * Default repo-image build timeout (the build sandbox lifetime), in seconds.
  * Mirrors `DEFAULT_BUILD_TIMEOUT_SECONDS` in the Modal data plane
- * (`packages/modal-infra/src/sandbox/manager.py`).
+ * (`packages/modal-infra/src/sandbox/build_session.py`).
  */
 export const DEFAULT_BUILD_TIMEOUT_SECONDS = 1800;
 
 /**
- * Maximum configurable repo-image build timeout, in seconds. The Modal
- * stale-build sweep (`STALE_BUILD_THRESHOLD_SECONDS`) is sized above this, so
- * raising it requires raising that threshold in lockstep.
+ * Maximum configurable repo-image build timeout, in seconds. Control-plane
+ * stale recovery derives its provider-session ceiling from this value.
  */
 export const MAX_BUILD_TIMEOUT_SECONDS = 3600;
 
@@ -160,6 +196,12 @@ export interface SandboxSettings {
    */
   memoryMib?: number | null;
   /**
+   * Requested sandbox session lifetime, in milliseconds and whole-second
+   * increments. Unset uses the provider default. Provider support and limits
+   * vary.
+   */
+  sandboxTimeoutMs?: number;
+  /**
    * Repo-image build timeout (the build sandbox lifetime), in seconds.
    * Build-only — sessions are unaffected. Unset → DEFAULT_BUILD_TIMEOUT_SECONDS.
    * The trigger caps the effective value at MAX_BUILD_TIMEOUT_SECONDS via
@@ -185,18 +227,48 @@ export function resolveBuildTimeoutSeconds(settings: SandboxSettings | undefined
 
 export type SlackMentionsPolicy = "allow" | "escape" | "strip";
 
+/** What a Slack routing rule points at: a repository or a saved environment. */
+export type SlackRoutingTargetType = "repository" | "environment";
+
+export const slackRoutingTargetTypeSchema = z.enum(["repository", "environment"]);
+
 /**
- * A workspace-wide keyword→repository routing rule for Slack. When a Slack
+ * A workspace-wide keyword→target routing rule for Slack. When a Slack
  * message contains the keyword, the bot routes the agent to the target
- * repository deterministically, before falling back to LLM classification.
+ * repository or environment deterministically, before falling back to LLM
+ * classification.
  */
-export interface SlackRoutingRule {
+export const slackRoutingRuleSchema = z.object({
   /** Case-insensitive keyword or phrase. Matched as a whole token in the message. */
-  keyword: string;
-  /** Canonical "owner/name" (lowercase) of the target repository. */
-  target: string;
-  // Future (deferred): targetType?: "repository" | "environment" — defaults to "repository".
-}
+  keyword: z.string(),
+  /**
+   * Canonical "owner/name" (lowercase) of the target repository, or — when
+   * `targetType` is `"environment"` — the stable environment id (`env_…`),
+   * never the rename-able display name.
+   */
+  target: z.string(),
+  /** Absent means "repository" (every rule stored before environments existed). */
+  targetType: slackRoutingTargetTypeSchema.optional(),
+});
+
+export type SlackRoutingRule = z.infer<typeof slackRoutingRuleSchema>;
+
+export const slackIntegrationSettingsRoutingResponseSchema = z.object({
+  settings: z
+    .object({
+      defaults: z
+        .object({
+          routingRules: z.array(slackRoutingRuleSchema).optional(),
+        })
+        .optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
+export type SlackIntegrationSettingsRoutingResponse = z.infer<
+  typeof slackIntegrationSettingsRoutingResponseSchema
+>;
 
 /** Maximum number of routing rules a workspace can configure (bounds the settings blob). */
 export const MAX_SLACK_ROUTING_RULES = 100;
@@ -215,12 +287,21 @@ export interface SlackGlobalSettings extends SlackRepoSettings {
   mentionsPolicy?: SlackMentionsPolicy;
   /** Workspace-wide keyword→repository routing rules (global-only, like mentionsPolicy). */
   routingRules?: SlackRoutingRule[];
+  /**
+   * Custom instructions appended to the first prompt of every Slack-initiated
+   * session (global-only, like mentionsPolicy).
+   */
+  sessionInstructions?: string;
 }
 
 /**
- * Clean up raw routing rules for storage or use: trim and lowercase keyword and
- * target, drop entries that are empty after trimming, de-dupe identical
- * (keyword, target) pairs, and cap the count at {@link MAX_SLACK_ROUTING_RULES}.
+ * Clean up raw routing rules for storage or use: trim and lowercase the keyword,
+ * canonicalize the target (repository targets lowercase; environment ids are
+ * opaque and only trimmed), drop entries that are empty after trimming, de-dupe
+ * identical (keyword, targetType, target) triples, and cap the count at
+ * {@link MAX_SLACK_ROUTING_RULES}. Repository rules normalize to the bare
+ * `{ keyword, target }` shape (no `targetType`), keeping them byte-identical to
+ * every rule stored before environments existed.
  *
  * Lenient by design — it never throws — so it is safe on the bot's read path as
  * well as the control plane's write path. Shape/length enforcement (with errors)
@@ -233,12 +314,16 @@ export function normalizeRoutingRules(rules: SlackRoutingRule[] | undefined): Sl
   const normalized: SlackRoutingRule[] = [];
   for (const rule of rules) {
     const keyword = typeof rule?.keyword === "string" ? rule.keyword.trim().toLowerCase() : "";
-    const target = typeof rule?.target === "string" ? rule.target.trim().toLowerCase() : "";
+    const rawTarget = typeof rule?.target === "string" ? rule.target.trim() : "";
+    const isEnvironment = rule?.targetType === "environment";
+    const target = isEnvironment ? rawTarget : rawTarget.toLowerCase();
     if (!keyword || !target) continue;
-    const dedupeKey = `${keyword} ${target}`;
+    const dedupeKey = `${keyword} ${isEnvironment ? "environment" : "repository"} ${target}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    normalized.push({ keyword, target });
+    normalized.push(
+      isEnvironment ? { keyword, target, targetType: "environment" } : { keyword, target }
+    );
     if (normalized.length >= MAX_SLACK_ROUTING_RULES) break;
   }
   return normalized;
@@ -264,6 +349,19 @@ export function matchRoutingRules(message: string, rules: SlackRoutingRule[]): S
   });
 }
 
+/**
+ * Integrations that accept environment-level setting overrides — the top layer
+ * of the resolution chain (global defaults → primary-repo overrides →
+ * environment overrides). Limited to the settings the session-scoped
+ * resolution consumes; bot-scoped integrations (github, linear) resolve from
+ * the trigger repo before a session exists, and slack is global/per-repo only.
+ * The environment-level shape is the integration's repo (override) shape.
+ */
+export const ENVIRONMENT_SETTINGS_INTEGRATION_IDS = ["sandbox", "code-server"] as const;
+
+export type EnvironmentSettingsIntegrationId =
+  (typeof ENVIRONMENT_SETTINGS_INTEGRATION_IDS)[number];
+
 /** Maps each integration ID to its global and per-repo settings types. */
 export interface IntegrationSettingsMap {
   github: IntegrationEntry<GitHubBotSettings>;
@@ -271,6 +369,7 @@ export interface IntegrationSettingsMap {
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
+  scm: IntegrationEntry<ScmSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
@@ -278,6 +377,7 @@ export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
+export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */

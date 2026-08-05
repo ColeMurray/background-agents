@@ -2,7 +2,7 @@ import {
   MODEL_REASONING_CONFIG,
   type ValidModel,
   type ReasoningEffort,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 
 interface ReasoningEffortPillsProps {
   selectedModel: string;

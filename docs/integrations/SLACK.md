@@ -33,9 +33,12 @@ notification controls and safety notes are covered near the end.
 | Start from a channel        | Invite the bot, then `@mention` it with a request                          |
 | Start from a DM             | Send the bot a direct message                                              |
 | Continue a session          | Reply in the same Slack thread                                             |
+| Send images to the agent    | Attach PNG, JPEG, WebP, or GIF images to an interactive request            |
+| Forward a message           | Share another Slack message with the bot; text, images, and source travel  |
 | Pick the repository         | Let Open-Inspect infer it, or choose from a dropdown when it is unsure     |
 | Set personal defaults       | Use the Slack app's **Home** tab for model, reasoning effort, and branch   |
 | Follow the result           | Read the completion reply or open the full session with **View Session**   |
+| Review generated media      | Optionally attach charts, screenshots, and small recordings to the thread  |
 | Ask the agent to post Slack | Enable agent notifications, then explicitly ask the agent to post to Slack |
 | Auto-trigger from a channel | Opt-in: watch a channel so matching messages start an automation           |
 
@@ -44,6 +47,18 @@ Open-Inspect does not use slash commands today. In channels, it normally respond
 [channel-message triggers](#channel-message-triggers) feature can additionally start an
 **automation** from non-mention messages that match conditions you configure; it is disabled by
 default and must be enabled by an operator.
+
+All completion replies are delivered asynchronously through a Cloudflare Queue. Open-Inspect
+attaches generated PNG, JPEG, WebP, or MP4 session artifacts to the completion thread. Delivery is
+bounded to five files, 10 MiB per file, and 25 MiB total per completion. Additional or oversized
+media remains available through **View Session**. Files merely written into the repository are not
+uploaded automatically. Queue delivery requires the Terraform operator's Cloudflare token to have
+**Queues: Edit**. Media delivery requires the Slack app's `files:write` bot scope and a one-time app
+reinstall for each workspace.
+
+Inbound images use a separate path and permission: images that you attach to a prompt require
+`files:read`, while generated media that Open-Inspect posts back requires `files:write`. Adding
+either scope to an existing Slack app requires reinstalling the app for the workspace.
 
 ---
 
@@ -79,6 +94,40 @@ request to the agent.
 
 To continue a session that started from a DM, reply in the Slack thread created for that DM request.
 Sending a new top-level DM is treated as a new request and may start repository selection again.
+
+### With image attachments
+
+Attach PNG, JPEG, WebP, or GIF images to a DM, a channel request that `@mentions` the bot, or an
+interactive thread follow-up. You can include instructions with the images or send images alone; for
+example, attach a screenshot and ask Open-Inspect to fix the visible error. Open-Inspect forwards at
+most six images per message, and each image must be no larger than 10 MiB.
+
+If Open-Inspect asks you to choose a repository or environment, make the selection normally. The bot
+retrieves the original message's images after you choose and forwards them with the saved request.
+If only some images can be read, the remaining images and any message text still reach the agent,
+and the bot posts a warning in the thread. If an image-only request loses every image, no empty
+session or follow-up is sent.
+
+This feature requires the Slack app's `files:read` bot scope and a reinstall after adding the scope.
+Remote files hosted outside Slack and non-image attachments are not forwarded.
+
+### With forwarded messages
+
+Forward (share) another Slack message to a DM, to a channel request that `@mentions` the bot, or to
+an interactive thread follow-up. Add your own comment — "deal with this" — and it becomes the
+instruction the agent acts on; forward with no comment and the shared message is the whole request.
+
+The whole forwarded message reaches the agent:
+
+- Its text, with any links exactly as written.
+- Its images, forwarded as prompt attachments like images you attach yourself. They share the
+  per-message limits: at most six images, each no larger than 10 MiB.
+- Its author, source channel, permalink, channel id, and message timestamp. An agent with Slack
+  tooling of its own can use those to read the original thread for wider context.
+
+Forward several messages at once and each is quoted separately, up to ten per request. Each shared
+message's text is truncated at 4,000 characters. Link previews are skipped, since the message text
+already carries the link.
 
 ### Repository dropdowns
 
@@ -116,6 +165,16 @@ How matching works:
 Routing rules do not override an active thread: a keyword in a thread reply does not move that
 conversation to a different repository.
 
+### Session instructions
+
+Administrators can define workspace-wide instructions for Slack-started sessions under **Settings →
+Integrations → Slack → Session Instructions** in the web app. When set, the instructions are
+appended to the first prompt of every new Slack-initiated session as an `## Additional Instructions`
+section — use them for standing guidance such as coding standards, preferred tools, or PR
+conventions. They apply to new sessions only (thread follow-ups continue with the session's existing
+context), are limited to 10,000 characters, and mirror the Linear integration's **Issue Session
+Instructions**.
+
 ---
 
 ## Threaded Conversations
@@ -123,6 +182,10 @@ conversation to a different repository.
 A top-level Slack request starts a new Slack thread. Reply in that thread to send follow-up prompts
 to the same Open-Inspect session. This applies in both channels and DMs: in a direct message, the
 follow-up still needs to be a thread reply, not a fresh top-level DM.
+
+Image attachments on interactive channel follow-ups must accompany an `@mention` of the bot. In a DM
+thread, no mention is needed. Watched-channel automation threads are text-only, as described in
+[Channel Message Triggers](#channel-message-triggers).
 
 Open-Inspect keeps the Slack thread connected to the session for about 7 days. If you reply after
 that mapping expires, or if you reply outside the thread, the bot may start repository selection
@@ -152,8 +215,8 @@ When the agent finishes, Slack receives a completion reply with:
 - A **View Session** button
 
 If the agent created a manual-PR branch and no PR artifact is already present, Slack may also show a
-**Create PR** button. Screenshots and detailed event logs stay in the web session instead of being
-expanded into the Slack completion reply.
+**Create PR** button. Detailed event logs stay in the web session. Generated media is attached only
+when the operator enables media delivery; it always remains available through **View Session**.
 
 ---
 
@@ -235,6 +298,11 @@ The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED`
 When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
 automation in the web app is still allowed, but it will not run until the flag is enabled.
 
+Slack Message automations currently ingest the message's own text only. File uploads, including
+image-only `file_share` messages, do not start these automations; attachments on automation thread
+replies are not forwarded to the session; and the body of a forwarded message is not read. Use an
+interactive DM or `@mention` when the agent needs an image or a forwarded message.
+
 ### Slack app setup
 
 In addition to the standard event subscription the bot already uses, enable the bot to receive
@@ -257,6 +325,15 @@ condition to filter by content. See
 - When the run finishes, the agent's final response is posted into the triggering message's thread
   (with links to any pull requests and the full session), and the reaction is cleared. A failed run
   posts a short failure notice instead.
+- A run can **decline to reply**. If the agent's entire final message is `NO_REPLY` (or empty),
+  nothing is posted and only the 👀 reaction is cleared. This lets an automation that watches a busy
+  channel stay quiet on messages that turn out to need nothing from it — chatter between people, or
+  a follow-up addressed to someone else — instead of posting its reasoning about why it has nothing
+  to say. It applies to thread follow-ups as much as to the first trigger, which is where it matters
+  most: every reply in the thread wakes the automation. Tell the agent about the sentinel in the
+  automation's instructions; without an explicit instruction it will answer every message it is
+  woken for. A run that opened a pull request or produced other artifacts always posts, and
+  interactive `@mention` sessions never decline — a person is waiting on a visible answer there.
 - Every reply in a thread continues the same session — during the run and after it finishes — for up
   to 7 days after the thread's first trigger, like replying in an `@mention` thread. The reply is
   routed to that session as a follow-up prompt (re-spawned from a snapshot if it had gone idle),
@@ -328,6 +405,24 @@ dropdown expires after one hour.
 
 Reply inside the same Slack thread as the original request. Thread-to-session mappings last about 7
 days, so older threads may need a fresh request.
+
+### An attached image did not reach the agent
+
+Confirm the Slack app has the `files:read` bot scope and was reinstalled after that scope was added.
+Use PNG, JPEG, WebP, or GIF images no larger than 10 MiB, with at most six images in one message.
+For a channel request or interactive channel follow-up, `@mention` the bot; DMs do not need a
+mention.
+
+The bot may also need `channels:history` for public-channel messages or `groups:history` for
+private-channel messages so it can recover file details that Slack omits from `app_mention` events.
+If some images fail, check the warning posted in the thread. `files:write` does not grant inbound
+image access; it is used only when Open-Inspect posts generated media back to Slack.
+
+### A forwarded message did not reach the agent
+
+The same `channels:history` / `groups:history` scopes let the bot recover a forwarded message's
+content when Slack omits it from the `app_mention` event, and images inside a forwarded message need
+`files:read` like any other inbound image.
 
 ### The wrong model or branch was used
 

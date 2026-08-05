@@ -1,11 +1,14 @@
+import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
+import { isEnvironmentId } from "@open-inspect/shared/types/environments";
 import {
-  isValidModel,
-  isValidReasoningEffort,
+  ENVIRONMENT_SETTINGS_INTEGRATION_IDS,
   INTEGRATION_DEFINITIONS,
-  DEFAULT_MENTIONS_POLICY,
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
   MAX_SLACK_ROUTING_KEYWORD_LENGTH,
   normalizeRoutingRules,
+  type EnvironmentSettingsIntegrationId,
   type IntegrationId,
   type IntegrationSettingsMap,
   type GitHubBotSettings,
@@ -14,8 +17,10 @@ import {
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { normalizeSandboxSettings } from "../sandbox/settings";
+import type { SqlDatabase } from "./sql-database";
 
 type SettingsLevel = "global" | "repo";
 
@@ -34,10 +39,19 @@ export function isValidIntegrationId(id: string): id is IntegrationId {
   return VALID_INTEGRATION_IDS.has(id);
 }
 
-export class IntegrationSettingsStore {
-  constructor(private readonly db: D1Database) {}
+const ENVIRONMENT_SETTINGS_INTEGRATIONS = new Set<string>(ENVIRONMENT_SETTINGS_INTEGRATION_IDS);
 
-  async getGlobal<K extends IntegrationId>(
+/** Whether an integration accepts environment-level setting overrides (design §13.5). */
+export function supportsEnvironmentSettings(
+  id: keyof IntegrationSettingsMap
+): id is EnvironmentSettingsIntegrationId {
+  return ENVIRONMENT_SETTINGS_INTEGRATIONS.has(id);
+}
+
+export class IntegrationSettingsStore {
+  constructor(private readonly db: SqlDatabase) {}
+
+  async getGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K
   ): Promise<IntegrationSettingsMap[K]["global"] | null> {
     const row = await this.db
@@ -50,7 +64,7 @@ export class IntegrationSettingsStore {
     return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
-  async setGlobal<K extends IntegrationId>(
+  async setGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
@@ -87,14 +101,14 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async deleteGlobal<K extends IntegrationId>(integrationId: K): Promise<void> {
+  async deleteGlobal<K extends keyof IntegrationSettingsMap>(integrationId: K): Promise<void> {
     await this.db
       .prepare("DELETE FROM integration_settings WHERE integration_id = ?")
       .bind(integrationId)
       .run();
   }
 
-  async getRepoSettings<K extends IntegrationId>(
+  async getRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string
   ): Promise<IntegrationSettingsMap[K]["repo"] | null> {
@@ -110,7 +124,7 @@ export class IntegrationSettingsStore {
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
-  async setRepoSettings<K extends IntegrationId>(
+  async setRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
@@ -130,14 +144,17 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async deleteRepoSettings<K extends IntegrationId>(integrationId: K, repo: string): Promise<void> {
+  async deleteRepoSettings<K extends keyof IntegrationSettingsMap>(
+    integrationId: K,
+    repo: string
+  ): Promise<void> {
     await this.db
       .prepare("DELETE FROM integration_repo_settings WHERE integration_id = ? AND repo = ?")
       .bind(integrationId, repo.toLowerCase())
       .run();
   }
 
-  async listRepoSettings<K extends IntegrationId>(
+  async listRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K
   ): Promise<Array<{ repo: string; settings: IntegrationSettingsMap[K]["repo"] }>> {
     const { results } = await this.db
@@ -154,15 +171,73 @@ export class IntegrationSettingsStore {
     }));
   }
 
-  async getResolvedConfig<K extends IntegrationId>(
+  /**
+   * Environment-level overrides (design §13.5) — the top layer of the
+   * resolution chain, in the integration's override (repo) shape. Only the
+   * session-scoped integrations accept this level; see
+   * {@link supportsEnvironmentSettings}.
+   */
+  async getEnvironmentSettings<K extends EnvironmentSettingsIntegrationId>(
     integrationId: K,
-    repo: string
+    environmentId: string
+  ): Promise<IntegrationSettingsMap[K]["repo"] | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT settings FROM integration_environment_settings WHERE integration_id = ? AND environment_id = ?"
+      )
+      .bind(integrationId, environmentId)
+      .first<{ settings: string }>();
+
+    if (!row) return null;
+    const settings = JSON.parse(row.settings) as IntegrationSettingsMap[K]["repo"];
+    return this.normalizeStoredRepoSettings(integrationId, settings);
+  }
+
+  async setEnvironmentSettings<K extends EnvironmentSettingsIntegrationId>(
+    integrationId: K,
+    environmentId: string,
+    settings: IntegrationSettingsMap[K]["repo"]
+  ): Promise<void> {
+    const normalized = this.validateAndNormalizeSettings(integrationId, settings, "repo");
+
+    const now = Date.now();
+    await this.db
+      .prepare(
+        `INSERT INTO integration_environment_settings (integration_id, environment_id, settings, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(integration_id, environment_id) DO UPDATE SET
+           settings = excluded.settings,
+           updated_at = excluded.updated_at`
+      )
+      .bind(integrationId, environmentId, JSON.stringify(normalized), now, now)
+      .run();
+  }
+
+  async deleteEnvironmentSettings<K extends EnvironmentSettingsIntegrationId>(
+    integrationId: K,
+    environmentId: string
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        "DELETE FROM integration_environment_settings WHERE integration_id = ? AND environment_id = ?"
+      )
+      .bind(integrationId, environmentId)
+      .run();
+  }
+
+  async getResolvedConfig<K extends keyof IntegrationSettingsMap>(
+    integrationId: K,
+    repo: string,
+    environmentId?: string | null
   ): Promise<
     ResolvedIntegrationConfig<NonNullable<IntegrationSettingsMap[K]["global"]["defaults"]>>
   > {
-    const [globalSettings, repoSettings] = await Promise.all([
+    const [globalSettings, repoSettings, environmentSettings] = await Promise.all([
       this.getGlobal(integrationId),
       this.getRepoSettings(integrationId, repo),
+      environmentId && supportsEnvironmentSettings(integrationId)
+        ? this.getEnvironmentSettings(integrationId, environmentId)
+        : null,
     ]);
 
     // undefined → null (all repos), [] → [] (disabled), [...] → [...] (allowlist)
@@ -170,13 +245,15 @@ export class IntegrationSettingsStore {
       globalSettings?.enabledRepos !== undefined ? globalSettings.enabledRepos : null;
 
     const defaults = globalSettings?.defaults ?? {};
-    const overrides = repoSettings ?? {};
 
-    // Generic merge: repo overrides win, undefined keys don't clobber defaults
+    // Generic merge, later layers win, undefined keys don't clobber:
+    // global defaults → repo overrides → environment overrides (design §13.5).
     const settings: Record<string, unknown> = { ...defaults };
-    for (const [key, value] of Object.entries(overrides)) {
-      if (value !== undefined) {
-        settings[key] = value;
+    for (const overrides of [repoSettings ?? {}, environmentSettings ?? {}]) {
+      for (const [key, value] of Object.entries(overrides)) {
+        if (value !== undefined) {
+          settings[key] = value;
+        }
       }
     }
 
@@ -190,7 +267,7 @@ export class IntegrationSettingsStore {
     >;
   }
 
-  private normalizeStoredGlobalSettings<K extends IntegrationId>(
+  private normalizeStoredGlobalSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): IntegrationSettingsMap[K]["global"] {
@@ -201,7 +278,7 @@ export class IntegrationSettingsStore {
     } as IntegrationSettingsMap[K]["global"];
   }
 
-  private normalizeStoredRepoSettings<K extends IntegrationId>(
+  private normalizeStoredRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"]
   ): IntegrationSettingsMap[K]["repo"] {
@@ -211,7 +288,7 @@ export class IntegrationSettingsStore {
     }) as IntegrationSettingsMap[K]["repo"];
   }
 
-  private validateAndNormalizeSettings<K extends IntegrationId>(
+  private validateAndNormalizeSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"],
     level: SettingsLevel
@@ -331,10 +408,10 @@ export class IntegrationSettingsStore {
 
     if (
       typeof settings.issueSessionInstructions === "string" &&
-      settings.issueSessionInstructions.length > 10000
+      settings.issueSessionInstructions.length > MAX_SESSION_INSTRUCTIONS_LENGTH
     ) {
       throw new IntegrationSettingsValidationError(
-        "issueSessionInstructions must be 10000 characters or fewer"
+        `issueSessionInstructions must be ${MAX_SESSION_INSTRUCTIONS_LENGTH} characters or fewer`
       );
     }
   }
@@ -351,7 +428,13 @@ export class IntegrationSettingsStore {
   ): SlackGlobalSettings {
     const allowedKeys =
       level === "global"
-        ? new Set(["agentNotificationsEnabled", "model", "mentionsPolicy", "routingRules"])
+        ? new Set([
+            "agentNotificationsEnabled",
+            "model",
+            "mentionsPolicy",
+            "routingRules",
+            "sessionInstructions",
+          ])
         : new Set(["agentNotificationsEnabled"]);
 
     for (const key of Object.keys(settings)) {
@@ -375,6 +458,22 @@ export class IntegrationSettingsStore {
     ) {
       throw new IntegrationSettingsValidationError(
         `mentionsPolicy must be one of: ${SLACK_MENTIONS_POLICIES.join(", ")}`
+      );
+    }
+
+    if (
+      settings.sessionInstructions !== undefined &&
+      typeof settings.sessionInstructions !== "string"
+    ) {
+      throw new IntegrationSettingsValidationError("sessionInstructions must be a string");
+    }
+
+    if (
+      typeof settings.sessionInstructions === "string" &&
+      settings.sessionInstructions.length > MAX_SESSION_INSTRUCTIONS_LENGTH
+    ) {
+      throw new IntegrationSettingsValidationError(
+        `sessionInstructions must be ${MAX_SESSION_INSTRUCTIONS_LENGTH} characters or fewer`
       );
     }
 
@@ -402,7 +501,11 @@ export class IntegrationSettingsStore {
       if (typeof rule !== "object" || rule === null) {
         throw new IntegrationSettingsValidationError("each routing rule must be an object");
       }
-      const { keyword, target } = rule as { keyword?: unknown; target?: unknown };
+      const { keyword, target, targetType } = rule as {
+        keyword?: unknown;
+        target?: unknown;
+        targetType?: unknown;
+      };
       if (typeof keyword !== "string" || keyword.trim() === "") {
         throw new IntegrationSettingsValidationError(
           "routing rule keyword must be a non-empty string"
@@ -413,10 +516,32 @@ export class IntegrationSettingsStore {
           `routing rule keyword must be ${MAX_SLACK_ROUTING_KEYWORD_LENGTH} characters or fewer`
         );
       }
-      if (typeof target !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(target.trim())) {
+      if (targetType !== undefined && targetType !== "repository" && targetType !== "environment") {
         throw new IntegrationSettingsValidationError(
-          "routing rule target must be a repository in owner/name form"
+          'routing rule targetType must be "repository" or "environment"'
         );
+      }
+      if (targetType === "environment") {
+        // The stable environment id, never the rename-able display name.
+        if (typeof target !== "string" || !isEnvironmentId(target.trim())) {
+          throw new IntegrationSettingsValidationError(
+            "routing rule target must be an environment id (env_…) when targetType is environment"
+          );
+        }
+        // The owner segment excludes ":" (GitHub forbids it) so a repository
+        // target can never collide with the bots' "env:<id>" value encoding.
+      } else {
+        const repository =
+          typeof target === "string" ? parseRepositoryFullName(target.trim()) : null;
+        if (
+          !repository ||
+          /[\s:]/.test(repository.repoOwner) ||
+          /[\s/]/.test(repository.repoName)
+        ) {
+          throw new IntegrationSettingsValidationError(
+            "routing rule target must be a repository in owner/name form"
+          );
+        }
       }
     }
     return normalizeRoutingRules(rules as SlackRoutingRule[]);

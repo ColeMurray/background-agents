@@ -40,7 +40,9 @@ def test_resolve_clone_token_generates_github_installation_token(monkeypatch):
         captured.update(kwargs)
         return "ghs-token"
 
-    monkeypatch.setattr("src.auth.generate_installation_token", fake_generate_installation_token)
+    monkeypatch.setattr(
+        "sandbox_runtime.auth.generate_installation_token", fake_generate_installation_token
+    )
 
     assert resolve_clone_token() == "ghs-token"
     assert captured == {
@@ -57,7 +59,7 @@ def test_resolve_clone_token_returns_none_when_github_credentials_incomplete(mon
     def fail_if_called(**_kwargs):
         raise AssertionError("generate_installation_token should not be called")
 
-    monkeypatch.setattr("src.auth.generate_installation_token", fail_if_called)
+    monkeypatch.setattr("sandbox_runtime.auth.generate_installation_token", fail_if_called)
 
     assert resolve_clone_token() is None
 
@@ -70,6 +72,6 @@ def test_resolve_clone_token_returns_none_when_github_generation_fails(monkeypat
     def raise_from_generate(**_kwargs):
         raise RuntimeError("token generation failed")
 
-    monkeypatch.setattr("src.auth.generate_installation_token", raise_from_generate)
+    monkeypatch.setattr("sandbox_runtime.auth.generate_installation_token", raise_from_generate)
 
     assert resolve_clone_token() is None

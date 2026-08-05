@@ -12,7 +12,7 @@ describe("completion artifact type narrowing", () => {
     expect(toArtifactType("video")).toBe("video");
   });
 
-  it("omits video artifacts from completion artifact summaries like screenshots", () => {
+  it("keeps video artifacts out of public completion artifact links", () => {
     expect(toEventArtifactInfo({ artifactType: "video", url: "sessions/s1/media/a1.mp4" })).toBe(
       null
     );
@@ -90,9 +90,127 @@ describe("buildAgentResponseFromEvents", () => {
           metadata: { head: "fix" },
         },
       ],
+      mediaArtifacts: [],
       success: true,
       error: undefined,
     });
+  });
+
+  it("extracts and deduplicates message-scoped media alongside linked artifacts", () => {
+    const response = buildAgentResponseFromEvents([
+      {
+        id: "artifact:image",
+        type: "artifact",
+        data: {
+          artifactType: "screenshot",
+          artifactId: "image-1",
+          url: "sessions/s1/media/image-1.png",
+          metadata: {
+            mimeType: "image/png",
+            sizeBytes: 1234,
+            caption: "Revenue by month",
+          },
+        },
+        messageId: "msg-1",
+        createdAt: 10,
+      },
+      {
+        id: "artifact:image-duplicate",
+        type: "artifact",
+        data: {
+          artifactType: "screenshot",
+          artifactId: "image-1",
+          url: "sessions/s1/media/image-1.png",
+        },
+        messageId: "msg-1",
+        createdAt: 11,
+      },
+      {
+        id: "artifact:pr",
+        type: "artifact",
+        data: {
+          artifactType: "pr",
+          url: "https://example.com/pull/1",
+          metadata: { number: 1 },
+        },
+        messageId: "msg-1",
+        createdAt: 12,
+      },
+      {
+        id: "artifact:video",
+        type: "artifact",
+        data: {
+          artifactType: "video",
+          artifactId: "video-1",
+          url: "sessions/s1/media/video-1.mp4",
+          metadata: { mimeType: "video/mp4", sizeBytes: 4321, caption: "Demo" },
+        },
+        messageId: "msg-1",
+        createdAt: 13,
+      },
+    ]);
+
+    expect(response.artifacts).toEqual([
+      {
+        type: "pr",
+        url: "https://example.com/pull/1",
+        label: "PR #1",
+      },
+    ]);
+    expect(response.mediaArtifacts).toEqual([
+      {
+        id: "image-1",
+        type: "screenshot",
+        mimeType: "image/png",
+        sizeBytes: 1234,
+        caption: "Revenue by month",
+      },
+      {
+        id: "video-1",
+        type: "video",
+        mimeType: "video/mp4",
+        sizeBytes: 4321,
+        caption: "Demo",
+      },
+    ]);
+  });
+
+  it("ignores media events without a downloadable artifact id", () => {
+    const response = buildAgentResponseFromEvents([
+      {
+        id: "artifact:legacy",
+        type: "artifact",
+        data: {
+          artifactType: "screenshot",
+          url: "sessions/s1/media/legacy.png",
+        },
+        messageId: "msg-1",
+        createdAt: 1,
+      },
+    ]);
+
+    expect(response.mediaArtifacts).toEqual([]);
+  });
+
+  it("omits invalid media sizes from extracted metadata", () => {
+    for (const sizeBytes of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const response = buildAgentResponseFromEvents([
+        {
+          id: `artifact:${sizeBytes}`,
+          type: "artifact",
+          data: {
+            artifactType: "screenshot",
+            artifactId: `image-${sizeBytes}`,
+            url: "sessions/s1/media/image.png",
+            metadata: { sizeBytes },
+          },
+          messageId: "msg-1",
+          createdAt: 1,
+        },
+      ]);
+
+      expect(response.mediaArtifacts[0]).not.toHaveProperty("sizeBytes");
+    }
   });
 
   it("uses the explicit default success only when completion success is absent", () => {
@@ -149,6 +267,28 @@ describe("buildAgentResponseFromEvents", () => {
 });
 
 describe("extractAgentResponse", () => {
+  it("returns a failed response when the events response is malformed", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch() {
+        return Response.json({ events: [{ id: "event-1", type: "token" }], hasMore: false });
+      },
+    };
+
+    await expect(
+      extractAgentResponse(
+        { fetcher, auth: { service: "slack-bot", secret: "test-secret" } },
+        "session-1",
+        "msg-1"
+      )
+    ).resolves.toEqual({
+      textContent: "",
+      toolCalls: [],
+      artifacts: [],
+      mediaArtifacts: [],
+      success: false,
+    });
+  });
+
   it("filters fetched session artifacts to the message event window", async () => {
     const fetcher: ControlPlaneFetcher = {
       async fetch(input) {
@@ -200,7 +340,11 @@ describe("extractAgentResponse", () => {
       },
     };
 
-    const response = await extractAgentResponse({ fetcher }, "session-1", "msg-1");
+    const response = await extractAgentResponse(
+      { fetcher, auth: { service: "slack-bot", secret: "test-secret" } },
+      "session-1",
+      "msg-1"
+    );
 
     expect(response.artifacts).toEqual([
       {
@@ -210,5 +354,37 @@ describe("extractAgentResponse", () => {
         metadata: { head: "current" },
       },
     ]);
+  });
+
+  it("ignores a malformed artifacts response", async () => {
+    const fetcher: ControlPlaneFetcher = {
+      async fetch(input) {
+        const url = String(input);
+        if (url.includes("/events")) {
+          return Response.json({
+            events: [
+              {
+                id: "complete:msg-1",
+                type: "execution_complete",
+                data: { success: true },
+                messageId: "msg-1",
+                createdAt: 200,
+              },
+            ],
+            hasMore: false,
+          });
+        }
+
+        return Response.json({ artifacts: [{ id: "artifact-1", type: "branch" }] });
+      },
+    };
+
+    const response = await extractAgentResponse(
+      { fetcher, auth: { service: "slack-bot", secret: "test-secret" } },
+      "session-1",
+      "msg-1"
+    );
+
+    expect(response).toMatchObject({ success: true, artifacts: [] });
   });
 });

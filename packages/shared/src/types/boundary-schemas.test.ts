@@ -1,12 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
+  automationRepositoriesInputSchema,
+  automationRepositoryInputSchema,
   clientMessageSchema,
+  createSessionResponseSchema,
   createSessionRequestSchema,
+  callbackContextSchema,
+  listArtifactsResponseSchema,
+  listEventsResponseSchema,
+  MAX_AUTOMATION_REPOSITORIES,
+  normalizeOptionalRepositoryPair,
+  RepositoryPairValidationError,
   sandboxEventSchema,
+  toolCallIdentityKey,
+  sendPromptRequestSchema,
   serverMessageSchema,
+  sessionParticipantProfilesResponseSchema,
+  sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
+  cancelChildSessionRequestSchema,
   spawnContextSchema,
-  userPreferencesRequestSchema,
 } from ".";
 
 describe("boundary schemas", () => {
@@ -59,6 +72,15 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    it("rejects empty-string repository identifiers instead of coercing to repo-less", () => {
+      const result = createSessionRequestSchema.safeParse({
+        repoOwner: "",
+        repoName: "",
+      });
+
+      expect(result.success).toBe(false);
+    });
+
     it("rejects branch without repository context", () => {
       const result = createSessionRequestSchema.safeParse({
         title: "Incident sweep",
@@ -66,6 +88,243 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("control-plane response schemas", () => {
+    it("parses valid session and prompt responses", () => {
+      expect(
+        createSessionResponseSchema.safeParse({
+          sessionId: "session-123",
+          status: "created",
+        }).success
+      ).toBe(true);
+      expect(
+        sendPromptResponseSchema.safeParse({ messageId: "msg-456", status: "queued" }).success
+      ).toBe(true);
+      expect(sendPromptResponseSchema.safeParse({ messageId: "msg-456" }).success).toBe(true);
+    });
+
+    it("rejects malformed or partial responses", () => {
+      expect(
+        createSessionResponseSchema.safeParse({ sessionId: 123, status: "created" }).success
+      ).toBe(false);
+      expect(createSessionResponseSchema.safeParse({ sessionId: "session-123" }).success).toBe(
+        false
+      );
+      expect(
+        createSessionResponseSchema.safeParse({
+          sessionId: "session-123",
+          status: "running",
+        }).success
+      ).toBe(false);
+      expect(sendPromptResponseSchema.safeParse({ messageId: null }).success).toBe(false);
+      expect(sendPromptResponseSchema.safeParse({}).success).toBe(false);
+      expect(
+        sendPromptResponseSchema.safeParse({ messageId: "msg-456", status: "running" }).success
+      ).toBe(false);
+    });
+
+    it("rejects empty identifiers", () => {
+      expect(
+        createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
+      ).toBe(false);
+      expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("completion response schemas", () => {
+    it("parses valid event and artifact list responses", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [
+            {
+              id: "event-1",
+              type: "token",
+              data: { content: "hello" },
+              messageId: "msg-1",
+              createdAt: 123,
+            },
+          ],
+          cursor: "next-page",
+          hasMore: true,
+        }).success
+      ).toBe(true);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [
+            {
+              id: "artifact-1",
+              type: "branch",
+              url: "https://example.com/tree/main",
+              metadata: { head: "main" },
+              createdAt: 123,
+            },
+          ],
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects malformed or partial completion responses", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [{ id: "event-1", type: "token", data: {}, messageId: "msg-1" }],
+          hasMore: false,
+        }).success
+      ).toBe(false);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [{ id: "artifact-1", type: "branch", url: null }],
+        }).success
+      ).toBe(false);
+    });
+
+    it("rejects an events page that reports more results without a cursor", () => {
+      const page = {
+        events: [
+          {
+            id: "event-1",
+            type: "token",
+            data: { content: "hello" },
+            messageId: "msg-1",
+            createdAt: 123,
+          },
+        ],
+        hasMore: true,
+      };
+
+      expect(listEventsResponseSchema.safeParse(page).success).toBe(false);
+      expect(listEventsResponseSchema.safeParse({ ...page, cursor: "" }).success).toBe(false);
+      expect(listEventsResponseSchema.safeParse({ ...page, cursor: "next-page" }).success).toBe(
+        true
+      );
+    });
+
+    it("preserves updatedAt on listed artifacts", () => {
+      const parsed = listArtifactsResponseSchema.safeParse({
+        artifacts: [
+          {
+            id: "artifact-1",
+            type: "pr",
+            url: "https://example.com/pull/1",
+            metadata: { number: 1 },
+            createdAt: 123,
+            updatedAt: 456,
+          },
+        ],
+      });
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.artifacts[0].updatedAt).toBe(456);
+    });
+
+    it("accepts nullable boundary fields returned by the control plane", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [
+            {
+              id: "event-1",
+              type: "execution_complete",
+              data: { success: true },
+              messageId: null,
+              createdAt: 123,
+            },
+          ],
+          hasMore: false,
+        }).success
+      ).toBe(true);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [
+            {
+              id: "artifact-1",
+              type: "branch",
+              url: null,
+              metadata: null,
+              createdAt: 123,
+            },
+          ],
+        }).success
+      ).toBe(true);
+    });
+  });
+
+  describe("sendPromptRequestSchema", () => {
+    it("parses a valid prompt request with a Slack callback context", () => {
+      const result = sendPromptRequestSchema.safeParse({
+        content: "Investigate the failure",
+        source: "slack",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: "high",
+        attachments: [{ attachmentId: "att-1", name: "screenshot.png" }],
+        callbackContext: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "1710000000.000100",
+          repoFullName: "open-inspect/background-agents",
+          model: "anthropic/claude-sonnet-4-6",
+          reactionMessageTs: "1710000000.000200",
+        },
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a malformed prompt request", () => {
+      expect(sendPromptRequestSchema.safeParse({ content: 123 }).success).toBe(false);
+      expect(sendPromptRequestSchema.safeParse({ source: "web" }).success).toBe(false);
+      expect(sendPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+      expect(
+        sendPromptRequestSchema.safeParse({ content: "hello", source: "unknown" }).success
+      ).toBe(false);
+    });
+  });
+
+  describe("callbackContextSchema", () => {
+    it("parses valid callback contexts", () => {
+      expect(
+        callbackContextSchema.safeParse({
+          source: "slack",
+          channel: "C123",
+          threadTs: "1710000000.000100",
+          repoFullName: "open-inspect/background-agents",
+          model: "anthropic/claude-sonnet-4-6",
+        }).success
+      ).toBe(true);
+      expect(
+        callbackContextSchema.safeParse({
+          source: "linear",
+          issueId: "issue-1",
+          issueIdentifier: "OI-123",
+          issueUrl: "https://linear.app/open-inspect/issue/OI-123/test",
+          repoFullName: "open-inspect/background-agents",
+          model: "anthropic/claude-sonnet-4-6",
+          transitionIssueOnStart: false,
+        }).success
+      ).toBe(true);
+      expect(
+        callbackContextSchema.safeParse({
+          source: "automation",
+          automationId: "automation-1",
+          runId: "run-1",
+          automationName: "Nightly sweep",
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects malformed or partial callback contexts", () => {
+      expect(callbackContextSchema.safeParse({ source: "slack", channel: "C123" }).success).toBe(
+        false
+      );
+      expect(
+        callbackContextSchema.safeParse({
+          source: "automation",
+          automationId: "automation-1",
+          runId: null,
+          automationName: "Nightly sweep",
+        }).success
+      ).toBe(false);
+      expect(callbackContextSchema.safeParse({ source: "github" }).success).toBe(false);
     });
   });
 
@@ -84,6 +343,70 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("preserves task activity correlation fields", () => {
+      const taskResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "task",
+        args: { description: "Review code" },
+        callId: "task-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+        childSessionId: "child-session-1",
+      });
+      const childResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "child-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 124,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      const errorResult = sandboxEventSchema.safeParse({
+        type: "error",
+        error: "Child failed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 125,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+
+      expect(taskResult.success && taskResult.data.childSessionId).toBe("child-session-1");
+      expect(childResult.success && childResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      expect(errorResult.success && errorResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+    });
+
+    it("uses task ownership when a child session ID is unavailable", () => {
+      const base = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "shared-call",
+        messageId: "message-1",
+        isSubtask: true,
+      };
+
+      expect(toolCallIdentityKey({ ...base, taskCallId: "task-1" })).not.toBe(
+        toolCallIdentityKey({ ...base, taskCallId: "task-2" })
+      );
     });
 
     it("rejects a malformed partial sandbox event", () => {
@@ -128,6 +451,42 @@ describe("boundary schemas", () => {
         expect(result.data.ackId).toBe("ack-1");
       }
     });
+
+    it("parses step finish events with structured token usage", () => {
+      const tokenUsage = {
+        total: 223,
+        input: 219,
+        output: 4,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
+      };
+
+      const result = sandboxEventSchema.safeParse({
+        type: "step_finish",
+        messageId: "message-1",
+        cost: 0.001,
+        tokens: tokenUsage,
+        reason: "end_turn",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tokens).toEqual(tokenUsage);
+      }
+    });
+
+    it("parses a ready event (emitted on every sandbox connect)", () => {
+      const result = sandboxEventSchema.safeParse({
+        type: "ready",
+        sandboxId: "sandbox-1",
+        opencodeSessionId: null,
+        timestamp: 123,
+      });
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe("clientMessageSchema", () => {
@@ -139,15 +498,55 @@ describe("boundary schemas", () => {
         reasoningEffort: "high",
         attachments: [
           {
-            type: "file",
-            name: "error.log",
-            content: "stack trace",
-            mimeType: "text/plain",
+            name: "error.png",
+            attachmentId: "attachment-1",
           },
         ],
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("rejects inline and remote attachment sources", () => {
+      for (const attachment of [
+        { name: "inline.png", content: "aGVsbG8=" },
+        { name: "remote.png", url: "https://example.com/remote.png" },
+      ]) {
+        const result = clientMessageSchema.safeParse({
+          type: "prompt",
+          content: "Look",
+          attachments: [attachment],
+        });
+        expect(result.success).toBe(false);
+      }
+    });
+
+    it("rejects prompts with more than six attachments", () => {
+      const result = clientMessageSchema.safeParse({
+        type: "prompt",
+        content: "Compare these",
+        attachments: Array.from({ length: 7 }, (_, index) => ({
+          name: `${index}.png`,
+          attachmentId: `upload-${index}`,
+        })),
+      });
+
+      expect(result.success).toBe(false);
+    });
+
+    it("bounds attachment identifiers and names", () => {
+      for (const attachment of [
+        { name: "shot.png", attachmentId: "../upload" },
+        { name: "x".repeat(256), attachmentId: "attachment-1" },
+      ]) {
+        expect(
+          clientMessageSchema.safeParse({
+            type: "prompt",
+            content: "Look",
+            attachments: [attachment],
+          }).success
+        ).toBe(false);
+      }
     });
 
     it("rejects a malformed partial subscribe message", () => {
@@ -217,6 +616,61 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("keeps recognized replay events and drops unknown ones without failing", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "subscribed",
+        sessionId: "session-1",
+        state: {
+          id: "session-1",
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "completed",
+          sandboxStatus: "stopped",
+          messageCount: 1,
+          createdAt: 123,
+          parentSessionId: null,
+          tunnelUrls: null,
+        },
+        artifacts: [],
+        participantId: "participant-1",
+        replay: {
+          events: [
+            { type: "ready", sandboxId: "sandbox-1", opencodeSessionId: null, timestamp: 1 },
+            { type: "some_future_event", foo: "bar", timestamp: 2 },
+            { type: "token", content: "hi", messageId: "m1", sandboxId: "sandbox-1", timestamp: 3 },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+        spawnError: null,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.replay?.events.map((event) => event.type)).toEqual(["ready", "token"]);
+      }
+    });
+
+    it("keeps recognized history_page items and drops unknown ones without failing", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "history_page",
+        items: [
+          { type: "some_legacy_event", foo: "bar", timestamp: 1 },
+          { type: "git_sync", status: "completed", sandboxId: "sandbox-1", timestamp: 2 },
+        ],
+        hasMore: false,
+        cursor: null,
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success && result.data.type === "history_page") {
+        expect(result.data.items.map((item) => item.type)).toEqual(["git_sync"]);
+      }
+    });
+
     it("rejects a malformed partial sandbox event message", () => {
       const result = serverMessageSchema.safeParse({
         type: "sandbox_event",
@@ -238,22 +692,48 @@ describe("boundary schemas", () => {
     });
   });
 
-  describe("userPreferencesRequestSchema", () => {
-    it("parses a valid user preferences request", () => {
-      const result = userPreferencesRequestSchema.safeParse({
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: "high",
+  describe("participant profile boundaries", () => {
+    it("parses only safe profile fields keyed by canonical user ID", () => {
+      const result = sessionParticipantProfilesResponseSchema.parse({
+        profiles: {
+          "user-1": {
+            userId: "user-1",
+            displayName: "Ada Lovelace",
+            avatarUrl: "https://avatars.example/ada",
+            email: "private@example.com",
+          },
+        },
       });
 
-      expect(result.success).toBe(true);
+      expect(result).toEqual({
+        profiles: {
+          "user-1": {
+            userId: "user-1",
+            displayName: "Ada Lovelace",
+            avatarUrl: "https://avatars.example/ada",
+          },
+        },
+      });
     });
 
-    it("rejects malformed preference fields", () => {
-      const result = userPreferencesRequestSchema.safeParse({
-        model: 123,
+    it("accepts historical user messages without an author userId", () => {
+      const legacy = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "hello",
+        messageId: "message-1",
+        timestamp: 1,
+        author: { participantId: "participant-1", name: "Legacy User" },
+      });
+      const current = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "hello",
+        messageId: "message-2",
+        timestamp: 1,
+        author: { participantId: "participant-1", userId: "user-1", name: "Ada" },
       });
 
-      expect(result.success).toBe(false);
+      expect(legacy.success).toBe(true);
+      expect(current.success).toBe(true);
     });
   });
 
@@ -280,6 +760,26 @@ describe("boundary schemas", () => {
     });
   });
 
+  describe("cancelChildSessionRequestSchema", () => {
+    it("parses an empty options object", () => {
+      const result = cancelChildSessionRequestSchema.safeParse({});
+
+      expect(result.success).toBe(true);
+    });
+
+    it("parses an explicit cancelNested flag", () => {
+      const result = cancelChildSessionRequestSchema.safeParse({ cancelNested: false });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects a non-boolean cancelNested", () => {
+      const result = cancelChildSessionRequestSchema.safeParse({ cancelNested: "yes" });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe("spawnContextSchema", () => {
     it("parses a valid spawn context with nullable fields", () => {
       const result = spawnContextSchema.safeParse({
@@ -289,6 +789,7 @@ describe("boundary schemas", () => {
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: null,
         baseBranch: null,
+        sandboxTimeoutMs: 14_400_000,
         owner: {
           userId: "user-1",
           scmUserId: null,
@@ -302,6 +803,9 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.sandboxTimeoutMs).toBe(14_400_000);
+      }
     });
 
     it("parses a repo-less spawn context", () => {
@@ -327,6 +831,33 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it.each([-1_000, 1_500, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects invalid snapshotted sandbox timeout %s",
+      (sandboxTimeoutMs) => {
+        const result = spawnContextSchema.safeParse({
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: null,
+          baseBranch: null,
+          sandboxTimeoutMs,
+          owner: {
+            userId: "user-1",
+            scmUserId: null,
+            scmLogin: null,
+            scmName: null,
+            scmEmail: null,
+            scmAccessTokenEncrypted: null,
+            scmRefreshTokenEncrypted: null,
+            scmTokenExpiresAt: null,
+          },
+        });
+
+        expect(result.success).toBe(false);
+      }
+    );
+
     it("rejects a malformed partial spawn context", () => {
       const result = spawnContextSchema.safeParse({
         repoOwner: "open-inspect",
@@ -334,6 +865,128 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+  });
+});
+
+describe("automation repository schemas", () => {
+  describe("normalizeOptionalRepositoryPair", () => {
+    it("trims and lowercases a complete pair", () => {
+      expect(
+        normalizeOptionalRepositoryPair({ repoOwner: "  Acme  ", repoName: "  Web-App " })
+      ).toEqual({
+        repoOwner: "acme",
+        repoName: "web-app",
+      });
+    });
+
+    it("maps an absent pair to null", () => {
+      expect(normalizeOptionalRepositoryPair({})).toBeNull();
+      expect(normalizeOptionalRepositoryPair({ repoOwner: null, repoName: null })).toBeNull();
+      expect(normalizeOptionalRepositoryPair({ repoOwner: "   ", repoName: "" })).toBeNull();
+    });
+
+    it("throws RepositoryPairValidationError on a half pair", () => {
+      expect(() => normalizeOptionalRepositoryPair({ repoOwner: "acme" })).toThrow(
+        RepositoryPairValidationError
+      );
+      expect(() => normalizeOptionalRepositoryPair({ repoOwner: "  ", repoName: "web" })).toThrow(
+        "repoOwner and repoName must be provided together"
+      );
+    });
+
+    it("uses the provided message for half pairs", () => {
+      expect(() => normalizeOptionalRepositoryPair({ repoName: "web" }, "custom message")).toThrow(
+        "custom message"
+      );
+    });
+  });
+
+  describe("automationRepositoryInputSchema", () => {
+    it("normalizes identifiers and defaults baseBranch to null", () => {
+      const result = automationRepositoryInputSchema.safeParse({
+        repoOwner: " Acme ",
+        repoName: " Web-App ",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ repoOwner: "acme", repoName: "web-app", baseBranch: null });
+    });
+
+    it("keeps a trimmed baseBranch", () => {
+      const result = automationRepositoryInputSchema.safeParse({
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: " develop ",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.data?.baseBranch).toBe("develop");
+    });
+
+    it("rejects empty identifiers", () => {
+      expect(
+        automationRepositoryInputSchema.safeParse({ repoOwner: "", repoName: "web" }).success
+      ).toBe(false);
+      expect(
+        automationRepositoryInputSchema.safeParse({ repoOwner: "acme", repoName: "  " }).success
+      ).toBe(false);
+    });
+
+    it("rejects a whitespace-only baseBranch", () => {
+      const result = automationRepositoryInputSchema.safeParse({
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: "   ",
+      });
+
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe("automationRepositoriesInputSchema", () => {
+    it("accepts an empty list and a single repository", () => {
+      expect(automationRepositoriesInputSchema.safeParse([]).success).toBe(true);
+      expect(
+        automationRepositoriesInputSchema.safeParse([{ repoOwner: "acme", repoName: "web" }])
+          .success
+      ).toBe(true);
+    });
+
+    it("rejects more than MAX_AUTOMATION_REPOSITORIES entries", () => {
+      const repositories = Array.from({ length: MAX_AUTOMATION_REPOSITORIES + 1 }, (_, i) => ({
+        repoOwner: "acme",
+        repoName: `repo-${i}`,
+      }));
+
+      expect(automationRepositoriesInputSchema.safeParse(repositories).success).toBe(false);
+    });
+
+    it("accepts exactly MAX_AUTOMATION_REPOSITORIES entries", () => {
+      const repositories = Array.from({ length: MAX_AUTOMATION_REPOSITORIES }, (_, i) => ({
+        repoOwner: "acme",
+        repoName: `repo-${i}`,
+      }));
+
+      expect(automationRepositoriesInputSchema.safeParse(repositories).success).toBe(true);
+    });
+
+    it("rejects case-insensitive duplicate repositories", () => {
+      const result = automationRepositoriesInputSchema.safeParse([
+        { repoOwner: "Acme", repoName: "Web" },
+        { repoOwner: "acme", repoName: "web" },
+      ]);
+
+      expect(result.success).toBe(false);
+    });
+
+    it("accepts the same repository name under different owners", () => {
+      const result = automationRepositoriesInputSchema.safeParse([
+        { repoOwner: "acme", repoName: "web" },
+        { repoOwner: "globex", repoName: "web" },
+      ]);
+
+      expect(result.success).toBe(true);
     });
   });
 });

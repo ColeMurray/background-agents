@@ -105,6 +105,7 @@ describe("MessageService", () => {
         url: "https://example.com/pr/1",
         metadata: '{"key":"value"}',
         created_at: 1000,
+        updated_at: 1500,
       },
     ];
     vi.mocked(repository.listArtifacts).mockReturnValue(artifacts);
@@ -120,6 +121,7 @@ describe("MessageService", () => {
           url: "https://example.com/pr/1",
           metadata: { key: "value" },
           createdAt: 1000,
+          updatedAt: 1500,
         },
       ],
     });
@@ -134,6 +136,7 @@ describe("MessageService", () => {
       url: "sessions/session-1/media/artifact-1.png",
       metadata: '{"mimeType":"image/png"}',
       created_at: 1000,
+      updated_at: 1500,
     };
     vi.mocked(repository.getArtifactById).mockReturnValue(artifact);
     vi.mocked(parseArtifactMetadata).mockReturnValue({ mimeType: "image/png" });
@@ -147,6 +150,7 @@ describe("MessageService", () => {
         url: "sessions/session-1/media/artifact-1.png",
         metadata: { mimeType: "image/png" },
         createdAt: 1000,
+        updatedAt: 1500,
       },
     });
     expect(repository.getArtifactById).toHaveBeenCalledWith("artifact-1");
@@ -171,7 +175,13 @@ describe("MessageService", () => {
         source: "web",
         model: null,
         reasoning_effort: null,
-        attachments: null,
+        attachments: JSON.stringify([
+          {
+            name: "screenshot.png",
+            attachmentId: "attachment-1",
+            mimeType: "image/png",
+          },
+        ]),
         callback_context: null,
         status: "pending",
         error_message: null,
@@ -186,7 +196,7 @@ describe("MessageService", () => {
         source: "web",
         model: null,
         reasoning_effort: null,
-        attachments: null,
+        attachments: "invalid-json",
         callback_context: null,
         status: "pending",
         error_message: null,
@@ -217,10 +227,43 @@ describe("MessageService", () => {
     expect(result.hasMore).toBe(true);
     expect(result.cursor).toBe("2000");
     expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.attachments).toEqual([
+      {
+        name: "screenshot.png",
+        attachmentId: "attachment-1",
+        mimeType: "image/png",
+      },
+    ]);
+    expect(result.messages[1]?.attachments).toBeNull();
     expect(repository.listMessages).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,
       status: "pending",
     });
+  });
+
+  it("returns null attachments for a stored empty array", () => {
+    const { service, repository } = createService();
+    vi.mocked(repository.listMessages).mockReturnValue([
+      {
+        id: "m1",
+        author_id: "p1",
+        content: "hello",
+        source: "web",
+        model: null,
+        reasoning_effort: null,
+        attachments: "[]",
+        callback_context: null,
+        status: "pending",
+        error_message: null,
+        created_at: 1000,
+        started_at: null,
+        completed_at: null,
+      },
+    ]);
+
+    const result = service.listMessages({ cursor: null, limit: 1, status: null });
+
+    expect(result.messages).toEqual([expect.objectContaining({ attachments: null })]);
   });
 });

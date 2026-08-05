@@ -5,28 +5,76 @@
  * enabling unit testing and future provider support.
  */
 
-import type { SandboxSettings } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
-import type { McpServerConfig } from "@open-inspect/shared";
+import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
+
+/**
+ * Provider-neutral configuration for triggering an image build inside a
+ * provider session. Every supported provider follows the same
+ * create-bind-launch contract: create the build sandbox, bind its provider
+ * session id via `onProviderSessionCreated`, then launch the build runtime.
+ * Providers that need extra fields extend this type (see
+ * ModalImageBuildTriggerConfig).
+ */
+export interface ImageBuildProviderTriggerConfig {
+  buildId: string;
+  scopeKind: ImageBuildScopeKind;
+  /** Build scope id; used only for sandbox naming/labels. */
+  scopeId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  callbackToken: string;
+  userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  buildExecutionTimeoutSeconds: number;
+  /**
+   * Provider-session lifetime in seconds, including deferred finalization
+   * headroom. Always resolved by the adapter layer
+   * (resolveImageBuildProviderSessionTimeoutSeconds) — providers apply it
+   * verbatim instead of choosing their own default.
+   */
+  providerSessionTimeoutSeconds: number;
+  onProviderSessionCreated: (providerSessionId: string) => Promise<void>;
+  correlation: CorrelationContext;
+}
 
 /**
  * Capabilities supported by a sandbox provider.
  * Providers can support different feature sets.
  */
 export interface SandboxProviderCapabilities {
+  /** Whether explicit sandbox session lifetimes are enforced by this provider. */
+  supportsSandboxTimeout: boolean;
   /** Whether the provider supports filesystem snapshots */
   supportsSnapshots: boolean;
   /** Whether the provider supports restoring from snapshots */
   supportsRestore: boolean;
-  /** Whether the provider supports pre-warming sandboxes */
-  supportsWarm: boolean;
   /** Whether the provider can resume a previously stopped sandbox in place */
   supportsPersistentResume?: boolean;
   /** Whether the provider can stop a sandbox explicitly via API */
   supportsExplicitStop?: boolean;
+}
+
+/**
+ * One member repository of a session, in position order (first = primary).
+ * Mirrors the runtime's SessionRepositoryConfig, whose snake_case wire form
+ * (with baseBranch renamed to `branch`) is produced by
+ * toRepositoryConfigPayload.
+ */
+export interface SessionRepositoryInfo {
+  repoOwner: string;
+  repoName: string;
+  /** Base branch to clone (resolved at session create; never null). */
+  baseBranch: string;
+  /** Immutable session-start commit used by the Changes capture protocol. */
+  baseSha?: string | null;
 }
 
 /**
@@ -55,10 +103,14 @@ export interface CreateSandboxConfig {
   opencodeSessionId?: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
-  /** Opaque provider image ID of a pre-built repo image */
-  repoImageId?: string | null;
-  /** Git SHA the repo image was built from */
-  repoImageSha?: string | null;
+  /**
+   * Opaque provider image ID of a pre-built image — a repo image for
+   * single-repo sessions, an environment image for environment sessions.
+   * Both boot through the same provider plumbing (FROM_REPO_IMAGE flags).
+   */
+  prebuiltImageId?: string | null;
+  /** Git SHA the image was built from (the primary repository's for environment images) */
+  prebuiltImageSha?: string | null;
   /** Sandbox lifetime in seconds. Defaults to DEFAULT_SANDBOX_TIMEOUT_SECONDS on Modal. */
   timeoutSeconds?: number;
   /** Git branch to work on (defaults to repo's default branch) */
@@ -75,6 +127,15 @@ export interface CreateSandboxConfig {
   mcpServers?: McpServerConfig[];
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /**
+   * Ordered member list for multi-repo sessions. Only set when the session
+   * has more than one member — single-repo sessions keep the scalar
+   * repoOwner/repoName/branch wire form (the runtime synthesizes its
+   * one-entry list from them). Working-branch names are not part of this
+   * config: they are derived lazily at PR-creation time
+   * (pull-request-service) and travel in per-repo push specs.
+   */
+  repositories?: SessionRepositoryInfo[];
 }
 
 /**
@@ -137,6 +198,8 @@ export interface RestoreConfig {
   agentSlackNotifyEnabled?: boolean;
   /** Sandbox settings (tunnel ports, etc.) resolved from integration settings */
   sandboxSettings?: SandboxSettings;
+  /** Multi-repo member list — see CreateSandboxConfig. */
+  repositories?: SessionRepositoryInfo[];
 }
 
 /**
@@ -173,6 +236,8 @@ export interface SnapshotConfig {
   reason: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
+  /** Optional caller deadline for long-running provider artifact creation. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -239,6 +304,8 @@ export interface StopConfig {
   reason: string;
   /** Correlation context for downstream tracing */
   correlation?: CorrelationContext;
+  /** Optional caller deadline for provider cleanup. */
+  signal?: AbortSignal;
 }
 
 /**

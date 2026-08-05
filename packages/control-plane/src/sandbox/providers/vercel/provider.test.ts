@@ -13,6 +13,12 @@ import type {
   VercelSnapshotMetadata,
   VercelSnapshotResponse,
 } from "./client";
+import { VercelSandboxApiError } from "./client";
+import {
+  MIN_COMPATIBLE_RUNTIME_VERSION,
+  parseRuntimeVersionNumber,
+} from "../../../image-builds/model";
+import { VERCEL_SANDBOX_VERSION } from "./bootstrap";
 
 function createSessionResponse(
   sessionId = "vercel-session-1",
@@ -119,15 +125,31 @@ const baseRestoreConfig: RestoreConfig = {
 // Mirrors VERCEL_MAX_SANDBOX_TIMEOUT_MS in provider.ts — Vercel rejects timeouts above 45 minutes.
 const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 
+function environmentBuildConfig() {
+  return {
+    buildId: "envimg-1",
+    scopeKind: "environment" as const,
+    scopeId: "env_flagship",
+    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
+    callbackUrl: "https://control-plane.test/image-builds/build-complete",
+    failureCallbackUrl: "https://control-plane.test/image-builds/build-failed",
+    callbackToken: "callback-token",
+    buildExecutionTimeoutSeconds: 1800,
+    providerSessionTimeoutSeconds: 2400,
+    onProviderSessionCreated: async () => undefined,
+    correlation: { trace_id: "trace-1", request_id: "request-1" },
+  };
+}
+
 describe("VercelSandboxProvider", () => {
   it("reports Vercel capabilities", () => {
     const provider = new VercelSandboxProvider(createMockClient(), providerConfig);
 
     expect(provider.name).toBe("vercel");
     expect(provider.capabilities).toEqual({
+      supportsSandboxTimeout: true,
       supportsSnapshots: true,
       supportsRestore: true,
-      supportsWarm: true,
       supportsPersistentResume: false,
       supportsExplicitStop: true,
     });
@@ -210,6 +232,23 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("maps bitbucket to its own clone identity", async () => {
+    // Locked in so the shared env assembly can't silently change it.
+    const client = createMockClient();
+    const provider = new VercelSandboxProvider(client, {
+      ...providerConfig,
+      scmProvider: "bitbucket",
+    });
+
+    await provider.createSandbox(baseCreateConfig);
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    expect(createCall.env).toMatchObject({
+      VCS_HOST: "bitbucket.org",
+      VCS_CLONE_USERNAME: "x-token-auth",
+    });
+  });
+
   it("omits repo tag for no-repository sandboxes", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
@@ -241,6 +280,9 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
       VERCEL_MAX_SANDBOX_TIMEOUT_MS
     );
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].env).toMatchObject({
+      SANDBOX_TIMEOUT_SECONDS: String(VERCEL_MAX_SANDBOX_TIMEOUT_MS / 1000),
+    });
   });
 
   it("keeps explicit Vercel sandbox timeouts below the provider limit", async () => {
@@ -272,6 +314,9 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
       VERCEL_MAX_SANDBOX_TIMEOUT_MS
     );
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].env).toMatchObject({
+      SANDBOX_TIMEOUT_SECONDS: String(VERCEL_MAX_SANDBOX_TIMEOUT_MS / 1000),
+    });
   });
 
   it("maps sandbox CPU and memory settings to Vercel vCPU resources", async () => {
@@ -355,8 +400,8 @@ describe("VercelSandboxProvider", () => {
 
     const result = await provider.createSandbox({
       ...baseCreateConfig,
-      repoImageId: "repo-snapshot-1",
-      repoImageSha: "abc123",
+      prebuiltImageId: "repo-snapshot-1",
+      prebuiltImageSha: "abc123",
       codeServerEnabled: true,
       sandboxSettings: { terminalEnabled: true, tunnelPorts: [8080, 3000, 5173] },
     });
@@ -378,7 +423,9 @@ describe("VercelSandboxProvider", () => {
         args: expect.arrayContaining([
           "/usr/bin/python3.12",
           "-c",
-          expect.stringContaining("TUNNEL_3000"),
+          // Tagged with the logical sandbox ID (first line) so the supervisor's
+          // stale-file cleanup keeps this write, then the port URLs.
+          expect.stringContaining("TUNNEL_SANDBOX_ID=sandbox-456\\nTUNNEL_3000"),
         ]),
       }),
       undefined
@@ -488,6 +535,17 @@ describe("VercelSandboxProvider", () => {
     expect(vi.mocked(client.deleteSnapshot)).toHaveBeenCalledWith("snapshot-1");
   });
 
+  it("treats an already-deleted Vercel snapshot as cleanup success", async () => {
+    const client = createMockClient({
+      deleteSnapshot: vi.fn(async () => {
+        throw new VercelSandboxApiError("not found", 404);
+      }),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await expect(provider.deleteProviderImage("snapshot-missing")).resolves.toBeUndefined();
+  });
+
   it("stops a Vercel sandbox session", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
@@ -529,21 +587,18 @@ describe("VercelSandboxProvider", () => {
     expect(result).toEqual({ success: false, error: "Snapshot status was failed" });
   });
 
-  it("triggers a repo image build sandbox and launches entrypoint with callback metadata", async () => {
+  it("keeps reserved callback env keys and clone secrets out of the build sandbox env", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    const result = await provider.triggerRepoImageBuild({
-      buildId: "build-123",
-      repoOwner: "testowner",
-      repoName: "testrepo",
-      defaultBranch: "main",
-      callbackUrl: "https://control-plane.test/repo-images/build-complete",
-      callbackToken: "callback-token",
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
       userEnvVars: {
         USER_SECRET: "value",
+        SANDBOX_VERSION: "v999-user-controlled",
         OI_REPO_IMAGE_CALLBACK_TOKEN: "user-controlled",
         OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
+        OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "99999",
       },
       cloneToken: "clone-token",
     });
@@ -552,21 +607,15 @@ describe("VercelSandboxProvider", () => {
     expect(createCall).toEqual(
       expect.objectContaining({
         runtime: "node24",
-        timeoutMs: 1800 * 1000,
+        timeoutMs: 2400 * 1000,
         sourceSnapshotId: "base-snapshot-1",
-        tags: {
-          openinspect_framework: "open-inspect",
-          openinspect_kind: "repo-image-build",
-          openinspect_build_id: "build-123",
-          openinspect_repo: "testowner/testrepo",
-        },
       })
     );
     expect(createCall.env).toEqual(
       expect.objectContaining({
         USER_SECRET: "value",
         IMAGE_BUILD_MODE: "true",
-        SESSION_CONFIG: JSON.stringify({ branch: "main" }),
+        SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
         VCS_CLONE_TOKEN: "clone-token",
       })
     );
@@ -586,46 +635,111 @@ describe("VercelSandboxProvider", () => {
         args: ["-E", "/usr/bin/python3.12", "-m", "sandbox_runtime.entrypoint"],
         cwd: "/workspace",
         env: {
+          OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
           OI_REPO_IMAGE_PROVIDER_SESSION_ID: "vercel-session-1",
-          OI_REPO_IMAGE_BUILD_ID: "build-123",
-          OI_REPO_IMAGE_CALLBACK_URL: "https://control-plane.test/repo-images/build-complete",
+          OI_REPO_IMAGE_BUILD_ID: "envimg-1",
+          OI_REPO_IMAGE_CALLBACK_URL: "https://control-plane.test/image-builds/build-complete",
           OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+          OI_REPO_IMAGE_FAILURE_CALLBACK_URL:
+            "https://control-plane.test/image-builds/build-failed",
         },
       }),
-      undefined
+      { trace_id: "trace-1", request_id: "request-1" }
     );
-    expect(result).toEqual({ buildId: "build-123", status: "building" });
   });
 
-  it("honors an explicit build timeout below the Vercel limit for repo image builds", async () => {
+  it("reports a compatible authoritative runtime version for image builds", () => {
+    const version = parseRuntimeVersionNumber(VERCEL_SANDBOX_VERSION);
+
+    expect(version).not.toBeNull();
+    expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
+  });
+
+  it("starts environment image builds with a repositories-bearing SESSION_CONFIG", async () => {
+    const client = createMockClient();
+    const onProviderSessionCreated = vi.fn(async () => undefined);
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    await provider.triggerImageBuild({
+      buildId: "envimg-1",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
+      repositories: [
+        { repoOwner: "acme", repoName: "web", baseBranch: "main" },
+        { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
+      ],
+      callbackUrl: "https://control-plane.test/environment-images/build-complete",
+      failureCallbackUrl: "https://control-plane.test/environment-images/build-failed",
+      callbackToken: "callback-token",
+      buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
+      cloneToken: "clone-token",
+      onProviderSessionCreated,
+      correlation: { trace_id: "trace-1", request_id: "request-1" },
+    });
+
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+    // Primary repository mirrors into the scalar identity; the list drives the
+    // list-native runtime.
+    expect(createCall.env).toEqual(
+      expect.objectContaining({
+        IMAGE_BUILD_MODE: "true",
+        REPO_OWNER: "acme",
+        REPO_NAME: "web",
+        SANDBOX_ID: "build-env-env_flagship",
+        VCS_CLONE_TOKEN: "clone-token",
+      })
+    );
+    expect(JSON.parse(createCall.env?.SESSION_CONFIG as string)).toEqual({
+      branch: "main",
+      repositories: [
+        { repo_owner: "acme", repo_name: "web", branch: "main" },
+        { repo_owner: "acme", repo_name: "api", branch: "develop" },
+      ],
+    });
+    expect(createCall.tags).toEqual(
+      expect.objectContaining({
+        openinspect_kind: "environment-image-build",
+        openinspect_environment: "env_flagship",
+      })
+    );
+    expect(onProviderSessionCreated).toHaveBeenCalledWith("vercel-session-1");
+    expect(vi.mocked(client.startCommand)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        env: {
+          OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "1800",
+          OI_REPO_IMAGE_PROVIDER_SESSION_ID: "vercel-session-1",
+          OI_REPO_IMAGE_BUILD_ID: "envimg-1",
+          OI_REPO_IMAGE_CALLBACK_URL:
+            "https://control-plane.test/environment-images/build-complete",
+          OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
+          OI_REPO_IMAGE_FAILURE_CALLBACK_URL:
+            "https://control-plane.test/environment-images/build-failed",
+        },
+      }),
+      { trace_id: "trace-1", request_id: "request-1" }
+    );
+  });
+
+  it("honors an explicit build timeout below the Vercel limit for image builds", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerRepoImageBuild({
-      buildId: "build-123",
-      repoOwner: "testowner",
-      repoName: "testrepo",
-      defaultBranch: "main",
-      callbackUrl: "https://control-plane.test/repo-images/build-complete",
-      callbackToken: "callback-token",
-      buildTimeoutSeconds: 30 * 60,
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
+      providerSessionTimeoutSeconds: 40 * 60,
     });
 
-    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(30 * 60 * 1000);
+    expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(40 * 60 * 1000);
   });
 
   it("caps an over-limit build timeout at Vercel's 45 minute limit", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerRepoImageBuild({
-      buildId: "build-123",
-      repoOwner: "testowner",
-      repoName: "testrepo",
-      defaultBranch: "main",
-      callbackUrl: "https://control-plane.test/repo-images/build-complete",
-      callbackToken: "callback-token",
-      buildTimeoutSeconds: 60 * 60,
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
+      providerSessionTimeoutSeconds: 70 * 60,
     });
 
     expect(vi.mocked(client.createSandbox).mock.calls[0][0].timeoutMs).toBe(
@@ -648,18 +762,13 @@ describe("VercelSandboxProvider", () => {
     ).rejects.toThrow("Failed to create Vercel sandbox");
   });
 
-  it("binds the provider session before launching the repo image callback entrypoint", async () => {
+  it("binds the provider session before launching the image build callback entrypoint", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
     const onProviderSessionCreated = vi.fn(async () => undefined);
 
-    await provider.triggerRepoImageBuild({
-      buildId: "build-123",
-      repoOwner: "testowner",
-      repoName: "testrepo",
-      defaultBranch: "main",
-      callbackUrl: "https://control-plane.test/repo-images/build-complete",
-      callbackToken: "callback-token",
+    await provider.triggerImageBuild({
+      ...environmentBuildConfig(),
       onProviderSessionCreated,
     });
 

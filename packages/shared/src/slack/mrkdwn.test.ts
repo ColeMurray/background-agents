@@ -2,11 +2,32 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyMentionPolicy,
+  escapeMrkdwnText,
   sanitizeAgentText,
   sanitizeLinks,
   stripBroadcastMentions,
   truncateForSlack,
 } from "./mrkdwn";
+
+describe("escapeMrkdwnText", () => {
+  it("neutralizes broadcast mentions", () => {
+    expect(escapeMrkdwnText("<!channel> deploy")).toBe("&lt;!channel&gt; deploy");
+  });
+
+  it("neutralizes user mentions and links", () => {
+    expect(escapeMrkdwnText("<@U123> see <https://x.test|here>")).toBe(
+      "&lt;@U123&gt; see &lt;https://x.test|here&gt;"
+    );
+  });
+
+  it("escapes ampersands first so entities are not double-escaped", () => {
+    expect(escapeMrkdwnText("a & b &lt;")).toBe("a &amp; b &amp;lt;");
+  });
+
+  it("leaves plain text unchanged", () => {
+    expect(escapeMrkdwnText("full-stack env")).toBe("full-stack env");
+  });
+});
 
 describe("stripBroadcastMentions", () => {
   it("removes <!channel>", () => {

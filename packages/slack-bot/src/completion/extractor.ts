@@ -7,27 +7,11 @@
 
 import type { Env } from "../types";
 import type { AgentResponse } from "@open-inspect/shared";
-import { extractAgentResponse as sharedExtract } from "@open-inspect/shared";
+import { extractAgentResponse as sharedExtract } from "@open-inspect/shared/completion/extractor";
+import { resolveOutboundCredential } from "@open-inspect/shared/service-auth";
 import { createLogger } from "../logger";
 
 const log = createLogger("extractor");
-
-/**
- * Tool names to include in summary display.
- * Re-exported from shared for backward compatibility.
- */
-export { SUMMARY_TOOL_NAMES } from "@open-inspect/shared";
-
-/**
- * Re-export shared helpers that other modules in this package may use.
- */
-export {
-  summarizeToolCall,
-  getArtifactLabel,
-  getArtifactLabelFromArtifact,
-  toEventArtifactInfo,
-  toArtifactType,
-} from "@open-inspect/shared";
 
 /**
  * Fetch events for a message and aggregate them into a response.
@@ -43,7 +27,7 @@ export async function extractAgentResponse(
   return sharedExtract(
     {
       fetcher: env.CONTROL_PLANE,
-      internalSecret: env.INTERNAL_CALLBACK_SECRET,
+      auth: resolveOutboundCredential("slack-bot", env),
       log,
     },
     sessionId,

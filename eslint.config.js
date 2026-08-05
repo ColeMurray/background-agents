@@ -60,8 +60,83 @@ export default tseslint.config(
         "error",
         { prefer: "type-imports", fixStyle: "separate-type-imports" },
       ],
+      "no-restricted-imports": "off",
+      "@typescript-eslint/no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@open-inspect/shared",
+              importNames: [
+                "TOKEN_VALIDITY_MS",
+                "timingSafeEqual",
+                "bytesToHex",
+                "computeHmacHex",
+                "generateInternalToken",
+                "verifyCallbackSignature",
+                "verifyCallbackFromControlPlane",
+                "verifyInternalToken",
+              ],
+              message: "Import auth-owned names from @open-inspect/shared/auth.",
+            },
+            {
+              name: "@open-inspect/shared",
+              importNames: [
+                "ACTOR_HEADER",
+                "ControlPlaneFetcher",
+                "OutboundBinaryBody",
+                "OutboundCredentialEnv",
+                "OutboundRequestToSign",
+                "OutboundServiceCredential",
+                "SERVICE_HEADER",
+                "SERVICE_NAMES",
+                "SERVICE_SIGNATURE_HEADER",
+                "SIG1_PREFIX",
+                "ServiceName",
+                "ServiceSignatureFailure",
+                "ServiceSignatureHeaderParse",
+                "ServiceSignatureResult",
+                "SignedFetchInit",
+                "buildCanonicalRequestString",
+                "buildOutboundAuthHeaders",
+                "buildServiceAuthHeaders",
+                "canonicalizeQuery",
+                "isServiceName",
+                "parseServiceSignatureHeader",
+                "resolveOutboundCredential",
+                "sha256Hex",
+                "signedControlPlaneFetch",
+                "verifyServiceSignature",
+              ],
+              message: "Import service-auth-owned names from @open-inspect/shared/service-auth.",
+            },
+          ],
+        },
+      ],
       // Allow console in backend/server code - disable per-file if needed
       "no-console": "off",
+    },
+  },
+
+  // Control-plane data-layer boundary: all production code must use the
+  // injected SqlDatabase (ctx.db, a DO's db field, or a db parameter), never
+  // the raw env.DB binding — reading the binding elsewhere would silently
+  // bypass the injection path and, on request paths, query instrumentation.
+  // The only legitimate reads are the composition roots (router.ts and the
+  // two Durable Object constructors), each carrying an inline
+  // eslint-disable with justification.
+  {
+    files: ["packages/control-plane/src/**/*.ts"],
+    ignores: ["packages/control-plane/src/**/*.test.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: 'MemberExpression[property.name="DB"]',
+          message:
+            "Use the injected SqlDatabase (ctx.db / this.db / a db param) instead of env.DB; the binding is read only at composition roots.",
+        },
+      ],
     },
   },
 
@@ -91,6 +166,52 @@ export default tseslint.config(
     },
   },
 
+  // Web code depends on app-owned auth and request seams. OAuth and session
+  // protocol code is owned by the control plane.
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "next-auth",
+              message: "Use the app-owned browser authentication seams.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["next-auth/*"],
+              message: "Use the app-owned browser authentication seams.",
+            },
+            {
+              regex: "(?:^|/)lib/auth$",
+              message: "Use getServerAuthSession from @/lib/server-auth-session.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["packages/web/src/**/*.{ts,tsx}"],
+    ignores: [
+      "**/*.test.{ts,tsx}",
+      "**/*.spec.{ts,tsx}",
+      "packages/web/src/lib/browser-api-fetch.ts",
+      "packages/web/src/lib/control-plane-transport.ts",
+    ],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message: "Use an app-owned HTTP transport instead of raw fetch.",
+        },
+      ],
+    },
+  },
   // Cloudflare Workers specific config
   {
     files: ["packages/control-plane/**/*.ts"],

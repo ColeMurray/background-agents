@@ -1,4 +1,4 @@
-import type { AnalyticsDays, AnalyticsSummaryResponse } from "@open-inspect/shared";
+import type { AnalyticsDays, AnalyticsSummaryResponse } from "@open-inspect/shared/types/analytics";
 import { formatSessionCost } from "@/lib/session-cost";
 import { formatAnalyticsCount } from "@/lib/analytics";
 
@@ -8,7 +8,15 @@ interface SummaryCardsProps {
   loading: boolean;
 }
 
-function SummaryCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+export function SummaryCard({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+}) {
   return (
     <div className="relative overflow-hidden rounded-md border border-border-muted bg-card p-4">
       <div className="absolute inset-x-0 top-0 h-px bg-[linear-gradient(90deg,transparent,var(--accent),transparent)]" />

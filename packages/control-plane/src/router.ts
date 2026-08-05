@@ -2,8 +2,11 @@
  * API router for Open-Inspect Control Plane.
  */
 
+import { isBrowserAuthProxyRoute } from "@open-inspect/shared/browser-auth-routes";
 import type { Env } from "./types";
-import { verifyInternalToken } from "./auth/internal";
+import { authenticate, isAuthError } from "./auth/authenticate";
+import type { Principal } from "./auth/principal";
+import { getUserAuth, getUserAuthRuntime } from "./auth/user/runtime";
 import {
   resolveScmProviderFromEnv,
   SourceControlProviderError,
@@ -14,16 +17,28 @@ import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
-import { type Route, type RequestContext, parsePattern, json, error } from "./routes/shared";
+import {
+  type Route,
+  type RequestContext,
+  parsePattern,
+  json,
+  error,
+  HttpError,
+} from "./routes/shared";
+import { browserAuthRoutes } from "./routes/browser-auth";
+import { signInProviderRoutes } from "./routes/sign-in-providers";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
+import { commitSigningRoutes } from "./routes/commit-signing";
+import { scmSettingsRoutes } from "./routes/scm-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
-import { repoImageRoutes } from "./routes/repo-images";
 import { secretsRoutes } from "./routes/secrets";
+import { environmentRoutes } from "./routes/environments";
+import { environmentSecretsRoutes } from "./routes/environment-secrets";
+import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
-import { providerIdentityRoutes } from "./routes/provider-identities";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
@@ -49,8 +64,10 @@ const PUBLIC_ROUTES: RegExp[] = [
   /^\/health$/,
   /^\/webhooks\/sentry\/[^/]+$/,
   /^\/webhooks\/automation\/[^/]+$/,
-  /^\/repo-images\/build-complete$/,
-  /^\/repo-images\/build-failed$/,
+  // Image-build callbacks authenticate inside the workflow (internal HMAC
+  // for provider_image mode, per-build bearer token for provider_session).
+  /^\/image-builds\/build-complete$/,
+  /^\/image-builds\/build-failed$/,
 ];
 
 /**
@@ -60,14 +77,27 @@ const PUBLIC_ROUTES: RegExp[] = [
  */
 const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/pr$/, // PR creation from sandbox
-  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI token refresh from sandbox
   /^\/sessions\/[^/]+\/scm-credentials$/, // SCM credential broker for git credential helper
   /^\/sessions\/[^/]+\/tunnel-urls$/, // Tunnel URL fetch for sandboxes whose .tunnels.env write isn't visible from inside
   /^\/sessions\/[^/]+\/media$/, // Media upload from sandbox
+  /^\/sessions\/[^/]+\/attachments\/[^/]+$/, // Session attachment download from sandbox bridge
   /^\/sessions\/[^/]+\/children$/, // POST spawn, GET list
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
   /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
+];
+
+/** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
+const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
+  /^\/sessions\/[^/]+\/commit-signing$/, // Public signing configuration and remote signer
+  /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
+  /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
+];
+
+/** Diff endpoints the sandbox needs, constrained by both path and method. */
+const SANDBOX_DIFF_AUTH_ROUTES: ReadonlyArray<{ method: string; pattern: RegExp }> = [
+  { method: "PUT", pattern: /^\/sessions\/[^/]+\/diff$/ },
+  { method: "POST", pattern: /^\/sessions\/[^/]+\/diff\/failure$/ },
 ];
 
 type CachedScmProvider =
@@ -120,17 +150,34 @@ function isPublicRoute(path: string): boolean {
 /**
  * Check if a path matches any sandbox auth route pattern.
  */
-function isSandboxAuthRoute(path: string): boolean {
-  return SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path));
+function isSandboxAuthRoute(path: string, method: string): boolean {
+  return (
+    SANDBOX_AUTH_ROUTES.some((pattern) => pattern.test(path)) ||
+    SANDBOX_DIFF_AUTH_ROUTES.some((route) => route.method === method && route.pattern.test(path))
+  );
 }
 
-function isScmAgnosticRoute(path: string): boolean {
+function isSandboxAuthOnlyRoute(path: string): boolean {
+  return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
+}
+
+function isWebServiceAuthRoute(method: string, path: string): boolean {
   return (
-    /^\/analytics\/(summary|timeseries|breakdown)$/.test(path) ||
-    // Identity upserts are independent of the SCM provider. Only the known auth
-    // providers are agnostic; an unimplemented SCM (e.g. gitlab) still 501s.
-    /^\/provider-identities\/(github|slack|linear|google)\/[^/]+$/.test(path) ||
-    /^\/sessions\/[^/]+\/tunnel-urls$/.test(path)
+    isBrowserAuthProxyRoute(method, path) ||
+    (method === "GET" && path === "/internal/auth/sign-in-providers")
+  );
+}
+
+export function isScmAgnosticRoute(method: string, path: string): boolean {
+  return (
+    isWebServiceAuthRoute(method, path) ||
+    /^\/scm-settings(?:\/.*)?$/.test(path) ||
+    /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
+    (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
+    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
+      path
+    ) ||
+    /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );
 }
 
@@ -140,6 +187,7 @@ function isProviderImplementedRoute(provider: SourceControlProviderName, path: s
 }
 
 function enforceImplementedScmProvider(
+  method: string,
   path: string,
   env: Env,
   ctx: RequestContext
@@ -149,7 +197,7 @@ function enforceImplementedScmProvider(
     if (
       !isProviderImplementedRoute(provider, path) &&
       !isPublicRoute(path) &&
-      !isScmAgnosticRoute(path)
+      !isScmAgnosticRoute(method, path)
     ) {
       logger.warn("SCM provider not implemented", {
         event: "scm.provider_not_implemented",
@@ -187,6 +235,9 @@ function enforceImplementedScmProvider(
 /**
  * Validate sandbox authentication by checking with the Durable Object.
  * The DO stores the expected sandbox auth token.
+ *
+ * On success, sets the sandbox principal on the request context — this is
+ * the single place a sandbox principal is assembled.
  *
  * @param request - The incoming request
  * @param env - Environment bindings
@@ -231,52 +282,36 @@ async function verifySandboxAuth(
     return error("Unauthorized: Invalid sandbox token", 401);
   }
 
+  ctx.principal = { kind: "sandbox", sessionId };
   return null; // Auth passed
 }
 
 /**
- * Require internal API authentication for service-to-service calls.
- * Fails closed: returns error response if secret is not configured or token is invalid.
- *
- * @param request - The incoming request
- * @param env - Environment bindings
- * @param path - Request path for logging
- * @param ctx - Request correlation context
- * @returns null if authentication passes, or an error Response to return immediately
+ * Emit the per-request `auth.principal` line: who is acting, as a verified
+ * identity — never token material.
  */
-async function requireInternalAuth(
-  request: Request,
-  env: Env,
-  path: string,
-  ctx: RequestContext
-): Promise<Response | null> {
-  if (!env.INTERNAL_CALLBACK_SECRET) {
-    logger.error("INTERNAL_CALLBACK_SECRET not configured - rejecting request", {
-      event: "auth.misconfigured",
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Internal authentication not configured", 500);
+function logPrincipal(principal: Principal, ctx: RequestContext, path: string): void {
+  const fields: Record<string, string | undefined> = { principal_kind: principal.kind };
+  switch (principal.kind) {
+    case "service":
+      fields.auth_scheme = "per-service";
+      fields.service = principal.service;
+      fields.actor = principal.actor?.participantUserId;
+      break;
+    case "sandbox":
+      fields.session_id = principal.sessionId;
+      break;
+    case "user":
+      fields.user_id = principal.userId;
+      break;
   }
-
-  const isValid = await verifyInternalToken(
-    request.headers.get("Authorization"),
-    env.INTERNAL_CALLBACK_SECRET
-  );
-
-  if (!isValid) {
-    const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-    logger.warn("Auth failed: HMAC", {
-      event: "auth.hmac_failed",
-      http_path: path,
-      client_ip: clientIP,
-      request_id: ctx.request_id,
-      trace_id: ctx.trace_id,
-    });
-    return error("Unauthorized", 401);
-  }
-
-  return null; // Auth passed
+  logger.info("auth.principal", {
+    event: "auth.principal",
+    ...fields,
+    http_path: path,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
 }
 
 /**
@@ -289,6 +324,9 @@ const routes: Route[] = [
     pattern: parsePattern("/health"),
     handler: async () => json({ status: "healthy", service: "open-inspect-control-plane" }),
   },
+
+  ...browserAuthRoutes,
+  ...signInProviderRoutes,
 
   // Session management
   ...sessionRoutes,
@@ -305,14 +343,24 @@ const routes: Route[] = [
   // Secrets
   ...secretsRoutes,
 
+  // Environments (Phase-2 session target; internal-HMAC only, web BFF proxied)
+  ...environmentRoutes,
+  ...environmentSecretsRoutes,
+
+  // Image builds (scope-generic)
+  ...imageBuildRoutes,
+
   // Model preferences
   ...modelPreferencesRoutes,
 
   // Integration settings
   ...integrationSettingsRoutes,
 
-  // Repo image builds
-  ...repoImageRoutes,
+  // Deployment-wide commit signing identity
+  ...commitSigningRoutes,
+
+  // SCM (source-control) settings
+  ...scmSettingsRoutes,
 
   // Automations
   ...automationRoutes,
@@ -322,9 +370,6 @@ const routes: Route[] = [
 
   // Analytics
   ...analyticsRoutes,
-
-  // Provider identities
-  ...providerIdentityRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
@@ -343,24 +388,42 @@ export async function handleRequest(
   const method = request.method;
   const startTime = Date.now();
 
-  // Build correlation context with per-request metrics
+  // The DB binding is required (types.ts) and the control plane cannot serve
+  // requests without it. Reject a missing binding once here — the single
+  // honest boundary — so ctx.db is genuinely always present in handlers and
+  // no per-route degraded-mode guards are needed.
+  // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
+  if (!env.DB) {
+    logger.error("DB binding is not configured; refusing request", { http_path: path });
+    return new Response(JSON.stringify({ error: "Database not configured" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // Build correlation context with per-request metrics and the instrumented
+  // database handle. Handlers use ctx.db (never env.DB) so all queries are
+  // automatically timed.
   const metrics = createRequestMetrics();
   const ctx: RequestContext = {
     trace_id: request.headers.get("x-trace-id") || crypto.randomUUID(),
     request_id: crypto.randomUUID().slice(0, 8),
     metrics,
+    // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
+    db: instrumentD1(env.DB, metrics),
+    // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
+    getUserAuth: () => getUserAuth(env, env.DB),
+    // eslint-disable-next-line no-restricted-syntax -- composition root owns normalized auth runtime construction
+    getUserAuthRuntime: () => getUserAuthRuntime(env, env.DB),
     executionCtx,
   };
-
-  // Instrument D1 so all queries are automatically timed
-  const instrumentedEnv: Env = { ...env, DB: instrumentD1(env.DB, metrics) };
 
   // CORS preflight
   if (method === "OPTIONS") {
     return new Response(null, {
       headers: {
         "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Max-Age": "86400",
         "x-request-id": ctx.request_id,
@@ -369,82 +432,108 @@ export async function handleRequest(
     });
   }
 
+  const matchedRoute = routes
+    .filter((route) => route.method === method)
+    .map((route) => ({ route, match: path.match(route.pattern) }))
+    .find(
+      (candidate): candidate is { route: Route; match: RegExpMatchArray } =>
+        candidate.match !== null
+    );
+  if (!matchedRoute) {
+    return withCorsAndTraceHeaders(error("Not found", 404), ctx);
+  }
+
   // Require authentication for non-public routes
   if (!isPublicRoute(path)) {
-    // First try HMAC auth (for web app, slack bot, etc.)
-    const hmacAuthError = await requireInternalAuth(request, env, path, ctx);
+    const requiresSandboxAuth = isSandboxAuthOnlyRoute(path);
+    let authError: Response | null;
 
-    if (hmacAuthError) {
-      // HMAC auth failed - check if this route accepts sandbox auth
-      if (isSandboxAuthRoute(path)) {
-        // Extract session ID from path (e.g., /sessions/abc123/pr -> abc123)
-        const sessionIdMatch = path.match(/^\/sessions\/([^/]+)\//);
-        if (sessionIdMatch) {
-          const sessionId = sessionIdMatch[1];
-          const sandboxAuthError = await verifySandboxAuth(request, env, sessionId, ctx);
-          if (!sandboxAuthError) {
-            // Sandbox auth passed, continue to route handler
-          } else {
-            // Both HMAC and sandbox auth failed
-            return withCorsAndTraceHeaders(sandboxAuthError, ctx);
-          }
+    // Session id for sandbox auth (e.g., /sessions/abc123/pr -> abc123)
+    const sandboxSessionId = path.match(/^\/sessions\/([^/]+)\//)?.[1] ?? null;
+
+    if (requiresSandboxAuth) {
+      authError = sandboxSessionId
+        ? await verifySandboxAuth(request, env, sandboxSessionId, ctx)
+        : error("Unauthorized: Invalid session path", 401);
+    } else {
+      const authResult = await authenticate(request, env, ctx, {
+        webService: isWebServiceAuthRoute(method, path) ? "service" : "user",
+      });
+
+      if (isAuthError(authResult)) {
+        // A service-credential attempt is terminal; only a request with no
+        // recognized credential may still be a sandbox-token call on a
+        // sandbox-accepting route.
+        authError = error(authResult.reason, authResult.status);
+
+        if (
+          authResult.failedScheme === "none" &&
+          isSandboxAuthRoute(path, method) &&
+          sandboxSessionId
+        ) {
+          authError = await verifySandboxAuth(request, env, sandboxSessionId, ctx);
         }
       } else {
-        // Not a sandbox auth route, return HMAC auth error
-        return withCorsAndTraceHeaders(hmacAuthError, ctx);
+        authError = null;
+        ctx.principal = authResult.principal;
+        ctx.authentication = authResult.authentication;
+        request = authResult.request;
       }
+    }
+
+    if (authError) {
+      return withCorsAndTraceHeaders(authError, ctx);
+    }
+
+    if (ctx.principal) {
+      logPrincipal(ctx.principal, ctx, path);
     }
   }
 
-  const providerCheck = enforceImplementedScmProvider(path, env, ctx);
+  const providerCheck = enforceImplementedScmProvider(method, path, env, ctx);
   if (providerCheck) {
     return providerCheck;
   }
 
-  // Find matching route
-  for (const route of routes) {
-    if (route.method !== method) continue;
-
-    const match = path.match(route.pattern);
-    if (match) {
-      let response: Response;
-      let outcome: "success" | "error";
-      try {
-        response = await route.handler(request, instrumentedEnv, match, ctx);
-        outcome = response.status >= 500 ? "error" : "success";
-      } catch (e) {
-        const durationMs = Date.now() - startTime;
-        logger.error("http.request", {
-          event: "http.request",
-          request_id: ctx.request_id,
-          trace_id: ctx.trace_id,
-          http_method: method,
-          http_path: path,
-          http_status: 500,
-          duration_ms: durationMs,
-          outcome: "error",
-          error: e instanceof Error ? e : String(e),
-          ...ctx.metrics.summarize(),
-        });
-        return error("Internal server error", 500);
-      }
-
+  let response: Response;
+  let outcome: "success" | "error";
+  try {
+    response = await matchedRoute.route.handler(request, env, matchedRoute.match, ctx);
+    outcome = response.status >= 500 ? "error" : "success";
+  } catch (e) {
+    if (e instanceof HttpError) {
+      response = error(e.message, e.status);
+      outcome = e.status >= 500 ? "error" : "success";
+    } else {
       const durationMs = Date.now() - startTime;
-      logger.info("http.request", {
+      logger.error("http.request", {
         event: "http.request",
         request_id: ctx.request_id,
         trace_id: ctx.trace_id,
         http_method: method,
         http_path: path,
-        http_status: response.status,
+        http_status: 500,
         duration_ms: durationMs,
-        outcome,
+        outcome: "error",
+        error: e instanceof Error ? e : String(e),
         ...ctx.metrics.summarize(),
       });
-
-      return withCorsAndTraceHeaders(response, ctx);
+      return withCorsAndTraceHeaders(error("Internal server error", 500), ctx);
     }
   }
 
-  return error("Not found", 404);
+  const durationMs = Date.now() - startTime;
+  logger.info("http.request", {
+    event: "http.request",
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+    http_method: method,
+    http_path: path,
+    http_status: response.status,
+    duration_ms: durationMs,
+    outcome,
+    ...ctx.metrics.summarize(),
+  });
+
+  return withCorsAndTraceHeaders(response, ctx);
 }

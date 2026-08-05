@@ -6,7 +6,8 @@
  * the id is effectively static for the lifetime of the Slack app.
  */
 
-import { authTest, createKvCacheStore } from "@open-inspect/shared";
+import { authTest } from "@open-inspect/shared/slack";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { Env } from "./types";
 import { createLogger } from "./logger";
 

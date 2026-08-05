@@ -4,11 +4,22 @@ locals {
   use_daytona_backend      = var.sandbox_provider == "daytona"
   use_vercel_backend       = var.sandbox_provider == "vercel"
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
+  use_e2b_backend          = var.sandbox_provider == "e2b"
 
-  # Google login is enabled only when both OAuth credentials are configured.
-  # Drives the build-time NEXT_PUBLIC_GOOGLE_ENABLED flag (sign-in button) and
-  # mirrors the server-side conditional GoogleProvider in packages/web/src/lib/auth.ts.
-  google_enabled = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
+  # A complete OAuth credential pair is the deployment's provider enablement
+  # declaration. Runtime validation mirrors these plan-time invariants.
+  github_oauth_enabled = trimspace(var.github_client_id) != "" && trimspace(var.github_client_secret) != ""
+  google_enabled       = trimspace(var.google_client_id) != "" && trimspace(var.google_client_secret) != ""
+  provider_neutral_admission_enabled = (
+    length([for item in split(",", var.allowed_email_domains) : trimspace(item) if trimspace(item) != ""]) > 0 ||
+    length([for item in split(",", var.allowed_emails) : trimspace(item) if trimspace(item) != ""]) > 0
+  )
+  github_admission_enabled = (
+    length([for item in split(",", var.allowed_users) : trimspace(item) if trimspace(item) != ""]) > 0 ||
+    length([for item in split(",", var.allowed_github_orgs) : trimspace(item) if trimspace(item) != ""]) > 0
+  )
+  admission_allowlist_enabled = local.provider_neutral_admission_enabled || local.github_admission_enabled
+  unsafe_allow_all_effective  = var.unsafe_allow_all_users && !local.admission_allowlist_enabled
 
   # URLs for cross-service configuration
   control_plane_host = "open-inspect-control-plane-${local.name_suffix}.${var.cloudflare_worker_subdomain}.workers.dev"
@@ -42,6 +53,9 @@ locals {
   web_app_url = (var.web_platform == "cloudflare"
     ? "https://${local.web_cloudflare_host}"
     : "https://open-inspect-${local.name_suffix}.vercel.app"
+  )
+  effective_web_app_url = (
+    var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
   )
 
   # Worker script paths (deterministic output locations)

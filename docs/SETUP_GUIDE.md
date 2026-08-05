@@ -16,6 +16,9 @@ Open-Inspect is designed for **single-tenant** use. Everyone in your deployment 
 GitHub App installation scope. Read the security model in [README.md](../README.md) before
 production use.
 
+The control plane is the sole sign-in-provider authority. GitHub-only, Google-only, and combined
+sign-in are supported, while GitHub App repository credentials remain required for all three.
+
 ## Prerequisites
 
 Required:
@@ -60,8 +63,9 @@ What this does:
 
 ## Path A: Run the Web App Locally (Recommended Quick Start)
 
-Use this when you already have a deployed control plane and sandbox backend, and only need local UI
-development.
+Use this with a dedicated development control plane whose `WEB_APP_URL` is `http://localhost:3000`.
+Browser auth is origin-bound, so a production control plane configured for its deployed web origin
+cannot authenticate a localhost web process.
 
 ### 1. Create local env file
 
@@ -74,39 +78,14 @@ cp packages/web/.env.example packages/web/.env.local
 Edit `packages/web/.env.local`:
 
 ```bash
-# GitHub App OAuth
-GITHUB_CLIENT_ID=your_github_app_client_id
-GITHUB_CLIENT_SECRET=your_github_app_client_secret
-
-# Google OAuth (optional — enables "Sign in with Google"). Create a Web OAuth
-# client at https://console.cloud.google.com/apis/credentials with redirect URI
-# http://localhost:3000/api/auth/callback/google. Set NEXT_PUBLIC_GOOGLE_ENABLED=true
-# to reveal the button (inlined at build time — restart the dev server after changing).
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-NEXT_PUBLIC_GOOGLE_ENABLED=
-
-# NextAuth
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=your_generated_secret
-
-# Backend endpoints (deployed)
+# Development control-plane endpoints
 CONTROL_PLANE_URL=https://open-inspect-control-plane-<name>.<subdomain>.workers.dev
 NEXT_PUBLIC_WS_URL=wss://open-inspect-control-plane-<name>.<subdomain>.workers.dev
 
-# Must match control-plane INTERNAL_CALLBACK_SECRET
-INTERNAL_CALLBACK_SECRET=your_shared_secret
-
-# Optional access control (a user is admitted if they match ANY allowlist)
-ALLOWED_USERS=
-ALLOWED_EMAIL_DOMAINS=
-# Exact emails (any provider's verified email) — for users on shared domains
-ALLOWED_EMAILS=
-# GitHub orgs whose active members can sign in. Requests read:org only when set,
-# then checks active org membership with the user's OAuth token. Requires GitHub
-# App Organization permissions: Members read-only.
-ALLOWED_GITHUB_ORGS=
-UNSAFE_ALLOW_ALL_USERS=false
+# Web's per-service signing secret. Must match the control plane's
+# SERVICE_AUTH_SECRET_WEB binding (Terraform generates it; read it from
+# terraform state or the deployed web app's env).
+SERVICE_AUTH_SECRET=your_web_service_secret
 
 # Optional whitelabel branding (defaults shown). NEXT_PUBLIC_* vars are
 # inlined into the client bundle at build time — restart `npm run dev`
@@ -119,18 +98,21 @@ NEXT_PUBLIC_APP_ICON_URL=
 
 Do not commit `packages/web/.env.local`.
 
-Generate a secret value:
+OAuth provider credentials are not web environment variables. Better Auth runs in the control plane,
+so configure at least one complete pair: `github_client_id` plus `github_client_secret`,
+`google_client_id` plus `google_client_secret`, or both. See
+[Create GitHub App](GETTING_STARTED.md#step-3-create-github-app) and
+[Enable Google Login](GETTING_STARTED.md#enable-google-login-optional) for the complete provider
+setup. The `/login` page reads the enabled provider set from the control plane at request time.
 
-```bash
-openssl rand -base64 32
-```
+If you are using someone else's deployed backend, do not generate your own `SERVICE_AUTH_SECRET`.
+Use the web service secret configured in that backend deployment (the control plane only accepts
+signatures under its own copy). That backend must also be configured with
+`WEB_APP_URL=http://localhost:3000`; otherwise use its deployed web app rather than a local UI.
 
-If you are using someone else's deployed backend, do not generate your own
-`INTERNAL_CALLBACK_SECRET`. Use the value configured in that backend deployment.
+### 3. Configure OAuth callback URLs
 
-### 3. Configure GitHub callback URL
-
-In GitHub App settings, include:
+If GitHub sign-in is enabled, include this callback in the GitHub App settings:
 
 `http://localhost:3000/api/auth/callback/github`
 
@@ -150,7 +132,7 @@ Open `http://localhost:3000`.
 
 ### 5. Verify it works
 
-1. Sign in with GitHub.
+1. Sign in with each configured provider.
 2. Open or create a session.
 3. Send a prompt.
 4. Confirm live events stream in the session page.
@@ -159,7 +141,7 @@ If session actions fail, validate:
 
 - `CONTROL_PLANE_URL`
 - `NEXT_PUBLIC_WS_URL`
-- `INTERNAL_CALLBACK_SECRET`
+- `SERVICE_AUTH_SECRET`
 
 These must align with your deployed backend.
 
@@ -221,7 +203,9 @@ Critical notes before deploy:
 - Build workers before running Terraform apply.
 - Build `@open-inspect/shared` first.
 - Use two-phase Terraform deploy for DO/service bindings.
-- For Modal deployments, deploy with `modal deploy deploy.py` (not `src/app.py`).
+- For Modal deployments, eagerly build the Sandbox image with
+  `uv run python deploy.py --build-sandbox-image`, then deploy with `uv run modal deploy deploy.py`
+  (not `src/app.py`).
 
 ## Common Issues and Fixes
 
@@ -231,14 +215,15 @@ Your GitHub callback URL does not exactly match the running app URL.
 
 ### Access denied after sign-in
 
-Check `ALLOWED_USERS`, `ALLOWED_EMAIL_DOMAINS`, and `ALLOWED_GITHUB_ORGS` in
-`packages/web/.env.local`. If `ALLOWED_GITHUB_ORGS` is set, make sure your GitHub App has
-Organization permissions: Members read-only and that the updated permission was republished and
+Check `allowed_users`, `allowed_email_domains`, `allowed_emails`, and `allowed_github_orgs` in the
+control plane's Terraform configuration. If `allowed_github_orgs` is set, make sure your GitHub App
+has Organization permissions: Members read-only and that the updated permission was republished and
 approved for the installation.
 
 ### Web can load, but session APIs return 401
 
-`INTERNAL_CALLBACK_SECRET` in web env does not match the control plane secret.
+`SERVICE_AUTH_SECRET` in web env does not match the control plane's `SERVICE_AUTH_SECRET_WEB`
+binding.
 
 ### WebSocket disconnects immediately
 
@@ -258,4 +243,5 @@ configured/deployed.
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
+- SuperGrok model setup: [docs/GROK_MODELS.md](./GROK_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

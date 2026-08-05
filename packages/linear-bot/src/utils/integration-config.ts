@@ -1,15 +1,26 @@
+import {
+  encodeRepositoryPathSegments,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
+import { z } from "zod";
 import type { Env } from "../types";
-import { buildInternalAuthHeaders } from "./internal";
+import { signedControlPlaneFetch } from "../internal-auth";
 
-export interface ResolvedLinearConfig {
-  model: string | null;
-  reasoningEffort: string | null;
-  allowUserPreferenceOverride: boolean;
-  allowLabelModelOverride: boolean;
-  emitToolProgressActivities: boolean;
-  issueSessionInstructions: string | null;
-  enabledRepos: string[] | null;
-}
+const resolvedLinearConfigSchema = z.object({
+  model: z.string().nullable(),
+  reasoningEffort: z.string().nullable(),
+  allowUserPreferenceOverride: z.boolean(),
+  allowLabelModelOverride: z.boolean(),
+  emitToolProgressActivities: z.boolean(),
+  issueSessionInstructions: z.string().nullable(),
+  enabledRepos: z.array(z.string()).nullable(),
+});
+
+const resolvedLinearConfigResponseSchema = z.object({
+  config: resolvedLinearConfigSchema.nullable(),
+});
+
+export type ResolvedLinearConfig = z.infer<typeof resolvedLinearConfigSchema>;
 
 const DEFAULT_CONFIG: ResolvedLinearConfig = {
   model: null,
@@ -22,23 +33,20 @@ const DEFAULT_CONFIG: ResolvedLinearConfig = {
 };
 
 export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedLinearConfig> {
-  if (!env.INTERNAL_CALLBACK_SECRET) {
+  if (!env.SERVICE_AUTH_SECRET) {
     return DEFAULT_CONFIG;
   }
 
-  const [owner, name] = repo.split("/");
-  if (!owner || !name) {
+  const repository = parseRepositoryFullName(repo);
+  if (!repository) {
     return DEFAULT_CONFIG;
   }
 
-  const headers = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET);
+  const url = `https://internal/integration-settings/linear/resolved/${encodeRepositoryPathSegments(repository)}`;
 
   let response: Response;
   try {
-    response = await env.CONTROL_PLANE.fetch(
-      `https://internal/integration-settings/linear/resolved/${owner}/${name}`,
-      { headers }
-    );
+    response = await signedControlPlaneFetch(env, { method: "GET", url });
   } catch {
     return DEFAULT_CONFIG;
   }
@@ -47,10 +55,12 @@ export async function getLinearConfig(env: Env, repo: string): Promise<ResolvedL
     return DEFAULT_CONFIG;
   }
 
-  const data = (await response.json()) as { config: ResolvedLinearConfig | null };
-  if (!data.config) {
+  const parsed = resolvedLinearConfigResponseSchema.safeParse(
+    await response.json().catch(() => null)
+  );
+  if (!parsed.success || !parsed.data.config) {
     return DEFAULT_CONFIG;
   }
 
-  return data.config;
+  return parsed.data.config;
 }

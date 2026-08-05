@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { GitLabSourceControlProvider } from "./gitlab-provider";
+import { GitLabSourceControlProvider, deriveGitLabMergeRequestStatus } from "./gitlab-provider";
 import { SourceControlProviderError } from "../errors";
 
 // Mock global fetch
@@ -20,6 +20,51 @@ const fakeConfig = { accessToken: "glpat-test-token" };
 describe("GitLabSourceControlProvider", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  describe("getBranchHead", () => {
+    it("preserves nested namespaces and resolves slash-containing branches", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: { id: "def456" } }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      await expect(
+        provider.getBranchHead({
+          owner: "acme/platform",
+          name: "web",
+          branch: "feature/test",
+        })
+      ).resolves.toBe("def456");
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/projects/acme%2Fplatform%2Fweb/repository/branches/feature%2Ftest"
+        ),
+        expect.any(Object)
+      );
+    });
+
+    it("returns null for a confirmed missing branch", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({}, 404));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
+      ).resolves.toBeNull();
+    });
+
+    it("rejects malformed branch responses", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: {} }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      const err = await provider
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to resolve branch head: unexpected response shape (commit.id)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
   });
 
   it("throws a permanent provider error when the access token is blank", () => {
@@ -129,6 +174,73 @@ describe("GitLabSourceControlProvider", () => {
       expect((err as SourceControlProviderError).errorType).toBe("permanent");
       expect((err as SourceControlProviderError).httpStatus).toBe(401);
     });
+
+    it("throws permanent error when the project response shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: {},
+          default_branch: "main",
+          visibility: "private",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
+    });
+
+    it("throws a permission error when the token cannot read repository code", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: { full_path: "acme" },
+          visibility: "private",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("cannot read repository code");
+      expect((err as Error).message).not.toContain("unexpected response shape");
+    });
+
+    it("rejects non-integer project IDs and unsupported visibility values", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 42.5,
+          path: "web",
+          path_with_namespace: "acme/web",
+          namespace: { full_path: "acme" },
+          default_branch: "main",
+          visibility: "restricted",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .getRepository({ authType: "pat", token: "user-token" }, { owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as Error).message).toContain("unexpected response shape");
+      expect((err as Error).message).toContain("id");
+      expect((err as Error).message).toContain("visibility");
+    });
   });
 
   describe("createPullRequest", () => {
@@ -142,6 +254,7 @@ describe("GitLabSourceControlProvider", () => {
           draft: false,
           source_branch: "feature/foo",
           target_branch: "main",
+          updated_at: "2026-07-10T12:00:00Z",
         })
       );
 
@@ -168,9 +281,11 @@ describe("GitLabSourceControlProvider", () => {
         id: 5,
         webUrl: "https://gitlab.com/acme/web/-/merge_requests/5",
         apiUrl: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/5",
-        state: "open",
+        lifecycleState: "open",
+        isDraft: false,
         sourceBranch: "feature/foo",
         targetBranch: "main",
+        providerUpdatedAt: Date.parse("2026-07-10T12:00:00Z"),
       });
     });
 
@@ -286,7 +401,8 @@ describe("GitLabSourceControlProvider", () => {
         }
       );
 
-      expect(result.state).toBe("merged");
+      expect(result.lifecycleState).toBe("merged");
+      expect(result.isDraft).toBe(false);
     });
 
     it("maps closed MR state correctly", async () => {
@@ -321,7 +437,8 @@ describe("GitLabSourceControlProvider", () => {
         }
       );
 
-      expect(result.state).toBe("closed");
+      expect(result.lifecycleState).toBe("closed");
+      expect(result.isDraft).toBe(false);
     });
 
     it("maps draft MR state correctly", async () => {
@@ -356,7 +473,8 @@ describe("GitLabSourceControlProvider", () => {
         }
       );
 
-      expect(result.state).toBe("draft");
+      expect(result.lifecycleState).toBe("open");
+      expect(result.isDraft).toBe(true);
     });
   });
 
@@ -368,6 +486,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -389,6 +508,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "backend", full_path: "acme/backend" },
           path: "web",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -412,10 +532,26 @@ describe("GitLabSourceControlProvider", () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse({
           id: 99,
-          namespace: { path: "acme" },
+          namespace: { path: "acme", full_path: "acme" },
           path: "web",
           default_branch: "main",
           archived: true,
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const result = await provider.checkRepositoryAccess({ owner: "acme", name: "web" });
+
+      expect(result).toBeNull();
+    });
+
+    it("returns null when the PAT cannot read repository code", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 99,
+          namespace: { path: "acme", full_path: "acme" },
+          path: "web",
+          archived: false,
         })
       );
 
@@ -444,6 +580,7 @@ describe("GitLabSourceControlProvider", () => {
           namespace: { path: "ACME", full_path: "ACME" },
           path: "WEB",
           default_branch: "main",
+          archived: false,
         })
       );
 
@@ -452,6 +589,26 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(result?.repoOwner).toBe("acme");
       expect(result?.repoName).toBe("web");
+    });
+
+    it("throws permanent error when the access response shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse({
+          id: 99,
+          namespace: { path: "acme", full_path: "acme" },
+          path: "web",
+          default_branch: "main",
+        })
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .checkRepositoryAccess({ owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
     });
   });
 
@@ -531,6 +688,37 @@ describe("GitLabSourceControlProvider", () => {
       expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
     });
 
+    it("excludes projects the PAT cannot read without failing the list", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 1,
+            path: "active",
+            path_with_namespace: "acme/active",
+            namespace: { full_path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+            archived: false,
+          },
+          {
+            id: 2,
+            path: "guest-only",
+            path_with_namespace: "acme/guest-only",
+            namespace: { full_path: "acme" },
+            description: null,
+            visibility: "private",
+            archived: false,
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const repos = await provider.listRepositories();
+
+      expect(repos.map((repo) => repo.fullName)).toEqual(["acme/active"]);
+    });
+
     it("returns the full namespace path as owner for nested-group projects", async () => {
       mockFetch.mockResolvedValueOnce(
         makeResponse([
@@ -582,6 +770,29 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).errorType).toBe("transient");
+    });
+
+    it("throws permanent error when a listed repository shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(
+        makeResponse([
+          {
+            id: 1,
+            path: "web",
+            path_with_namespace: "acme/web",
+            namespace: { path: "acme", full_path: "acme" },
+            description: null,
+            visibility: "private",
+            default_branch: "main",
+          },
+        ])
+      );
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider.listRepositories().catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
     });
   });
 
@@ -689,6 +900,8 @@ describe("GitLabSourceControlProvider", () => {
         redactedRemoteUrl: "https://oauth2:<redacted>@gitlab.com/acme/web.git",
         refspec: "HEAD:refs/heads/feature/one",
         targetBranch: "feature/one",
+        repoOwner: "acme",
+        repoName: "web",
         force: false,
       });
     });
@@ -749,5 +962,295 @@ describe("GitLabSourceControlProvider", () => {
       expect(spec.remoteUrl).toBe("https://oauth2:glpat-secret@gitlab.com/acme/my-repo.git");
       expect(spec.redactedRemoteUrl).toBe("https://oauth2:<redacted>@gitlab.com/acme/my-repo.git");
     });
+  });
+});
+
+// ─── PR lifecycle tracking (getPullRequest + status derivation) ───────────────
+
+describe("deriveGitLabMergeRequestStatus", () => {
+  it("maps an opened ready MR", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "opened", draft: false })).toEqual({
+      lifecycleState: "open",
+      isDraft: false,
+    });
+  });
+
+  it("maps an opened draft MR", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "opened", draft: true })).toEqual({
+      lifecycleState: "open",
+      isDraft: true,
+    });
+  });
+
+  it("maps merged terminal-first and never leaks a stale draft flag (invariant)", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "merged", draft: true })).toEqual({
+      lifecycleState: "merged",
+      isDraft: false,
+    });
+  });
+
+  it("maps closed terminal-first", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "closed", draft: true })).toEqual({
+      lifecycleState: "closed",
+      isDraft: false,
+    });
+  });
+
+  it("treats the transient locked state as open", () => {
+    expect(deriveGitLabMergeRequestStatus({ state: "locked", draft: false })).toEqual({
+      lifecycleState: "open",
+      isDraft: false,
+    });
+  });
+});
+
+describe("getPullRequest", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  const baseMrResponse = {
+    iid: 7,
+    web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+    state: "opened",
+    draft: true,
+    source_branch: "open-inspect/session-1",
+    target_branch: "main",
+    sha: "abc123",
+    project_id: 9001,
+    updated_at: "2026-07-10T12:00:00.000Z",
+  };
+
+  it("reads with the provider PAT and maps the response to a snapshot", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse(baseMrResponse));
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot).toEqual({
+      number: 7,
+      url: "https://gitlab.com/acme/web/-/merge_requests/7",
+      lifecycleState: "open",
+      isDraft: true,
+      headBranch: "open-inspect/session-1",
+      baseBranch: "main",
+      headSha: "abc123",
+      repoOwner: "acme",
+      repoName: "web",
+      repositoryExternalId: "9001",
+      providerUpdatedAt: Date.parse("2026-07-10T12:00:00.000Z"),
+    });
+
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/7");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer glpat-test-token");
+  });
+
+  it("maps outcome timestamps (created_at / merged_at / closed_at) into the snapshot", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        ...baseMrResponse,
+        state: "merged",
+        draft: false,
+        created_at: "2026-07-08T09:00:00.000Z",
+        merged_at: "2026-07-10T12:00:00.000Z",
+        closed_at: null,
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot.providerCreatedAt).toBe(Date.parse("2026-07-08T09:00:00.000Z"));
+    expect(snapshot.mergedAt).toBe(Date.parse("2026-07-10T12:00:00.000Z"));
+    expect(snapshot.closedAt).toBeUndefined();
+  });
+
+  it("maps a merged MR to merged", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ ...baseMrResponse, state: "merged" }));
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot.lifecycleState).toBe("merged");
+    expect(snapshot.isDraft).toBe(false);
+  });
+
+  it("resolves the project by stable id and retries once on 404 (rename tolerance)", async () => {
+    mockFetch
+      .mockResolvedValueOnce(makeResponse({ message: "404 Not Found" }, 404))
+      .mockResolvedValueOnce(
+        makeResponse({ id: 9001, path: "web-renamed", namespace: { full_path: "acme" } })
+      )
+      .mockResolvedValueOnce(
+        makeResponse({
+          ...baseMrResponse,
+          web_url: "https://gitlab.com/acme/web-renamed/-/merge_requests/7",
+        })
+      );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({
+      owner: "acme",
+      name: "web",
+      number: 7,
+      repositoryExternalId: "9001",
+    });
+
+    expect(snapshot.repoName).toBe("web-renamed");
+    expect(mockFetch.mock.calls[1][0]).toBe("https://gitlab.com/api/v4/projects/9001");
+    expect(mockFetch.mock.calls[2][0]).toBe(
+      "https://gitlab.com/api/v4/projects/acme%2Fweb-renamed/merge_requests/7"
+    );
+  });
+
+  it("throws with httpStatus 404 when the MR is gone and no stable id is known", async () => {
+    mockFetch.mockResolvedValueOnce(makeResponse({ message: "404 Not Found" }, 404));
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).httpStatus).toBe(404);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createPullRequest state capture", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("captures headSha and repositoryExternalId from the create response", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        iid: 5,
+        web_url: "https://gitlab.com/acme/web/-/merge_requests/5",
+        _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/5" },
+        state: "opened",
+        draft: false,
+        source_branch: "open-inspect/session-1",
+        target_branch: "main",
+        sha: "abc123",
+        project_id: 9001,
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const result = await provider.createPullRequest(
+      { authType: "pat", token: "user-token" },
+      {
+        repository: {
+          owner: "acme",
+          name: "web",
+          fullName: "acme/web",
+          defaultBranch: "main",
+          isPrivate: true,
+          providerRepoId: 9001,
+        },
+        title: "Add feature",
+        body: "Description",
+        sourceBranch: "open-inspect/session-1",
+        targetBranch: "main",
+      }
+    );
+
+    expect(result.headSha).toBe("abc123");
+    expect(result.repositoryExternalId).toBe("9001");
+  });
+});
+
+describe("response validation (zod boundary)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("getPullRequest maps the transient locked state to open at the response level", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        iid: 7,
+        web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+        state: "locked",
+        draft: false,
+        source_branch: "open-inspect/session-1",
+        target_branch: "main",
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const snapshot = await provider.getPullRequest({ owner: "acme", name: "web", number: 7 });
+
+    expect(snapshot.lifecycleState).toBe("open");
+    expect(snapshot.isDraft).toBe(false);
+  });
+
+  it("getPullRequest throws a permanent provider error on an unexpected state value", async () => {
+    // Schema drift must fail loudly, never be silently stored as "open".
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({
+        iid: 7,
+        web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+        state: "hidden",
+        draft: false,
+        source_branch: "open-inspect/session-1",
+        target_branch: "main",
+      })
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    expect((err as SourceControlProviderError).message).toContain("state");
+  });
+
+  it("createPullRequest throws a permanent provider error on a malformed response", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeResponse({ web_url: "https://gitlab.com/acme/web/-/merge_requests/5" }) // missing iid etc.
+    );
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Add feature",
+          body: "Description",
+          sourceBranch: "feature/foo",
+          targetBranch: "main",
+        }
+      )
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).errorType).toBe("permanent");
+  });
+
+  it("falls back to the original 404 when the by-id resolution body is malformed", async () => {
+    mockFetch
+      .mockResolvedValueOnce(makeResponse({ message: "404 Not Found" }, 404))
+      .mockResolvedValueOnce(makeResponse({ id: 9001 })); // no path/namespace
+
+    const provider = new GitLabSourceControlProvider(fakeConfig);
+    const err = await provider
+      .getPullRequest({ owner: "acme", name: "web", number: 7, repositoryExternalId: "9001" })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(SourceControlProviderError);
+    expect((err as SourceControlProviderError).httpStatus).toBe(404);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,4 +1,7 @@
-import type { AnalyticsBreakdownEntry, AnalyticsBreakdownResponse } from "@open-inspect/shared";
+import type {
+  AnalyticsBreakdownEntry,
+  AnalyticsBreakdownResponse,
+} from "@open-inspect/shared/types/analytics";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, ChevronUpIcon } from "@/components/ui/icons";

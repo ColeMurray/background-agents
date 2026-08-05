@@ -27,3 +27,13 @@ output "custom_domain" {
   description = "The custom domain for the worker (if configured)"
   value       = var.custom_domain != null ? cloudflare_workers_custom_domain.this[0].hostname : null
 }
+
+output "plain_text_binding_names" {
+  description = "Names of configured plain-text bindings."
+  value       = [for binding in var.plain_text_bindings : binding.name]
+}
+
+output "secret_binding_names" {
+  description = "Names of configured secret bindings; secret values are not exposed."
+  value       = nonsensitive([for binding in var.secrets : binding.name])
+}

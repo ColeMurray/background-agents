@@ -66,6 +66,24 @@ describe("isDmDispatchable", () => {
   it("returns false for non-message event type", () => {
     expect(isDmDispatchable({ ...baseEvent, type: "app_mention" })).toBe(false);
   });
+
+  it("returns true for a file_share message with text", () => {
+    expect(isDmDispatchable({ ...baseEvent, subtype: "file_share" })).toBe(true);
+  });
+
+  it("returns true for a text-less file_share message with files", () => {
+    expect(
+      isDmDispatchable({ ...baseEvent, subtype: "file_share", text: undefined, files: [{}] })
+    ).toBe(true);
+  });
+
+  it("returns false for a text-less file_share message without files", () => {
+    expect(isDmDispatchable({ ...baseEvent, subtype: "file_share", text: undefined })).toBe(false);
+  });
+
+  it("still rejects other subtypes even when files are present", () => {
+    expect(isDmDispatchable({ ...baseEvent, subtype: "message_changed", files: [{}] })).toBe(false);
+  });
 });
 
 describe("isChannelTriggerCandidate", () => {

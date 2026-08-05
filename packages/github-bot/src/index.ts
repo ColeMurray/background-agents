@@ -10,12 +10,16 @@ import type { Env } from "./types";
 import type { Logger } from "./logger";
 import { createLogger, parseLogLevel } from "./logger";
 import { verifyWebhookSignature } from "./verify";
-import { normalizeGitHubEvent, buildInternalAuthHeaders } from "@open-inspect/shared";
+import { normalizeGitHubEvent } from "@open-inspect/shared/triggers";
+import { signedControlPlaneFetch } from "./internal-auth";
 import {
   issueCommentPayloadSchema,
   pullRequestOpenedPayloadSchema,
   reviewCommentPayloadSchema,
   reviewRequestedPayloadSchema,
+  webhookActionPayloadSchema,
+  webhookSummaryPayloadSchema,
+  type WebhookSummaryPayload,
 } from "./payload-schemas";
 import {
   handlePullRequestOpened,
@@ -25,7 +29,7 @@ import {
   isReviewRequestedForBot,
   type HandlerResult,
 } from "./handlers";
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 
 const app = new Hono<{ Bindings: Env }>();
 const DELIVERY_DEDUPE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -78,17 +82,21 @@ app.post("/webhooks/github", async (c) => {
     log.warn("webhook.delivery_id_missing", { event_type: event });
   }
 
-  const payload = JSON.parse(rawBody);
+  const payload: unknown = JSON.parse(rawBody);
+  const summaryResult = webhookSummaryPayloadSchema.safeParse(payload);
+  const summary = summaryResult.success ? summaryResult.data : null;
+  const actionResult = webhookActionPayloadSchema.safeParse(payload);
+  const action = summary?.action ?? (actionResult.success ? actionResult.data.action : undefined);
   const traceId = crypto.randomUUID();
 
   log.info("webhook.received", {
     event_type: event,
     delivery_id: deliveryId,
     trace_id: traceId,
-    repo: payload?.repository
-      ? `${payload.repository.owner?.login}/${payload.repository.name}`
+    repo: summary?.repository
+      ? `${summary.repository.owner.login}/${summary.repository.name}`
       : undefined,
-    action: payload?.action,
+    action,
   });
 
   c.executionCtx.waitUntil(
@@ -140,14 +148,14 @@ async function handleWebhook(
   traceId: string,
   deliveryId: string | undefined
 ): Promise<void> {
-  const p = payload as Record<string, unknown>;
-  const repo = p.repository
-    ? `${(p.repository as Record<string, unknown> & { owner: { login: string }; name: string }).owner.login}/${(p.repository as Record<string, unknown> & { name: string }).name}`
-    : undefined;
-  const sender = (p.sender as { login?: string } | undefined)?.login;
-  const pullNumber =
-    (p.pull_request as { number?: number } | undefined)?.number ??
-    (p.issue as { number?: number } | undefined)?.number;
+  const parsed = webhookSummaryPayloadSchema.safeParse(payload);
+  const actionResult = webhookActionPayloadSchema.safeParse(payload);
+  const p: WebhookSummaryPayload = parsed.success
+    ? parsed.data
+    : { action: actionResult.success ? actionResult.data.action : undefined };
+  const repo = p.repository ? `${p.repository.owner.login}/${p.repository.name}` : undefined;
+  const sender = p.sender?.login;
+  const pullNumber = p.pull_request?.number ?? p.issue?.number;
 
   const wideEventBase = {
     trace_id: traceId,
@@ -189,18 +197,16 @@ async function handleWebhook(
   log.info("webhook.handled", wideEvent);
 
   // Forward normalized event to control-plane for automation triggering.
-  // This is additive — failures here must not affect existing bot behavior.
+  // Use the passthrough parse so nested lifecycle fields are not stripped by
+  // the summary schema used for logging and bot dispatch.
   if (event) {
-    const normalizedEvent = normalizeGitHubEvent(event, p);
+    const normalizationPayload = actionResult.success ? actionResult.data : {};
+    const normalizedEvent = normalizeGitHubEvent(event, normalizationPayload);
     if (normalizedEvent !== null) {
       try {
+        const url = "https://internal/internal/github-event";
         const body = JSON.stringify(normalizedEvent);
-        const authHeaders = await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId);
-        const response = await env.CONTROL_PLANE.fetch("https://internal/internal/github-event", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders },
-          body,
-        });
+        const response = await signedControlPlaneFetch(env, { method: "POST", url, body, traceId });
         if (!response.ok) {
           log.warn("webhook.github_event_forward_failed", {
             trace_id: traceId,
@@ -225,7 +231,7 @@ function dispatchHandler(
   env: Env,
   log: Logger,
   event: string | undefined,
-  p: Record<string, unknown>,
+  p: WebhookSummaryPayload,
   payload: unknown,
   traceId: string
 ): Promise<HandlerResult> {

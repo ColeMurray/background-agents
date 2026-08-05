@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { SettingsNav, type SettingsCategory } from "@/components/settings/settings-nav";
 import { SecretsSettings } from "@/components/settings/secrets-settings";
+import { EnvironmentsSettings } from "@/components/settings/environments-settings";
 import { ModelsSettings } from "@/components/settings/models-settings";
 import { DataControlsSettings } from "@/components/settings/data-controls-settings";
 import { KeyboardShortcutsSettings } from "@/components/settings/keyboard-shortcuts-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
 import { SandboxSettingsPage } from "@/components/settings/sandbox-settings";
+import { ScmSettingsPage } from "@/components/settings/scm-settings";
 import { ImagesSettings } from "@/components/settings/images-settings";
 import { McpServersSettings } from "@/components/settings/mcp-servers-settings";
 import { AppearanceSettings } from "@/components/settings/appearance-settings";
@@ -20,24 +22,28 @@ import { supportsRepoImages } from "@/lib/sandbox-provider";
 
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   secrets: "Secrets",
+  environments: "Environments",
   models: "Models",
   images: "Images",
   appearance: "Appearance",
   "keyboard-shortcuts": "Keyboard",
   "data-controls": "Data Controls",
   sandbox: "Sandbox",
+  scm: "SCM Settings",
   integrations: "Integrations",
   "mcp-servers": "MCP Servers",
 };
 
 const VALID_CATEGORIES = new Set<string>([
   "secrets",
+  "environments",
   "models",
   "images",
   "appearance",
   "keyboard-shortcuts",
   "data-controls",
   "sandbox",
+  "scm",
   "integrations",
   "mcp-servers",
 ]);
@@ -46,7 +52,7 @@ function isValidCategory(tab: string | null): tab is SettingsCategory {
   return tab !== null && VALID_CATEGORIES.has(tab);
 }
 
-export default function SettingsPage() {
+function SettingsPageContent() {
   const { isOpen, toggle } = useSidebarContext();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
@@ -81,12 +87,14 @@ export default function SettingsPage() {
   const content = (
     <>
       {activeCategory === "secrets" && <SecretsSettings />}
+      {activeCategory === "environments" && <EnvironmentsSettings />}
       {activeCategory === "models" && <ModelsSettings />}
       {activeCategory === "images" && repoImagesEnabled && <ImagesSettings />}
       {activeCategory === "appearance" && <AppearanceSettings />}
       {activeCategory === "keyboard-shortcuts" && <KeyboardShortcutsSettings />}
       {activeCategory === "data-controls" && <DataControlsSettings />}
       {activeCategory === "sandbox" && <SandboxSettingsPage />}
+      {activeCategory === "scm" && <ScmSettingsPage />}
       {activeCategory === "integrations" && <IntegrationsSettings />}
       {activeCategory === "mcp-servers" && <McpServersSettings />}
     </>
@@ -100,6 +108,7 @@ export default function SettingsPage() {
             <header className="border-b border-border-muted flex-shrink-0">
               <div className="px-4 py-3">
                 <button
+                  type="button"
                   onClick={toggle}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
@@ -122,6 +131,7 @@ export default function SettingsPage() {
             <header className="border-b border-border-muted flex-shrink-0">
               <div className="px-4 py-3 flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={toggle}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
@@ -130,6 +140,7 @@ export default function SettingsPage() {
                   <SidebarIcon className="w-4 h-4" />
                 </button>
                 <button
+                  type="button"
                   onClick={() => setMobileView("list")}
                   className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                   aria-label="Back to settings"
@@ -155,14 +166,7 @@ export default function SettingsPage() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
           </div>
         </header>
       )}
@@ -174,5 +178,13 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsPageContent />
+    </Suspense>
   );
 }

@@ -1,17 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { SELF, env } from "cloudflare:test";
-import { generateInternalToken } from "../../src/auth/internal";
-
-async function authHeaders(): Promise<Record<string, string>> {
-  const token = await generateInternalToken(env.INTERNAL_CALLBACK_SECRET!);
-  return { Authorization: `Bearer ${token}` };
-}
+import { SELF } from "cloudflare:test";
+import { serviceFetch } from "./helpers";
 
 describe("Worker fetch handler", () => {
   it("returns 404 for unknown authenticated paths", async () => {
-    const response = await SELF.fetch("https://test.local/unknown-path", {
-      headers: await authHeaders(),
-    });
+    const response = await serviceFetch("https://test.local/unknown-path");
     expect(response.status).toBe(404);
     const body = await response.json<{ error: string }>();
     expect(body.error).toBe("Not found");

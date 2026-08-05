@@ -11,6 +11,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: "octocat@example.com",
     scm_name: "The Octocat",
+    auth_name: null,
     role: "member",
     scm_access_token_encrypted: "enc-access",
     scm_refresh_token_encrypted: "enc-refresh",
@@ -43,14 +44,19 @@ function createHandler() {
     child: vi.fn(),
   } as unknown as Logger;
 
-  const handler = createWsTokenHandler({
+  const wsTokenHandler = createWsTokenHandler({
     repository,
     getParticipantByUserId,
     generateId,
     hashToken,
     now,
-    getLog: () => log,
   });
+
+  // Bind the request-scoped log so call sites exercise the threading without
+  // repeating it at every invocation.
+  const handler = {
+    generateWsToken: (request: Request) => wsTokenHandler.generateWsToken(request, log),
+  };
 
   return {
     handler,
@@ -262,5 +268,46 @@ describe("createWsTokenHandler", () => {
       role: "member",
       joinedAt: 1234,
     });
+  });
+
+  it("does not copy profile names into new participants", async () => {
+    const { handler, repository, getParticipantByUserId } = createHandler();
+    const createdParticipant = createParticipant({ id: "participant-new", scm_name: null });
+    getParticipantByUserId.mockReturnValueOnce(null).mockReturnValueOnce(createdParticipant);
+
+    const response = await handler.generateWsToken(
+      new Request("http://internal/internal/ws-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "google-sub-123", authName: "Ada Lovelace" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "google-sub-123",
+        scmName: null,
+      })
+    );
+    expect(repository.createParticipant.mock.calls[0]?.[0]).not.toHaveProperty("authName");
+  });
+
+  it("does not copy profile names into existing participants", async () => {
+    const { handler, repository, getParticipantByUserId } = createHandler();
+    // Existing participant → update path (createParticipant is not called).
+    getParticipantByUserId.mockReturnValue(createParticipant({ scm_name: null }));
+
+    const response = await handler.generateWsToken(
+      new Request("http://internal/internal/ws-token", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: "google-sub-123", authName: "Ada Lovelace" }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(repository.updateParticipantCoalesce.mock.calls[0]?.[1]).not.toHaveProperty("authName");
   });
 });

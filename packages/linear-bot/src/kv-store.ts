@@ -1,10 +1,17 @@
 /**
  * KV accessor helpers for config, issue sessions, and event deduplication.
+ *
+ * The `config:*` and `user_prefs:*` keys are operator-managed: edit them
+ * directly with `wrangler kv key put --namespace-id <LINEAR_KV> <key> <json>`
+ * using these key formats:
+ * - `config:team-repos`   — { [teamKey]: "owner/repo" }
+ * - `config:project-repos` — { [projectId]: "owner/repo" }
+ * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
+import { issueSessionSchema } from "./types";
 import type {
   Env,
-  TriggerConfig,
   TeamRepoMapping,
   ProjectRepoMapping,
   UserPreferences,
@@ -13,12 +20,6 @@ import type {
 import { createLogger } from "./logger";
 
 const log = createLogger("kv-store");
-
-export const DEFAULT_TRIGGER_CONFIG: TriggerConfig = {
-  triggerLabel: "agent",
-  autoTriggerOnCreate: false,
-  triggerCommand: "@agent",
-};
 
 export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
   try {
@@ -44,20 +45,6 @@ export async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMappin
   return {};
 }
 
-export async function getTriggerConfig(env: Env): Promise<TriggerConfig> {
-  try {
-    const data = await env.LINEAR_KV.get("config:triggers", "json");
-    if (data && typeof data === "object") {
-      return { ...DEFAULT_TRIGGER_CONFIG, ...(data as Partial<TriggerConfig>) };
-    }
-  } catch (e) {
-    log.debug("kv.get_trigger_config_failed", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-  }
-  return DEFAULT_TRIGGER_CONFIG;
-}
-
 export async function getUserPreferences(
   env: Env,
   userId: string
@@ -81,7 +68,8 @@ function getIssueSessionKey(issueId: string): string {
 export async function lookupIssueSession(env: Env, issueId: string): Promise<IssueSession | null> {
   try {
     const data = await env.LINEAR_KV.get(getIssueSessionKey(issueId), "json");
-    if (data && typeof data === "object") return data as IssueSession;
+    const result = issueSessionSchema.safeParse(data);
+    if (result.success) return result.data;
   } catch (e) {
     log.debug("kv.lookup_issue_session_failed", {
       issueId,
