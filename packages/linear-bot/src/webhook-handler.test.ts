@@ -545,6 +545,69 @@ describe("handleAgentSessionEvent environment targets", () => {
     });
   });
 
+  it("resolves an explicit owner/repo from a clarification reply without classifying", async () => {
+    // The elicitation path created no session, so no issue mapping exists; the
+    // user's reply arrives as a prompted event whose text lives on the agent
+    // activity. It must reach target resolution and match deterministically —
+    // the classifier stub below throws if consulted.
+    const { kv, store } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+    });
+    const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
+    const fetchMock = (env.CONTROL_PLANE as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://internal/repos") {
+        return {
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              repos: [
+                { owner: "acme", name: "backend", defaultBranch: "main", private: true },
+                { owner: "acme", name: "frontend", defaultBranch: "main", private: true },
+              ],
+            }),
+        };
+      }
+      if (url.startsWith("https://internal/integration-settings/linear/resolved/")) {
+        return { ok: true, json: () => Promise.resolve({ config: null }) };
+      }
+      if (url === "https://internal/environments") {
+        return { ok: true, json: () => Promise.resolve({ environments: [], total: 0 }) };
+      }
+      if (url === "https://internal/sessions") {
+        return {
+          ok: true,
+          json: () => Promise.resolve({ sessionId: "session-xyz", status: "created" }),
+        };
+      }
+      if (url === "https://internal/sessions/session-xyz/prompt") {
+        return { ok: true, json: () => Promise.resolve({ ok: true }) };
+      }
+      throw new Error(`Unexpected control-plane fetch to ${url}`);
+    });
+    const webhook = makeWebhook();
+    webhook.action = "prompted";
+    webhook.agentActivity = {
+      userId: "human-user-1",
+      content: { type: "prompt", body: "acme/backend" },
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-clarification-reply");
+
+    const body = createSessionBody(fetchMock);
+    expect(body).toMatchObject({ title: "ENG-42: Wire the fullstack flow" });
+    const issueSession = JSON.parse(store.get("issue:issue-1") ?? "null") as Record<
+      string,
+      unknown
+    > | null;
+    expect(issueSession).toMatchObject({
+      sessionId: "session-xyz",
+      repoOwner: "acme",
+      repoName: "backend",
+    });
+  });
+
   it("attributes follow-up prompts to the human activity author", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),

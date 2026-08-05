@@ -6,6 +6,8 @@ import {
 } from "../model-resolution";
 import { isValidPayload } from "../callbacks";
 import { buildOAuthSuccessHtml } from "../index";
+import { matchExplicitRepo } from "../target-resolution";
+import type { RepoConfig } from "../types";
 import type { CompletionCallback } from "../types";
 
 describe("buildOAuthSuccessHtml", () => {
@@ -24,6 +26,43 @@ describe("buildOAuthSuccessHtml", () => {
   it("escapes the workspace name to prevent HTML injection", () => {
     const html = buildOAuthSuccessHtml("Open-Inspect", "Evil <img src=x>");
     expect(html).toContain("Evil &lt;img src=x&gt;");
+  });
+});
+
+// ─── matchExplicitRepo ───────────────────────────────────────────────────────
+
+describe("matchExplicitRepo", () => {
+  const repo = (owner: string, name: string): RepoConfig => ({
+    id: `${owner}/${name}`,
+    owner,
+    name,
+    fullName: `${owner}/${name}`,
+    displayName: name,
+    description: name,
+    defaultBranch: "main",
+    private: true,
+  });
+  const repos = [repo("acme", "backend"), repo("acme", "frontend")];
+
+  it("finds the one repository a clarification reply names", () => {
+    expect(matchExplicitRepo("acme/backend", repos)?.fullName).toBe("acme/backend");
+  });
+
+  it("matches case-insensitively — repos are stored lowercase", () => {
+    expect(matchExplicitRepo("use Acme/Backend please", repos)?.fullName).toBe("acme/backend");
+  });
+
+  it("returns null when several repositories are named", () => {
+    expect(matchExplicitRepo("acme/backend or acme/frontend", repos)).toBeNull();
+  });
+
+  it("returns null when none are named", () => {
+    expect(matchExplicitRepo("the vault sorting bug", repos)).toBeNull();
+  });
+
+  it("does not match inside a longer repository path", () => {
+    expect(matchExplicitRepo("see acme/backend-legacy for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see notacme/backend for context", repos)).toBeNull();
   });
 });
 

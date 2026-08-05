@@ -450,7 +450,14 @@ async function handleNewSession(
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
-  const comment = webhook.agentSession.comment;
+  // A "prompted" event that reaches new-session handling is a reply to an
+  // elicitation — no issue→session mapping existed, so no session was ever
+  // created. The reply text lives on the agent activity, not on the session's
+  // original trigger comment, and it is the clarification the resolver asked
+  // for — so it must win.
+  const replyBody =
+    webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;
+  const comment = replyBody ? { body: replyBody } : webhook.agentSession.comment;
   const orgId = webhook.organizationId;
 
   const client = await getAgentSessionLinearClient({
