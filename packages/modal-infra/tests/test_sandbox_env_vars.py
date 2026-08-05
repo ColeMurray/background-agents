@@ -394,8 +394,7 @@ def _fake_sandbox_create(captured):
 
 
 # Note: fresh and repo-image sandboxes never receive SCM tokens in the
-# environment. Callers only set fallback_clone_token for snapshot paths that
-# still need VCS_CLONE_TOKEN for legacy entrypoints.
+# environment; created sandboxes rely on brokered credentials only.
 
 
 @pytest.mark.asyncio
@@ -516,59 +515,6 @@ async def test_repo_image_boot_preserves_user_github_cli_token(monkeypatch, toke
     assert "VCS_CLONE_TOKEN" not in env
     assert env.get("GITHUB_TOKEN") != "ghs_repo_image_token"
     assert env.get("GITHUB_APP_TOKEN") != "ghs_repo_image_token"
-    assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
-
-
-@pytest.mark.asyncio
-async def test_session_snapshot_boot_preserves_clone_token(monkeypatch):
-    """A session-snapshot boot keeps the legacy fallback token."""
-    captured = {}
-
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
-
-    manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner="acme",
-        repo_name="repo",
-        fallback_clone_token="ghs_snapshot_token",
-        snapshot_id="snap-1",
-    )
-    await manager.create_sandbox(config)
-
-    env = captured["env"]
-    assert env["VCS_CLONE_TOKEN"] == "ghs_snapshot_token"
-    assert env["OI_GITHUB_TOKEN_IS_FALLBACK"] == "1"
-
-
-@pytest.mark.asyncio
-async def test_no_repo_session_snapshot_boot_omits_clone_token(monkeypatch):
-    """A no-repository snapshot boot gets host scoping but no VCS credentials."""
-    captured = {}
-
-    monkeypatch.setattr("src.sandbox.manager.modal.Image.from_registry", lambda *a, **kw: object())
-    monkeypatch.setattr("src.sandbox.manager.modal.Sandbox.create", _fake_sandbox_create(captured))
-    monkeypatch.delenv("SCM_PROVIDER", raising=False)
-
-    manager = SandboxManager()
-    config = SandboxConfig(
-        repo_owner=None,
-        repo_name=None,
-        fallback_clone_token="ghs_snapshot_token",
-        snapshot_id="snap-1",
-    )
-    await manager.create_sandbox(config)
-
-    env = captured["env"]
-    assert "REPOSITORY_MODE" not in env
-    assert env["REPO_OWNER"] == ""
-    assert env["REPO_NAME"] == ""
-    assert env["VCS_HOST"] == "github.com"
-    assert env["VCS_CLONE_USERNAME"] == "x-access-token"
-    assert "VCS_CLONE_TOKEN" not in env
-    assert "GITHUB_TOKEN" not in env
-    assert "GITHUB_APP_TOKEN" not in env
     assert "OI_GITHUB_TOKEN_IS_FALLBACK" not in env
 
 

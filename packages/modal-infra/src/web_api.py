@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
 
+from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
 
 from .app import (
@@ -26,7 +27,6 @@ from .app import (
     internal_api_secret,
     validate_control_plane_url,
 )
-from .auth import AuthConfigurationError, verify_internal_token
 from .clone_token import resolve_clone_token
 from .log_config import configure_logging, get_logger
 
@@ -134,7 +134,7 @@ def _session_config_from_create_request(
 
 @app.function(
     image=function_image,
-    secrets=[github_app_secrets, internal_api_secret],
+    secrets=[internal_api_secret],
 )
 @fastapi_endpoint(method="POST")
 async def api_create_sandbox(
@@ -158,7 +158,6 @@ async def api_create_sandbox(
         "repo_name": "...",
         "control_plane_url": "...",
         "sandbox_auth_token": "...",
-        "snapshot_id": null,
         "provider": "anthropic",
         "model": "claude-sonnet-4-6"
     }
@@ -181,14 +180,10 @@ async def api_create_sandbox(
 
         manager = SandboxManager()
 
-        snapshot_id = request.get("snapshot_id")
         repo_image_id = request.get("repo_image_id") or None
         repo_owner, repo_name = _normalize_optional_repository_context(
             request.get("repo_owner"),
             request.get("repo_name"),
-        )
-        fallback_clone_token = (
-            resolve_clone_token() if snapshot_id and repo_owner and repo_name else None
         )
 
         session_config = _session_config_from_create_request(
@@ -199,11 +194,9 @@ async def api_create_sandbox(
             repo_owner=repo_owner,
             repo_name=repo_name,
             sandbox_id=request.get("sandbox_id"),  # Use control-plane-provided ID for auth
-            snapshot_id=snapshot_id,
             session_config=session_config,
             control_plane_url=control_plane_url,
             sandbox_auth_token=request.get("sandbox_auth_token"),
-            fallback_clone_token=fallback_clone_token,
             user_env_vars=request.get("user_env_vars") or None,
             repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
@@ -607,20 +600,10 @@ async def api_create_build_sandbox(
         )
         clone_host = _optional_string(request, "clone_host")
         clone_username = _optional_string(request, "clone_username")
-        callback_url = _optional_string(request, "callback_url")
-        failure_callback_url = _optional_string(request, "failure_callback_url")
-        if bool(callback_url) != bool(failure_callback_url):
-            raise HTTPException(
-                status_code=400,
-                detail="callback_url and failure_callback_url must be provided together",
-            )
-        if (
-            callback_url
-            and failure_callback_url
-            and (
-                not validate_control_plane_url(callback_url)
-                or not validate_control_plane_url(failure_callback_url)
-            )
+        callback_url = _required_string(request, "callback_url")
+        failure_callback_url = _required_string(request, "failure_callback_url")
+        if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
+            failure_callback_url
         ):
             raise HTTPException(
                 status_code=400, detail="callback URLs must target the control plane"
@@ -687,22 +670,11 @@ async def api_start_build_sandbox(
     try:
         from .sandbox.build_session import ModalBuildSessionService
 
-        callback_url = _required_string(request, "callback_url")
-        failure_callback_url = _required_string(request, "failure_callback_url")
-        if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
-            failure_callback_url
-        ):
-            raise HTTPException(
-                status_code=400, detail="callback URLs must target the control plane"
-            )
-
         build_id = _required_string(request, "build_id")
         provider_session_id = _required_string(request, "provider_session_id")
         await ModalBuildSessionService().start(
             build_id=build_id,
             provider_session_id=provider_session_id,
-            callback_url=callback_url,
-            failure_callback_url=failure_callback_url,
             callback_token=_required_string(request, "callback_token"),
         )
         return {"success": True, "data": {"started": True}}

@@ -11,6 +11,7 @@ import {
   CURRENT_USER_CREATED_BY,
   SIDEBAR_SESSIONS_KEY,
 } from "@/lib/session-list";
+import { SESSION_CREATOR_FILTER_STORAGE_KEY } from "@/hooks/use-sidebar-sessions";
 
 expect.extend(matchers);
 
@@ -62,6 +63,8 @@ vi.mock("@/hooks/use-environments", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  localStorage.clear();
   vi.useRealTimers();
   mockUseIsMobile.mockReturnValue(false);
   mockPush.mockReset();
@@ -488,7 +491,102 @@ describe("SessionSidebar", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(mineKey);
     });
+    expect(localStorage.getItem(SESSION_CREATOR_FILTER_STORAGE_KEY)).toBe("mine");
     expect(screen.queryByText("Session 1")).not.toBeInTheDocument();
+  });
+
+  it("restores the saved creator filter after a refresh", async () => {
+    const mineKey = buildSessionsPageKey({
+      excludeStatus: "archived",
+      excludeAutomationLineage: true,
+      createdBy: [CURRENT_USER_CREATED_BY],
+    });
+    localStorage.setItem(SESSION_CREATOR_FILTER_STORAGE_KEY, "mine");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === mineKey) {
+        return jsonResponse({
+          sessions: [createSession(2, { title: "Saved mine session" })],
+          hasMore: false,
+        });
+      }
+      throw new Error(`Unexpected fetch for ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fetcher: async (url: string) => (await fetch(url)).json(),
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Saved mine session")).toBeInTheDocument();
+    expect(screen.getByText("Mine").closest("button")).toHaveAttribute("data-state", "on");
+    expect(fetchMock).toHaveBeenCalledWith(mineKey);
+    expect(fetchMock).not.toHaveBeenCalledWith(SIDEBAR_SESSIONS_KEY);
+  });
+
+  it("ignores an invalid saved creator filter", async () => {
+    localStorage.setItem(SESSION_CREATOR_FILTER_STORAGE_KEY, "invalid");
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: { [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false } },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    expect(screen.getByText("All").closest("button")).toHaveAttribute("data-state", "on");
+  });
+
+  it("keeps the creator filter usable when storage is unavailable", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("Storage unavailable");
+    });
+    const mineKey = buildSessionsPageKey({
+      excludeStatus: "archived",
+      excludeAutomationLineage: true,
+      createdBy: [CURRENT_USER_CREATED_BY],
+    });
+
+    render(
+      <SWRConfig
+        value={{
+          fallback: {
+            [SIDEBAR_SESSIONS_KEY]: { sessions: [createSession(1)], hasMore: false },
+            [mineKey]: {
+              sessions: [createSession(2, { title: "Mine without storage" })],
+              hasMore: false,
+            },
+          },
+          dedupingInterval: 0,
+          revalidateOnFocus: false,
+        }}
+      >
+        <SessionSidebar />
+      </SWRConfig>
+    );
+
+    expect(await screen.findByText("Session 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Mine"));
+    expect(await screen.findByText("Mine without storage")).toBeInTheDocument();
+    expect(screen.getByText("Mine").closest("button")).toHaveAttribute("data-state", "on");
   });
 
   it("shows the environment name on cards for environment-launched sessions", async () => {

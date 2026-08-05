@@ -505,7 +505,7 @@ describe("ModalSandboxProvider", () => {
       const correlation = { request_id: "request-1", trace_id: "trace-1" };
       const onProviderSessionCreated = vi.fn(async () => undefined);
 
-      const result = await provider.triggerEnvironmentImageBuild({
+      await provider.triggerImageBuild({
         buildId: "build-123",
         scopeKind: "repo",
         scopeId: "acme/repo",
@@ -513,7 +513,7 @@ describe("ModalSandboxProvider", () => {
         cloneToken: "clone-token",
         userEnvVars: { FOO: "bar" },
         buildExecutionTimeoutSeconds: 1800,
-        providerSessionTimeoutMs: 2_400_000,
+        providerSessionTimeoutSeconds: 2400,
         callbackUrl: "https://worker.test/image-builds/build-complete",
         failureCallbackUrl: "https://worker.test/image-builds/build-failed",
         callbackToken: "callback-token",
@@ -521,7 +521,6 @@ describe("ModalSandboxProvider", () => {
         correlation,
       });
 
-      expect(result).toEqual({ buildId: "build-123", status: "building" });
       expect(client.createImageBuildSandbox).toHaveBeenCalledWith(
         {
           scopeKind: "repo",
@@ -542,8 +541,6 @@ describe("ModalSandboxProvider", () => {
         {
           buildId: "build-123",
           providerSessionId: "modal-session-123",
-          callbackUrl: "https://worker.test/image-builds/build-complete",
-          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
           callbackToken: "callback-token",
           correlation,
         },
