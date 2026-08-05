@@ -85,7 +85,6 @@ export function SessionSidebar({
     loadingMore,
     sessionsError,
     sessionCreatorFilter,
-    isSessionCreatorFilterHydrated,
     setSessionCreatorFilter,
     scrollContainerRef,
     maybeLoadMoreSessions,
@@ -180,7 +179,7 @@ export function SessionSidebar({
       <div className="px-3 py-2">
         <ToggleGroup
           type="single"
-          value={isSessionCreatorFilterHydrated ? sessionCreatorFilter : ""}
+          value={sessionCreatorFilter ?? ""}
           onValueChange={(value) => {
             if (value === "all" || value === "mine") {
               setSessionCreatorFilter(value);
