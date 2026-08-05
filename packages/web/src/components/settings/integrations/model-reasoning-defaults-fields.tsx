@@ -4,7 +4,7 @@ import {
   getReasoningConfig,
   isValidReasoningEffort,
   type ModelCategory,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import {
   Select,
   SelectContent,

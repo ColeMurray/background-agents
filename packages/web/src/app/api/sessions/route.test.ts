@@ -11,6 +11,7 @@ vi.mock("@/lib/control-plane", () => ({
 
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { hostileIdentityFields } from "../hostile-identity.test-fixture";
 import { GET, POST } from "./route";
 
 function request(path: string) {
@@ -42,15 +43,16 @@ describe("sessions API route", () => {
 
     const response = await GET(
       request(
-        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
       )
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=10&offset=20&excludeStatus=archived&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ sessions: [], hasMore: false });
   });
 
@@ -72,22 +74,30 @@ describe("sessions API route", () => {
     expect(response.status).toBe(200);
   });
 
-  it("preserves createdBy=me across pagination requests", async () => {
+  it("preserves Mine filters across pagination requests", async () => {
     vi.mocked(controlPlaneUserFetch)
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: true }, { status: 200 }))
       .mockResolvedValueOnce(Response.json({ sessions: [], hasMore: false }, { status: 200 }));
 
-    await GET(request("/api/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"));
-    await GET(request("/api/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"));
+    await GET(
+      request(
+        "/api/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+      )
+    );
+    await GET(
+      request(
+        "/api/sessions?limit=50&offset=50&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
+      )
+    );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledTimes(2);
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       1,
-      "/sessions?limit=50&offset=0&excludeStatus=archived&createdBy=me"
+      "/sessions?limit=50&offset=0&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
     expect(controlPlaneUserFetch).toHaveBeenNthCalledWith(
       2,
-      "/sessions?limit=50&offset=50&excludeStatus=archived&createdBy=me"
+      "/sessions?limit=50&offset=50&excludeStatus=archived&excludeAutomationLineage=true&createdBy=me"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
   });
@@ -121,15 +131,27 @@ describe("sessions API route (POST)", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("sends display fields without identity or SCM assertions", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
+  it.each([
+    {
+      provider: "GitHub",
       user: {
         id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
       },
-    } as never);
+    },
+    {
+      provider: "Google",
+      user: {
+        id: "fedcba9876543210fedcba9876543210",
+        name: "Pat PM",
+        email: "pm@gmail.com",
+        image: "https://lh3.googleusercontent.com/a/pat",
+      },
+    },
+  ])("sends the same profile-independent body for a $provider session", async ({ user }) => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ id: "sess1" }, { status: 201 })
     );
@@ -142,55 +164,7 @@ describe("sessions API route (POST)", () => {
       expect.objectContaining({ method: "POST" })
     );
     const sent = controlPlaneBody();
-    expect(sent).toMatchObject({
-      repoOwner: "o",
-      repoName: "r",
-      model: "m",
-      actorEmail: "ada@example.com",
-      actorDisplayName: "Ada Lovelace",
-      actorAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-    });
-    // Forbidden under strict identity enforcement: the control plane derives
-    // these from the Bearer principal, so the web must not send them.
-    expect(sent.userId).toBeUndefined();
-    expect(sent.spawnSource).toBeUndefined();
-    expect(sent.authProvider).toBeUndefined();
-    expect(sent.authUserId).toBeUndefined();
-    expect(sent.actorUserId).toBeUndefined();
-    expect(sent.scmUserId).toBeUndefined();
-    expect(sent.scmToken).toBeUndefined();
-    expect(sent.scmRefreshToken).toBeUndefined();
-    expect(sent.scmTokenExpiresAt).toBeUndefined();
-  });
-
-  it("uses the same display-only body for another sign-in provider", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: {
-        id: "fedcba9876543210fedcba9876543210",
-        name: "Pat PM",
-        email: "pm@gmail.com",
-        image: "https://lh3.googleusercontent.com/a/pat",
-      },
-    } as never);
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ id: "sess2" }, { status: 201 })
-    );
-
-    const response = await POST(postRequest({ repoOwner: "o", repoName: "r", model: "m" }));
-
-    expect(response.status).toBe(201);
-    const sent = controlPlaneBody();
-    expect(sent).toMatchObject({
-      actorEmail: "pm@gmail.com",
-      actorDisplayName: "Pat PM",
-    });
-    expect(sent.userId).toBeUndefined();
-    expect(sent.authProvider).toBeUndefined();
-    expect(sent.authUserId).toBeUndefined();
-    expect(sent.scmUserId).toBeUndefined();
-    expect(sent.scmToken).toBeUndefined();
-    expect(sent.scmLogin).toBeUndefined();
-    expect(sent.scmEmail).toBeUndefined();
+    expect(sent).toEqual({ repoOwner: "o", repoName: "r", model: "m" });
   });
 
   it("forwards environmentId for environment launches", async () => {
@@ -242,21 +216,12 @@ describe("sessions API route (POST)", () => {
     const response = await POST(
       postRequest({
         environmentId: "env-1",
-        userId: "attacker",
-        spawnSource: "automation",
-        scmToken: "gho_forged",
-        authUserId: "someone-else",
+        ...hostileIdentityFields,
       })
     );
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
-    expect(sent.environmentId).toBe("env-1");
-    // Client-asserted identity never reaches the control plane — under strict
-    // enforcement the body carries no identity fields at all.
-    expect(sent.userId).toBeUndefined();
-    expect(sent.spawnSource).toBeUndefined();
-    expect(sent.scmToken).toBeUndefined();
-    expect(sent.authUserId).toBeUndefined();
+    expect(sent).toEqual({ environmentId: "env-1" });
   });
 });

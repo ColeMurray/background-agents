@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { describeCron, GITHUB_WEBHOOK_EVENT_CATALOG } from "@open-inspect/shared";
-import type { Automation } from "@open-inspect/shared";
+import { describeCron } from "@open-inspect/shared/cron";
+import { GITHUB_WEBHOOK_EVENT_CATALOG } from "@open-inspect/shared/triggers";
+import type { Automation } from "@open-inspect/shared/types/automations";
 import { AutomationStatusBadge } from "@/components/automations/automation-status-badge";
 import { Button } from "@/components/ui/button";
 import { FolderIcon, BoxIcon, ClockIcon, BoltIcon } from "@/components/ui/icons";

@@ -1,7 +1,7 @@
 import {
   SESSION_DIFF_FILE_NOT_FOUND_CODE,
   SESSION_DIFF_REVISION_STALE_CODE,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import {
   DiffBaselineMismatchError,
   DiffBaselineUnavailableError,

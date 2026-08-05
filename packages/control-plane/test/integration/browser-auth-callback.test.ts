@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { isCanonicalUserId } from "@open-inspect/shared";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { buildServiceAuthHeaders } from "@open-inspect/shared/service-auth";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getUserAuth } from "../../src/auth/user/runtime";

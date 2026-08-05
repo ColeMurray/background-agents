@@ -1,4 +1,4 @@
-import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 import { z } from "zod";
 
 const collaboratorPermissionResponseSchema = z.object({

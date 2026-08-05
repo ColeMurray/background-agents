@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { artifactTypeSchema } from "./statuses";
-import type { ArtifactType } from "./statuses";
+
+export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
+
+export const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
 
 export const recordSchema = z.record(z.string(), z.unknown());
 
@@ -153,19 +155,17 @@ export interface PullRequest {
   updatedAt: string;
 }
 
-export const artifactResponseSchema = z.object({
-  id: z.string(),
-  type: artifactTypeSchema,
-  url: z.string().nullable(),
-  metadata: recordSchema.nullable(),
-  createdAt: z.number(),
-});
-
+/**
+ * The `/artifacts` list response is the session artifact shape verbatim — the
+ * producer serializes stored artifact rows, `updatedAt` included. It reuses
+ * `sessionArtifactSchema` rather than restating the fields so the two can never
+ * drift (a restated copy silently stripped `updatedAt`).
+ */
 export const listArtifactsResponseSchema = z.object({
-  artifacts: z.array(artifactResponseSchema),
+  artifacts: z.array(sessionArtifactSchema),
 });
 
-export type ArtifactResponse = z.infer<typeof artifactResponseSchema>;
+export type ArtifactResponse = z.infer<typeof sessionArtifactSchema>;
 export type ListArtifactsResponse = z.infer<typeof listArtifactsResponseSchema>;
 
 export interface ToolCallSummary {

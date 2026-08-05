@@ -1,4 +1,5 @@
-import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES, type SlackMessageFile } from "@open-inspect/shared";
+import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@open-inspect/shared/types/session-attachments";
+import type { SlackMessageFile } from "@open-inspect/shared/slack";
 import { sha256Hex, verifyServiceSignature } from "@open-inspect/shared/service-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -298,6 +299,22 @@ describe("uploadPreparedAttachments", () => {
     const controlPlaneFetch = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ attachmentId: null }), { status: 201 }));
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await prepareAndUpload(env, "sess-1", [pngFile]);
+
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual(["upload_rejected"]);
+    expect(result.sessionMissing).toBe(false);
+  });
+
+  it("counts syntactically invalid attachment ids as dropped", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
+    const controlPlaneFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ attachmentId: "bad id" }), { status: 201 })
+      );
     const env = makeEnv(controlPlaneFetch);
 
     const result = await prepareAndUpload(env, "sess-1", [pngFile]);

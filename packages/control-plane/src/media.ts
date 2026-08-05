@@ -1,9 +1,9 @@
+import { type VideoArtifactMetadata } from "@open-inspect/shared";
 import {
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
   type SessionAttachmentMimeType,
-  type VideoArtifactMetadata,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
 
 export { SESSION_ATTACHMENT_IMAGE_MAX_BYTES };
 

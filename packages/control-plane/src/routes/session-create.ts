@@ -1,8 +1,5 @@
-import {
-  getValidModelOrDefault,
-  isValidReasoningEffort,
-  type RepositoryRef,
-} from "@open-inspect/shared";
+import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
+import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
@@ -19,8 +16,7 @@ import type { CreateSessionResponse, Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
-  type RepositoryPair,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
 import {
   error,
   json,

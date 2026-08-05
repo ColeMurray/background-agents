@@ -13,7 +13,7 @@ import { ImageBuildStore } from "../../src/db/image-builds";
 import { DEFAULT_STALE_BUILD_MAX_AGE_MS } from "../../src/image-builds/maintenance";
 import type { ImageBuildScope } from "../../src/image-builds/model";
 import type { ImageBuildAdapterFactory } from "../../src/image-builds/provider-factory";
-import type { AnyImageBuildAdapter } from "../../src/image-builds/types";
+import type { ImageBuildAdapter } from "../../src/image-builds/types";
 import { ImageBuildWorkflow } from "../../src/image-builds/workflow";
 import type { Env } from "../../src/types";
 import { cleanD1Tables } from "./cleanup";
@@ -28,7 +28,7 @@ const TWO_HOURS_AGO = () => Date.now() - 2 * 60 * 60 * 1000;
  * one seam.
  */
 function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
-  const adapter = { async startBuild() {} } as unknown as AnyImageBuildAdapter;
+  const adapter = { async startBuild() {} } as unknown as ImageBuildAdapter;
   const factory = { create: () => adapter } as ImageBuildAdapterFactory;
   const planner = {
     resolveTarget: async () => ({
@@ -47,7 +47,6 @@ function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
         buildTimeoutMs: 1800_000,
         correlation: { trace_id: "trace-heal", request_id: "req-heal" },
         provider: "modal",
-        callbackMode: "provider_image",
       },
       callbackAuth: { type: "none" },
     }),
@@ -56,7 +55,8 @@ function createTriggerWorkflow(scope: ImageBuildScope): ImageBuildWorkflow {
     { ...env, WORKER_URL: "https://worker.test" } as Env,
     new ImageBuildStore(env.DB),
     factory,
-    { provider: "modal", planner }
+    { provider: "modal", planner },
+    { send: async () => undefined }
   );
 }
 
@@ -100,6 +100,79 @@ describe("lazy trigger-time stale recovery over real D1", () => {
     expect((await getRow("lazy-fresh"))?.status).toBe("building");
     expect((await getRow("lazy-other-scope"))?.status).toBe("building");
     expect((await getRow("lazy-other-provider"))?.status).toBe("building");
+  });
+
+  it("does not stale-fail a callback accepted for asynchronous finalization", async () => {
+    const environmentId = await seedEnvironment();
+    await seedImageRow({
+      id: "accepted-finalization",
+      environmentId,
+      status: "building",
+      createdAt: TWO_HOURS_AGO(),
+    });
+    await env.DB.prepare(
+      `UPDATE image_builds
+       SET callback_token_used_at = ?, completion_hash = 'accepted-hash'
+       WHERE id = 'accepted-finalization'`
+    )
+      .bind(Date.now())
+      .run();
+
+    const store = new ImageBuildStore(env.DB);
+    expect(
+      await store.markScopeStaleBuildFailed(
+        environmentScope(environmentId),
+        "modal",
+        DEFAULT_STALE_BUILD_MAX_AGE_MS
+      )
+    ).toBe(0);
+    expect(await store.markStaleBuildsAsFailed(DEFAULT_STALE_BUILD_MAX_AGE_MS)).toBe(0);
+    expect((await getRow("accepted-finalization"))?.status).toBe("building");
+  });
+
+  it("leaves an old accepted callback recoverable instead of stale-failing it", async () => {
+    const environmentId = await seedEnvironment();
+    await seedImageRow({
+      id: "exhausted-finalization",
+      environmentId,
+      status: "building",
+      createdAt: TWO_HOURS_AGO(),
+    });
+    await env.DB.prepare(
+      `UPDATE image_builds
+       SET callback_token_used_at = ?, completion_hash = 'accepted-hash'
+       WHERE id = 'exhausted-finalization'`
+    )
+      .bind(TWO_HOURS_AGO())
+      .run();
+
+    expect(
+      await new ImageBuildStore(env.DB).markStaleBuildsAsFailed(DEFAULT_STALE_BUILD_MAX_AGE_MS)
+    ).toBe(0);
+    expect(await getRow("exhausted-finalization")).toMatchObject({
+      status: "building",
+      completion_hash: "accepted-hash",
+    });
+  });
+
+  it("marks every globally stale build in one maintenance scan", async () => {
+    const environmentId = await seedEnvironment();
+    for (let index = 0; index < 30; index += 1) {
+      await seedImageRow({
+        id: `stale-${String(index).padStart(2, "0")}`,
+        environmentId,
+        status: "building",
+        createdAt: index + 1,
+      });
+    }
+
+    expect(
+      await new ImageBuildStore(env.DB).markStaleBuildsAsFailed(DEFAULT_STALE_BUILD_MAX_AGE_MS)
+    ).toBe(30);
+    const remaining = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM image_builds WHERE status = 'building'"
+    ).first<{ count: number }>();
+    expect(remaining?.count).toBe(0);
   });
 
   it("triggerBuild heals a wedged scope: dead row failed, fresh build registered", async () => {

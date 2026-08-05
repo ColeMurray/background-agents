@@ -9,13 +9,15 @@
 import type { Env, RepoConfig } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
-  controlPlaneReposResponseSchema,
-  createKvCacheStore,
   normalizeRoutingRules,
-  repoConfigSchema,
   type SlackGlobalConfig,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import {
+  controlPlaneReposResponseSchema,
+  repoConfigSchema,
+} from "@open-inspect/shared/types/repository-catalog";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createCachedResource } from "./cached-resource";
 import {
   controlPlaneFetch,

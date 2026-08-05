@@ -11,11 +11,11 @@ import type {
   ToolCallSummary,
   ArtifactInfo,
   MediaArtifactInfo,
+  ArtifactType,
 } from "../types/artifacts";
 import { listArtifactsResponseSchema } from "../types/artifacts";
 import type { EventResponse } from "../types/sandbox-events";
 import { listEventsResponseSchema } from "../types/sandbox-events";
-import type { ArtifactType } from "../types/statuses";
 import type { Logger } from "../logger";
 import {
   buildOutboundAuthHeaders,

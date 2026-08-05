@@ -10,7 +10,7 @@ import {
   listInstallationRepositories,
   listRepositoryBranches,
 } from "./github-app";
-import type { CacheStore } from "@open-inspect/shared";
+import type { CacheStore } from "@open-inspect/shared/cache-store";
 
 class FakeCacheStore implements CacheStore {
   private readonly store = new Map<string, string>();

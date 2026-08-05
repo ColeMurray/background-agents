@@ -112,6 +112,17 @@ describe("controlPlaneUserFetch", () => {
     expect(init?.signal?.reason).toBe("caller disconnected");
   });
 
+  it("preserves caller redirect and cache policy", async () => {
+    await controlPlaneUserFetch("/sessions", {
+      redirect: "error",
+      cache: "force-cache",
+    });
+
+    const [, init] = fetchMock.mock.calls[0] ?? [];
+    expect(init?.redirect).toBe("error");
+    expect(init?.cache).toBe("force-cache");
+  });
+
   it("generates a fresh trace id when the inbound one is invalid", async () => {
     vi.mocked(headers).mockResolvedValue(
       new Headers({

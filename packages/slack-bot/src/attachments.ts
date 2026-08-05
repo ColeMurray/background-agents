@@ -12,15 +12,16 @@
  * images.
  */
 
+import { z } from "zod";
+import { postMessage, type SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
-  postMessage,
-  readBodyCapped,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  sessionAttachmentIdSchema,
   type SessionAttachmentReference,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-attachments";
+import { readBodyCapped } from "@open-inspect/shared";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";
@@ -31,6 +32,15 @@ const log = createLogger("attachments");
 const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
 const SUPPORTED_MIME_TYPES = new Set<string>(SESSION_ATTACHMENT_IMAGE_MIME_TYPES);
+
+/**
+ * Upload response from the control plane. The id is parsed with the canonical
+ * `sessionAttachmentIdSchema` so an id that would be rejected downstream is
+ * treated as an upload rejection here, not carried into a prompt reference.
+ */
+const uploadAttachmentResponseSchema = z.object({
+  attachmentId: sessionAttachmentIdSchema,
+});
 
 /** Prompt body used when a message carries images but no user text. */
 export const IMAGE_ONLY_PROMPT_TEXT = "See the attached image(s).";
@@ -288,10 +298,8 @@ async function uploadToSession(
       });
       return { sessionMissing: response.status === 404 };
     }
-    const body: unknown = await response.json();
-    const attachmentId =
-      body && typeof body === "object" && "attachmentId" in body ? body.attachmentId : undefined;
-    if (typeof attachmentId !== "string" || !attachmentId) {
+    const parsed = uploadAttachmentResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
       log.warn("slack.attachment.upload_failed", {
         trace_id: traceId,
         session_id: sessionId,
@@ -300,7 +308,7 @@ async function uploadToSession(
       });
       return { sessionMissing: false };
     }
-    return { reference: { attachmentId, name: attachment.name } };
+    return { reference: { attachmentId: parsed.data.attachmentId, name: attachment.name } };
   } catch (e) {
     log.warn("slack.attachment.upload_error", {
       trace_id: traceId,

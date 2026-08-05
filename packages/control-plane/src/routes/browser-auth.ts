@@ -1,4 +1,4 @@
-import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared";
+import { BROWSER_AUTH_PROXY_ROUTES } from "@open-inspect/shared/browser-auth-routes";
 import { type BetterAuthRuntime, UserAuthConfigurationError } from "../auth/user/runtime";
 import { createLogger } from "../logger";
 import { error, parsePattern, type Route } from "./shared";

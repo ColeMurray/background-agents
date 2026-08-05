@@ -3,7 +3,7 @@
  * workflow and planner throw these instead of returning Responses.
  */
 
-import type { ImageBuildScopeKind } from "@open-inspect/shared";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 
 export type ImageBuildErrorCode =
   | "scope_not_found"
@@ -11,13 +11,10 @@ export type ImageBuildErrorCode =
   | "workflow_unavailable"
   | "provider_unconfigured"
   | "trigger_failed"
-  | "invalid_callback"
   | "callback_auth_rejected"
   | "callback_auth_unavailable"
   | "completion_not_accepted"
-  | "failure_not_accepted"
-  | "build_complete_failed"
-  | "build_failed_update_failed";
+  | "failure_not_accepted";
 
 export abstract class ImageBuildError extends Error {
   abstract readonly code: ImageBuildErrorCode;
@@ -59,10 +56,6 @@ export class ImageBuildTriggerFailedError extends ImageBuildError {
   }
 }
 
-export class ImageBuildInvalidCallbackError extends ImageBuildError {
-  readonly code = "invalid_callback";
-}
-
 export class ImageBuildCallbackAuthRejectedError extends ImageBuildError {
   readonly code = "callback_auth_rejected";
 }
@@ -77,20 +70,4 @@ export class ImageBuildCompletionNotAcceptedError extends ImageBuildError {
 
 export class ImageBuildFailureNotAcceptedError extends ImageBuildError {
   readonly code = "failure_not_accepted";
-}
-
-export class ImageBuildCompleteFailedError extends ImageBuildError {
-  readonly code = "build_complete_failed";
-
-  constructor(message = "Failed to mark build as ready", cause?: unknown) {
-    super(message, cause);
-  }
-}
-
-export class ImageBuildFailedUpdateError extends ImageBuildError {
-  readonly code = "build_failed_update_failed";
-
-  constructor(message = "Failed to mark build as failed", cause?: unknown) {
-    super(message, cause);
-  }
 }

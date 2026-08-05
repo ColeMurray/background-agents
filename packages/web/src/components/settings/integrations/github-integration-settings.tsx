@@ -5,15 +5,19 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   encodeRepositoryPathSegments,
-  MODEL_REASONING_CONFIG,
   parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  GitHubBotSettings,
+  GitHubGlobalConfig,
+} from "@open-inspect/shared/types/integrations";
+import {
+  MODEL_REASONING_CONFIG,
   isValidReasoningEffort,
-  type EnrichedRepository,
-  type GitHubBotSettings,
-  type GitHubGlobalConfig,
   type ModelCategory,
   type ValidModel,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";

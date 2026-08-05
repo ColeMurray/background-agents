@@ -1,4 +1,4 @@
-import { isCanonicalUserId } from "@open-inspect/shared";
+import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import type {
   CanonicalUserProjection,
   UserProjectionInput,

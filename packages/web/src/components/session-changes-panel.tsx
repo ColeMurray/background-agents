@@ -4,10 +4,14 @@ import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
 import { mutate } from "swr";
 import useSWR from "swr";
-import { useEffect, useRef } from "react";
-import { formatRepositoryFullName, SESSION_DIFF_REVISION_STALE_CODE } from "@open-inspect/shared";
-import type { SessionDiffErrorCode } from "@open-inspect/shared";
-import type { SessionDiffFile, SessionDiffState } from "@open-inspect/shared";
+import { useEffect, useId, useRef, useState } from "react";
+import { formatRepositoryFullName } from "@open-inspect/shared/types/repositories";
+import {
+  SESSION_DIFF_REVISION_STALE_CODE,
+  type SessionDiffErrorCode,
+  type SessionDiffFile,
+  type SessionDiffState,
+} from "@open-inspect/shared/types/session-diffs";
 import { useSessionDiffPreferences, type DiffStyle } from "@/hooks/use-session-diff-preferences";
 import { sessionDiffKey } from "@/hooks/use-session-diffs";
 import { useDiffFileNavigation } from "@/hooks/use-diff-file-navigation";
@@ -18,6 +22,7 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import { cn } from "@/lib/utils";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 import { FilesChangedSection } from "@/components/sidebar/files-changed-section";
+import { SidebarIcon } from "@/components/ui/icons";
 
 const PierreDiffRenderer = dynamic(() => import("./pierre-diff-renderer"), {
   ssr: false,
@@ -83,12 +88,18 @@ function ChangesPanelHeader({
   selected,
   selectedIndex,
   fileCount,
+  isFileListOpen,
+  fileListId,
+  onToggleFileList,
   onMoveSelection,
   onClose,
 }: {
   selected: ReadyDiffSelection | null;
   selectedIndex: number;
   fileCount: number;
+  isFileListOpen: boolean;
+  fileListId: string;
+  onToggleFileList: () => void;
   onMoveSelection: (offset: number) => void;
   onClose: () => void;
 }) {
@@ -110,6 +121,16 @@ function ChangesPanelHeader({
           </p>
         )}
       </div>
+      <button
+        type="button"
+        onClick={onToggleFileList}
+        aria-label={isFileListOpen ? "Hide file list" : "Show file list"}
+        aria-controls={fileListId}
+        aria-expanded={isFileListOpen}
+        className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <SidebarIcon className="h-4 w-4" />
+      </button>
       <button
         type="button"
         onClick={() => onMoveSelection(-1)}
@@ -213,6 +234,8 @@ export function SessionChangesPanel({
   mobile?: boolean;
 }) {
   const panelRef = useRef<HTMLElement>(null);
+  const fileListId = useId();
+  const [isFileListOpen, setIsFileListOpen] = useState(true);
   const panelWidth = usePanelWidth(panelRef, { enabled: !mobile });
   const { resolvedTheme } = useTheme();
   const { diffStyle, setDiffStyle, wrap, setWrap } = useSessionDiffPreferences();
@@ -268,6 +291,9 @@ export function SessionChangesPanel({
         selected={selected}
         selectedIndex={selectedIndex}
         fileCount={files.length}
+        isFileListOpen={isFileListOpen}
+        fileListId={fileListId}
+        onToggleFileList={() => setIsFileListOpen((open) => !open)}
         onMoveSelection={moveSelection}
         onClose={onClose}
       />
@@ -287,7 +313,9 @@ export function SessionChangesPanel({
 
       <div className={cn("flex min-h-0 flex-1", mobile && "flex-col")}>
         <aside
+          id={fileListId}
           aria-label="Changed files"
+          hidden={!isFileListOpen}
           className={cn(
             "shrink-0 overflow-auto",
             mobile

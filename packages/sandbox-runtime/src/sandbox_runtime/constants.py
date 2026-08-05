@@ -5,6 +5,12 @@
 BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
 DEFAULT_BIN_INSTALL_DIR = "/usr/local/bin"
 
+# Sandbox lifetime and the env contract used to pass it to the bridge.
+DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200
+SANDBOX_TIMEOUT_ENV_VAR = "SANDBOX_TIMEOUT_SECONDS"
+MAX_SNAPSHOT_RESERVE_SECONDS = 900
+SNAPSHOT_RESERVE_FRACTION = 0.25
+
 # Default service ports. The control plane may override the externally-exposed
 # ones per session via the *_ENV_VAR env vars below; the entrypoint and ttyd
 # proxy fall back to these defaults. TTYD_PORT is localhost-only and fixed — it
@@ -33,6 +39,10 @@ TUNNEL_ENV_SANDBOX_ID_KEY = "TUNNEL_SANDBOX_ID"
 # Comma-separated tunnel ports the manager will resolve. Read by the entrypoint
 # to gate stale-file cleanup and the wait-for-fresh-URLs before start.sh.
 EXPECTED_TUNNEL_PORTS_ENV_VAR = "EXPECTED_TUNNEL_PORTS"
+
+# Overall clone + setup budget for image-build mode. The provider sandbox lives
+# longer so deferred Queue finalization can snapshot it after this budget ends.
+IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR = "OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS"
 
 # Boot warnings queued by the supervisor (which has no control-plane event
 # channel) and drained by the bridge as `warning` sandbox events after its

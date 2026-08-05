@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { Environment, ImageBuildRecordView, ImageBuildStatus } from "@open-inspect/shared";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type {
+  ImageBuildRecordView,
+  ImageBuildStatus,
+} from "@open-inspect/shared/types/image-builds";
 import { foldImageBuildStatusByScope, imageBuildScopeKey } from "@/lib/image-builds";
 import type { Repo } from "@/hooks/use-repos";
 import { describeEnvironment, describeRepository } from "./use-session-target-picker";

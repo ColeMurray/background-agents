@@ -270,6 +270,12 @@ export const sessionRuntimeProxyRoutes: Route[] = [
   }),
   simpleProxyRoute({
     method: "POST",
+    routePath: "/sessions/:id/xai-token-refresh",
+    internalPath: SessionInternalPaths.xaiTokenRefresh,
+    runtimeMethod: "POST",
+  }),
+  simpleProxyRoute({
+    method: "POST",
     routePath: "/sessions/:id/scm-credentials",
     internalPath: SessionInternalPaths.scmCredentials,
     runtimeMethod: "POST",

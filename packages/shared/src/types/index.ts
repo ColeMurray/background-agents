@@ -25,20 +25,6 @@ export type {
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
-export { eventTypeSchema, messageSourceSchema, sessionStatusSchema } from "./statuses";
-export type {
-  SessionStatus,
-  SandboxStatus,
-  GitSyncStatus,
-  MessageStatus,
-  MessageSource,
-  ArtifactType,
-  EventType,
-  ParticipantRole,
-  SpawnSource,
-  ConfidenceLevel,
-} from "./statuses";
-
 export {
   MAX_TARGET_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
@@ -77,9 +63,10 @@ export type {
   ControlPlaneRepo,
   ControlPlaneReposResponse,
   ClassificationResult,
+  ConfidenceLevel,
 } from "./repository-catalog";
 
-export { artifactResponseSchema, listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
+export { listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
 export type {
   SessionArtifact,
   ManualPullRequestArtifactMetadata,
@@ -96,32 +83,54 @@ export type {
   ArtifactInfo,
   MediaArtifactInfo,
   AgentResponse,
+  ArtifactType,
 } from "./artifacts";
 
 export {
   eventResponseSchema,
+  eventTypeSchema,
   listEventsResponseSchema,
   sandboxEventSchema,
+  toolCallIdentityKey,
+  toolCallIdentityTuple,
 } from "./sandbox-events";
-export type { AgentEvent, SandboxEvent, EventResponse, ListEventsResponse } from "./sandbox-events";
+export type {
+  AgentEvent,
+  SandboxEvent,
+  EventResponse,
+  ListEventsResponse,
+  GitSyncStatus,
+  EventType,
+} from "./sandbox-events";
 
 export type {
   SessionParticipant,
   Session,
   SessionMessage,
-  SessionState,
-  ParticipantPresence,
   PullRequestSummary,
+  SessionReadState,
+  SessionReadAction,
+  SessionReadResult,
   SessionParticipantProfile,
   SessionParticipantProfilesResponse,
+  SessionStatus,
+  SandboxStatus,
+  MessageStatus,
+  MessageSource,
+  ParticipantRole,
+  SpawnSource,
 } from "./sessions";
 export {
+  messageSourceSchema,
+  sessionStatusSchema,
+  sessionReadActionSchema,
+  sessionReadResultSchema,
   sessionParticipantProfileSchema,
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";
 
 export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage } from "./server-messages";
+export type { ServerMessage, SessionState, ParticipantPresence } from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
@@ -252,8 +261,6 @@ export type {
   ImageBuildScopeKind,
   RepositoryShaEntry,
   ImageBuildRecordView,
-  ImageBuildCompleteCallback,
-  ImageBuildFailedCallback,
 } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";

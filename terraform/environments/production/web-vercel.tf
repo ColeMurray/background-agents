@@ -60,17 +60,7 @@ module "web_app" {
       targets   = ["production", "preview"]
       sensitive = true
     },
-    # This cutover intentionally removes the legacy web-owned auth variables,
-    # so the first apply replaces the module's count-indexed env resources.
-    # After that one-time transition, append new variables to keep indices
-    # stable and avoid Vercel ENV_CONFLICT replacement races.
-    # Build-time flag that reveals the "Sign in with Google" button. Inlined into
-    # the client bundle, so it must be present at build time (not just runtime).
-    {
-      key       = "NEXT_PUBLIC_GOOGLE_ENABLED"
-      value     = tostring(local.google_enabled)
-      targets   = ["production", "preview"]
-      sensitive = false
-    },
+    # Append new variables to keep count indices stable and avoid Vercel
+    # ENV_CONFLICT replacement races.
   ]
 }

@@ -1,4 +1,7 @@
-import { encodeRepositoryPathSegments, parseRepositoryFullName } from "@open-inspect/shared";
+import {
+  encodeRepositoryPathSegments,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import type { Logger } from "../logger";
