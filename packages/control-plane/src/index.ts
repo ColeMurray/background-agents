@@ -7,6 +7,7 @@
 import { handleRequest } from "./router";
 import { createLogger } from "./logger";
 import type { Env } from "./types";
+import { runIdentityReconciliation } from "./db/identity-reconciliation-job";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 
@@ -40,7 +41,20 @@ export default {
     if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
       const requestId = crypto.randomUUID();
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
-      await runImageBuildScheduler(env, env.DB, {
+      const db = env.DB;
+      // Identity reconciliation rides the existing half-hourly trigger — the
+      // sign-in bridge mechanisms swallow their own failures and lean on this
+      // sweep to repair what they missed. Its failure must never starve the
+      // image-build scheduler (and vice versa).
+      try {
+        await runIdentityReconciliation(db);
+      } catch (error) {
+        logger.error("Identity reconciliation cycle failed", {
+          event: "auth.reconciliation_failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      await runImageBuildScheduler(env, db, {
         request_id: requestId,
         trace_id: requestId,
       });

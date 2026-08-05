@@ -6,6 +6,7 @@ const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const UNUSED_PROFILE_RESOLVER = async () => null;
 const UNUSED_USER_PROJECTION = { project: async () => {} };
+const UNUSED_IDENTITY_PROJECTION = { project: async () => {} };
 
 describe("Better Auth provider execution", () => {
   it("rejects a provider that is disabled before sign-in executes", async () => {
@@ -14,6 +15,7 @@ describe("Better Auth provider execution", () => {
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
       userProjection: UNUSED_USER_PROJECTION,
+      identityProjection: UNUSED_IDENTITY_PROJECTION,
       google: {
         clientId: "google-client-id",
         clientSecret: "google-client-secret",

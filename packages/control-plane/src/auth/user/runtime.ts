@@ -13,6 +13,8 @@ import { createUserAuth, type UserAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
+import { SignInReconciliation } from "./sign-in-reconciliation";
+import { D1AccountIdentityProjection } from "../../db/account-identity-projection";
 import { D1CanonicalUserProjection } from "../../db/canonical-user-projection";
 import type { Env } from "../../types";
 
@@ -182,19 +184,41 @@ function createGoogleAuthConfig(
   };
 }
 
+function withReconciliation(
+  provider: SignInProvider,
+  reconciliation: SignInReconciliation,
+  config: UserAuthConfig["github"]
+): UserAuthConfig["github"] {
+  if (!config) return undefined;
+  return {
+    ...config,
+    getUserInfo: reconciliation.wrapResolver(provider, config.getUserInfo),
+  };
+}
+
 function createUserAuthRuntime(
   config: NormalizedUserAuthConfig,
   database: D1Database
 ): UserAuthRuntime {
   const admissionPolicy = new AdmissionPolicy(config.admission);
-  const github = createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy);
-  const google = createGoogleAuthConfig(config.providers.google, admissionPolicy);
+  const reconciliation = new SignInReconciliation(database);
+  const github = withReconciliation(
+    "github",
+    reconciliation,
+    createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy)
+  );
+  const google = withReconciliation(
+    "google",
+    reconciliation,
+    createGoogleAuthConfig(config.providers.google, admissionPolicy)
+  );
 
   const auth = createUserAuth({
     database,
     publicWebOrigin: config.publicWebOrigin,
     secret: config.secret,
     userProjection: new D1CanonicalUserProjection(database),
+    identityProjection: new D1AccountIdentityProjection(database),
     ...(github ? { github } : {}),
     ...(google ? { google } : {}),
   });

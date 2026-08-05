@@ -1,6 +1,7 @@
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
 import { betterAuth } from "better-auth";
 import { generateId } from "../crypto";
+import type { AccountIdentityProjection } from "./account-identity-projection";
 import type { CanonicalUserProjection } from "./canonical-user-projection";
 import type { ProviderProfileResolver } from "./provider-profile";
 
@@ -14,6 +15,7 @@ export interface UserAuthConfig {
   readonly publicWebOrigin: string;
   readonly secret: string;
   readonly userProjection: CanonicalUserProjection;
+  readonly identityProjection: AccountIdentityProjection;
   readonly github?: {
     readonly clientId: string;
     readonly clientSecret: string;
@@ -91,9 +93,12 @@ export function createUserAuth(config: UserAuthConfig) {
     },
     account: {
       modelName: "auth_accounts",
-      accountLinking: {
-        disableImplicitLinking: true,
-      },
+      // Implicit linking is deliberately enabled (the Better Auth default):
+      // bot ingress links identities across providers by verified email on
+      // every request, and pre-cutover web sign-in did the same — refusing it
+      // at the web door locked out every canonical user without a seeded
+      // auth account (#1290). requireLocalEmailVerified stays at its default
+      // (true), making deliberate emailVerified seeding the linking gate.
       encryptOAuthTokens: true,
     },
     verification: {
@@ -107,6 +112,19 @@ export function createUserAuth(config: UserAuthConfig) {
         },
         update: {
           after: (user) => config.userProjection.project(user),
+        },
+      },
+      account: {
+        // Both hooks project the account's subject into user_identities. The
+        // create hook covers register and implicit-link flows; the update
+        // hook fires on effectively every repeat sign-in (token refresh runs
+        // through updateAccount), making it the retry chokepoint for a
+        // projection missed at create time.
+        create: {
+          after: (account) => config.identityProjection.project(account),
+        },
+        update: {
+          after: (account) => config.identityProjection.project(account),
         },
       },
     },
