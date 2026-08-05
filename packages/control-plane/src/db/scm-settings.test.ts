@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ScmGlobalConfig, ScmSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
 import { ScmSettingsStore, ScmSettingsValidationError } from "./scm-settings";
 import { IntegrationSettingsStore } from "./integration-settings";
 import type { SqlDatabase } from "./sql-database";
@@ -85,7 +85,7 @@ describe("ScmSettingsStore", () => {
 
   it("rejects unknown keys and unsupported global config and does not write", async () => {
     await expect(
-      store.setRepoSettings("acme/web", { unexpected: true } as unknown as ScmSettings)
+      store.setRepoSettings("acme/web", { unexpected: true } as unknown as ScmRepoSettings)
     ).rejects.toThrow(ScmSettingsValidationError);
     // `enabledRepos` (and any non-`defaults` global key) is not supported for scm.
     await expect(
@@ -97,6 +97,14 @@ describe("ScmSettingsStore", () => {
     );
 
     expect(delegate.setGlobal).not.toHaveBeenCalled();
+    expect(delegate.setRepoSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects an empty repository override and does not write", async () => {
+    await expect(
+      store.setRepoSettings("acme/web", {} as unknown as ScmRepoSettings)
+    ).rejects.toThrow("alwaysUseDraftMode is required for repository overrides");
+
     expect(delegate.setRepoSettings).not.toHaveBeenCalled();
   });
 

@@ -1,4 +1,4 @@
-import type { ScmSettings, ScmGlobalConfig } from "@open-inspect/shared";
+import type { ScmSettings, ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
 import { IntegrationSettingsStore } from "./integration-settings";
 import type { SqlDatabase } from "./sql-database";
 
@@ -36,6 +36,13 @@ function validateScmSettings(settings: unknown): asserts settings is ScmSettings
   const { alwaysUseDraftMode } = settings as { alwaysUseDraftMode?: unknown };
   if (alwaysUseDraftMode !== undefined && typeof alwaysUseDraftMode !== "boolean") {
     throw new ScmSettingsValidationError("alwaysUseDraftMode must be a boolean");
+  }
+}
+
+function validateScmRepoSettings(settings: unknown): asserts settings is ScmRepoSettings {
+  validateScmSettings(settings);
+  if (settings.alwaysUseDraftMode === undefined) {
+    throw new ScmSettingsValidationError("alwaysUseDraftMode is required for repository overrides");
   }
 }
 
@@ -78,12 +85,12 @@ export class ScmSettingsStore {
     return this.store.deleteGlobal(SCM_SETTINGS_KEY);
   }
 
-  getRepoSettings(repo: string): Promise<ScmSettings | null> {
-    return this.store.getRepoSettings(SCM_SETTINGS_KEY, repo);
+  getRepoSettings(repo: string): Promise<ScmRepoSettings | null> {
+    return this.store.getRepoSettings(SCM_SETTINGS_KEY, repo) as Promise<ScmRepoSettings | null>;
   }
 
-  async setRepoSettings(repo: string, settings: ScmSettings): Promise<void> {
-    validateScmSettings(settings);
+  async setRepoSettings(repo: string, settings: ScmRepoSettings): Promise<void> {
+    validateScmRepoSettings(settings);
     await this.store.setRepoSettings(SCM_SETTINGS_KEY, repo, settings);
   }
 
@@ -91,8 +98,10 @@ export class ScmSettingsStore {
     return this.store.deleteRepoSettings(SCM_SETTINGS_KEY, repo);
   }
 
-  listRepoSettings(): Promise<Array<{ repo: string; settings: ScmSettings }>> {
-    return this.store.listRepoSettings(SCM_SETTINGS_KEY);
+  listRepoSettings(): Promise<Array<{ repo: string; settings: ScmRepoSettings }>> {
+    return this.store.listRepoSettings(SCM_SETTINGS_KEY) as Promise<
+      Array<{ repo: string; settings: ScmRepoSettings }>
+    >;
   }
 
   /** Resolve a repo's effective settings: global defaults merged with the per-repo override (override wins). */

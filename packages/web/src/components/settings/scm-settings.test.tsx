@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { ScmGlobalConfig, ScmSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
 import { getScmRepoSettingsPath, ScmSettingsPage } from "./scm-settings";
 
 expect.extend(matchers);
 
 interface RepoSettingsEntry {
   repo: string;
-  settings: ScmSettings;
+  settings: ScmRepoSettings;
 }
 
 const { useSWRMock, mutateMock } = vi.hoisted(() => ({

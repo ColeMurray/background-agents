@@ -5,6 +5,7 @@ import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
   type EnrichedRepository,
+  type ScmRepoSettings,
   type ScmSettings,
   type ScmGlobalConfig,
 } from "@open-inspect/shared";
@@ -47,7 +48,7 @@ interface GlobalResponse {
 
 interface RepoSettingsEntry {
   repo: string;
-  settings: ScmSettings;
+  settings: ScmRepoSettings;
 }
 
 interface RepoListResponse {
@@ -299,15 +300,13 @@ function RepoOverridesSection({
 }
 
 function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
-  const [alwaysUseDraftMode, setAlwaysUseDraftMode] = useState(
-    entry.settings.alwaysUseDraftMode ?? false
-  );
+  const [alwaysUseDraftMode, setAlwaysUseDraftMode] = useState(entry.settings.alwaysUseDraftMode);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     if (!dirty) {
-      setAlwaysUseDraftMode(entry.settings.alwaysUseDraftMode ?? false);
+      setAlwaysUseDraftMode(entry.settings.alwaysUseDraftMode);
     }
   }, [entry.settings.alwaysUseDraftMode, dirty]);
 
@@ -316,7 +315,7 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
     if (!settingsPath) return;
     setSaving(true);
 
-    const settings: ScmSettings = { alwaysUseDraftMode };
+    const settings: ScmRepoSettings = { alwaysUseDraftMode };
 
     try {
       const res = await browserApiFetch(settingsPath, {

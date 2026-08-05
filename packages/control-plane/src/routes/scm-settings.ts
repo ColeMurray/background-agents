@@ -6,7 +6,7 @@
  * drafts) for both GitHub and GitLab.
  */
 
-import type { ScmGlobalConfig, ScmSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
 import { ScmSettingsStore, ScmSettingsValidationError } from "../db/scm-settings";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
@@ -117,7 +117,7 @@ async function handleSetRepoSettings(
   const { owner, name } = params;
   const repo = `${owner}/${name}`;
 
-  const body = await parseJsonBody<{ settings?: ScmSettings }>(request);
+  const body = await parseJsonBody<{ settings?: ScmRepoSettings }>(request);
   if (body instanceof Response) return body;
 
   if (!body?.settings || typeof body.settings !== "object" || Array.isArray(body.settings)) {

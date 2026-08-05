@@ -37,6 +37,11 @@ export interface ScmSettings {
   alwaysUseDraftMode?: boolean;
 }
 
+/** A repository override must choose an explicit value rather than inherit. */
+export interface ScmRepoSettings extends ScmSettings {
+  alwaysUseDraftMode: boolean;
+}
+
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
   model?: string;
