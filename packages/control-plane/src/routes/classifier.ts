@@ -239,7 +239,7 @@ async function parseClassifierStream(
       ? { kind: "failed" }
       : { kind: "invalid" };
   } finally {
-    await reader.cancel().catch(() => undefined);
+    void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
 

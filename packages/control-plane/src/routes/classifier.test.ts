@@ -406,9 +406,9 @@ describe("POST /internal/classifier/infer", () => {
     expect(responseText).not.toContain("upstream secret details");
   });
 
-  it("times out a never-ending upstream stream and cancels its reader", async () => {
+  it("times out when the upstream stream and reader cancellation never finish", async () => {
     vi.useFakeTimers();
-    const cancel = vi.fn();
+    const cancel = vi.fn(() => new Promise<void>(() => undefined));
     vi.mocked(fetch).mockResolvedValueOnce(openStreamResponse(undefined, cancel));
 
     try {

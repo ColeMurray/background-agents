@@ -35,7 +35,7 @@ describe("target classification contracts", () => {
     ).toBe(false);
   });
 
-  it("rejects empty strings and emits provider tool constraints", () => {
+  it("rejects whitespace-only decision strings", () => {
     const decision = {
       targetId: "   ",
       confidence: "high",
