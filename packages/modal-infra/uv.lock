@@ -820,6 +820,7 @@ name = "open-inspect-sandbox-runtime"
 version = "0.1.0"
 source = { editable = "../sandbox-runtime" }
 dependencies = [
+    { name = "cryptography" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -828,6 +829,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=44.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14.0" },
     { name = "pydantic", specifier = ">=2.0" },

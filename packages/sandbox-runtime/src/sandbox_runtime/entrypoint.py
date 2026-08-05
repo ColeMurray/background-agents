@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import TypeVar
 
 import httpx
+from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+from cryptography.hazmat.primitives.ciphers import Cipher, modes
 
 from .constants import (
     BIN_INSTALL_DIR_ENV_VAR,
@@ -71,6 +73,14 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 # visible instead of silently dropped.
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 _ResultT = TypeVar("_ResultT")
+
+# VNC password files obscure their eight-byte payload with this protocol-defined key.
+_VNC_PASSWORD_FILE_KEY = bytes((0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)) * 3
+
+
+def _encode_vnc_password(password: bytes) -> bytes:
+    encryptor = Cipher(TripleDES(_VNC_PASSWORD_FILE_KEY), modes.ECB()).encryptor()
+    return encryptor.update(password.ljust(VNC_PASSWORD_MAX_BYTES, b"\0")) + encryptor.finalize()
 
 
 @dataclass(frozen=True)
@@ -1292,7 +1302,7 @@ class SandboxSupervisor:
             0o600,
         )
         try:
-            os.write(password_fd, password_bytes)
+            os.write(password_fd, _encode_vnc_password(password_bytes))
         finally:
             os.close(password_fd)
 
@@ -1342,7 +1352,7 @@ class SandboxSupervisor:
             "127.0.0.1",
             "-forever",
             "-shared",
-            "-passwdfile",
+            "-rfbauth",
             VNC_PASSWORD_FILE_PATH,
         ]
         self.x11vnc_process = await asyncio.create_subprocess_exec(

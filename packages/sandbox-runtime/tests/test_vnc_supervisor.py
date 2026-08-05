@@ -140,10 +140,12 @@ class TestStartVnc:
         )
         assert x11vnc_args[3:5] == ("-rfbport", str(VNC_PORT))
         assert x11vnc_args[5:7] == ("-listen", "127.0.0.1")
+        assert x11vnc_args[-2:] == ("-rfbauth", str(password_path))
         assert "secret12" not in x11vnc_args
         assert "0.0.0.0:6099" in novnc_args
         assert f"127.0.0.1:{VNC_PORT}" in novnc_args
-        assert password_path.read_text() == "secret12"
+        assert password_path.read_bytes() == bytes.fromhex("24b5ae4ce15503c6")
+        assert b"secret12" not in password_path.read_bytes()
         assert stat.S_IMODE(password_path.stat().st_mode) == 0o600
 
     @pytest.mark.asyncio
