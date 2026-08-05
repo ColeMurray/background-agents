@@ -35,11 +35,11 @@ const modalClient = vi.hoisted(() => ({
 }));
 
 const vercelProvider = vi.hoisted(() => ({
-  triggerEnvironmentImageBuild: vi.fn(),
+  triggerImageBuild: vi.fn(),
 }));
 
 const openComputerProvider = vi.hoisted(() => ({
-  triggerEnvironmentImageBuild: vi.fn(),
+  triggerImageBuild: vi.fn(),
 }));
 
 const integrationSettings = vi.hoisted(() => ({
@@ -238,8 +238,8 @@ beforeEach(() => {
   });
   modalClient.startImageBuildSandbox.mockResolvedValue(undefined);
   modalClient.terminateImageBuildSandbox.mockResolvedValue(undefined);
-  vercelProvider.triggerEnvironmentImageBuild.mockResolvedValue(undefined);
-  openComputerProvider.triggerEnvironmentImageBuild.mockResolvedValue(undefined);
+  vercelProvider.triggerImageBuild.mockResolvedValue(undefined);
+  openComputerProvider.triggerImageBuild.mockResolvedValue(undefined);
   integrationSettings.resolveSandboxSettings.mockResolvedValue({});
   scmProvider.generateCredentialHelperAuth.mockResolvedValue({
     username: "x-access-token",
@@ -303,10 +303,11 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     const response = await callTrigger(createVercelEnv());
 
     expect(response.status).toBe(200);
-    expect(vercelProvider.triggerEnvironmentImageBuild).toHaveBeenCalledTimes(1);
-    expect(vercelProvider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
+    expect(vercelProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
+    expect(vercelProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
-        environmentId: "acme/repo",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
         cloneToken: "clone-token",
       })
@@ -327,10 +328,11 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
 
     expect(response.status).toBe(200);
     expect(scmProvider.generateCredentialHelperAuth).toHaveBeenCalled();
-    expect(openComputerProvider.triggerEnvironmentImageBuild).toHaveBeenCalledTimes(1);
-    expect(openComputerProvider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
+    expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledTimes(1);
+    expect(openComputerProvider.triggerImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
-        environmentId: "acme/repo",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
         cloneToken: "clone-token",
       })

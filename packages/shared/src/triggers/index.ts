@@ -42,7 +42,14 @@ export {
   sentryConditions,
   normalizeSentryEvent,
   buildSentryContextBlock,
+  buildSentryIssueWebhookContextBlock,
+  buildSentryMetricContextBlock,
   verifySentrySignature,
+} from "./sentry";
+export type {
+  SentryIssueAlertPayload,
+  SentryIssueWebhookPayload,
+  SentryMetricAlertPayload,
 } from "./sentry";
 
 // Webhook source module

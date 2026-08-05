@@ -26,6 +26,7 @@ function createProcessor() {
     updateSandboxHeartbeat: vi.fn(),
     getProcessingMessage,
     upsertTokenEvent: vi.fn(),
+    upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
     addSessionCost: vi.fn(),
@@ -584,6 +585,11 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+      expect(h.repository.upsertToolCallEvent).toHaveBeenCalledWith(
+        "msg-1",
+        expect.objectContaining({ callId: "call-1", status: "running" }),
+        expect.any(Number)
+      );
     });
 
     it("notifies tool_call regardless of status (provider-agnostic)", async () => {

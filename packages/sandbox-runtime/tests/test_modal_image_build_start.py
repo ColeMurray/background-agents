@@ -164,7 +164,7 @@ async def test_modal_entrypoint_runs_supervisor_with_memory_only_callback_token(
     async def finish_build(supervisor, _expected_tunnel_ports):
         observed_supervisor["value"] = supervisor
         observed_hook_env.update(supervisor._hook_env())
-        return entrypoint.RepositoryBootResult(True, "abc123", [], True, None)
+        return entrypoint.RepositoryBootResult(True, [], True, None)
 
     monkeypatch.setattr(entrypoint.SandboxSupervisor, "_run_image_build_execution", finish_build)
 

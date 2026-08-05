@@ -15,6 +15,7 @@ import type {
   SandboxRow,
   SessionRepositoryRow,
 } from "./types";
+import { toolCallIdentityKey } from "@open-inspect/shared";
 import type {
   SessionStatus,
   SandboxStatus,
@@ -36,8 +37,10 @@ import type { SessionAttachmentRepository } from "./session-attachment-repositor
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
+const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
 /**
  * WS client mapping result for hibernation recovery.
@@ -887,8 +890,8 @@ export class SessionRepository {
 
   createEvent(data: CreateEventData): void {
     this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})`,
       data.id,
       data.type,
       data.data,
@@ -905,8 +908,8 @@ export class SessionRepository {
   ): void {
     const id = `${type}:${messageId}`;
     this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
@@ -921,6 +924,22 @@ export class SessionRepository {
 
   upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
     this.upsertEventByMessageId("token", messageId, event, createdAt);
+  }
+
+  upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
+    const id = `tool_call:${toolCallIdentityKey(event)}`;
+    this.sql.exec(
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
+       ON CONFLICT(id) DO UPDATE SET
+         data = excluded.data,
+         message_id = excluded.message_id`,
+      id,
+      event.type,
+      JSON.stringify(event),
+      messageId,
+      createdAt
+    );
   }
 
   upsertExecutionCompleteEvent(
@@ -965,8 +984,13 @@ export class SessionRepository {
 
     const cursor = options.cursor;
     if (cursor?.kind === "timeline") {
-      conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
-      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      if (cursor.sequence !== undefined) {
+        conditions.push(`((created_at < ?) OR (created_at = ? AND timeline_sequence < ?))`);
+        params.push(cursor.createdAt, cursor.createdAt, cursor.sequence);
+      } else {
+        conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
+        params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      }
     } else if (cursor?.kind === "legacy") {
       conditions.push(`created_at < ?`);
       params.push(cursor.createdAt);
@@ -976,7 +1000,9 @@ export class SessionRepository {
       query += ` WHERE ${conditions.join(" AND ")}`;
     }
 
-    query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
+    const tieBreaker =
+      cursor?.kind === "timeline" && cursor.sequence === undefined ? "id" : "timeline_sequence";
+    query += ` ORDER BY created_at DESC, ${tieBreaker} DESC LIMIT ?`;
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);
@@ -992,8 +1018,8 @@ export class SessionRepository {
     const result = this.sql.exec(
       `SELECT * FROM (
          SELECT * FROM events WHERE type != 'heartbeat'
-         ORDER BY created_at DESC, id DESC LIMIT ?
-       ) sub ORDER BY created_at ASC, id ASC`,
+         ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?
+       ) sub ORDER BY created_at ASC, timeline_sequence ASC`,
       limit
     );
     return this.rows<EventRow>(result);

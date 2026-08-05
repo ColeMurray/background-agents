@@ -9,10 +9,14 @@ import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { RefreshIcon } from "@/components/ui/icons";
-import { IMAGE_BUILDS_KEY, parsePrimaryBuildSha, type ImageBuildsFeed } from "@/lib/image-builds";
+import {
+  IMAGE_BUILDS_KEY,
+  formatReadyDetails,
+  parsePrimaryBuildSha,
+  type ImageBuildsFeed,
+} from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 import { ImageBuildStatus } from "./image-build-status";
-import { formatReadyDetails } from "./image-build-status-utils";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export function ImagesSettings() {

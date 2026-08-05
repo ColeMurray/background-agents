@@ -852,7 +852,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("timeline_sequence");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "token:msg-1",
@@ -889,6 +889,53 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("upsertToolCallEvent", () => {
+    it("scopes child call IDs and preserves the first event position on updates", () => {
+      const event = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "call-1",
+        status: "running",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+        isSubtask: true,
+        childSessionId: "child-1",
+        taskCallId: "task-1",
+      };
+
+      repo.upsertToolCallEvent("msg-1", event, 1000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].query).not.toContain("created_at = excluded.created_at");
+      expect(mock.calls[0].params).toEqual([
+        'tool_call:["msg-1","child-1","call-1"]',
+        "tool_call",
+        JSON.stringify(event),
+        "msg-1",
+        1000,
+      ]);
+    });
+
+    it("uses a different identity for a parent call with the same call ID", () => {
+      const event = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "call-1",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+
+      repo.upsertToolCallEvent("msg-1", event, 1000);
+
+      expect(mock.calls[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
+    });
+  });
+
   describe("upsertExecutionCompleteEvent", () => {
     it("upserts completion event by deterministic message key", () => {
       const event = {
@@ -903,7 +950,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("timeline_sequence");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "execution_complete:msg-1",
@@ -943,7 +990,7 @@ describe("SessionRepository", () => {
   describe("listEventPage", () => {
     it("returns in deterministic descending order", () => {
       repo.listEventPage({ limit: 50 });
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, timeline_sequence DESC");
     });
 
     it("filters by type", () => {
@@ -974,7 +1021,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore and trims overflow", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e3", created_at: 5000, type: "token", data: "{}" },
         { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
@@ -995,7 +1042,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(
-        "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?"
+        "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
       );
       expect(mock.calls[0].params).toEqual([51]);
     });
@@ -1028,7 +1075,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore=false when a timeline page fits within the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e2", created_at: 4000, type: "token", data: "{}" },
         { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
@@ -1042,7 +1089,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore=true and trims overflow when a timeline page exceeds the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e3", created_at: 5000, type: "token", data: "{}" },
         { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
@@ -1063,9 +1110,11 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       // Inner subquery selects newest events via DESC
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC LIMIT ?");
+      expect(mock.calls[0].query).toContain(
+        "ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
+      );
       // Outer query re-sorts to chronological ASC for replay
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, timeline_sequence ASC");
       expect(mock.calls[0].params).toEqual([500]);
     });
   });

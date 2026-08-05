@@ -70,7 +70,6 @@ class RepositoryBootResult:
     """State produced by repository synchronization and hook execution."""
 
     git_sync_success: bool
-    head_sha: str
     repository_shas: list[dict[str, str]]
     setup_success: bool | None
     start_success: bool | None
@@ -1984,7 +1983,6 @@ class SandboxSupervisor:
         self._write_workspace_manifest()
         return RepositoryBootResult(
             git_sync_success=git_sync_success,
-            head_sha=head_sha,
             repository_shas=repository_shas,
             setup_success=setup_success,
             start_success=start_success,
@@ -2087,7 +2085,6 @@ class SandboxSupervisor:
                 if repo_image_callback:
                     reported = await self._run_until_shutdown(
                         repo_image_callback.report_success(
-                            base_sha=boot_result.head_sha,
                             build_duration_seconds=time.time() - startup_start,
                             repository_shas=boot_result.repository_shas,
                             runtime_version=runtime_version,

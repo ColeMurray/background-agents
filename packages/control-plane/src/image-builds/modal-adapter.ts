@@ -10,7 +10,7 @@ import type {
   ImageBuildStartCallbacks,
 } from "./types";
 import { ImageBuildFinalizationAttemptError } from "./finalization-error";
-import { resolveImageBuildProviderSessionTimeoutMs } from "./timeouts";
+import { resolveImageBuildProviderSessionTimeoutSeconds } from "./timeouts";
 
 /**
  * Modal provider-session image build adapter.
@@ -19,7 +19,7 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly provider: ModalImageBuildProvider) {}
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
-    await this.provider.triggerEnvironmentImageBuild({
+    await this.provider.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
       buildId: plan.buildId,
@@ -30,7 +30,9 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter {
         plan.cloneAuth.type === "credential_helper" ? plan.cloneAuth.username : undefined,
       userEnvVars: plan.userEnvVars,
       buildExecutionTimeoutSeconds: Math.ceil(plan.buildTimeoutMs / 1000),
-      providerSessionTimeoutMs: resolveImageBuildProviderSessionTimeoutMs(plan.buildTimeoutMs),
+      providerSessionTimeoutSeconds: resolveImageBuildProviderSessionTimeoutSeconds(
+        plan.buildTimeoutMs
+      ),
       callbackUrl: plan.callbackUrl,
       failureCallbackUrl: plan.failureCallbackUrl,
       callbackToken: plan.callbackToken,
