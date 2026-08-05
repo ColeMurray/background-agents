@@ -54,10 +54,10 @@ export async function handleAutofixQueue(
     trace_id: crypto.randomUUID(),
     request_id: crypto.randomUUID(),
   });
-  const service = new AutofixService({
+  const service = new AutofixService(
     feedbackStore,
-    pullRequests: new SessionPullRequestStore(db),
-    settings: {
+    new SessionPullRequestStore(db),
+    {
       async resolve(repoFullName) {
         const resolved = await integrationSettings.getResolvedConfig("github", repoFullName);
         return {
@@ -68,15 +68,15 @@ export async function handleAutofixQueue(
     },
     github,
     sessions,
-    botUsername: env.GITHUB_BOT_USERNAME,
-    now: () => Date.now(),
-  });
-  const consumer = new AutofixQueueConsumer({
+    env.GITHUB_BOT_USERNAME,
+    () => Date.now()
+  );
+  const consumer = new AutofixQueueConsumer(
     service,
     feedbackStore,
-    now: () => Date.now(),
-    maxDeliveryAttempts: MAX_DELIVERY_ATTEMPTS,
-  });
+    () => Date.now(),
+    MAX_DELIVERY_ATTEMPTS
+  );
 
   for (const message of batch.messages) {
     await consumer.consume(message);

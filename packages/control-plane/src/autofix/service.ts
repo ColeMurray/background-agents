@@ -121,14 +121,11 @@ export type AutofixProcessResult =
       reason: string;
     };
 
-interface AutofixServiceDeps {
-  feedbackStore: FeedbackStore;
-  pullRequests: PullRequestStore;
-  settings: AutofixSettingsResolver;
-  github: GitHubAutofixProvider;
-  sessions: SessionClient;
-  botUsername: string;
-  now: () => number;
+type EnqueueAutofixCommand = Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>;
+
+interface EligibleFeedback {
+  feedback: GitHubPullRequestFeedback;
+  settings: ResolvedGitHubAutofixSettings;
 }
 
 function isEnabledForRepo(enabledRepos: string[] | null, repoFullName: string): boolean {
@@ -184,11 +181,41 @@ function buildPrompt(feedback: GitHubPullRequestFeedback): string {
 }
 
 export class AutofixService {
-  constructor(private readonly deps: AutofixServiceDeps) {}
+  constructor(
+    private readonly feedbackStore: FeedbackStore,
+    private readonly pullRequests: PullRequestStore,
+    private readonly settings: AutofixSettingsResolver,
+    private readonly github: GitHubAutofixProvider,
+    private readonly sessions: SessionClient,
+    private readonly botUsername: string,
+    private readonly now: () => number
+  ) {}
 
   async process(envelope: GitHubAutofixEnvelope): Promise<AutofixProcessResult> {
-    const now = this.deps.now();
-    const receipt = await this.deps.feedbackStore.receive(envelope, now);
+    const now = this.now();
+    const receipt = await this.feedbackStore.receive(envelope, now);
+    const completed = this.completedReceiptResult(receipt);
+    if (completed) return completed;
+
+    const owner = await this.pullRequests.getByIdentity({
+      repositoryExternalId: envelope.repository.id,
+      repoOwner: envelope.repository.owner,
+      repoName: envelope.repository.name,
+      prNumber: envelope.pullRequestNumber,
+    });
+    if (!owner) return this.skip(receipt.feedbackKey, "untracked_pull_request", now);
+
+    const recovered = await this.recoverPriorDispatch(receipt, owner, now);
+    if (recovered) return recovered;
+
+    const eligibility = await this.resolveEligibleFeedback(envelope, receipt, owner, now);
+    if ("decision" in eligibility) return eligibility;
+
+    const command = this.createSessionCommand(envelope, receipt, owner, eligibility);
+    return this.dispatchToSession(owner.sessionId, receipt.feedbackKey, command, now);
+  }
+
+  private completedReceiptResult(receipt: FeedbackReceipt): AutofixProcessResult | null {
     if (receipt.decision === "queued" && receipt.messageId) {
       return {
         kind: "completed",
@@ -204,53 +231,59 @@ export class AutofixService {
         reason: receipt.reason ?? `already_${receipt.decision}`,
       };
     }
+    return null;
+  }
 
-    const owner = await this.deps.pullRequests.getByIdentity({
-      repositoryExternalId: envelope.repository.id,
-      repoOwner: envelope.repository.owner,
-      repoName: envelope.repository.name,
-      prNumber: envelope.pullRequestNumber,
-    });
-    if (!owner) return this.skip(receipt.feedbackKey, "untracked_pull_request", now);
+  private async recoverPriorDispatch(
+    receipt: FeedbackReceipt,
+    owner: PullRequestOwner,
+    decidedAt: number
+  ): Promise<AutofixProcessResult | null> {
+    if (receipt.dispatchAttemptedAt === null) return null;
 
-    if (receipt.dispatchAttemptedAt !== null) {
-      const recovered = await this.lookupExistingMessage(owner.sessionId, receipt.feedbackKey);
-      if (recovered) {
-        await this.deps.feedbackStore.markQueued(
-          receipt.feedbackKey,
-          recovered,
-          "recovered_after_ambiguous_dispatch",
-          now
-        );
-        return {
-          kind: "completed",
-          decision: "queued",
-          reason: "recovered_after_ambiguous_dispatch",
-          messageId: recovered,
-        };
-      }
-    }
+    const messageId = await this.lookupExistingMessage(owner.sessionId, receipt.feedbackKey);
+    if (!messageId) return null;
 
+    await this.feedbackStore.markQueued(
+      receipt.feedbackKey,
+      messageId,
+      "recovered_after_ambiguous_dispatch",
+      decidedAt
+    );
+    return {
+      kind: "completed",
+      decision: "queued",
+      reason: "recovered_after_ambiguous_dispatch",
+      messageId,
+    };
+  }
+
+  private async resolveEligibleFeedback(
+    envelope: GitHubAutofixEnvelope,
+    receipt: FeedbackReceipt,
+    owner: PullRequestOwner,
+    decidedAt: number
+  ): Promise<EligibleFeedback | AutofixProcessResult> {
     const repoFullName = `${owner.repoOwner}/${owner.repoName}`;
-    const resolved = await this.deps.settings.resolve(repoFullName);
+    const resolved = await this.settings.resolve(repoFullName);
     if (!resolved.autofix.enabled || !isEnabledForRepo(resolved.enabledRepos, repoFullName)) {
-      return this.skip(receipt.feedbackKey, "disabled", now);
+      return this.skip(receipt.feedbackKey, "disabled", decidedAt);
     }
     if (envelope.providerObject.kind === "pr_comment" && !resolved.autofix.prCommentsEnabled) {
-      return this.skip(receipt.feedbackKey, "pr_comments_disabled", now);
+      return this.skip(receipt.feedbackKey, "pr_comments_disabled", decidedAt);
     }
     if (envelope.providerObject.kind === "review" && !resolved.autofix.reviewsEnabled) {
-      return this.skip(receipt.feedbackKey, "reviews_disabled", now);
+      return this.skip(receipt.feedbackKey, "reviews_disabled", decidedAt);
     }
 
-    const pullRequest = await this.deps.github.getPullRequest({
+    const pullRequest = await this.github.getPullRequest({
       owner: owner.repoOwner,
       name: owner.repoName,
       number: owner.prNumber,
       repositoryExternalId: envelope.repository.id,
     });
     if (pullRequest.lifecycleState !== "open") {
-      return this.skip(receipt.feedbackKey, "pull_request_not_open", now);
+      return this.skip(receipt.feedbackKey, "pull_request_not_open", decidedAt);
     }
 
     const feedbackLocation = {
@@ -260,21 +293,21 @@ export class AutofixService {
     };
     const feedback =
       envelope.providerObject.kind === "pr_comment"
-        ? await this.deps.github.getPullRequestFeedback({
+        ? await this.github.getPullRequestFeedback({
             ...feedbackLocation,
             providerObject: {
               kind: "pr_comment",
               id: envelope.providerObject.id,
             },
           })
-        : await this.deps.github.getPullRequestFeedback({
+        : await this.github.getPullRequestFeedback({
             ...feedbackLocation,
             providerObject: {
               kind: "review",
               id: envelope.providerObject.id,
             },
           });
-    await this.deps.feedbackStore.attachContext(receipt.feedbackKey, {
+    await this.feedbackStore.attachContext(receipt.feedbackKey, {
       artifactId: owner.artifactId,
       sessionId: owner.sessionId,
       authorId: feedback.author.id,
@@ -289,9 +322,21 @@ export class AutofixService {
       pullRequest.repoOwner,
       pullRequest.repoName
     );
-    if (eligibilityReason) return this.skip(receipt.feedbackKey, eligibilityReason, now);
+    if (eligibilityReason) {
+      return this.skip(receipt.feedbackKey, eligibilityReason, decidedAt);
+    }
 
-    const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {
+    return { feedback, settings: resolved.autofix };
+  }
+
+  private createSessionCommand(
+    envelope: GitHubAutofixEnvelope,
+    receipt: FeedbackReceipt,
+    owner: PullRequestOwner,
+    eligibility: EligibleFeedback
+  ): EnqueueAutofixCommand {
+    const { feedback, settings } = eligibility;
+    return {
       type: "enqueue_feedback",
       feedbackKey: receipt.feedbackKey,
       pullRequest: {
@@ -316,11 +361,18 @@ export class AutofixService {
               authorType: "human",
               feedbackUrl: feedback.url,
             },
-      attemptLimit: resolved.autofix.maxAttemptsPerPrPer24Hours,
+      attemptLimit: settings.maxAttemptsPerPrPer24Hours,
     };
+  }
 
-    await this.deps.feedbackStore.markDispatchAttempted(receipt.feedbackKey, now);
-    const response = await this.deps.sessions.fetch(owner.sessionId, SessionInternalPaths.autofix, {
+  private async dispatchToSession(
+    sessionId: string,
+    feedbackKey: string,
+    command: EnqueueAutofixCommand,
+    decidedAt: number
+  ): Promise<AutofixProcessResult> {
+    await this.feedbackStore.markDispatchAttempted(feedbackKey, decidedAt);
+    const response = await this.sessions.fetch(sessionId, SessionInternalPaths.autofix, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(command),
@@ -334,11 +386,11 @@ export class AutofixService {
     }
 
     if (parsed.data.kind === "enqueued" || parsed.data.kind === "duplicate") {
-      await this.deps.feedbackStore.markQueued(
-        receipt.feedbackKey,
+      await this.feedbackStore.markQueued(
+        feedbackKey,
         parsed.data.messageId,
         parsed.data.kind,
-        now
+        decidedAt
       );
       return {
         kind: "completed",
@@ -348,7 +400,7 @@ export class AutofixService {
       };
     }
     if (parsed.data.kind === "rejected") {
-      return this.skip(receipt.feedbackKey, parsed.data.reason, now);
+      return this.skip(feedbackKey, parsed.data.reason, decidedAt);
     }
     throw new Error(`Unexpected Session Autofix response: ${parsed.data.kind}`);
   }
@@ -361,18 +413,18 @@ export class AutofixService {
   ): Promise<string | null> {
     const authorType = feedback.author.type.toLowerCase();
     const authorLogin = feedback.author.login.toLowerCase();
-    if (authorLogin === this.deps.botUsername.toLowerCase()) {
+    if (authorLogin === this.botUsername.toLowerCase()) {
       return settings.openInspectReviewsEnabled ? "own_app_unattributed" : "own_reviews_disabled";
     }
 
     if (authorType === "user") {
       if (
         feedback.kind === "pr_comment" &&
-        feedback.body.toLowerCase().includes(`@${this.deps.botUsername.toLowerCase()}`)
+        feedback.body.toLowerCase().includes(`@${this.botUsername.toLowerCase()}`)
       ) {
         return "explicit_mention";
       }
-      const canWrite = await this.deps.github.hasPullRequestWritePermission({
+      const canWrite = await this.github.hasPullRequestWritePermission({
         owner,
         name,
         authorLogin: feedback.author.login,
@@ -402,7 +454,7 @@ export class AutofixService {
       type: "lookup_feedback",
       feedbackKey,
     };
-    const response = await this.deps.sessions.fetch(sessionId, SessionInternalPaths.autofix, {
+    const response = await this.sessions.fetch(sessionId, SessionInternalPaths.autofix, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(command),
@@ -422,11 +474,11 @@ export class AutofixService {
     reason: string,
     decidedAt: number
   ): Promise<AutofixProcessResult> {
-    if (await this.deps.feedbackStore.markSkipped(feedbackKey, reason, decidedAt)) {
+    if (await this.feedbackStore.markSkipped(feedbackKey, reason, decidedAt)) {
       return { kind: "completed", decision: "skipped", reason };
     }
 
-    const winner = await this.deps.feedbackStore.get(feedbackKey);
+    const winner = await this.feedbackStore.get(feedbackKey);
     if (winner?.decision === "queued" && winner.messageId) {
       return {
         kind: "completed",

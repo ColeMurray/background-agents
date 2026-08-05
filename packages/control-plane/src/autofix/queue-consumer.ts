@@ -24,19 +24,17 @@ interface QueueMessage {
   retry(): void;
 }
 
-interface AutofixQueueConsumerDeps {
-  service: AutofixProcessor;
-  feedbackStore: FailureStore;
-  now: () => number;
-  maxDeliveryAttempts: number;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 export class AutofixQueueConsumer {
-  constructor(private readonly deps: AutofixQueueConsumerDeps) {}
+  constructor(
+    private readonly service: AutofixProcessor,
+    private readonly feedbackStore: FailureStore,
+    private readonly now: () => number,
+    private readonly maxDeliveryAttempts: number
+  ) {}
 
   async consume(message: QueueMessage): Promise<void> {
     const parsed = githubAutofixEnvelopeSchema.safeParse(message.body);
@@ -46,28 +44,28 @@ export class AutofixQueueConsumer {
     }
 
     try {
-      await this.deps.service.process(parsed.data);
+      await this.service.process(parsed.data);
       message.ack();
     } catch (error) {
       const feedbackKey = githubAutofixFeedbackKey(parsed.data);
       const detail = errorMessage(error);
       if (error instanceof SourceControlProviderError && error.errorType === "permanent") {
-        await this.deps.feedbackStore.markFailed(
+        await this.feedbackStore.markFailed(
           feedbackKey,
           "permanent_provider_error",
           detail,
-          this.deps.now()
+          this.now()
         );
         message.ack();
         return;
       }
-      await this.deps.feedbackStore.recordError(feedbackKey, detail);
-      if (message.attempts >= this.deps.maxDeliveryAttempts) {
-        const failed = await this.deps.feedbackStore.markFailed(
+      await this.feedbackStore.recordError(feedbackKey, detail);
+      if (message.attempts >= this.maxDeliveryAttempts) {
+        const failed = await this.feedbackStore.markFailed(
           feedbackKey,
           "delivery_attempts_exhausted",
           detail,
-          this.deps.now()
+          this.now()
         );
         if (!failed) {
           message.ack();

@@ -33,12 +33,7 @@ describe("AutofixQueueConsumer", () => {
       markFailed: vi.fn(),
       markSkipped: vi.fn(),
     };
-    const consumer = new AutofixQueueConsumer({
-      service,
-      feedbackStore,
-      now: () => 2_000,
-      maxDeliveryAttempts: 5,
-    });
+    const consumer = new AutofixQueueConsumer(service, feedbackStore, () => 2_000, 5);
     const input = { ...message(), body: { version: 1 } };
 
     await consumer.consume(input);
@@ -64,12 +59,7 @@ describe("AutofixQueueConsumer", () => {
       recordError: vi.fn(),
       markFailed: vi.fn(),
     };
-    const consumer = new AutofixQueueConsumer({
-      service,
-      feedbackStore,
-      now: () => 2_000,
-      maxDeliveryAttempts: 5,
-    });
+    const consumer = new AutofixQueueConsumer(service, feedbackStore, () => 2_000, 5);
     const input = message();
 
     await consumer.consume(input);
@@ -88,12 +78,7 @@ describe("AutofixQueueConsumer", () => {
       recordError: vi.fn(async () => undefined),
       markFailed: vi.fn(async () => true),
     };
-    const consumer = new AutofixQueueConsumer({
-      service,
-      feedbackStore,
-      now: () => 2_000,
-      maxDeliveryAttempts: 5,
-    });
+    const consumer = new AutofixQueueConsumer(service, feedbackStore, () => 2_000, 5);
     const input = message(2);
 
     await consumer.consume(input);
@@ -117,12 +102,7 @@ describe("AutofixQueueConsumer", () => {
       recordError: vi.fn(async () => undefined),
       markFailed: vi.fn(async () => true),
     };
-    const consumer = new AutofixQueueConsumer({
-      service,
-      feedbackStore,
-      now: () => 2_000,
-      maxDeliveryAttempts: 5,
-    });
+    const consumer = new AutofixQueueConsumer(service, feedbackStore, () => 2_000, 5);
     const input = message(5);
 
     await consumer.consume(input);
@@ -146,12 +126,7 @@ describe("AutofixQueueConsumer", () => {
       recordError: vi.fn(async () => undefined),
       markFailed: vi.fn(async () => false),
     };
-    const consumer = new AutofixQueueConsumer({
-      service,
-      feedbackStore,
-      now: () => 2_000,
-      maxDeliveryAttempts: 5,
-    });
+    const consumer = new AutofixQueueConsumer(service, feedbackStore, () => 2_000, 5);
     const input = message(5);
 
     await consumer.consume(input);
@@ -170,12 +145,7 @@ describe("AutofixQueueConsumer", () => {
       recordError: vi.fn(async () => undefined),
       markFailed: vi.fn(async () => true),
     };
-    const consumer = new AutofixQueueConsumer({
-      service,
-      feedbackStore,
-      now: () => 2_000,
-      maxDeliveryAttempts: 5,
-    });
+    const consumer = new AutofixQueueConsumer(service, feedbackStore, () => 2_000, 5);
     const input = message(1);
 
     await consumer.consume(input);

@@ -69,15 +69,15 @@ function buildService() {
   const sessions = {
     fetch: vi.fn(async () => Response.json({ kind: "enqueued", messageId: "message-1" })),
   };
-  const service = new AutofixService({
+  const service = new AutofixService(
     feedbackStore,
     pullRequests,
     settings,
     github,
     sessions,
-    botUsername: "open-inspect[bot]",
-    now: () => 2_000,
-  });
+    "open-inspect[bot]",
+    () => 2_000
+  );
 
   return { service, feedbackStore, pullRequests, settings, github, sessions };
 }
