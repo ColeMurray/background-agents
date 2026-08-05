@@ -14,7 +14,7 @@ describe("image build finalization jobs", () => {
         { repoOwner: "Acme", repoName: "Api", baseSha: "def456" },
       ],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
     };
 
     const first = await createImageBuildFinalizationJob({ outcome: "success", completion });
@@ -43,7 +43,7 @@ describe("image build finalization jobs", () => {
         { repoOwner: "Acme", repoName: "Api", baseSha: "def456" },
       ],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
     };
 
     const ordered = await createImageBuildFinalizationJob({ outcome: "success", completion });

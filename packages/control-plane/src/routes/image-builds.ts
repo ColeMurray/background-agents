@@ -48,7 +48,6 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:image-builds");
-const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 
 /**
@@ -64,15 +63,11 @@ const buildCompleteBodySchema = z.object({
   runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
     message: "must start with v<number>",
   }),
-  // The converted milliseconds must stay finite: Infinity would be
-  // canonicalized to null by JSON.stringify inside the completion hash and
-  // the persisted row.
-  build_duration_seconds: z
-    .number()
-    .nonnegative()
-    .refine((value) => Number.isFinite(value * MS_PER_SECOND), {
-      message: "must convert to finite milliseconds",
-    }),
+  // Must stay finite: Infinity would be canonicalized to null by
+  // JSON.stringify inside the completion hash and the persisted row. Capped
+  // at MAX_SAFE_INTEGER so an absurd duration cannot lose integer precision
+  // in the persisted row or the completion-hash canonicalization.
+  build_duration_seconds: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
 });
 
 const buildFailedBodySchema = z.object({
@@ -201,7 +196,7 @@ async function handleBuildComplete(
     providerSessionId: parsed.provider_session_id,
     repositoryShas: parsed.repository_shas,
     runtimeVersion: parsed.runtime_version,
-    buildDurationMs: parsed.build_duration_seconds * MS_PER_SECOND,
+    buildDurationSeconds: parsed.build_duration_seconds,
   };
 
   try {

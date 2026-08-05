@@ -590,9 +590,9 @@ async def api_create_build_sandbox(
             default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
         )
-        timeout_seconds = _validated_timeout_seconds(
+        provider_session_timeout_seconds = _validated_timeout_seconds(
             request,
-            "build_timeout_seconds",
+            "provider_session_timeout_seconds",
             default_seconds=(
                 DEFAULT_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
             ),
@@ -621,7 +621,7 @@ async def api_create_build_sandbox(
             clone_username=clone_username,
             user_env_vars=request.get("user_env_vars") or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=provider_session_timeout_seconds,
         )
         return {
             "success": True,

@@ -615,7 +615,7 @@ export class ModalClient {
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
-          build_timeout_seconds: request.providerSessionTimeoutSeconds,
+          provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
         }),
       });
 

@@ -50,7 +50,7 @@ describe("image build scheduler integration", () => {
       completionHash,
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 1_000,
+      buildDurationSeconds: 1,
       now: callbackTime,
     });
     await env.DB.prepare("UPDATE image_builds SET created_at = 1 WHERE id = ?")
@@ -113,7 +113,7 @@ describe("image build scheduler integration", () => {
         completionHash,
         repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
         runtimeVersion: "v53-runtime",
-        buildDurationMs: 1_000,
+        buildDurationSeconds: 1,
         now: index + 1,
       });
     }

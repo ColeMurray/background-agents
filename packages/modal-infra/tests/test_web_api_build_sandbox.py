@@ -68,7 +68,7 @@ async def test_create_build_sandbox_forwards_callback_context_and_returns_provid
             "callback_url": "https://worker.test/image-builds/build-complete",
             "failure_callback_url": "https://worker.test/image-builds/build-failed",
             "user_env_vars": {"FOO": "bar"},
-            "build_timeout_seconds": 2400,
+            "provider_session_timeout_seconds": 2400,
         },
     )
 
@@ -215,7 +215,7 @@ async def test_create_logs_http_outcome(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "field",
-    ["build_execution_timeout_seconds", "build_timeout_seconds"],
+    ["build_execution_timeout_seconds", "provider_session_timeout_seconds"],
 )
 async def test_create_rejects_non_integer_build_timeout(monkeypatch, field):
     service = _patch_dependencies(monkeypatch)
@@ -249,7 +249,7 @@ async def test_create_clamps_build_timeout_to_provider_maximum(monkeypatch):
             "build_id": "imgb-1",
             "repositories": [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
             **CALLBACK_CONTEXT,
-            "build_timeout_seconds": 99999,
+            "provider_session_timeout_seconds": 99999,
         },
     )
 

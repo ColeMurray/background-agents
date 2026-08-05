@@ -30,7 +30,7 @@ async function seedAcceptedBuild(buildId: string): Promise<ImageBuildStore> {
     completionHash: COMPLETION_HASH,
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
     runtimeVersion: "v53-runtime",
-    buildDurationMs: 1_000,
+    buildDurationSeconds: 1,
     now,
   });
   return store;

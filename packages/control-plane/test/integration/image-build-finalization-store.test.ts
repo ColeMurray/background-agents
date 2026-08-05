@@ -55,7 +55,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
       now,
     };
 
@@ -116,7 +116,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 1_000,
+      buildDurationSeconds: 1,
       now,
     });
 
@@ -152,7 +152,7 @@ describe("ImageBuildStore finalization state", () => {
         completionHash: `completion-${index + 1}`,
         repositoryShas: [],
         runtimeVersion: "v53-runtime",
-        buildDurationMs: 1_000,
+        buildDurationSeconds: 1,
         now: callbackTime,
       });
     }
@@ -320,7 +320,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
       now,
     });
     await store.supersedeActiveImages(environmentScope(environmentId));
@@ -456,7 +456,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 12_500,
+      buildDurationSeconds: 12.5,
       now,
     });
 
@@ -516,7 +516,7 @@ describe("ImageBuildStore finalization state", () => {
       completionHash: "completion-hash",
       repositoryShas: [],
       runtimeVersion: "v53-runtime",
-      buildDurationMs: 1,
+      buildDurationSeconds: 1,
       now,
     });
 

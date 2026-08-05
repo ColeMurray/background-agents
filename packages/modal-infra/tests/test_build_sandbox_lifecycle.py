@@ -25,6 +25,7 @@ from src.sandbox.build_session import (
     ModalBuildSessionService,
 )
 from src.sandbox.manager import SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
+from src.web_api import IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
 
 
 def _async_method(return_value=None):
@@ -55,6 +56,31 @@ def test_build_timeout_limits_match_shared_contract(constant_name, python_value)
 
     assert match is not None, f"missing numeric shared constant: {constant_name}"
     assert python_value == int(match.group(1))
+
+
+def test_finalization_grace_matches_control_plane_contract():
+    """Pin IMAGE_BUILD_FINALIZATION_GRACE_SECONDS to the control-plane grace window.
+
+    web_api.py mirrors IMAGE_BUILD_FINALIZATION_GRACE_MS from the control
+    plane's image-builds/timeouts.ts; both planes must reserve the same
+    finalization headroom on top of the build-execution budget.
+    """
+    ts_source = (
+        Path(__file__).resolve().parents[2]
+        / "control-plane"
+        / "src"
+        / "image-builds"
+        / "timeouts.ts"
+    ).read_text()
+    match = re.search(
+        r"export\s+const\s+IMAGE_BUILD_FINALIZATION_GRACE_MS\s*=\s*"
+        r"(\d+)\s*\*\s*(\d+)\s*\*\s*MS_PER_SECOND\s*;",
+        ts_source,
+    )
+
+    assert match is not None, "missing TS constant: IMAGE_BUILD_FINALIZATION_GRACE_MS"
+    ts_grace_seconds = int(match.group(1)) * int(match.group(2))
+    assert ts_grace_seconds == IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
 
 
 def _load_callback_env_manifest() -> dict:

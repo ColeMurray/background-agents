@@ -73,7 +73,8 @@ export interface CompleteImageBuildCallback {
   providerSessionId: string;
   repositoryShas: RepositoryShaEntry[];
   runtimeVersion: string;
-  buildDurationMs: number;
+  /** Wire seconds passed through unconverted — the D1 column is also seconds. */
+  buildDurationSeconds: number;
 }
 
 export interface FailImageBuildCallback {

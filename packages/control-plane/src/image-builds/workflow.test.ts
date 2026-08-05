@@ -162,7 +162,7 @@ function validCompletion(overrides: Record<string, unknown> = {}) {
     providerSessionId: "vercel-session-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
     runtimeVersion: "v56-managed-provider-runtime",
-    buildDurationMs: 12_500,
+    buildDurationSeconds: 12.5,
     ...overrides,
   };
 }

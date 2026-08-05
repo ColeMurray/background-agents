@@ -46,7 +46,7 @@ export async function createImageBuildFinalizationJob(
                 left.baseSha.localeCompare(right.baseSha)
             ),
           runtimeVersion: result.completion.runtimeVersion,
-          buildDurationMs: result.completion.buildDurationMs,
+          buildDurationSeconds: result.completion.buildDurationSeconds,
         }
       : {
           buildId,
