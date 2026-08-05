@@ -104,17 +104,13 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
   );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-  const [initialized, setInitialized] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
 
   useEffect(() => {
-    if (settings !== undefined && !initialized) {
-      if (settings) {
-        setAlwaysUseDraftMode(settings.defaults?.alwaysUseDraftMode ?? false);
-      }
-      setInitialized(true);
+    if (settings !== undefined && !dirty) {
+      setAlwaysUseDraftMode(settings?.defaults?.alwaysUseDraftMode ?? false);
     }
-  }, [settings, initialized]);
+  }, [settings, dirty]);
 
   const isConfigured = settings !== null && settings !== undefined;
 
@@ -125,7 +121,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
       const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        await mutate(GLOBAL_SETTINGS_KEY);
         setAlwaysUseDraftMode(false);
         setDirty(false);
         toast.success("Settings reset to defaults.");
@@ -154,7 +150,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
       });
 
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        await mutate(GLOBAL_SETTINGS_KEY);
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -309,6 +305,12 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
+  useEffect(() => {
+    if (!dirty) {
+      setAlwaysUseDraftMode(entry.settings.alwaysUseDraftMode ?? false);
+    }
+  }, [entry.settings.alwaysUseDraftMode, dirty]);
+
   const handleSave = async () => {
     const settingsPath = getScmRepoSettingsPath(entry.repo);
     if (!settingsPath) return;
@@ -324,7 +326,7 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
       });
 
       if (res.ok) {
-        mutate(REPO_SETTINGS_KEY);
+        await mutate(REPO_SETTINGS_KEY);
         setDirty(false);
         toast.success(`Override for ${entry.repo} saved.`);
       } else {
