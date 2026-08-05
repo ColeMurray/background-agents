@@ -20,7 +20,6 @@ variables {
   github_app_id               = "1"
   github_app_private_key      = "test-private-key"
   github_app_installation_id  = "1"
-  anthropic_api_key           = "test-anthropic-key"
   token_encryption_key        = "test-token-key"
   repo_secrets_encryption_key = "test-repo-key"
   nextauth_secret             = "test-browser-auth-secret-with-32-characters"
@@ -200,6 +199,7 @@ run "slack_classification_anthropic" {
     enable_service_bindings = false
     slack_bot_token         = "test-slack-token"
     slack_signing_secret    = "test-slack-signing-secret"
+    anthropic_api_key       = "test-anthropic-key"
   }
 
   assert {
@@ -219,7 +219,6 @@ run "slack_classification_anthropic_missing_key" {
     enable_slack_bot     = true
     slack_bot_token      = "test-slack-token"
     slack_signing_secret = "test-slack-signing-secret"
-    anthropic_api_key    = "  "
   }
 
   expect_failures = [var.anthropic_api_key]
@@ -234,7 +233,6 @@ run "slack_classification_openai" {
     slack_bot_token            = "test-slack-token"
     slack_signing_secret       = "test-slack-signing-secret"
     slack_classification_model = "openai/gpt-5.6-luna"
-    anthropic_api_key          = ""
   }
 
   assert {
