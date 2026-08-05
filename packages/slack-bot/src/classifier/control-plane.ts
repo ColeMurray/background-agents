@@ -27,12 +27,16 @@ export const KV_CACHE_TTL_SECONDS = 300;
 export async function controlPlaneFetch(
   env: Env,
   path: string,
-  traceId?: string
+  traceId?: string,
+  timeoutMs?: number
 ): Promise<Response> {
   return signedControlPlaneFetch(
     env,
     { method: "GET", url: `https://internal${path}`, traceId },
-    { headers: { Accept: "application/json" } }
+    {
+      headers: { Accept: "application/json" },
+      ...(timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(timeoutMs) }),
+    }
   );
 }
 
