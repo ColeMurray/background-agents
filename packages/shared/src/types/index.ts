@@ -66,7 +66,7 @@ export type {
   ConfidenceLevel,
 } from "./repository-catalog";
 
-export { toDisplayStatus } from "./artifacts";
+export { listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
 export type {
   SessionArtifact,
   ManualPullRequestArtifactMetadata,
@@ -86,7 +86,14 @@ export type {
   ArtifactType,
 } from "./artifacts";
 
-export { sandboxEventSchema, toolCallIdentityKey, toolCallIdentityTuple } from "./sandbox-events";
+export {
+  eventResponseSchema,
+  eventTypeSchema,
+  listEventsResponseSchema,
+  sandboxEventSchema,
+  toolCallIdentityKey,
+  toolCallIdentityTuple,
+} from "./sandbox-events";
 export type {
   AgentEvent,
   SandboxEvent,
@@ -213,6 +220,9 @@ export {
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
   isEnvironmentId,
   environmentRepositoriesInputSchema,
+  environmentRepositorySchema,
+  environmentSchema,
+  listEnvironmentsResponseSchema,
   createEnvironmentInputSchema,
   updateEnvironmentInputSchema,
 } from "./environments";

@@ -7,8 +7,6 @@ import { timingSafeEqual } from "@open-inspect/shared/auth";
 import type { ImageBuildCallbackBuild, ImageBuildProvider } from "../image-builds/model";
 import type { SqlDatabase } from "./sql-database";
 
-const MS_PER_SECOND = 1000;
-
 interface CallbackTokenRow {
   id: string;
   scope_kind: ImageBuildScopeKind;
@@ -62,7 +60,7 @@ export class ImageBuildFinalizationStore {
     completionHash: string;
     repositoryShas: RepositoryShaEntry[];
     runtimeVersion: string;
-    buildDurationMs: number;
+    buildDurationSeconds: number;
     now: number;
   }): Promise<ImageBuildCompletionAcceptance> {
     const result = await this.db
@@ -82,7 +80,7 @@ export class ImageBuildFinalizationStore {
         params.completionHash,
         JSON.stringify(params.repositoryShas),
         params.runtimeVersion,
-        params.buildDurationMs / MS_PER_SECOND,
+        params.buildDurationSeconds,
         params.now,
         params.buildId,
         params.provider,

@@ -294,6 +294,36 @@ describe("uploadPreparedAttachments", () => {
     expect(result.sessionMissing).toBe(false);
   });
 
+  it("counts malformed upload responses as dropped", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
+    const controlPlaneFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ attachmentId: null }), { status: 201 }));
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await prepareAndUpload(env, "sess-1", [pngFile]);
+
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual(["upload_rejected"]);
+    expect(result.sessionMissing).toBe(false);
+  });
+
+  it("counts syntactically invalid attachment ids as dropped", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(imageBytesResponse());
+    const controlPlaneFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ attachmentId: "bad id" }), { status: 201 })
+      );
+    const env = makeEnv(controlPlaneFetch);
+
+    const result = await prepareAndUpload(env, "sess-1", [pngFile]);
+
+    expect(result.references).toEqual([]);
+    expect(result.dropped).toEqual(["upload_rejected"]);
+    expect(result.sessionMissing).toBe(false);
+  });
+
   it("flags the session as missing when every upload 404s", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => imageBytesResponse());
     const controlPlaneFetch = vi

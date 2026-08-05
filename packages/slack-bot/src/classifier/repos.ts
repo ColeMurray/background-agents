@@ -10,7 +10,7 @@ import type { Env, RepoConfig } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
   normalizeRoutingRules,
-  type SlackGlobalConfig,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
 import {
@@ -199,8 +199,9 @@ const routingRules = createCachedResource<SlackRoutingRule[]>({
   kvKey: "slack:routing-rules",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/integration-settings/slack", traceId);
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse(body);
     return normalizeRoutingRules(
-      (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+      parsed.success ? parsed.data.settings?.defaults?.routingRules : []
     );
   },
   deserialize: (cached) =>

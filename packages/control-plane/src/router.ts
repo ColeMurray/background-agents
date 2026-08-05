@@ -29,6 +29,7 @@ import { browserAuthRoutes } from "./routes/browser-auth";
 import { signInProviderRoutes } from "./routes/sign-in-providers";
 import { integrationSettingsRoutes } from "./routes/integration-settings";
 import { commitSigningRoutes } from "./routes/commit-signing";
+import { scmSettingsRoutes } from "./routes/scm-settings";
 import { modelPreferencesRoutes } from "./routes/model-preferences";
 import { reposRoutes } from "./routes/repos";
 import { secretsRoutes } from "./routes/secrets";
@@ -170,6 +171,7 @@ function isWebServiceAuthRoute(method: string, path: string): boolean {
 export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
+    /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
@@ -356,6 +358,9 @@ const routes: Route[] = [
 
   // Deployment-wide commit signing identity
   ...commitSigningRoutes,
+
+  // SCM (source-control) settings
+  ...scmSettingsRoutes,
 
   // Automations
   ...automationRoutes,

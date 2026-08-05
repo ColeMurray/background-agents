@@ -9,6 +9,7 @@
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
+import { issueSessionSchema } from "./types";
 import type {
   Env,
   TeamRepoMapping,
@@ -67,7 +68,8 @@ function getIssueSessionKey(issueId: string): string {
 export async function lookupIssueSession(env: Env, issueId: string): Promise<IssueSession | null> {
   try {
     const data = await env.LINEAR_KV.get(getIssueSessionKey(issueId), "json");
-    if (data && typeof data === "object") return data as IssueSession;
+    const result = issueSessionSchema.safeParse(data);
+    if (result.success) return result.data;
   } catch (e) {
     log.debug("kv.lookup_issue_session_failed", {
       issueId,

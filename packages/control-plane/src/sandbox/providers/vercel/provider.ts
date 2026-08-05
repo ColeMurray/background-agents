@@ -7,14 +7,13 @@ import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
 import {
-  applyScmCloneEnv,
+  buildImageBuildCallbackEnv,
+  buildImageBuildEnvVars,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-  IMAGE_BUILD_MODE_ENV_VAR,
+  imageBuildSandboxIdentity,
   scmCloneIdentity,
-  SESSION_CONFIG_ENV_VAR,
-  toRepositoryConfigPayload,
 } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -56,18 +55,6 @@ const VERCEL_MEMORY_MIB_PER_VCPU = 2048;
 const VERCEL_SUPPORTED_VCPUS: readonly VercelVcpus[] = [1, 2, 4, 8];
 const VERCEL_MAX_VCPUS = VERCEL_SUPPORTED_VCPUS[VERCEL_SUPPORTED_VCPUS.length - 1];
 const VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS = 30_000;
-const REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
-  "OI_REPO_IMAGE_BUILD_ID",
-  "OI_REPO_IMAGE_CALLBACK_URL",
-  "OI_REPO_IMAGE_CALLBACK_TOKEN",
-  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
-] as const;
-const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
-  "OI_REPO_IMAGE_CALLBACK_SECRET",
-  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-] as const;
 
 function resolveVercelTimeoutMs(timeoutSeconds?: number): number {
   const requestedMs = (timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000;
@@ -271,35 +258,15 @@ export class VercelSandboxProvider implements SandboxProvider {
         );
       }
 
-      const primary = config.repositories[0];
-      if (!primary) {
-        throw new Error("environment build requires at least one repository");
-      }
-
-      const sandboxName = `build-env-${config.scopeId}-${Date.now()}`;
-      const env = this.buildBuildEnvVars({
-        userEnvVars: config.userEnvVars,
-        cloneToken: config.cloneToken,
-        sandboxId: `build-env-${config.scopeId}`,
-        repoOwner: primary.repoOwner,
-        repoName: primary.repoName,
-        sessionConfig: {
-          branch: primary.baseBranch,
-          repositories: config.repositories.map(toRepositoryConfigPayload),
-        },
-      });
+      const identity = imageBuildSandboxIdentity(config, Date.now());
+      const env = this.buildBuildEnvVars(config, identity.sandboxId);
       const created = await this.client.createSandbox(
         {
-          name: sandboxName,
+          name: identity.sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
           timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
-          tags: {
-            openinspect_framework: "open-inspect",
-            openinspect_kind: "environment-image-build",
-            openinspect_build_id: config.buildId,
-            openinspect_environment: config.scopeId,
-          },
+          tags: identity.labels,
           sourceSnapshotId: baseSnapshotId,
         },
         config.correlation
@@ -322,7 +289,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         scope_id: config.scopeId,
         session_id: created.session.id,
         command_id: command.commandId,
-        sandbox_name: sandboxName,
+        sandbox_name: identity.sandboxName,
       });
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
@@ -383,30 +350,21 @@ export class VercelSandboxProvider implements SandboxProvider {
     return envVars;
   }
 
-  /** Build-sandbox env for both repo- and environment-image builds; the caller owns identity + SESSION_CONFIG shape. */
-  private buildBuildEnvVars(config: {
-    userEnvVars?: Record<string, string>;
-    cloneToken?: string;
-    sandboxId: string;
-    repoOwner: string;
-    repoName: string;
-    sessionConfig: Record<string, unknown>;
-  }): Record<string, string> {
-    const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
-      delete envVars[key];
-    }
-
-    Object.assign(envVars, this.buildPlatformEnvVars(), {
-      SANDBOX_ID: config.sandboxId,
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
-      [IMAGE_BUILD_MODE_ENV_VAR]: "true",
-      [SESSION_CONFIG_ENV_VAR]: JSON.stringify(config.sessionConfig),
+  /** Shared build-sandbox env assembly plus Vercel's platform overlay. */
+  private buildBuildEnvVars(
+    config: ImageBuildProviderTriggerConfig,
+    sandboxId: string
+  ): Record<string, string> {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId,
+      repositories: config.repositories,
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      cloneToken: config.cloneToken,
+      baseEnvVars: config.userEnvVars,
     });
-
-    applyScmCloneEnv(envVars, scmCloneIdentity(this.providerConfig.scmProvider), config.cloneToken);
+    Object.assign(envVars, this.buildPlatformEnvVars(), {
+      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
+    });
     return envVars;
   }
 
@@ -586,11 +544,13 @@ export class VercelSandboxProvider implements SandboxProvider {
     sessionId: string
   ): Record<string, string> {
     return {
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sessionId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
+      ...buildImageBuildCallbackEnv({
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
+        token: config.callbackToken,
+        providerSessionId: sessionId,
+      }),
       [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
     };
   }

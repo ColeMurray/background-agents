@@ -3,35 +3,8 @@ import { recordSchema } from "./artifacts";
 import { sessionDiffBaselineRepositorySchema } from "./session-diffs";
 import { resolvedSessionAttachmentsSchema } from "./session-attachments";
 
-export type GitSyncStatus = "pending" | "in_progress" | "completed" | "failed";
-
-export const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
-
-export type EventType =
-  | "heartbeat"
-  | "ready"
-  | "token"
-  | "tool_call"
-  | "step_start"
-  | "step_finish"
-  | "tool_result"
-  | "git_sync"
-  | "error"
-  | "execution_complete"
-  | "artifact"
-  | "push_complete"
-  | "push_error"
-  | "warning"
-  | "session_title"
-  | "user_message";
-
-export interface AgentEvent {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
+const gitSyncStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+export type GitSyncStatus = z.infer<typeof gitSyncStatusSchema>;
 
 const tokenUsageDetailsSchema = z
   .object({
@@ -207,6 +180,15 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
 ]);
 
 export type SandboxEvent = z.infer<typeof sandboxEventSchema>;
+export type EventType = SandboxEvent["type"];
+
+export interface AgentEvent {
+  id: string;
+  type: EventType;
+  data: Record<string, unknown>;
+  messageId: string | null;
+  createdAt: number;
+}
 
 type ToolCallIdentityEvent = Pick<
   Extract<SandboxEvent, { type: "tool_call" }>,
@@ -227,30 +209,38 @@ export function toolCallIdentityKey(event: ToolCallIdentityEvent): string {
 }
 
 /**
- * Sandbox event arrays for session hydration — both the initial `subscribed`
- * replay and paginated `history_page` items, which read from the same event
- * store. Resilient to unknown/legacy event shapes: each event is validated
- * individually and dropped if it doesn't match, instead of failing the whole
- * message. A single unrecognized event must never wedge session hydration and
- * strand the client on "loading session" forever.
+ * Runtime companion to `EventType`: the enum is derived from the canonical
+ * `sandboxEventSchema` discriminator values, so it can never drift from the
+ * event union that owns the contract.
  */
-export const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
-  events.flatMap((event) => {
-    const result = sandboxEventSchema.safeParse(event);
-    return result.success ? [result.data] : [];
-  })
+export const eventTypeSchema = z.enum(
+  sandboxEventSchema.options.map((option) => option.shape.type.value) as [EventType, ...EventType[]]
 );
 
-export interface EventResponse {
-  id: string;
-  type: EventType;
-  data: Record<string, unknown>;
-  messageId: string | null;
-  createdAt: number;
-}
+export const eventResponseSchema = z.object({
+  id: z.string(),
+  type: eventTypeSchema,
+  data: recordSchema,
+  messageId: z.string().nullable(),
+  createdAt: z.number(),
+});
 
-export interface ListEventsResponse {
-  events: EventResponse[];
-  cursor?: string;
-  hasMore: boolean;
-}
+/**
+ * Pagination invariant: a page that reports more results must carry the cursor
+ * needed to fetch them. Consumers stop paginating when `cursor` is absent, so a
+ * `hasMore: true` page without a cursor would silently truncate the history and
+ * can produce a false completion from partial events.
+ */
+export const listEventsResponseSchema = z
+  .object({
+    events: z.array(eventResponseSchema),
+    cursor: z.string().min(1).optional(),
+    hasMore: z.boolean(),
+  })
+  .refine((page) => !page.hasMore || page.cursor !== undefined, {
+    message: "cursor is required when hasMore is true",
+    path: ["cursor"],
+  });
+
+export type EventResponse = z.infer<typeof eventResponseSchema>;
+export type ListEventsResponse = z.infer<typeof listEventsResponseSchema>;
