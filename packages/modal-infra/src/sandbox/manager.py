@@ -20,7 +20,9 @@ import modal
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
+    DEFAULT_SANDBOX_TIMEOUT_SECONDS,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    SANDBOX_TIMEOUT_ENV_VAR,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
@@ -35,7 +37,6 @@ from .vcs_env import inject_vcs_env_vars
 
 log = get_logger("manager")
 
-DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200  # 2 hours
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 
@@ -78,12 +79,10 @@ class SandboxConfig:
     repo_owner: str | None
     repo_name: str | None
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
-    snapshot_id: str | None = None
     session_config: SessionConfig | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
-    fallback_clone_token: str | None = None  # VCS token for legacy snapshot fallback paths
     user_env_vars: dict[str, str] | None = None  # User-provided env vars (repo secrets)
     repo_image_id: str | None = None  # Pre-built repo image ID from provider
     repo_image_sha: str | None = None  # Git SHA the repo image was built from
@@ -303,8 +302,9 @@ class SandboxManager:
         """
         Create a new sandbox for a session.
 
-        If a snapshot_id is provided, restores from that snapshot.
-        Otherwise, creates from the latest image for the repo.
+        Creates from the pre-built repo image when one is provided,
+        otherwise from the base image. Snapshot restores go through
+        restore_sandbox, not this path.
 
         Args:
             config: Sandbox configuration including repo info and session config
@@ -336,6 +336,7 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": config.control_plane_url,
                 "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
                 "REPO_OWNER": config.repo_owner or "",
                 "REPO_NAME": config.repo_name or "",
             }
@@ -343,13 +344,8 @@ class SandboxManager:
 
         # Host scoping (VCS_HOST / VCS_CLONE_USERNAME) is injected even without a
         # repository so GitLab/Bitbucket deployments don't fall back to github.com
-        # credential-helper behavior; clone tokens stay repository-gated.
-        fallback_clone_token = config.fallback_clone_token if has_repository else None
-        inject_vcs_env_vars(
-            env_vars,
-            clone_token=fallback_clone_token,
-            include_github_cli_aliases=bool(fallback_clone_token),
-        )
+        # credential-helper behavior; fresh creates never carry a clone token.
+        inject_vcs_env_vars(env_vars, clone_token=None)
 
         code_server_password: str | None = None
         if config.code_server_enabled:
@@ -366,10 +362,8 @@ class SandboxManager:
         if config.session_config:
             env_vars["SESSION_CONFIG"] = config.session_config.model_dump_json()
 
-        # Determine image to use (priority: session snapshot > repo image > base image)
-        if config.snapshot_id:
-            image = modal.Image.from_registry(f"open-inspect-snapshot:{config.snapshot_id}")
-        elif config.repo_image_id:
+        # Determine image to use (priority: repo image > base image)
+        if config.repo_image_id:
             image = modal.Image.from_id(config.repo_image_id)
             env_vars["FROM_REPO_IMAGE"] = "true"
             env_vars["REPO_IMAGE_SHA"] = config.repo_image_sha or ""
@@ -438,7 +432,6 @@ class SandboxManager:
             modal_sandbox=sandbox,
             status=SandboxStatus.WARMING,
             created_at=time.time(),
-            snapshot_id=config.snapshot_id,
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
@@ -446,7 +439,7 @@ class SandboxManager:
             tunnel_urls=extra_tunnel_urls,
         )
 
-    def take_snapshot(
+    async def take_snapshot(
         self,
         handle: SandboxHandle,
     ) -> str:
@@ -473,9 +466,7 @@ class SandboxManager:
         start_time = time.time()
         snapshot_id = f"snap-{handle.sandbox_id}-{int(time.time() * 1000)}"
 
-        # Use Modal's native snapshot_filesystem() API
-        # This returns an Image directly (not async)
-        image = handle.modal_sandbox.snapshot_filesystem(
+        image = await handle.modal_sandbox.snapshot_filesystem.aio(
             timeout=SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS
         )
 
@@ -508,7 +499,7 @@ class SandboxManager:
             SandboxHandle if found, None otherwise
         """
         try:
-            modal_sandbox = modal.Sandbox.from_id(sandbox_id)
+            modal_sandbox = await modal.Sandbox.from_id.aio(sandbox_id)
             return SandboxHandle(
                 sandbox_id=sandbox_id,
                 modal_sandbox=modal_sandbox,
@@ -583,6 +574,7 @@ class SandboxManager:
                 "SANDBOX_ID": sandbox_id,
                 "CONTROL_PLANE_URL": control_plane_url,
                 "SANDBOX_AUTH_TOKEN": sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(timeout_seconds),
                 "REPO_OWNER": repo_owner or "",
                 "REPO_NAME": repo_name or "",
                 "RESTORED_FROM_SNAPSHOT": "true",  # Signal to skip git clone

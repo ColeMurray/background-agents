@@ -7,6 +7,7 @@ import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 export interface HistoryCursor {
   timestamp: number;
   id: string;
+  sequence?: number;
 }
 
 /**

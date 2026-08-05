@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
+import type { SessionDO } from "../../src/session/durable-object";
 import {
   collectMessages,
   initNamedSession,
@@ -100,6 +102,94 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(state.sandbox.status).toBe("ready");
 
     ws!.close();
+  });
+
+  it.each([1000, 1001])(
+    "allows the active sandbox to reconnect after close code %s",
+    async (closeCode) => {
+      const name = `ws-sandbox-reconnect-${closeCode}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "ready",
+      });
+
+      const { ws: firstWs } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(firstWs).not.toBeNull();
+      firstWs!.accept();
+
+      const closed = new Promise<void>((resolve) => {
+        firstWs!.addEventListener("close", () => resolve());
+      });
+      firstWs!.close(closeCode, closeCode === 1001 ? "Going away" : "Normal closure");
+      await closed;
+
+      const stateAfterClose = await stub.fetch("http://internal/internal/state");
+      const state = await stateAfterClose.json<{ sandbox: { status: string } }>();
+      expect(state.sandbox.status).toBe("ready");
+
+      const { ws: reconnectedWs, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(response.status).toBe(101);
+      expect(reconnectedWs).not.toBeNull();
+      reconnectedWs!.accept();
+      reconnectedWs!.close();
+    }
+  );
+
+  it("refreshes heartbeat on reconnect before an old disconnect alarm runs", async () => {
+    const name = `ws-sandbox-reconnect-heartbeat-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    const { ws: firstWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(firstWs).not.toBeNull();
+    firstWs!.accept();
+
+    const closed = new Promise<void>((resolve) => {
+      firstWs!.addEventListener("close", () => resolve());
+    });
+    firstWs!.close(1001, "Going away");
+    await closed;
+
+    const oldHeartbeat = Date.now() - 10 * 60 * 1000;
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
+    });
+
+    const { ws: reconnectedWs, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(response.status).toBe(101);
+    expect(reconnectedWs).not.toBeNull();
+    reconnectedWs!.accept();
+
+    const sandboxAfterReconnect = await queryDO<{ last_heartbeat: number; status: string }>(
+      stub,
+      "SELECT last_heartbeat, status FROM sandbox"
+    );
+    expect(sandboxAfterReconnect[0].last_heartbeat).toBeGreaterThan(oldHeartbeat);
+
+    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+
+    const sandboxAfterAlarm = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    expect(sandboxAfterAlarm[0].status).toBe("ready");
+
+    reconnectedWs!.close();
   });
 
   it("failed sandbox can reconnect and self-heal to ready", async () => {

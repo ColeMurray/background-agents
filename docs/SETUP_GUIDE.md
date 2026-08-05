@@ -203,7 +203,9 @@ Critical notes before deploy:
 - Build workers before running Terraform apply.
 - Build `@open-inspect/shared` first.
 - Use two-phase Terraform deploy for DO/service bindings.
-- For Modal deployments, deploy with `modal deploy deploy.py` (not `src/app.py`).
+- For Modal deployments, eagerly build the Sandbox image with
+  `uv run python deploy.py --build-sandbox-image`, then deploy with `uv run modal deploy deploy.py`
+  (not `src/app.py`).
 
 ## Common Issues and Fixes
 
@@ -241,4 +243,5 @@ configured/deployed.
 - Debugging and observability: [docs/DEBUGGING_PLAYBOOK.md](./DEBUGGING_PLAYBOOK.md)
 - Available models: [docs/AVAILABLE_MODELS.md](./AVAILABLE_MODELS.md)
 - OpenAI model setup: [docs/OPENAI_MODELS.md](./OPENAI_MODELS.md)
+- SuperGrok model setup: [docs/GROK_MODELS.md](./GROK_MODELS.md)
 - Contribution workflow: [CONTRIBUTING.md](../CONTRIBUTING.md)

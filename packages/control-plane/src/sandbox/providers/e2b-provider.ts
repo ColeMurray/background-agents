@@ -79,10 +79,14 @@ export class E2BSandboxProvider implements SandboxProvider {
             this.providerConfig.codeServerPasswordSecret
           )
         : undefined;
-      const envVars = buildSandboxEnvVars(config, {
-        scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
-        codeServerPassword,
-      });
+      const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
+      const envVars = buildSandboxEnvVars(
+        { ...config, timeoutSeconds },
+        {
+          scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+          codeServerPassword,
+        }
+      );
       // E2B sandboxes run as a non-root user and /run is a root-owned tmpfs, so
       // the git credential helper can't create its default cache dir (/run/oi)
       // and fails before brokering a token. Point it at a user-writable path.
@@ -91,7 +95,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       const sandbox = await this.client.createSandbox({
         templateID: this.client.config.templateId,
         metadata,
-        timeoutSeconds: config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds,
+        timeoutSeconds,
         autoPause: this.providerConfig.autoPause,
         // Require secure envd access: the per-session env we upload carries
         // SANDBOX_AUTH_TOKEN + user secrets, so envd must reject writes lacking the

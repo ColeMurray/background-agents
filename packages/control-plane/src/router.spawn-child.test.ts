@@ -87,16 +87,102 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
 
-  async function makeRequest(env: Record<string, unknown>): Promise<Response> {
+  async function makeRequest(
+    env: Record<string, unknown>,
+    body: Record<string, unknown> = { title: "Child task", prompt: "Do the thing" }
+  ): Promise<Response> {
     return handleRequest(
       await signedServiceRequest(`https://test.local/sessions/${parentId}/children`, {
         method: "POST",
-        body: JSON.stringify({ title: "Child task", prompt: "Do the thing" }),
+        body: JSON.stringify(body),
         service: "linear-bot",
       }),
       env as never
     );
   }
+
+  function makeSuccessfulEnv(context: TestSpawnContext) {
+    const parentStub: DurableObjectStub = {
+      fetch: vi.fn(async () => Response.json(context)),
+    } as never;
+    const childStub: DurableObjectStub = {
+      fetch: vi.fn(async (request: Request) => {
+        const path = new URL(request.url).pathname;
+        if (path === SessionInternalPaths.init) return Response.json({ status: "ok" });
+        if (path === SessionInternalPaths.prompt) {
+          return Response.json({ messageId: "msg-1", status: "queued" });
+        }
+        return Response.json({ error: "unexpected" }, { status: 404 });
+      }),
+    } as never;
+    return {
+      childStub,
+      env: {
+        ...TEST_SERVICE_SECRETS,
+        SCM_PROVIDER: "github",
+        DB: {},
+        SESSION: {
+          idFromName: (name: string) => name,
+          get: (id: string) => (id === parentId ? parentStub : childStub),
+        },
+      },
+    };
+  }
+
+  async function getInitBody(childStub: DurableObjectStub) {
+    const initRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
+      const request = call[0] as Request;
+      return new URL(request.url).pathname === SessionInternalPaths.init;
+    })?.[0] as Request;
+    return initRequest.json<{ reasoningEffort: string | null }>();
+  }
+
+  it("inherits the parent's reasoning effort when omitted", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env, childStub } = makeSuccessfulEnv({ ...spawnContext, reasoningEffort: "high" });
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(201);
+    await expect(getInitBody(childStub)).resolves.toMatchObject({ reasoningEffort: "high" });
+  });
+
+  it("uses an explicit child reasoning effort override", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env, childStub } = makeSuccessfulEnv({ ...spawnContext, reasoningEffort: "high" });
+
+    const response = await makeRequest(env, {
+      title: "Child task",
+      prompt: "Do the thing",
+      reasoningEffort: "low",
+    });
+
+    expect(response.status).toBe(201);
+    await expect(getInitBody(childStub)).resolves.toMatchObject({ reasoningEffort: "low" });
+  });
+
+  it("clears an explicit reasoning effort incompatible with the resolved model", async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env, childStub } = makeSuccessfulEnv({ ...spawnContext, reasoningEffort: "high" });
+
+    const response = await makeRequest(env, {
+      title: "Child task",
+      prompt: "Do the thing",
+      reasoningEffort: "xhigh",
+    });
+
+    expect(response.status).toBe(201);
+    await expect(getInitBody(childStub)).resolves.toMatchObject({ reasoningEffort: null });
+  });
 
   it("returns 201 when child prompt enqueue succeeds", async () => {
     const store = makeStore("canonical-user-123");

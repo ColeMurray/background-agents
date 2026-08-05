@@ -442,7 +442,7 @@ export async function getCachedInstallationTokenWithExpiry(
 }
 
 // Re-export from shared for backward compatibility
-export type { InstallationRepository } from "@open-inspect/shared";
+export type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 
 /**
  * List all repositories accessible to the GitHub App installation.
