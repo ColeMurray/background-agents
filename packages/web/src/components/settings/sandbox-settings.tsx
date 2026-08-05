@@ -593,7 +593,7 @@ export function SandboxSettingsEditor({
         </div>
       </div>
 
-      <fieldset>
+      <fieldset className="min-w-0">
         <legend className="block text-sm font-medium text-foreground mb-1.5">Service Ports</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Ports code-server and the web terminal bind to. Leave blank for the defaults (
@@ -636,7 +636,7 @@ export function SandboxSettingsEditor({
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset className="min-w-0">
         <legend className="sr-only">Tunnel Ports</legend>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
           <span className="block text-sm font-medium text-foreground">Tunnel Ports</span>
@@ -683,7 +683,7 @@ export function SandboxSettingsEditor({
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset className="min-w-0">
         <legend className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Limit agent-spawned child sessions to prevent runaway sandbox usage.
@@ -724,7 +724,7 @@ export function SandboxSettingsEditor({
         </div>
       </fieldset>
 
-      <fieldset>
+      <fieldset className="min-w-0">
         <legend className="block text-sm font-medium text-foreground mb-1.5">Resources</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
