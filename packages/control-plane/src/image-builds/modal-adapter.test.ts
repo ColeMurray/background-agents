@@ -8,10 +8,7 @@ import type { ImageBuildFinalizationAttemptError } from "./finalization-error";
 
 function createProvider(): ModalImageBuildProvider {
   return {
-    triggerEnvironmentImageBuild: vi.fn(async () => ({
-      buildId: "build-1",
-      status: "building",
-    })),
+    triggerEnvironmentImageBuild: vi.fn(async () => undefined),
     terminateImageBuildSandbox: vi.fn(async () => undefined),
     snapshotImageBuildSandbox: vi.fn(async () => ({ success: true, imageId: "modal-image-1" })),
     deleteProviderImage: vi.fn(async () => undefined),
@@ -61,7 +58,7 @@ describe("ModalImageBuildAdapter", () => {
       cloneHost: "gitlab.com",
       cloneUsername: "oauth2",
       buildExecutionTimeoutSeconds: 1800,
-      providerSessionTimeoutMs: 2_400_000,
+      providerSessionTimeoutSeconds: 2400,
       userEnvVars: { FOO: "bar" },
       callbackUrl: "https://worker.test/image-builds/build-complete",
       failureCallbackUrl: "https://worker.test/image-builds/build-failed",

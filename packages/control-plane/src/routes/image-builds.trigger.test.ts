@@ -306,7 +306,8 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     expect(vercelProvider.triggerEnvironmentImageBuild).toHaveBeenCalledTimes(1);
     expect(vercelProvider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
-        environmentId: "acme/repo",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
         cloneToken: "clone-token",
       })
@@ -330,7 +331,8 @@ describe("POST /image-builds/trigger/repo/:owner/:name", () => {
     expect(openComputerProvider.triggerEnvironmentImageBuild).toHaveBeenCalledTimes(1);
     expect(openComputerProvider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
       expect.objectContaining({
-        environmentId: "acme/repo",
+        scopeKind: "repo",
+        scopeId: "acme/repo",
         repositories: REPO_REPOSITORIES,
         cloneToken: "clone-token",
       })

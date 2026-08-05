@@ -128,12 +128,14 @@ const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 function environmentBuildConfig() {
   return {
     buildId: "envimg-1",
-    environmentId: "env_flagship",
+    scopeKind: "environment" as const,
+    scopeId: "env_flagship",
     repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     callbackUrl: "https://control-plane.test/image-builds/build-complete",
     failureCallbackUrl: "https://control-plane.test/image-builds/build-failed",
     callbackToken: "callback-token",
     buildExecutionTimeoutSeconds: 1800,
+    onProviderSessionCreated: async () => undefined,
   };
 }
 
@@ -587,7 +589,7 @@ describe("VercelSandboxProvider", () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    const result = await provider.triggerEnvironmentImageBuild({
+    await provider.triggerEnvironmentImageBuild({
       ...environmentBuildConfig(),
       userEnvVars: {
         USER_SECRET: "value",
@@ -642,7 +644,6 @@ describe("VercelSandboxProvider", () => {
       }),
       undefined
     );
-    expect(result).toEqual({ buildId: "envimg-1", status: "building" });
   });
 
   it("reports a compatible authoritative runtime version for image builds", () => {
@@ -657,9 +658,10 @@ describe("VercelSandboxProvider", () => {
     const onProviderSessionCreated = vi.fn(async () => undefined);
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    const result = await provider.triggerEnvironmentImageBuild({
+    await provider.triggerEnvironmentImageBuild({
       buildId: "envimg-1",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
@@ -713,7 +715,6 @@ describe("VercelSandboxProvider", () => {
       }),
       undefined
     );
-    expect(result).toEqual({ buildId: "envimg-1", status: "building" });
   });
 
   it("honors an explicit build timeout below the Vercel limit for image builds", async () => {

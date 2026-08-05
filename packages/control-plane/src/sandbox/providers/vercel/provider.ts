@@ -8,7 +8,6 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
-import type { CorrelationContext } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
 import {
   applyScmCloneEnv,
@@ -25,6 +24,7 @@ import {
   SandboxProviderError,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type ImageBuildProviderTriggerConfig,
   type RestoreConfig,
   type RestoreResult,
   type SandboxProvider,
@@ -87,28 +87,6 @@ export interface VercelProviderConfig {
   apiBaseUrl?: string;
   token: string;
   teamId?: string;
-}
-
-export interface TriggerVercelEnvironmentImageBuildConfig {
-  buildId: string;
-  environmentId: string;
-  /** Repositories in position order ([0] = primary), cloned at their base branches. */
-  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
-  callbackUrl: string;
-  failureCallbackUrl: string;
-  callbackToken: string;
-  userEnvVars?: Record<string, string>;
-  cloneToken?: string;
-  buildExecutionTimeoutSeconds: number;
-  /** Provider-session lifetime, including deferred finalization headroom. */
-  providerSessionTimeoutSeconds?: number;
-  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
-  correlation?: CorrelationContext;
-}
-
-export interface TriggerVercelEnvironmentImageBuildResult {
-  buildId: string;
-  status: string;
 }
 
 export class VercelSandboxProvider implements SandboxProvider {
@@ -287,9 +265,7 @@ export class VercelSandboxProvider implements SandboxProvider {
    * SESSION_CONFIG carries the repository list so the list-native runtime
    * clones and sets up every repository.
    */
-  async triggerEnvironmentImageBuild(
-    config: TriggerVercelEnvironmentImageBuildConfig
-  ): Promise<TriggerVercelEnvironmentImageBuildResult> {
+  async triggerEnvironmentImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
     try {
       const baseSnapshotId = await this.resolveBaseSnapshotId(config.correlation);
       if (!baseSnapshotId) {
@@ -303,11 +279,11 @@ export class VercelSandboxProvider implements SandboxProvider {
         throw new Error("environment build requires at least one repository");
       }
 
-      const sandboxName = `build-env-${config.environmentId}-${Date.now()}`;
+      const sandboxName = `build-env-${config.scopeId}-${Date.now()}`;
       const env = this.buildBuildEnvVars({
         userEnvVars: config.userEnvVars,
         cloneToken: config.cloneToken,
-        sandboxId: `build-env-${config.environmentId}`,
+        sandboxId: `build-env-${config.scopeId}`,
         repoOwner: primary.repoOwner,
         repoName: primary.repoName,
         sessionConfig: {
@@ -327,16 +303,14 @@ export class VercelSandboxProvider implements SandboxProvider {
             openinspect_framework: "open-inspect",
             openinspect_kind: "environment-image-build",
             openinspect_build_id: config.buildId,
-            openinspect_environment: config.environmentId,
+            openinspect_environment: config.scopeId,
           },
           sourceSnapshotId: baseSnapshotId,
         },
         config.correlation
       );
 
-      if (config.onProviderSessionCreated) {
-        await config.onProviderSessionCreated(created.session.id);
-      }
+      await config.onProviderSessionCreated(created.session.id);
 
       const command = await this.launchEntrypoint(
         created.session.id,
@@ -346,13 +320,12 @@ export class VercelSandboxProvider implements SandboxProvider {
 
       log.info("vercel.environment_image_build_triggered", {
         build_id: config.buildId,
-        environment_id: config.environmentId,
+        scope_kind: config.scopeKind,
+        scope_id: config.scopeId,
         session_id: created.session.id,
         command_id: command.commandId,
         sandbox_name: sandboxName,
       });
-
-      return { buildId: config.buildId, status: "building" };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to trigger Vercel environment image build", error);

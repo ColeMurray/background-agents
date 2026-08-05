@@ -337,7 +337,8 @@ describe("OpenComputerSandboxProvider", () => {
 
     await provider.triggerEnvironmentImageBuild({
       buildId: "build-bb",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
       callbackUrl: "https://control.example/image-builds/build-complete",
       failureCallbackUrl: "https://control.example/image-builds/build-failed",
@@ -665,7 +666,8 @@ describe("OpenComputerSandboxProvider", () => {
 
     await provider.triggerEnvironmentImageBuild({
       buildId: "build-1",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
       callbackUrl: "https://control.example/image-builds/build-complete",
       failureCallbackUrl: "https://control.example/image-builds/build-failed",
@@ -734,7 +736,8 @@ describe("OpenComputerSandboxProvider", () => {
 
     await provider.triggerEnvironmentImageBuild({
       buildId: "envimg-1",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
@@ -791,12 +794,14 @@ describe("OpenComputerSandboxProvider", () => {
     await expect(
       provider.triggerEnvironmentImageBuild({
         buildId: "build-1",
-        environmentId: "env_flagship",
+        scopeKind: "environment",
+        scopeId: "env_flagship",
         repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
         callbackUrl: "https://control.example/image-builds/build-complete",
         failureCallbackUrl: "https://control.example/image-builds/build-failed",
         callbackToken: "callback-token",
         buildExecutionTimeoutSeconds: 1800,
+        onProviderSessionCreated: vi.fn(async () => undefined),
       })
     ).rejects.toThrow("Failed to trigger OpenComputer environment image build");
 

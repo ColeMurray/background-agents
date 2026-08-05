@@ -46,7 +46,8 @@ describe("OpenComputerImageBuildAdapter", () => {
     await adapter.startBuild(createPlan(), { bindProviderSession });
 
     expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
-      environmentId: "acme/repo",
+      scopeKind: "repo",
+      scopeId: "acme/repo",
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       callbackUrl: "https://worker.test/image-builds/build-complete",
@@ -57,6 +58,10 @@ describe("OpenComputerImageBuildAdapter", () => {
       providerSessionTimeoutSeconds: 2401,
       userEnvVars: { FOO: "bar" },
       onProviderSessionCreated: bindProviderSession,
+      correlation: {
+        request_id: "request-1",
+        trace_id: "trace-1",
+      },
     });
   });
 

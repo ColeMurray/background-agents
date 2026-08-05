@@ -22,9 +22,8 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
     await this.provider.triggerEnvironmentImageBuild({
-      // The provider build API is keyed by environmentId (used only for
-      // sandbox naming/labels); scope.id fills it for every scope kind.
-      environmentId: plan.scope.id,
+      scopeKind: plan.scope.kind,
+      scopeId: plan.scope.id,
       repositories: plan.repositories,
       buildId: plan.buildId,
       callbackUrl: plan.callbackUrl,
@@ -37,6 +36,7 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
         plan.buildTimeoutMs
       ),
       onProviderSessionCreated: callbacks.bindProviderSession,
+      correlation: plan.correlation,
     });
   }
 

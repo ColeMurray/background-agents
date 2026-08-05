@@ -46,7 +46,8 @@ describe("VercelImageBuildAdapter", () => {
     await adapter.startBuild(createPlan(), { bindProviderSession });
 
     expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
-      environmentId: "acme/repo",
+      scopeKind: "repo",
+      scopeId: "acme/repo",
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       callbackUrl: "https://worker.test/image-builds/build-complete",
