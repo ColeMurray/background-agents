@@ -19,7 +19,7 @@ export class ModalImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly provider: ModalImageBuildProvider) {}
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
-    await this.provider.triggerEnvironmentImageBuild({
+    await this.provider.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
       buildId: plan.buildId,

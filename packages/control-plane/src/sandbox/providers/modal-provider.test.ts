@@ -505,7 +505,7 @@ describe("ModalSandboxProvider", () => {
       const correlation = { request_id: "request-1", trace_id: "trace-1" };
       const onProviderSessionCreated = vi.fn(async () => undefined);
 
-      await provider.triggerEnvironmentImageBuild({
+      await provider.triggerImageBuild({
         buildId: "build-123",
         scopeKind: "repo",
         scopeId: "acme/repo",

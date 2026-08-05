@@ -335,7 +335,7 @@ describe("OpenComputerSandboxProvider", () => {
       codeServerPasswordSecret: "secret",
     });
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "build-bb",
       scopeKind: "environment",
       scopeId: "env_flagship",
@@ -666,7 +666,7 @@ describe("OpenComputerSandboxProvider", () => {
       llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
     });
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "build-1",
       scopeKind: "environment",
       scopeId: "env_flagship",
@@ -738,7 +738,7 @@ describe("OpenComputerSandboxProvider", () => {
       codeServerPasswordSecret: "secret",
     });
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "envimg-1",
       scopeKind: "environment",
       scopeId: "env_flagship",
@@ -798,7 +798,7 @@ describe("OpenComputerSandboxProvider", () => {
     });
 
     await expect(
-      provider.triggerEnvironmentImageBuild({
+      provider.triggerImageBuild({
         buildId: "build-1",
         scopeKind: "environment",
         scopeId: "env_flagship",

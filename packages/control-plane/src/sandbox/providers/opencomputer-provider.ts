@@ -354,7 +354,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
    * SESSION_CONFIG carries the repository list so the list-native runtime
    * clones and sets up every repository.
    */
-  async triggerEnvironmentImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
+  async triggerImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
     const template = this.requireTemplate();
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;

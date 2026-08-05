@@ -5,7 +5,7 @@ import type { ImageBuildPlan } from "./types";
 
 function createProvider(): OpenComputerSandboxProvider {
   return {
-    triggerEnvironmentImageBuild: vi.fn(async () => undefined),
+    triggerImageBuild: vi.fn(async () => undefined),
     takeSnapshot: vi.fn(async () => ({ success: true, imageId: "oc-checkpoint-1" })),
     deleteSandbox: vi.fn(async () => ({ success: true })),
     deleteProviderImage: vi.fn(async () => undefined),
@@ -45,7 +45,7 @@ describe("OpenComputerImageBuildAdapter", () => {
 
     await adapter.startBuild(createPlan(), { bindProviderSession });
 
-    expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
+    expect(provider.triggerImageBuild).toHaveBeenCalledWith({
       scopeKind: "repo",
       scopeId: "acme/repo",
       buildId: "build-1",

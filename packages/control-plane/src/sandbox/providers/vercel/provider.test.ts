@@ -591,7 +591,7 @@ describe("VercelSandboxProvider", () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       userEnvVars: {
         USER_SECRET: "value",
@@ -660,7 +660,7 @@ describe("VercelSandboxProvider", () => {
     const onProviderSessionCreated = vi.fn(async () => undefined);
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "envimg-1",
       scopeKind: "environment",
       scopeId: "env_flagship",
@@ -725,7 +725,7 @@ describe("VercelSandboxProvider", () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       providerSessionTimeoutSeconds: 40 * 60,
     });
@@ -737,7 +737,7 @@ describe("VercelSandboxProvider", () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       providerSessionTimeoutSeconds: 70 * 60,
     });
@@ -767,7 +767,7 @@ describe("VercelSandboxProvider", () => {
     const provider = new VercelSandboxProvider(client, providerConfig);
     const onProviderSessionCreated = vi.fn(async () => undefined);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       onProviderSessionCreated,
     });

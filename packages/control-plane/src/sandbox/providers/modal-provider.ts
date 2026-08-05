@@ -53,7 +53,7 @@ export interface SnapshotModalImageBuildConfig {
 }
 
 export interface ModalImageBuildProvider {
-  triggerEnvironmentImageBuild(config: ModalImageBuildTriggerConfig): Promise<void>;
+  triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void>;
   terminateImageBuildSandbox(config: TerminateModalImageBuildConfig): Promise<void>;
   snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult>;
   deleteProviderImage(
@@ -303,7 +303,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
-  async triggerEnvironmentImageBuild(config: ModalImageBuildTriggerConfig): Promise<void> {
+  async triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void> {
     const created = await this.createImageBuildSandbox(config);
     await config.onProviderSessionCreated(created.providerSessionId);
     await this.startImageBuildSandbox({

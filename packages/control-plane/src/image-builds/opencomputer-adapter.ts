@@ -21,7 +21,7 @@ export class OpenComputerImageBuildAdapter implements ImageBuildAdapter {
   constructor(private readonly provider: OpenComputerSandboxProvider) {}
 
   async startBuild(plan: ImageBuildPlan, callbacks: ImageBuildStartCallbacks): Promise<void> {
-    await this.provider.triggerEnvironmentImageBuild({
+    await this.provider.triggerImageBuild({
       scopeKind: plan.scope.kind,
       scopeId: plan.scope.id,
       repositories: plan.repositories,

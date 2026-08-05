@@ -262,7 +262,7 @@ export class VercelSandboxProvider implements SandboxProvider {
    * SESSION_CONFIG carries the repository list so the list-native runtime
    * clones and sets up every repository.
    */
-  async triggerEnvironmentImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
+  async triggerImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
     try {
       const baseSnapshotId = await this.resolveBaseSnapshotId(config.correlation);
       if (!baseSnapshotId) {
