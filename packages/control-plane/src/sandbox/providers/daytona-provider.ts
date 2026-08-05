@@ -11,7 +11,12 @@ import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
 import type { DaytonaRestClient, DaytonaCreateSandboxParams } from "../daytona-rest-client";
 import { DaytonaApiError, DaytonaNotFoundError } from "../daytona-rest-client";
-import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
+import {
+  buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  deriveVncPassword,
+  scmCloneIdentity,
+} from "../sandbox-env";
 import {
   SandboxProviderError,
   type CreateSandboxConfig,
@@ -39,7 +44,7 @@ const DEFAULT_PREVIEW_EXPIRY_SECONDS = 3900;
 export interface DaytonaProviderConfig {
   scmProvider: SourceControlProviderName;
   gitlabAccessToken?: string;
-  /** Secret used for HMAC derivation of code-server passwords */
+  /** Secret used for domain-separated sandbox access password derivation. */
   codeServerPasswordSecret: string;
 }
 
@@ -87,13 +92,15 @@ export class DaytonaSandboxProvider implements SandboxProvider {
 
       const sandbox = await this.client.createSandbox(params);
 
-      const { codeServerUrl, codeServerPassword, tunnelUrls } = await this.buildTunnelUrls(
-        sandbox.id,
-        config.sandboxId,
-        config.timeoutSeconds,
-        config.codeServerEnabled,
-        config.sandboxSettings
-      );
+      const { codeServerUrl, codeServerPassword, vncUrl, vncPassword, tunnelUrls } =
+        await this.buildTunnelUrls(
+          sandbox.id,
+          config.sandboxId,
+          config.timeoutSeconds,
+          config.codeServerEnabled,
+          config.vncEnabled,
+          config.sandboxSettings
+        );
 
       return {
         sandboxId: config.sandboxId,
@@ -102,6 +109,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,
+        vncUrl,
+        vncPassword,
         tunnelUrls,
       };
     } catch (error) {
@@ -138,6 +147,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       // doesn't mask a successful resume.
       let codeServerUrl: string | undefined;
       let codeServerPassword: string | undefined;
+      let vncUrl: string | undefined;
+      let vncPassword: string | undefined;
       let tunnelUrls: Record<string, string> | undefined;
       try {
         const tunnels = await this.buildTunnelUrls(
@@ -145,10 +156,13 @@ export class DaytonaSandboxProvider implements SandboxProvider {
           config.sandboxId,
           config.timeoutSeconds,
           config.codeServerEnabled,
+          config.vncEnabled,
           config.sandboxSettings
         );
         codeServerUrl = tunnels.codeServerUrl;
         codeServerPassword = tunnels.codeServerPassword;
+        vncUrl = tunnels.vncUrl;
+        vncPassword = tunnels.vncPassword;
         tunnelUrls = tunnels.tunnelUrls;
       } catch (tunnelError) {
         log.warn("daytona.resume_tunnel_urls_failed", {
@@ -162,6 +176,8 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         providerObjectId: sandbox.id,
         codeServerUrl,
         codeServerPassword,
+        vncUrl,
+        vncPassword,
         tunnelUrls,
       };
     } catch (error) {
@@ -200,6 +216,9 @@ export class DaytonaSandboxProvider implements SandboxProvider {
             this.providerConfig.codeServerPasswordSecret
           )
         : undefined,
+      vncPassword: config.vncEnabled
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.codeServerPasswordSecret)
+        : undefined,
     });
   }
 
@@ -227,17 +246,22 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     logicalSandboxId: string,
     timeoutSeconds: number | undefined,
     codeServerEnabled: boolean | undefined,
+    vncEnabled: boolean | undefined,
     sandboxSettings: SandboxSettings | undefined
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;
+    vncUrl?: string;
+    vncPassword?: string;
     tunnelUrls?: Record<string, string>;
   }> {
     const expirySeconds = resolvePreviewExpirySeconds(timeoutSeconds);
-    const { codeServerPort } = resolveServicePorts(sandboxSettings);
+    const { codeServerPort, vncPort } = resolveServicePorts(sandboxSettings);
     let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
+    let vncUrl: string | undefined;
+    let vncPassword: string | undefined;
 
     if (codeServerEnabled) {
       const preview = await this.client.getSignedPreviewUrl(
@@ -251,6 +275,20 @@ export class DaytonaSandboxProvider implements SandboxProvider {
         this.providerConfig.codeServerPasswordSecret
       );
       tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
+    }
+
+    if (vncEnabled) {
+      const preview = await this.client.getSignedPreviewUrl(
+        daytonaSandboxId,
+        vncPort,
+        expirySeconds
+      );
+      vncUrl = preview.url;
+      vncPassword = await deriveVncPassword(
+        logicalSandboxId,
+        this.providerConfig.codeServerPasswordSecret
+      );
+      tunnelPorts = tunnelPorts.filter((p) => p !== vncPort);
     }
 
     let tunnelUrls: Record<string, string> | undefined;
@@ -268,7 +306,7 @@ export class DaytonaSandboxProvider implements SandboxProvider {
       tunnelUrls = Object.fromEntries(entries);
     }
 
-    return { codeServerUrl, codeServerPassword, tunnelUrls };
+    return { codeServerUrl, codeServerPassword, vncUrl, vncPassword, tunnelUrls };
   }
 
   // -----------------------------------------------------------------------

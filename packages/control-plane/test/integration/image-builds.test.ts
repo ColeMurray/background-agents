@@ -1064,12 +1064,14 @@ describe("Image builds", () => {
       const row = await selectScopeForSpawn(REPO_SCOPE, "modal");
       expect(row?.id).toBe("rp-fp");
 
-      const onDefault = await evaluateImageBuildForSpawn(row, defaultBranchSet);
+      const onDefault = await evaluateImageBuildForSpawn(row, defaultBranchSet, false);
       expect(onDefault.outcome).toBe("selected");
 
-      const onFeature = await evaluateImageBuildForSpawn(row, [
-        { repoOwner: "acme", repoName: "web", baseBranch: "feature/x" },
-      ]);
+      const onFeature = await evaluateImageBuildForSpawn(
+        row,
+        [{ repoOwner: "acme", repoName: "web", baseBranch: "feature/x" }],
+        false
+      );
       expect(onFeature).toEqual({
         outcome: "miss",
         reason: "fingerprint_mismatch",
@@ -1091,7 +1093,7 @@ describe("Image builds", () => {
       });
 
       const row = await selectScopeForSpawn(REPO_SCOPE, "modal");
-      const result = await evaluateImageBuildForSpawn(row, repositories);
+      const result = await evaluateImageBuildForSpawn(row, repositories, false);
 
       expect(result).toEqual({
         outcome: "miss",

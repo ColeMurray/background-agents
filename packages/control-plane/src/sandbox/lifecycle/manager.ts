@@ -120,6 +120,12 @@ export interface SandboxStorage {
   clearSandboxCodeServer(): void;
   /** Clear the code-server URL while preserving the stored password */
   clearSandboxCodeServerUrl?(): void;
+  /** Update VNC URL and (encrypted) password on the sandbox row */
+  updateSandboxVnc(url: string, password: string): void | Promise<void>;
+  /** Clear stale VNC URL and password */
+  clearSandboxVnc(): void;
+  /** Clear the VNC URL while preserving the stored password */
+  clearSandboxVncUrl?(): void;
   /** Update tunnel URLs for extra ports on the sandbox row */
   updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
   /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
@@ -432,6 +438,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
       const repositories = this.storage.getSessionRepositories();
       const multiRepoFields = multiRepoSpawnFields(repositories);
+      const vncEnabled = session.vnc_enabled === 1;
 
       // Prebuilt-image selection: an environment session matches its
       // environment's image against the session's own repository snapshot
@@ -446,12 +453,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (session.environment_id) {
         selectedImage = await this.lookupImageBuildForSpawn(
           { kind: "environment", id: session.environment_id },
-          repositories
+          repositories,
+          vncEnabled
         );
       } else if (hasRepository && repositories.length === 1) {
         selectedImage = await this.lookupImageBuildForSpawn(
           repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
-          repositories
+          repositories,
+          vncEnabled
         );
       }
 
@@ -479,6 +488,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
@@ -529,6 +539,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+      }
+      if (result.vncUrl && result.vncPassword) {
+        await this.storeAndBroadcastVnc(result.vncUrl, result.vncPassword);
       }
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
@@ -607,12 +620,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
-    repositories: SessionRepositoryInfo[]
+    repositories: SessionRepositoryInfo[],
+    vncEnabled: boolean
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
       const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories);
+      const result = await evaluateImageBuildForSpawn(image, repositories, vncEnabled);
       if (result.outcome === "selected") {
         this.log.info("Using prebuilt image", {
           event: "image_build.spawn_selected",
@@ -752,6 +766,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       const repositories = this.storage.getSessionRepositories();
       const codeServerEnabled = session.code_server_enabled === 1;
+      const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
@@ -770,6 +785,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
@@ -782,6 +798,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         }
         if (result.codeServerUrl && result.codeServerPassword) {
           await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+        }
+        if (result.vncUrl && result.vncPassword) {
+          await this.storeAndBroadcastVnc(result.vncUrl, result.vncPassword);
         }
         await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
@@ -897,6 +916,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
         codeServerEnabled: session.code_server_enabled === 1,
+        vncEnabled: session.vnc_enabled === 1,
         sandboxSettings,
       });
 
@@ -921,6 +941,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+      }
+      if (result.vncUrl && result.vncPassword) {
+        await this.storeAndBroadcastVnc(result.vncUrl, result.vncPassword);
       }
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
@@ -1033,19 +1056,21 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Clear preview URLs after a sandbox is no longer reachable.
    *
-   * Daytona resumes preserve the code-server password, so only the URL is
-   * cleared. Modal-style snapshots rotate the password on restore, so both
-   * values are removed.
+   * Persistent resumes preserve code-server and VNC passwords, so only their
+   * URLs are cleared. Snapshot restores rotate passwords, so both values are
+   * removed.
    */
   private clearSandboxAccessState(): void {
     if (this.usesProviderManagedStop() && this.storage.clearSandboxCodeServerUrl) {
       this.storage.clearSandboxCodeServerUrl();
+      this.storage.clearSandboxVncUrl?.();
       this.storage.clearSandboxTunnelUrls();
       this.storage.clearSandboxTtyd();
       return;
     }
 
     this.storage.clearSandboxCodeServer();
+    this.storage.clearSandboxVnc();
     this.storage.clearSandboxTunnelUrls();
     this.storage.clearSandboxTtyd();
   }
@@ -1368,6 +1393,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     await this.storage.updateSandboxCodeServer(url, password);
     this.broadcaster.broadcast({
       type: "code_server_info",
+      url,
+      password,
+    });
+  }
+
+  private async storeAndBroadcastVnc(url: string, password: string): Promise<void> {
+    this.log.info("Storing and broadcasting VNC info", { url });
+    await this.storage.updateSandboxVnc(url, password);
+    this.broadcaster.broadcast({
+      type: "vnc_info",
       url,
       password,
     });

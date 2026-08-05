@@ -60,6 +60,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -88,6 +89,8 @@ function createMockSandbox(
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
@@ -197,6 +200,24 @@ function createMockStorage(
       if (sandbox) {
         sandbox.code_server_url = null;
       }
+    }),
+    updateSandboxVnc: vi.fn(async (url: string, password: string) => {
+      calls.push(`updateSandboxVnc:${url}`);
+      if (sandbox) {
+        sandbox.vnc_url = url;
+        sandbox.vnc_password = password;
+      }
+    }),
+    clearSandboxVnc: vi.fn(() => {
+      calls.push("clearSandboxVnc");
+      if (sandbox) {
+        sandbox.vnc_url = null;
+        sandbox.vnc_password = null;
+      }
+    }),
+    clearSandboxVncUrl: vi.fn(() => {
+      calls.push("clearSandboxVncUrl");
+      if (sandbox) sandbox.vnc_url = null;
     }),
     updateSandboxTunnelUrls: vi.fn(async (urls: Record<string, string>) => {
       calls.push(`updateSandboxTunnelUrls`);
@@ -364,6 +385,42 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_status")
       ).toBe(true);
+    });
+
+    it("stores and broadcasts VNC access returned by the provider", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession({ vnc_enabled: 1 }), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async (config) => ({
+          sandboxId: config.sandboxId,
+          status: "connecting",
+          createdAt: Date.now(),
+          vncUrl: "https://vnc.test",
+          vncPassword: "secret",
+        })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ vncEnabled: true })
+      );
+      expect(storage.updateSandboxVnc).toHaveBeenCalledWith("https://vnc.test", "secret");
+      expect(broadcaster.messages).toContainEqual({
+        type: "vnc_info",
+        url: "https://vnc.test",
+        password: "secret",
+      });
     });
 
     it("logs one terminal sandbox.spawn event for success", async () => {
@@ -1527,6 +1584,7 @@ describe("SandboxLifecycleManager", () => {
       );
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
       expect(storage.calls).toContain("clearSandboxCodeServer");
+      expect(storage.calls).toContain("clearSandboxVnc");
     });
 
     it("does not explicitly stop providers when the capability is disabled", async () => {
@@ -1574,6 +1632,8 @@ describe("SandboxLifecycleManager", () => {
         last_activity: now - 11 * 60 * 1000,
         code_server_url: "https://code.test",
         code_server_password: "encrypted-password",
+        vnc_url: "https://vnc.test",
+        vnc_password: "encrypted-vnc-password",
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const stopSandbox = vi.fn(async () => ({ success: true }));
@@ -1603,6 +1663,9 @@ describe("SandboxLifecycleManager", () => {
       );
       expect(storage.calls).toContain("clearSandboxCodeServerUrl");
       expect(storage.calls).not.toContain("clearSandboxCodeServer");
+      expect(storage.calls).toContain("clearSandboxVncUrl");
+      expect(storage.calls).not.toContain("clearSandboxVnc");
+      expect(sandbox.vnc_password).toBe("encrypted-vnc-password");
     });
 
     it("calls onSandboxTerminating callback on heartbeat stale", async () => {
@@ -1983,6 +2046,23 @@ describe("SandboxLifecycleManager", () => {
           prebuiltImageId: "img-abc123",
           prebuiltImageSha: "sha-def456",
         })
+      );
+    });
+
+    it("does not boot a VNC-enabled session from a v56 repo image", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({
+        imageBuildLookup,
+        session: createMockSession({ vnc_enabled: 1 }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ prebuiltImageId: null, prebuiltImageSha: null, vncEnabled: true })
       );
     });
 
