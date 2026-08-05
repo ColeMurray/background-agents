@@ -152,7 +152,7 @@ export default tool({
       .boolean()
       .optional()
       .describe(
-        "Open the pull request as a draft. Set to true to open a draft PR, or false for a ready-for-review PR. Note: this may be overridden by policy."
+        "Whether to open the pull request as a draft. Set to true only when the user explicitly asks for a draft; otherwise omit this field so the pull request is ready for review. Note: repository policy may still require draft mode."
       ),
   },
   async execute(args, context) {

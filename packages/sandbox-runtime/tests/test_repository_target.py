@@ -34,7 +34,10 @@ def _plugin_module(tmp_path: Path) -> Path:
     zod_package.mkdir(parents=True)
     (zod_package / "package.json").write_text('{"type":"module","exports":"./index.js"}')
     (zod_package / "index.js").write_text(
-        "const schema = { describe() { return this; }, optional() { return this; } };"
+        "const schema = {"
+        " describe(description) { this.description = description; return this; },"
+        " optional() { return this; }"
+        "};"
         "export const z = {"
         " string() { return Object.create(schema); },"
         " boolean() { return Object.create(schema); }"
@@ -87,6 +90,30 @@ def test_parses_nested_owner_without_manifest(tmp_path: Path) -> None:
 @pytest.mark.parametrize("repo", ["web", "/web", "group/", "group//web"])
 def test_rejects_malformed_repository_names(tmp_path: Path, repo: str) -> None:
     assert _resolve(tmp_path, repo, []) is None
+
+
+def test_draft_mode_requires_explicit_user_request(tmp_path: Path) -> None:
+    script = """
+      console.log = () => {};
+      const { default: pullRequestTool } = await import(process.argv[1]);
+      process.stdout.write(pullRequestTool.args.draft.description);
+    """
+    result = subprocess.run(
+        [
+            NODE_BINARY,
+            "--input-type=module",
+            "-e",
+            script,
+            _plugin_module(tmp_path).as_uri(),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+    assert "true only when the user explicitly asks for a draft" in result.stdout
+    assert "otherwise omit this field" in result.stdout
 
 
 @pytest.mark.parametrize(
