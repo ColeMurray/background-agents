@@ -7,14 +7,15 @@
  */
 
 import type {
-  ListArtifactsResponse,
   AgentResponse,
   ToolCallSummary,
   ArtifactInfo,
   MediaArtifactInfo,
   ArtifactType,
 } from "../types/artifacts";
-import type { EventResponse, ListEventsResponse } from "../types/sandbox-events";
+import { listArtifactsResponseSchema } from "../types/artifacts";
+import type { EventResponse } from "../types/sandbox-events";
+import { listEventsResponseSchema } from "../types/sandbox-events";
 import type { Logger } from "../logger";
 import {
   buildOutboundAuthHeaders,
@@ -123,7 +124,23 @@ export async function extractAgentResponse(
         };
       }
 
-      const data = (await response.json()) as ListEventsResponse;
+      const parsed = listEventsResponseSchema.safeParse(await response.json());
+      if (!parsed.success) {
+        log.error("control_plane.fetch_events", {
+          ...base,
+          outcome: "error",
+          error: new Error("Invalid events response"),
+          duration_ms: Date.now() - startTime,
+        });
+        return {
+          textContent: "",
+          toolCalls: [],
+          artifacts: [],
+          mediaArtifacts: [],
+          success: false,
+        };
+      }
+      const data = parsed.data;
       allEvents.push(...data.events);
       cursor = data.hasMore ? data.cursor : undefined;
     } while (cursor);
@@ -262,7 +279,16 @@ async function fetchSessionArtifacts(
       return [];
     }
 
-    const data = (await response.json()) as ListArtifactsResponse;
+    const parsed = listArtifactsResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("control_plane.fetch_artifacts", {
+        ...base,
+        outcome: "error",
+        error: new Error("Invalid artifacts response"),
+      });
+      return [];
+    }
+    const data = parsed.data;
     return data.artifacts
       .filter((artifact) => artifact.type !== "screenshot" && artifact.type !== "video")
       .filter((artifact) => isArtifactInEventRange(artifact.createdAt, eventRange))

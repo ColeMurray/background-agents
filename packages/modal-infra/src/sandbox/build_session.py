@@ -33,6 +33,20 @@ DEFAULT_BUILD_TIMEOUT_SECONDS = 1800
 MAX_BUILD_TIMEOUT_SECONDS = 3600
 LAUNCH_PROTOCOL_TAG = "openinspect_launch_protocol"
 
+# Keys scrubbed from user env vars before a build sandbox launches — the
+# Python sibling of the control plane's RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS
+# (packages/control-plane/src/sandbox/sandbox-env.ts). The intended divergence
+# between the two sets is pinned by a contract test in
+# tests/test_build_sandbox_lifecycle.py.
+RESERVED_USER_ENV_KEYS = (
+    BUILD_ID_ENV,
+    CALLBACK_URL_ENV,
+    FAILURE_CALLBACK_URL_ENV,
+    CALLBACK_TOKEN_ENV,
+    PROVIDER_SESSION_ID_ENV,
+    MODAL_SANDBOX_ID_ENV,
+)
+
 
 class BuildSessionNotFoundError(LookupError):
     """The requested provider session is absent or bound to another build."""
@@ -60,14 +74,7 @@ class ModalBuildSessionService:
         start_time = time.time()
         primary = repositories[0]
         env_vars = dict(user_env_vars or {})
-        for name in (
-            BUILD_ID_ENV,
-            CALLBACK_URL_ENV,
-            FAILURE_CALLBACK_URL_ENV,
-            CALLBACK_TOKEN_ENV,
-            PROVIDER_SESSION_ID_ENV,
-            MODAL_SANDBOX_ID_ENV,
-        ):
+        for name in RESERVED_USER_ENV_KEYS:
             env_vars.pop(name, None)
         env_vars.update(
             {

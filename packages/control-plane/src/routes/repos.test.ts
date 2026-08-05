@@ -216,4 +216,66 @@ describe("repository metadata routes", () => {
     });
     expect(mockLogger.warn).not.toHaveBeenCalled();
   });
+
+  it("rejects malformed metadata before persistence", async () => {
+    const path = "/repos/acme/widget/metadata";
+    const { handler, match } = getUpdateHandler(path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "PUT",
+        body: JSON.stringify({ aliases: ["api", 42] }),
+      }),
+      { REPOS_CACHE: {} as KVNamespace } as Env,
+      match,
+      createContext()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid repository metadata" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed JSON with the same 400 as an invalid object", async () => {
+    const path = "/repos/acme/widget/metadata";
+    const { handler, match } = getUpdateHandler(path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, { method: "PUT", body: "{" }),
+      { REPOS_CACHE: {} as KVNamespace } as Env,
+      match,
+      createContext()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid repository metadata" });
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockCacheDelete).not.toHaveBeenCalled();
+  });
+
+  it("persists only schema fields and drops unknown keys", async () => {
+    const path = "/repos/acme/widget/metadata";
+    const { handler, match } = getUpdateHandler(path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          description: "Updated description",
+          keywords: ["billing"],
+          notAField: "dropped",
+        }),
+      }),
+      { REPOS_CACHE: {} as KVNamespace } as Env,
+      match,
+      createContext()
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockUpsert).toHaveBeenCalledWith("acme", "widget", {
+      description: "Updated description",
+      keywords: ["billing"],
+    });
+  });
 });

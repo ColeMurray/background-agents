@@ -590,9 +590,15 @@ async def api_create_build_sandbox(
             default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
         )
-        timeout_seconds = _validated_timeout_seconds(
+        # legacy_field: transitional dual-read for the build_timeout_seconds ->
+        # provider_session_timeout_seconds rename. The control plane and Modal
+        # deploy the same commit via independent pipelines, so an older control
+        # plane may still send only the legacy key during the skew window.
+        # Drop the alias once both planes are known to be past the rename.
+        provider_session_timeout_seconds = _validated_timeout_seconds(
             request,
-            "build_timeout_seconds",
+            "provider_session_timeout_seconds",
+            legacy_field="build_timeout_seconds",
             default_seconds=(
                 DEFAULT_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
             ),
@@ -621,7 +627,7 @@ async def api_create_build_sandbox(
             clone_username=clone_username,
             user_env_vars=request.get("user_env_vars") or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=provider_session_timeout_seconds,
         )
         return {
             "success": True,
@@ -801,8 +807,12 @@ def _validated_timeout_seconds(
     *,
     default_seconds: int,
     max_seconds: int,
+    legacy_field: str | None = None,
 ) -> int:
     value = request.get(field)
+    if value is None and legacy_field is not None:
+        field = legacy_field
+        value = request.get(field)
     if value is None:
         return default_seconds
     if not isinstance(value, int) or isinstance(value, bool):

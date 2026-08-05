@@ -21,14 +21,16 @@ import {
   type OpenComputerSecretStoreResponse,
 } from "../opencomputer-rest-client";
 import {
-  applyScmCloneEnv,
+  buildImageBuildCallbackEnv,
+  buildImageBuildEnvVars,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
   IMAGE_BUILD_MODE_ENV_VAR,
+  imageBuildSandboxIdentity,
+  REPO_IMAGE_CALLBACK_ENV,
+  RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS,
   scmCloneIdentity,
-  SESSION_CONFIG_ENV_VAR,
-  toRepositoryConfigPayload,
   VCS_CLONE_TOKEN_ENV_VAR,
 } from "../sandbox-env";
 import {
@@ -50,18 +52,6 @@ import {
 
 const log = createLogger("opencomputer-provider");
 const OPENCOMPUTER_SECRET_STORE_EGRESS_ALLOWLIST = ["*"];
-const REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
-  "OI_REPO_IMAGE_BUILD_ID",
-  "OI_REPO_IMAGE_CALLBACK_URL",
-  "OI_REPO_IMAGE_CALLBACK_TOKEN",
-  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
-] as const;
-const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
-  "OI_REPO_IMAGE_CALLBACK_SECRET",
-  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-] as const;
 
 export interface OpenComputerProviderConfig {
   scmProvider: SourceControlProviderName;
@@ -359,39 +349,16 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let secretStore: OpenComputerSecretStoreResponse | undefined;
     let providerObjectId: string | undefined;
     try {
-      const primary = config.repositories[0];
-      if (!primary) {
-        throw new Error("environment build requires at least one repository");
-      }
-
-      const sandboxName = `build-env-${config.scopeId}-${Date.now()}`;
-      const environment = this.buildBuildEnvironment({
-        userEnvVars: config.userEnvVars,
-        cloneToken: config.cloneToken,
-        sandboxId: `build-env-${config.scopeId}`,
-        repoOwner: primary.repoOwner,
-        repoName: primary.repoName,
-        sessionConfig: {
-          branch: primary.baseBranch,
-          repositories: config.repositories.map(toRepositoryConfigPayload),
-        },
-        buildId: config.buildId,
-        callbackUrl: config.callbackUrl,
-        failureCallbackUrl: config.failureCallbackUrl,
-        callbackToken: config.callbackToken,
-        buildExecutionTimeoutSeconds: config.buildExecutionTimeoutSeconds,
-      });
+      const identity = imageBuildSandboxIdentity(config, Date.now());
+      const environment = this.buildBuildEnvironment(config, identity.sandboxId);
       secretStore = await this.createSecretStoreFor(config.buildId, environment.secretEnvVars);
       const sandbox = await this.client.createSandbox({
-        name: sandboxName,
+        name: identity.sandboxName,
         template,
         env: environment.envVars,
         labels: {
-          openinspect_framework: "open-inspect",
           openinspect_provider: "opencomputer",
-          openinspect_kind: "environment-image-build",
-          openinspect_build_id: config.buildId,
-          openinspect_environment: config.scopeId,
+          ...identity.labels,
         },
         timeoutSeconds: config.providerSessionTimeoutSeconds,
         secretStore: secretStore?.name,
@@ -401,7 +368,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       await config.onProviderSessionCreated(sandbox.id);
 
       await this.client.startRuntime(sandbox.id, {
-        [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sandbox.id,
+        [REPO_IMAGE_CALLBACK_ENV.providerSessionId]: sandbox.id,
       });
       // The OpenComputer REST client takes no correlation argument, so the
       // trace cannot be forwarded downstream yet — it is recorded on this
@@ -496,42 +463,42 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     return { envVars, secretEnvVars };
   }
 
-  /** Build-sandbox env for both repo- and environment-image builds; the caller owns identity + SESSION_CONFIG shape. */
-  private buildBuildEnvironment(config: {
-    userEnvVars?: Record<string, string>;
-    cloneToken?: string;
-    sandboxId: string;
-    repoOwner: string;
-    repoName: string;
-    sessionConfig: Record<string, unknown>;
-    buildId: string;
-    callbackUrl: string;
-    failureCallbackUrl: string;
-    callbackToken: string;
-    buildExecutionTimeoutSeconds: number;
-  }): PreparedOpenComputerEnvironment {
-    const environment = this.prepareEnvironment(config.userEnvVars, {
+  /**
+   * Shared build-sandbox env assembly plus OpenComputer's callback overlay
+   * and secret-store split. Unlike Vercel (which delivers callback env at
+   * entrypoint launch), OpenComputer bakes the callback contract into the
+   * sandbox env at create time; only the provider session id is delivered at
+   * startRuntime.
+   */
+  private buildBuildEnvironment(
+    config: ImageBuildProviderTriggerConfig,
+    sandboxId: string
+  ): PreparedOpenComputerEnvironment {
+    const { envVars: baseEnvVars, secretEnvVars } = this.prepareEnvironment(config.userEnvVars, {
       scrubReservedRepoImageEnv: true,
     });
-    const { envVars } = environment;
-
-    Object.assign(envVars, {
-      PYTHONUNBUFFERED: "1",
-      SANDBOX_ID: config.sandboxId,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
-      [IMAGE_BUILD_MODE_ENV_VAR]: "true",
-      [SESSION_CONFIG_ENV_VAR]: JSON.stringify(config.sessionConfig),
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
-      [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
+    const envVars = buildImageBuildEnvVars({
+      sandboxId,
+      repositories: config.repositories,
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      cloneToken: config.cloneToken,
+      baseEnvVars,
     });
 
-    applyScmCloneEnv(envVars, scmCloneIdentity(this.providerConfig.scmProvider), config.cloneToken);
+    Object.assign(
+      envVars,
+      // No providerSessionId: the sandbox does not exist yet at create time;
+      // OpenComputer delivers the id separately at startRuntime.
+      buildImageBuildCallbackEnv({
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
+        token: config.callbackToken,
+      }),
+      { [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds) }
+    );
 
-    return environment;
+    return { envVars, secretEnvVars };
   }
 
   private prepareEnvironment(

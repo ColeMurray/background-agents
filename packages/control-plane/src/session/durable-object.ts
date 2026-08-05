@@ -37,6 +37,7 @@ import {
 } from "../sandbox/lifecycle/manager";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
+import { ScmSettingsStore } from "../db/scm-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
 import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
@@ -78,7 +79,7 @@ import {
   parseSecretsCapMode,
 } from "../db/secrets-validation";
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
-import type { SessionRepositoryEntry } from "./repository-target";
+import type { RepoIdentity, SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
 import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
@@ -590,6 +591,7 @@ export class SessionDO extends DurableObject<Env> {
             messenger: this.messenger,
             appName: resolveAppName(this.env),
             sessionPullRequests: this.db ? new SessionPullRequestStore(this.db) : undefined,
+            resolveAlwaysDraftDefault: (repo) => this.resolveAlwaysDraftDefault(repo),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -646,6 +648,21 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._participantsHandler;
+  }
+
+  /**
+   * Resolves the "always use draft mode" SCM setting (global default merged
+   * with the per-repo override) for the pull request's target repository.
+   * A deployment without D1 cannot have this policy configured, so it retains
+   * the ready-for-review default; storage failures propagate to fail closed.
+   */
+  private async resolveAlwaysDraftDefault(repo: RepoIdentity): Promise<boolean> {
+    if (!this.db) return false;
+    const scmSettingsStore = new ScmSettingsStore(this.db);
+    const settings = await scmSettingsStore.getResolvedSettings(
+      `${repo.repoOwner}/${repo.repoName}`
+    );
+    return settings.alwaysUseDraftMode === true;
   }
 
   private get alarmHandler(): AlarmHandler {

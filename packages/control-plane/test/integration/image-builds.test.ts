@@ -164,7 +164,7 @@ describe("Image builds", () => {
         "im-new",
         REPOSITORY_SHAS,
         RUNTIME_VERSION,
-        12_500
+        12.5
       );
 
       expect(result.type).toBe("marked_ready");
@@ -211,7 +211,7 @@ describe("Image builds", () => {
         "im-late",
         REPOSITORY_SHAS,
         RUNTIME_VERSION,
-        10_000
+        10
       );
 
       expect(result.type).toBe("superseded_by_newer_ready");
@@ -854,8 +854,8 @@ describe("Image builds", () => {
       ],
       ["missing build_duration_seconds", { build_duration_seconds: undefined }],
       ["negative build_duration_seconds", { build_duration_seconds: -1 }],
-      // Finite seconds whose ×1000 conversion overflows to Infinity, which
-      // JSON.stringify would canonicalize to null downstream.
+      // Finite but beyond MAX_SAFE_INTEGER seconds — would lose integer
+      // precision in the persisted row and hash canonicalization.
       ["overflowing build_duration_seconds", { build_duration_seconds: 1e308 }],
     ])("fails registration closed on %s", async (_label, overrides) => {
       const environmentId = await seedEnvironment();
