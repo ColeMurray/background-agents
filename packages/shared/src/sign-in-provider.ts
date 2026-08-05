@@ -10,8 +10,12 @@ export const SIGN_IN_PROVIDER_ISSUERS = {
   google: "https://accounts.google.com",
 } as const satisfies Readonly<Record<SignInProvider, string>>;
 
+export function isSignInProvider(provider: string): provider is SignInProvider {
+  return SIGN_IN_PROVIDERS.some((candidate) => candidate === provider);
+}
+
 export function getSignInProviderIssuer(provider: string): string | null {
-  if (provider === "github" || provider === "google") {
+  if (isSignInProvider(provider)) {
     return SIGN_IN_PROVIDER_ISSUERS[provider];
   }
   return null;

@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { getSignInProviderIssuer, parseEnabledSignInProviders } from "./sign-in-provider";
+import {
+  getSignInProviderIssuer,
+  isSignInProvider,
+  parseEnabledSignInProviders,
+} from "./sign-in-provider";
+
+describe("isSignInProvider", () => {
+  it.each(["github", "google"])("recognizes %s", (provider) => {
+    expect(isSignInProvider(provider)).toBe(true);
+  });
+
+  it.each(["slack", "linear"])("rejects %s", (provider) => {
+    expect(isSignInProvider(provider)).toBe(false);
+  });
+});
 
 describe("getSignInProviderIssuer", () => {
   it.each([
