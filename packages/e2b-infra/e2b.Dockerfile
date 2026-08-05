@@ -18,13 +18,13 @@ ARG OPENCODE_VERSION=1.18.11
 ARG CODE_SERVER_VERSION=4.109.5
 ARG AGENT_BROWSER_VERSION=0.21.2
 
-# System packages: git/build toolchain + headless-browser shared libs + ffmpeg.
+# System packages: git/build toolchain + browser and VNC/noVNC dependencies.
 RUN apt-get update \
   && apt-get install -y git curl build-essential ca-certificates gnupg \
      openssh-client jq unzip libnss3 libnspr4 libatk1.0-0 \
      libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 \
      libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
-     libpango-1.0-0 libcairo2 ffmpeg \
+     libpango-1.0-0 libcairo2 ffmpeg xvfb fluxbox x11vnc websockify novnc \
   && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
      | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
   && echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main' \
@@ -81,7 +81,7 @@ ENV HOME=/root \
     PATH=/usr/local/bin:/usr/bin:/bin \
     PYTHONPATH=/app \
     NODE_PATH=/usr/lib/node_modules \
-    SANDBOX_VERSION=e2b-v1
+    SANDBOX_VERSION=e2b-v3-vnc
 
 # NOTE: file staging (sandbox_runtime, oi-launch.py), WORKDIR, and the start/ready
 # commands are applied by build-template.py via the E2B Template SDK
