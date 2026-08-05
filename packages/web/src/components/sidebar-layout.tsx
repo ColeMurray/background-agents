@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import useSWR from "swr";
 import { NewSessionButton, SearchSessionsButton, SessionSidebar } from "./session-sidebar";
 import { GlobalCommandMenu } from "./global-command-menu";
@@ -13,6 +12,12 @@ import { Button } from "@/components/ui/button";
 import { SidebarIcon } from "@/components/ui/icons";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useMobileSidebarPull } from "@/hooks/use-mobile-sidebar-pull";
+import {
+  getSessionTabElementId,
+  SessionTabs,
+  SessionTabsProvider,
+  useSessionTabs,
+} from "@/components/session-tabs";
 
 interface SidebarContextValue {
   isOpen: boolean;
@@ -73,7 +78,15 @@ export function CollapsedSidebarControls() {
 }
 
 export function SidebarLayout({ children }: SidebarLayoutProps) {
-  const router = useRouter();
+  return (
+    <SessionTabsProvider>
+      <SidebarLayoutContent>{children}</SidebarLayoutContent>
+    </SessionTabsProvider>
+  );
+}
+
+function SidebarLayoutContent({ children }: SidebarLayoutProps) {
+  const { activeTabId, navigate, openNewSession } = useSessionTabs();
   const sidebar = useSidebar();
   const isMobile = useIsMobile();
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
@@ -98,17 +111,17 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
     if (isMobile) {
       sidebar.close();
     }
-    router.push("/");
-  }, [isMobile, router, sidebar]);
+    openNewSession();
+  }, [isMobile, openNewSession, sidebar]);
 
   const handleNavigate = useCallback(
     (href: string) => {
       if (isMobile) {
         sidebar.close();
       }
-      router.push(href);
+      navigate(href);
     },
-    [isMobile, router, sidebar]
+    [isMobile, navigate, sidebar]
   );
 
   const handleOpenCommandMenu = useCallback(() => {
@@ -136,7 +149,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         <div
           data-testid="mobile-sidebar-gesture-boundary"
           className={`flex h-dvh overflow-hidden ${
-            isMobile && !sidebar.isOpen ? "touch-pan-y" : ""
+            isMobile && !sidebar.isOpen ? "touch-manipulation" : ""
           }`}
           onPointerDownCapture={sidebarPull.handlePointerDown}
           onPointerMoveCapture={sidebarPull.handlePointerMove}
@@ -187,7 +200,17 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
               onSessionSelect={sidebar.close}
             />
           </div>
-          <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+            <SessionTabs />
+            <div
+              id="session-tab-panel"
+              role="tabpanel"
+              aria-labelledby={activeTabId ? getSessionTabElementId(activeTabId) : undefined}
+              className="min-h-0 min-w-0 flex-1 overflow-hidden"
+            >
+              {children}
+            </div>
+          </main>
         </div>
         <GlobalCommandMenu
           open={isCommandMenuOpen}
