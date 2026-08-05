@@ -31,11 +31,7 @@ resource "null_resource" "web_app_cloudflare_secrets" {
   count = var.web_platform == "cloudflare" ? 1 : 0
 
   triggers = {
-    secrets_hash = sha256(join(",", [
-      var.github_client_secret,
-      var.nextauth_secret,
-      var.internal_callback_secret,
-    ]))
+    secrets_hash = sha256(join(",", [random_password.service_auth_secret_web.result]))
   }
 
   provisioner "local-exec" {
@@ -43,12 +39,12 @@ resource "null_resource" "web_app_cloudflare_secrets" {
     working_dir = var.project_root
 
     environment = {
-      CLOUDFLARE_API_TOKEN     = var.cloudflare_api_token
-      CLOUDFLARE_ACCOUNT_ID    = var.cloudflare_account_id
-      WORKER_NAME              = "open-inspect-web-${local.name_suffix}"
-      GITHUB_CLIENT_SECRET     = var.github_client_secret
-      NEXTAUTH_SECRET          = var.nextauth_secret
-      INTERNAL_CALLBACK_SECRET = var.internal_callback_secret
+      CLOUDFLARE_API_TOKEN  = var.cloudflare_api_token
+      CLOUDFLARE_ACCOUNT_ID = var.cloudflare_account_id
+      WORKER_NAME           = "open-inspect-web-${local.name_suffix}"
+      # Auth now lives in the control plane; the web worker only signs
+      # service-to-service calls with its own sig1 key.
+      SERVICE_AUTH_SECRET = random_password.service_auth_secret_web.result
     }
   }
 
@@ -66,18 +62,16 @@ resource "local_file" "web_app_wrangler_production" {
     compatibility_date = "2025-08-15"
     compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 
+    # Auth (GitHub OAuth, NEXTAUTH_URL, and the ALLOWED_* access-control set)
+    # now lives entirely in the control plane; the web worker is a thin client.
     [vars]
-    GITHUB_CLIENT_ID = "${var.github_client_id}"
-    NEXTAUTH_URL = "${local.web_app_url}"
     CONTROL_PLANE_URL = "${local.control_plane_url}"
     NEXT_PUBLIC_WS_URL = "${local.ws_url}"
     NEXT_PUBLIC_SANDBOX_PROVIDER = "${var.sandbox_provider}"
     NEXT_PUBLIC_APP_NAME = "${var.app_name}"
     NEXT_PUBLIC_APP_SHORT_NAME = "${var.app_short_name}"
     NEXT_PUBLIC_APP_ICON_URL = "${var.app_icon_url}"
-    ALLOWED_USERS = "${var.allowed_users}"
-    ALLOWED_EMAIL_DOMAINS = "${var.allowed_email_domains}"
-    UNSAFE_ALLOW_ALL_USERS = "${tostring(var.unsafe_allow_all_users)}"
+    NEXT_PUBLIC_GOOGLE_ENABLED = "${tostring(local.google_enabled)}"
 
     [assets]
     directory = ".open-next/assets"
