@@ -9,11 +9,13 @@ import { CodeServerIntegrationSettings } from "./code-server-integration-setting
 import { GitHubIntegrationSettings } from "./github-integration-settings";
 import { LinearIntegrationSettings } from "./linear-integration-settings";
 import { SlackIntegrationSettings } from "./slack-integration-settings";
+import { VncIntegrationSettings } from "./vnc-integration-settings";
 
 export const integrationSettingsComponents: Partial<Record<IntegrationId, ComponentType>> = {
   github: GitHubIntegrationSettings,
   linear: LinearIntegrationSettings,
   "code-server": CodeServerIntegrationSettings,
+  vnc: VncIntegrationSettings,
   slack: SlackIntegrationSettings,
 };
 

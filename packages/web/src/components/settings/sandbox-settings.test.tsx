@@ -256,7 +256,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     });
   });
 
-  it("includes configured code-server and terminal ports in the save payload", async () => {
+  it("includes configured code-server, VNC, and terminal ports in the save payload", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") {
         return new Response(JSON.stringify({}), { status: 200 });
@@ -281,6 +281,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     );
 
     await user.type(screen.getByPlaceholderText("8080"), "8081");
+    await user.type(screen.getByPlaceholderText("6080"), "6081");
     await user.type(screen.getByPlaceholderText("7680"), "7000");
     await user.click(screen.getByText("Save Settings"));
 
@@ -295,6 +296,7 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
                 tunnelPorts: [],
                 terminalEnabled: false,
                 codeServerPort: 8081,
+                vncPort: 6081,
                 terminalPort: 7000,
                 maxConcurrentChildSessions: DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
                 maxTotalChildSessions: DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
@@ -305,6 +307,36 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
         })
       );
     });
+  });
+
+  it("rejects a tunnel port that collides with the default VNC port", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <SWRConfig
+        value={{
+          provider: () => new Map(),
+          fallback: { [SETTINGS_KEY]: globalSettings([], ["acme/app"]) },
+          dedupingInterval: Infinity,
+          revalidateOnFocus: false,
+          revalidateIfStale: false,
+          revalidateOnReconnect: false,
+        }}
+      >
+        <SandboxSettingsPage />
+      </SWRConfig>
+    );
+
+    await user.click(screen.getByText("Add port"));
+    await user.type(screen.getByPlaceholderText("e.g. 3000"), "6080");
+    await user.click(screen.getByText("Save Settings"));
+
+    expect(screen.getByText(/must all be different/)).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      SETTINGS_KEY,
+      expect.objectContaining({ method: "PUT" })
+    );
   });
 
   it("rejects a service port that duplicates a tunnel port", async () => {
