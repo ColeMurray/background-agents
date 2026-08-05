@@ -70,7 +70,11 @@ class RepoImageBuildCallback:
             (CALLBACK_TOKEN_ENV, token),
             (PROVIDER_SESSION_ID_ENV, provider_session_id),
         )
-        if not any(value for _name, value in values):
+        # Configuration is detected by variable PRESENCE, not truthiness: a
+        # present-but-empty variable is a misconfigured build context, and the
+        # empty-value check below must reject it rather than silently
+        # disabling completion reporting.
+        if not any(name in os.environ for name, _value in values):
             return None
 
         log = logger or get_logger("repo_image_callback")

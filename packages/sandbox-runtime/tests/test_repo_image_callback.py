@@ -26,6 +26,17 @@ def test_from_env_returns_none_when_unconfigured(monkeypatch):
     assert RepoImageBuildCallback.from_env() is None
 
 
+def test_from_env_rejects_present_but_empty_configuration(monkeypatch):
+    monkeypatch.setenv(CALLBACK_URL_ENV, "")
+    monkeypatch.delenv(BUILD_ID_ENV, raising=False)
+    monkeypatch.delenv(FAILURE_CALLBACK_URL_ENV, raising=False)
+    monkeypatch.delenv(CALLBACK_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(PROVIDER_SESSION_ID_ENV, raising=False)
+
+    with pytest.raises(RepoImageCallbackMisconfigured):
+        RepoImageBuildCallback.from_env()
+
+
 def test_from_env_rejects_partial_configuration(monkeypatch):
     logger = MagicMock()
     monkeypatch.setenv(BUILD_ID_ENV, "build-1")
