@@ -542,8 +542,6 @@ describe("ModalSandboxProvider", () => {
         {
           buildId: "build-123",
           providerSessionId: "modal-session-123",
-          callbackUrl: "https://worker.test/image-builds/build-complete",
-          failureCallbackUrl: "https://worker.test/image-builds/build-failed",
           callbackToken: "callback-token",
           correlation,
         },

@@ -118,44 +118,6 @@ async def test_create_build_sandbox_runs_gated_entrypoint_and_scrubs_callback_en
 
 
 @pytest.mark.asyncio
-async def test_create_build_sandbox_without_callback_context_uses_legacy_placeholder(monkeypatch):
-    sandbox = SimpleNamespace(object_id="modal-session-1")
-    create = _async_method(sandbox)
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
-
-    await ModalBuildSessionService().create(
-        build_id="build-1",
-        scope_kind="repo",
-        scope_id="acme/repo",
-        repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
-    )
-
-    args = create.aio.await_args.args
-    kwargs = create.aio.await_args.kwargs
-    assert args == ("python", "-c", "import signal; signal.pause()")
-    assert "openinspect_launch_protocol" not in kwargs["tags"]
-    assert "OI_REPO_IMAGE_CALLBACK_URL" not in kwargs["env"]
-    assert "OI_REPO_IMAGE_FAILURE_CALLBACK_URL" not in kwargs["env"]
-
-
-@pytest.mark.asyncio
-async def test_create_build_sandbox_rejects_unpaired_callback_urls(monkeypatch):
-    create = _async_method(SimpleNamespace(object_id="modal-session-1"))
-    monkeypatch.setattr("src.sandbox.build_session.modal.Sandbox.create", create)
-
-    with pytest.raises(ValueError, match="callback URLs must be provided together"):
-        await ModalBuildSessionService().create(
-            build_id="build-1",
-            scope_kind="repo",
-            scope_id="acme/repo",
-            repositories=[{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}],
-            callback_url="https://cp.test/image-builds/build-complete",
-        )
-
-    create.aio.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_start_build_sandbox_writes_only_callback_token_to_gated_entrypoint(monkeypatch):
     stdin = SimpleNamespace(write=MagicMock(), drain=_async_method())
     sandbox = SimpleNamespace(
@@ -174,8 +136,6 @@ async def test_start_build_sandbox_writes_only_callback_token_to_gated_entrypoin
     await ModalBuildSessionService().start(
         build_id="build-1",
         provider_session_id="modal-session-1",
-        callback_url="https://cp.test/image-builds/build-complete",
-        failure_callback_url="https://cp.test/image-builds/build-failed",
         callback_token="a" * 64,
     )
 
@@ -187,51 +147,19 @@ async def test_start_build_sandbox_writes_only_callback_token_to_gated_entrypoin
 
 
 @pytest.mark.asyncio
-async def test_start_build_sandbox_uses_legacy_exec_for_untagged_sandbox(monkeypatch):
-    sandbox = SimpleNamespace(
-        get_tags=_async_method(
-            {
-                "openinspect_kind": "image-build",
-                "openinspect_build_id": "build-1",
-            }
-        ),
-        exec=_async_method(),
-    )
-    _mock_sandbox_lookup(monkeypatch, sandbox)
-
-    await ModalBuildSessionService().start(
-        build_id="build-1",
-        provider_session_id="modal-session-1",
-        callback_url="https://cp.test/image-builds/build-complete",
-        failure_callback_url="https://cp.test/image-builds/build-failed",
-        callback_token="callback-token",
-    )
-
-    assert sandbox.exec.aio.await_args.args == (
-        "python",
-        "-m",
-        "sandbox_runtime.entrypoint",
-    )
-    assert sandbox.exec.aio.await_args.kwargs["env"] == {
-        "OI_REPO_IMAGE_BUILD_ID": "build-1",
-        "OI_REPO_IMAGE_CALLBACK_URL": "https://cp.test/image-builds/build-complete",
-        "OI_REPO_IMAGE_FAILURE_CALLBACK_URL": "https://cp.test/image-builds/build-failed",
-        "OI_REPO_IMAGE_CALLBACK_TOKEN": "callback-token",
-        "OI_REPO_IMAGE_PROVIDER_SESSION_ID": "modal-session-1",
-    }
-
-
-@pytest.mark.asyncio
-async def test_start_build_sandbox_rejects_unknown_launch_protocol_without_delivery(monkeypatch):
+@pytest.mark.parametrize("launch_protocol", ["stdin-v2", None])
+async def test_start_build_sandbox_rejects_unsupported_launch_protocol_without_delivery(
+    monkeypatch, launch_protocol
+):
     stdin = SimpleNamespace(write=MagicMock(), drain=_async_method())
+    tags = {
+        "openinspect_kind": "image-build",
+        "openinspect_build_id": "build-1",
+    }
+    if launch_protocol is not None:
+        tags["openinspect_launch_protocol"] = launch_protocol
     sandbox = SimpleNamespace(
-        get_tags=_async_method(
-            {
-                "openinspect_kind": "image-build",
-                "openinspect_build_id": "build-1",
-                "openinspect_launch_protocol": "stdin-v2",
-            }
-        ),
+        get_tags=_async_method(tags),
         stdin=stdin,
         exec=_async_method(),
     )
@@ -241,8 +169,6 @@ async def test_start_build_sandbox_rejects_unknown_launch_protocol_without_deliv
         await ModalBuildSessionService().start(
             build_id="build-1",
             provider_session_id="modal-session-1",
-            callback_url="https://cp.test/image-builds/build-complete",
-            failure_callback_url="https://cp.test/image-builds/build-failed",
             callback_token="callback-token",
         )
 
@@ -268,8 +194,6 @@ async def test_start_build_sandbox_refuses_mismatched_tags(monkeypatch):
         await ModalBuildSessionService().start(
             build_id="build-1",
             provider_session_id="modal-session-1",
-            callback_url="https://cp.test/image-builds/build-complete",
-            failure_callback_url="https://cp.test/image-builds/build-failed",
             callback_token="callback-token",
         )
 

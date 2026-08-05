@@ -607,20 +607,10 @@ async def api_create_build_sandbox(
         )
         clone_host = _optional_string(request, "clone_host")
         clone_username = _optional_string(request, "clone_username")
-        callback_url = _optional_string(request, "callback_url")
-        failure_callback_url = _optional_string(request, "failure_callback_url")
-        if bool(callback_url) != bool(failure_callback_url):
-            raise HTTPException(
-                status_code=400,
-                detail="callback_url and failure_callback_url must be provided together",
-            )
-        if (
-            callback_url
-            and failure_callback_url
-            and (
-                not validate_control_plane_url(callback_url)
-                or not validate_control_plane_url(failure_callback_url)
-            )
+        callback_url = _required_string(request, "callback_url")
+        failure_callback_url = _required_string(request, "failure_callback_url")
+        if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
+            failure_callback_url
         ):
             raise HTTPException(
                 status_code=400, detail="callback URLs must target the control plane"
@@ -687,22 +677,11 @@ async def api_start_build_sandbox(
     try:
         from .sandbox.build_session import ModalBuildSessionService
 
-        callback_url = _required_string(request, "callback_url")
-        failure_callback_url = _required_string(request, "failure_callback_url")
-        if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
-            failure_callback_url
-        ):
-            raise HTTPException(
-                status_code=400, detail="callback URLs must target the control plane"
-            )
-
         build_id = _required_string(request, "build_id")
         provider_session_id = _required_string(request, "provider_session_id")
         await ModalBuildSessionService().start(
             build_id=build_id,
             provider_session_id=provider_session_id,
-            callback_url=callback_url,
-            failure_callback_url=failure_callback_url,
             callback_token=_required_string(request, "callback_token"),
         )
         return {"success": True, "data": {"started": True}}

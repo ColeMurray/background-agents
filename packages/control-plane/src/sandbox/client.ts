@@ -224,8 +224,6 @@ export interface CreateImageBuildSandboxResponse {
 export interface StartImageBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
-  callbackUrl: string;
-  failureCallbackUrl: string;
   callbackToken: string;
 }
 
@@ -669,8 +667,6 @@ export class ModalClient {
       {
         build_id: request.buildId,
         provider_session_id: request.providerSessionId,
-        callback_url: request.callbackUrl,
-        failure_callback_url: request.failureCallbackUrl,
         callback_token: request.callbackToken,
       },
       correlation

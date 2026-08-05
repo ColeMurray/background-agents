@@ -43,8 +43,6 @@ interface CreateModalImageBuildConfig {
 interface StartModalImageBuildConfig {
   buildId: string;
   providerSessionId: string;
-  callbackUrl: string;
-  failureCallbackUrl: string;
   callbackToken: string;
   correlation?: CorrelationContext;
 }
@@ -338,8 +336,6 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     await this.startImageBuildSandbox({
       buildId: config.buildId,
       providerSessionId: created.providerSessionId,
-      callbackUrl: config.callbackUrl,
-      failureCallbackUrl: config.failureCallbackUrl,
       callbackToken: config.callbackToken,
       correlation: config.correlation,
     });
