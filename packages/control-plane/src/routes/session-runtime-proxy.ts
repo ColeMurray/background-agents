@@ -19,8 +19,6 @@ const participantsResponseSchema = z.object({
   ),
 });
 
-type ParticipantLookup = z.infer<typeof participantsResponseSchema>["participants"][number];
-
 type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
@@ -97,14 +95,11 @@ async function handleParticipantProfiles(
   );
   if (!participantsResponse.ok) return participantsResponse;
 
-  let participants: ParticipantLookup[];
-  try {
-    const parsed = participantsResponseSchema.safeParse(await participantsResponse.json());
-    if (!parsed.success) throw new Error("Missing participants");
-    participants = parsed.data.participants;
-  } catch {
-    return error("Invalid participant response", 502);
-  }
+  const parsed = participantsResponseSchema.safeParse(
+    await participantsResponse.json().catch(() => null)
+  );
+  if (!parsed.success) return error("Invalid participant response", 502);
+  const participants = parsed.data.participants;
 
   const users = await new UserStore(ctx.db).getUsersByIds(
     participants.map((participant) => participant.canonicalUserId ?? participant.userId)

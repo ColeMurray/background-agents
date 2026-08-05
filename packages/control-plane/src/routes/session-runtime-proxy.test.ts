@@ -164,6 +164,23 @@ describe("session runtime proxy routes", () => {
     expect(db.prepare).not.toHaveBeenCalled();
   });
 
+  it("returns a bad-gateway error when the participant response is not JSON", async () => {
+    const fetch = vi.fn(async () => new Response("not json", { status: 200 }));
+    const db = { prepare: vi.fn(), batch: vi.fn() } as unknown as SqlDatabase;
+    const { handler, match } = getHandler("GET", "/sessions/session-1/participant-profiles");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participant-profiles"),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid participant response" });
+    expect(db.prepare).not.toHaveBeenCalled();
+  });
+
   it("preserves participant runtime errors without querying profiles", async () => {
     const fetch = vi.fn(async () => Response.json({ error: "missing" }, { status: 404 }));
     const db = { prepare: vi.fn(), batch: vi.fn() } as unknown as SqlDatabase;
