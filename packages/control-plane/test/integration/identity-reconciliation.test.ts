@@ -244,6 +244,91 @@ describe("R4: shared-subject conflicts", () => {
   });
 });
 
+describe("R5: canonical emails reserved by different auth users", () => {
+  it("reports the reservation that R2's same-id join cannot see and never auto-repairs it", async () => {
+    // A canonical user (whitespace-variant email) whose normalized email is
+    // held by a different, account-bearing auth user: no same-id auth row
+    // exists, so R2 is blind to it — 0057's seed and the sign-in email tier
+    // both skip this state.
+    const canonicalId = "a1111111111111111111111111111111";
+    const reservingId = "a2111111111111111111111111111111";
+    await insertCanonicalUser({ id: canonicalId, email: " person@example.com" });
+    await insertCanonicalUser({ id: reservingId, email: "person@example.com" });
+    await insertAuthUser({ id: reservingId, email: "person@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "aa211111111111111111111111111111",
+      accountId: "gh-a2",
+      providerId: "github",
+      userId: reservingId,
+    });
+
+    const report = await store().report();
+    expect(report.emailReservations).toEqual([
+      { userId: canonicalId, reservingAuthUserId: reservingId, reservingAccountCount: 1 },
+    ]);
+    // R2 indeed cannot see the canonical user (no auth row to join).
+    expect(report.authUserDrift).toEqual([]);
+
+    await store().applySafeRepairs();
+
+    // Operator work, never auto-repaired: the reserving graph is intact and
+    // the canonical user still has no auth row.
+    expect(await getAuthUserRow(reservingId)).not.toBeNull();
+    expect(await getAuthUserRow(canonicalId)).toBeNull();
+    expect((await store().report()).emailReservations).toHaveLength(1);
+  });
+});
+
+describe("aggregate residual counts", () => {
+  it("matches the row-level report class by class", async () => {
+    // One row in each class the counts must mirror.
+    const orphanId = "b1111111111111111111111111111111";
+    await insertAuthUser({ id: orphanId, email: "orphan@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "ab111111111111111111111111111111",
+      accountId: "gh-b1",
+      providerId: "github",
+      userId: orphanId,
+    });
+    const driftId = "b2111111111111111111111111111111";
+    await insertCanonicalUser({ id: driftId, email: "canonical@example.com" });
+    await insertAuthUser({ id: driftId, email: "authoritative@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "ab211111111111111111111111111111",
+      accountId: "gh-b2",
+      providerId: "github",
+      userId: driftId,
+    });
+    await insertIdentity({
+      id: "ib211111111111111111111111111111",
+      userId: driftId,
+      provider: "github",
+      providerUserId: "gh-b2",
+      issuer: "https://github.com",
+    });
+    const reservedId = "b3111111111111111111111111111111";
+    await insertCanonicalUser({ id: reservedId, email: "orphan@example.com " });
+
+    const report = await store().report();
+    const residuals = await store().residuals();
+
+    expect(residuals).toEqual({
+      orphanAccounts: report.accountsMissingIdentity.filter((row) => !row.hasCanonicalUser).length,
+      missingProjections: report.accountsMissingIdentity.filter((row) => row.hasCanonicalUser)
+        .length,
+      accountBearingDrift: report.authUserDrift.filter((row) => row.accountCount > 0).length,
+      zeroAccountDrift: report.authUserDrift.filter((row) => row.accountCount === 0).length,
+      accountBearingStrands: report.canonicalLessAuthUsers.filter((row) => row.accountCount > 0)
+        .length,
+      sharedSubjectConflicts: report.sharedSubjectConflicts.length,
+      emailReservations: report.emailReservations.length,
+    });
+    expect(residuals.orphanAccounts).toBe(1);
+    expect(residuals.accountBearingDrift).toBe(1);
+    expect(residuals.emailReservations).toBe(1);
+  });
+});
+
 describe("scheduled reconciliation run", () => {
   it("applies safe repairs and reports residual conflicts", async () => {
     // R1-repairable: account with canonical user, missing identity.
@@ -267,6 +352,8 @@ describe("scheduled reconciliation run", () => {
       residualSharedSubjectConflicts: 0,
       residualAccountBearingDrift: 0,
       residualAccountBearingStrands: 0,
+      residualMissingProjections: 0,
+      residualEmailReservations: 0,
     });
     expect(await countTableRows("user_identities")).toBe(1);
     expect(await getAuthUserRow("82111111111111111111111111111111")).toBeNull();

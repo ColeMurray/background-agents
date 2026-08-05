@@ -9,7 +9,7 @@ import {
   SIGN_IN_PROVIDER_ISSUERS,
   type SignInProvider,
 } from "@open-inspect/shared/sign-in-provider";
-import { createUserAuth, type UserAuthConfig } from "./better-auth";
+import { createUserAuth, type SocialProviderAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
@@ -148,7 +148,7 @@ function createGitHubAuthConfig(
   credentials: OAuthCredentials | null,
   appName: string,
   admissionPolicy: AdmissionPolicy
-): UserAuthConfig["github"] {
+): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "github");
 
@@ -169,7 +169,7 @@ function createGitHubAuthConfig(
 function createGoogleAuthConfig(
   credentials: OAuthCredentials | null,
   admissionPolicy: AdmissionPolicy
-): UserAuthConfig["google"] {
+): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "google");
 
@@ -187,8 +187,8 @@ function createGoogleAuthConfig(
 function withReconciliation(
   provider: SignInProvider,
   reconciliation: SignInReconciliation,
-  config: UserAuthConfig["github"]
-): UserAuthConfig["github"] {
+  config: SocialProviderAuthConfig | undefined
+): SocialProviderAuthConfig | undefined {
   if (!config) return undefined;
   return {
     ...config,

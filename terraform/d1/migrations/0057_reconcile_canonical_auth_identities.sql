@@ -5,10 +5,11 @@
 -- against post-cutover drift instead of aborting the deploy.
 --
 -- OPERATOR PREFLIGHT (before the deploy that applies this migration): step
--- (1) below cascade-deletes stranded auth graphs. Capture a D1 Time Travel
--- bookmark (`wrangler d1 time-travel info <db>`) and record preflight counts
--- for review:
---   SELECT COUNT(*) FROM auth_users a WHERE EXISTS (SELECT 1 FROM users u
+-- (1) below cascade-deletes stranded zero-account auth graphs. Capture a D1
+-- Time Travel bookmark (`wrangler d1 time-travel info <db>`) and record
+-- preflight counts for review:
+--   SELECT COUNT(*) FROM auth_users a WHERE NOT EXISTS (SELECT 1 FROM
+--     auth_accounts x WHERE x.userId = a.id) AND EXISTS (SELECT 1 FROM users u
 --     WHERE u.id <> a.id AND lower(trim(u.email)) = lower(trim(a.email)));
 --   SELECT COUNT(*) FROM users u WHERE u.email IS NOT NULL AND NOT EXISTS
 --     (SELECT 1 FROM auth_users a WHERE a.id = u.id);
@@ -23,15 +24,26 @@
 
 -- (1) Sweep stranded partial auth graphs. Better Auth's D1 fallback is
 -- non-atomic, so a failed sign-in strands an auth user whose normalized email
--- is owned by a different canonical user. Foreign keys cascade the stranded
--- accounts and sessions; the affected user is signed out once and recovers
--- through implicit linking on their next sign-in.
--- The second guard protects whitespace-variant email pairs (idx_users_email
+-- is owned by a different canonical user. Only ZERO-ACCOUNT rows are swept:
+-- once a row bears OAuth accounts it is a live sign-in target — Better Auth
+-- is authoritative for it regardless of email disagreement (the same rule as
+-- step (2)), and deleting it would cascade away real accounts and sessions.
+-- Account-bearing collisions are preserved and surface in the consistency
+-- report (R2 drift when a same-id canonical row exists, R3 account-bearing
+-- strand otherwise, R5 for the canonical user whose email they reserve) as
+-- operator merge work. Foreign keys cascade the swept rows' sessions; the
+-- affected user recovers through implicit linking on their next sign-in.
+-- The same-id guard protects whitespace-variant email pairs (idx_users_email
 -- is COLLATE NOCASE but not whitespace-normalizing, so two canonical users
 -- can normalize to one email): an auth row whose OWN canonical user matches
 -- its normalized email is healthy, not stranded, and must survive.
 DELETE FROM auth_users
-WHERE EXISTS (
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM auth_accounts
+    WHERE auth_accounts.userId = auth_users.id
+  )
+  AND EXISTS (
     SELECT 1
     FROM users
     WHERE users.id <> auth_users.id
@@ -48,11 +60,12 @@ WHERE EXISTS (
 -- wins while the reservation has never been linked. Account-bearing drift is
 -- deliberately left alone — Better Auth is authoritative once accounts exist,
 -- and the R2 consistency report flags those pairs for operator review. The
--- sweep above already removed any other auth row holding the canonical email,
--- so this UPDATE cannot violate auth_users.email's UNIQUE constraint.
--- OR IGNORE: the other-owner guard below sees only pre-statement state, so
--- two whitespace-variant canonical emails normalizing to one value could
--- still collide intra-statement; the skipped row surfaces in R2 instead of
+-- sweep above removed zero-account strands holding the canonical email; an
+-- account-bearing row may still hold it, which the other-owner guard below
+-- skips (into R2) instead of colliding on auth_users.email's UNIQUE.
+-- OR IGNORE: the other-owner guard sees only pre-statement state, so two
+-- whitespace-variant canonical emails normalizing to one value could still
+-- collide intra-statement; the skipped row surfaces in R2 instead of
 -- aborting the deploy.
 UPDATE OR IGNORE auth_users
 SET
@@ -126,7 +139,9 @@ WHERE users.email IS NOT NULL
   )
 -- The guards see only pre-statement state; two whitespace-variant canonical
 -- users normalizing to one email would collide intra-statement without this.
--- The skipped variant lands in the R2 drift report instead of aborting the
+-- A skipped canonical user has no auth row, so R2's same-id join cannot see
+-- it — the R5 email-reservation report enumerates exactly this state (their
+-- normalized email held by a different auth user) instead of aborting the
 -- deploy.
 ON CONFLICT DO NOTHING;
 
@@ -236,7 +251,13 @@ SELECT
     'https://github.com',
     'https://accounts.google.com'
   ),
-  CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000
+  -- strftime returns NULL for an unparseable createdAt, which would violate
+  -- user_identities.created_at NOT NULL and abort the deploy (a NOT NULL
+  -- failure is outside the ON CONFLICT net). Fall back to now.
+  coalesce(
+    CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000,
+    CAST(strftime('%s', 'now') AS INTEGER) * 1000
+  )
 FROM auth_accounts
 JOIN users
   ON users.id = auth_accounts.userId

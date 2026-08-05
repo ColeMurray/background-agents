@@ -67,6 +67,29 @@ describe("UserStore", () => {
       expect(identity!.providerEmail).toBe("alice@example.com");
     });
 
+    it("treats whitespace-only provider emails as absent instead of persisting empty strings", async () => {
+      // idx_users_email is unique: two users persisting "" would collide on
+      // one slot. A blank email must normalize to NULL at every boundary.
+      const first = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1BLANK",
+        providerEmail: "   ",
+      });
+      const second = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U2BLANK",
+        providerEmail: "   ",
+      });
+
+      expect(first.email).toBeNull();
+      expect(second.email).toBeNull();
+      expect(second.id).not.toBe(first.id);
+      expect((await store.getUserById(first.id))!.email).toBeNull();
+      expect((await store.getIdentity("slack", "U1BLANK"))!.providerEmail).toBeNull();
+      // A blank lookup matches nothing rather than an empty-string row.
+      expect(await store.getUserByEmail("   ")).toBeNull();
+    });
+
     it("returns existing user for known identity and updates display_name", async () => {
       const first = await store.resolveOrCreateUser({
         provider: "github",

@@ -52,6 +52,11 @@ export async function insertAuthUser(options: {
   name?: string;
   createdAtIso?: string;
 }): Promise<void> {
+  // Defaults to an hour before the real clock, not SEED_NOW_ISO: the strand
+  // sweep's age gate compares createdAt against 'now', so the default must
+  // be reliably past the grace period on any machine clock. Pass an explicit
+  // createdAtIso to pin an instant (fresh-strand and epoch-conversion tests).
+  const createdAtIso = options.createdAtIso ?? new Date(Date.now() - 3_600_000).toISOString();
   await env.DB.prepare(
     `INSERT INTO auth_users (id, name, email, emailVerified, image, createdAt, updatedAt)
      VALUES (?, ?, ?, ?, NULL, ?, ?)`
@@ -61,8 +66,8 @@ export async function insertAuthUser(options: {
       options.name ?? options.email,
       options.email,
       options.emailVerified ?? 0,
-      options.createdAtIso ?? SEED_NOW_ISO,
-      options.createdAtIso ?? SEED_NOW_ISO
+      createdAtIso,
+      createdAtIso
     )
     .run();
 }

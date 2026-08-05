@@ -39,30 +39,59 @@ beforeEach(async () => {
 });
 
 describe("migration 0057: canonical/auth identity reconciliation", () => {
-  it("sweeps stranded partial auth graphs whose email belongs to another canonical user (cohort 4)", async () => {
+  it("sweeps stranded zero-account auth rows whose email belongs to another canonical user (cohort 4)", async () => {
     const canonicalId = "11111111111111111111111111111111";
     const strandedId = "99999999999999999999999999999999";
     await insertCanonicalUser({ id: canonicalId, email: "person@example.com" });
-    // Failed first sign-in left a generated-id auth graph holding the email.
+    // Failed first sign-in left a generated-id auth row (no account was ever
+    // written) holding the email.
     await insertAuthUser({ id: strandedId, email: "person@example.com" });
-    await insertAuthAccount({
-      id: "a1111111111111111111111111111111",
-      accountId: "gh-1",
-      providerId: "github",
-      userId: strandedId,
-    });
     await insertAuthSession({ id: "s1111111111111111111111111111111", userId: strandedId });
 
     await applyReconcileMigration();
 
     expect(await getAuthUserRow(strandedId)).toBeNull();
-    expect(await countTableRows("auth_accounts")).toBe(0);
     expect(await countTableRows("auth_sessions")).toBe(0);
     // The canonical owner is re-seeded, pre-verified for implicit linking.
     expect(await getAuthUserRow(canonicalId)).toMatchObject({
       email: "person@example.com",
       emailVerified: 1,
     });
+  });
+
+  it("preserves account-bearing auth graphs even when their email disagrees with the canonical registry", async () => {
+    // A live sign-in target: auth user with an OAuth account whose same-id
+    // canonical row holds a different (stale) email, while another canonical
+    // user owns the auth email's normalized value. Email disagreement alone
+    // must never classify an account-bearing graph as disposable — deleting
+    // it would cascade away real accounts and sessions.
+    const liveId = "12111111111111111111111111111111";
+    const otherOwnerId = "13111111111111111111111111111111";
+    await insertCanonicalUser({ id: liveId, email: "stale@example.com" });
+    await insertAuthUser({ id: liveId, email: "current@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "a1211111111111111111111111111111",
+      accountId: "gh-12",
+      providerId: "github",
+      userId: liveId,
+    });
+    await insertAuthSession({ id: "s1211111111111111111111111111111", userId: liveId });
+    await insertCanonicalUser({ id: otherOwnerId, email: "current@example.com" });
+
+    await applyReconcileMigration();
+
+    // The live graph is intact: account-bearing rows are Better Auth's to
+    // govern (same authority rule as step 2), and the collision is left for
+    // the consistency report as operator merge work.
+    expect(await getAuthUserRow(liveId)).toMatchObject({
+      email: "current@example.com",
+      emailVerified: 1,
+    });
+    expect(await countTableRows("auth_accounts")).toBe(1);
+    expect(await countTableRows("auth_sessions")).toBe(1);
+    // The other canonical owner is not seeded (its email slot is reserved by
+    // the live row) — enumerated by the R5 email-reservation report.
+    expect(await getAuthUserRow(otherOwnerId)).toBeNull();
   });
 
   it("seeds missing auth_users rows for emailed canonical users with emailVerified = 1 (cohorts 2-3)", async () => {
@@ -294,9 +323,34 @@ describe("migration 0057: canonical/auth identity reconciliation", () => {
       emailVerified: 1,
     });
     expect(await countTableRows("auth_accounts")).toBe(1);
-    // The variant is skipped (its email slot is taken) — R2 work, not a
-    // deploy abort.
+    // The variant is skipped (its email slot is taken) — enumerated by the
+    // R5 email-reservation report, not a deploy abort.
     expect(await getAuthUserRow(variantId)).toBeNull();
+  });
+
+  it("falls back to now for unparseable auth account timestamps instead of violating NOT NULL", async () => {
+    const userId = "93111111111111111111111111111111";
+    await insertCanonicalUser({ id: userId, email: "odd.time@example.com" });
+    await insertAuthUser({ id: userId, email: "odd.time@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "a9311111111111111111111111111111",
+      accountId: "gh-93",
+      providerId: "github",
+      userId,
+    });
+    // A createdAt strftime cannot parse: NULL would violate
+    // user_identities.created_at NOT NULL and abort the deploy.
+    await env.DB.prepare(`UPDATE auth_accounts SET createdAt = 'not-a-timestamp' WHERE id = ?`)
+      .bind("a9311111111111111111111111111111")
+      .run();
+
+    await applyReconcileMigration();
+
+    const identity = await env.DB.prepare(
+      `SELECT created_at FROM user_identities WHERE provider = 'github' AND provider_user_id = 'gh-93'`
+    ).first<{ created_at: number }>();
+    expect(identity).not.toBeNull();
+    expect(identity!.created_at).toBeGreaterThan(0);
   });
 
   it("is idempotent: a second run leaves the database unchanged", async () => {

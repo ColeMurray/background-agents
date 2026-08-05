@@ -30,9 +30,26 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
  *   accounts intact and is resumable by re-running, which matters because
  *   the wrangler CLI transport executes statements sequentially rather than
  *   atomically.
+ * - Resumable includes the surviving email: after an interruption that
+ *   already parked the loser's auth email, a re-run re-derives it from the
+ *   loser's canonical email (which the projection kept equal to the auth
+ *   email, and which is deleted only after the auth move completes). When no
+ *   canonical email exists to recover from, the merge refuses to start
+ *   without an explicit `survivingEmail` rather than park the only copy.
  * - The surviving email is validated against every other auth row before any
  *   write (Appendix A: validate before delete).
  */
+
+/**
+ * Mirror of `./email`'s normalizeEmail: this module is imported by the
+ * operator CLI under Node's type-stripping loader, which cannot resolve
+ * extensionless runtime imports — so it must stay free of value imports.
+ * Keep byte-identical to `./email` and to the SQL `lower(trim(...))` rule.
+ */
+function normalizeEmail(email: string | null | undefined): string | null {
+  const normalized = email?.trim().toLowerCase();
+  return normalized ? normalized : null;
+}
 
 export class UserMergeError extends Error {
   constructor(message: string) {
@@ -119,6 +136,10 @@ export async function mergeUsers(
   }
   // A missing loser row is not an error: re-running a completed merge must
   // be a no-op, and a partially-applied merge must be resumable.
+  const loser = await db
+    .prepare(`SELECT id, email FROM users WHERE id = ?`)
+    .bind(loserId)
+    .first<{ id: string; email: string | null }>();
   const loserAuthUser = await db
     .prepare(
       `SELECT id, name, email, emailVerified, image, createdAt, updatedAt
@@ -146,17 +167,43 @@ export async function mergeUsers(
 
   const createAuthUserForSurvivor = Boolean(loserAuthUser) && !survivorAuthUser;
   const placeholderEmail = mergePlaceholderEmail(loserId);
-  const loserEmailIsPlaceholder = loserAuthUser?.email === placeholderEmail;
+  // auth_users emails are normalized at the source: legacy rows written
+  // before normalization must compare and propagate identically to the
+  // lower(trim(...)) the SQL guards and consistency reports apply.
+  const requestedEmail = normalizeEmail(options.survivingEmail);
+  const loserAuthEmail = loserAuthUser ? normalizeEmail(loserAuthUser.email) : null;
+  const survivorAuthEmail = survivorAuthUser ? normalizeEmail(survivorAuthUser.email) : null;
+  const loserCanonicalEmail = normalizeEmail(loser?.email);
+  const survivorCanonicalEmail = normalizeEmail(survivor.email);
+  const loserEmailIsPlaceholder = loserAuthEmail === placeholderEmail;
+  // The canonical fallbacks make an interrupted run resumable: parking
+  // replaces the loser's auth email, but the loser's canonical row (deleted
+  // only after the auth move) still holds the same address in the common
+  // projected case.
   const survivingEmail =
-    options.survivingEmail?.trim().toLowerCase() ||
-    (loserEmailIsPlaceholder ? null : (loserAuthUser?.email ?? null)) ||
-    survivor.email?.trim().toLowerCase() ||
-    null;
+    requestedEmail ??
+    (loserEmailIsPlaceholder ? null : loserAuthEmail) ??
+    loserCanonicalEmail ??
+    survivorCanonicalEmail;
   if (createAuthUserForSurvivor && !survivingEmail) {
     // Only reachable when resuming a partial run that already parked the
-    // loser's email and the survivor has no canonical email to fall back to.
+    // loser's email and no canonical email survives to fall back to.
     throw new UserMergeError(
       "Cannot determine the surviving email; pass survivingEmail explicitly"
+    );
+  }
+  if (
+    createAuthUserForSurvivor &&
+    !requestedEmail &&
+    !loserCanonicalEmail &&
+    !survivorCanonicalEmail
+  ) {
+    // Parking the loser's auth email would leave no stored copy to re-derive
+    // the surviving email from — an interruption right after that statement
+    // could not be resumed by re-running. Refuse before the first write.
+    throw new UserMergeError(
+      "This merge would not be resumable if interrupted after the loser's email is parked " +
+        "(no canonical email exists to recover it from); pass survivingEmail explicitly"
     );
   }
   if (survivingEmail) {
@@ -177,14 +224,14 @@ export async function mergeUsers(
   // The survivor's existing auth email (when it has one) is what any
   // canonical backfill should propagate — backfilling the loser's email
   // beside a different active auth email would manufacture standing R2 drift.
-  const backfillEmail = survivorAuthUser?.email ?? survivingEmail;
+  const backfillEmail = survivorAuthEmail ?? survivingEmail;
 
   if (options.dryRun) {
     return {
       survivorId,
       loserId,
       dryRun: true,
-      counts: await previewCounts(db, survivorId, loserId, backfillEmail, survivor.email, {
+      counts: await previewCounts(db, survivorId, loserId, backfillEmail, survivorCanonicalEmail, {
         authUsersDeleted: loserAuthUser ? 1 : 0,
         authUserCreatedForSurvivor: createAuthUserForSurvivor ? 1 : 0,
         authAccountsMoved: loserAccounts.length,
@@ -296,7 +343,7 @@ export async function mergeUsers(
             survivorId,
             loserAuthUser.name,
             survivingEmail,
-            survivingEmail === loserAuthUser.email ? loserAuthUser.emailVerified : 0,
+            survivingEmail === loserAuthEmail ? loserAuthUser.emailVerified : 0,
             loserAuthUser.image,
             loserAuthUser.createdAt,
             new Date().toISOString()
@@ -311,16 +358,18 @@ export async function mergeUsers(
   }
 
   add("usersDeleted", db.prepare(`DELETE FROM users WHERE id = ?`).bind(loserId));
-  if (backfillEmail && !survivor.email) {
-    // A NULL-email survivor (GitHub-first bot row) acquires the verified
-    // email freed by the loser's deletion, guarded against any other owner.
+  if (backfillEmail && !survivorCanonicalEmail) {
+    // A blank-or-NULL-email survivor (GitHub-first bot row) acquires the
+    // verified email freed by the loser's deletion, guarded against any
+    // other owner. The SQL predicate mirrors the normalized TS condition so
+    // dry-run and execute counts agree.
     add(
       "canonicalEmailBackfilled",
       db
         .prepare(
           `UPDATE users SET email = ?, updated_at = ?
            WHERE id = ?
-             AND email IS NULL
+             AND (email IS NULL OR length(trim(email)) = 0)
              AND NOT EXISTS (
                SELECT 1 FROM users AS other
                WHERE other.id <> users.id AND lower(trim(other.email)) = ?

@@ -1,6 +1,7 @@
 import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { generateId } from "../crypto";
 import { createLogger } from "../../logger";
+import { normalizeEmail } from "../../db/email";
 import type { SqlDatabase } from "../../db/sql-database";
 import type { ProviderProfile, ProviderProfileResolver } from "./provider-profile";
 
@@ -145,8 +146,12 @@ export class SignInReconciliation {
 
     const nowIso = new Date().toISOString();
     // One atomic batch — unlike Better Auth's non-atomic D1 fallback, a
-    // failure here strands nothing.
-    await this.db.batch([
+    // failure here strands nothing. The zero-account invariant is enforced
+    // inside the account INSERT itself, not just by the read above: a
+    // concurrent callback could attach an account between the check and this
+    // batch, and once the row bears accounts only Better Auth's linking gate
+    // may add more.
+    const results = await this.db.batch([
       this.db
         .prepare(
           `INSERT INTO auth_users (id, name, email, emailVerified, image, createdAt, updatedAt)
@@ -182,15 +187,27 @@ export class SignInReconciliation {
              id, accountId, providerId, userId, accessToken, refreshToken,
              idToken, accessTokenExpiresAt, refreshTokenExpiresAt, scope,
              password, createdAt, updatedAt
-           ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
+           )
+           SELECT ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?
+           WHERE NOT EXISTS (
+             SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = ?
+           )
+           ON CONFLICT DO NOTHING`
         )
-        .bind(generateId(), subject, provider, targetUserId, nowIso, nowIso),
+        .bind(generateId(), subject, provider, targetUserId, nowIso, nowIso, targetUserId),
       // GitHub-first canonical rows carry no email; the verified sign-in
       // email is the first trustworthy value they can acquire.
       this.db
         .prepare(`UPDATE users SET email = ?, updated_at = ? WHERE id = ? AND email IS NULL`)
         .bind(email, Date.now(), targetUserId),
     ]);
+    const accountAttached = (results[2]?.meta.changes ?? 0) > 0;
+    if (!accountAttached) {
+      // A concurrent callback won the race and the target now bears an
+      // account; fall through to the email tier, which applies the same
+      // account-bearing authority rule.
+      return false;
+    }
     logger.info("Materialized auth identity for bot-first canonical user", {
       event: "auth.subject_materialized",
       provider,
@@ -258,19 +275,26 @@ export class SignInReconciliation {
     if (authRow.accountCount > 0) return;
     if (authRow.email === email && authRow.emailVerified === 1) return;
 
-    await this.db
-      .prepare(`UPDATE auth_users SET email = ?, emailVerified = 1, updatedAt = ? WHERE id = ?`)
+    // The zero-account authority rule is re-checked inside the write: a
+    // concurrent callback may have attached an account since the read above.
+    // OR IGNORE covers a concurrent claim of the email's UNIQUE slot.
+    const repaired = await this.db
+      .prepare(
+        `UPDATE OR IGNORE auth_users
+         SET email = ?, emailVerified = 1, updatedAt = ?
+         WHERE id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
+           )`
+      )
       .bind(email, nowIso, owner.id)
       .run();
-    logger.info("Repaired stale zero-account auth user at sign-in", {
-      event: "auth.email_tier_seeded",
-      user_id: owner.id,
-      mode: "repaired",
-    });
+    if (repaired.meta.changes > 0) {
+      logger.info("Repaired stale zero-account auth user at sign-in", {
+        event: "auth.email_tier_seeded",
+        user_id: owner.id,
+        mode: "repaired",
+      });
+    }
   }
-}
-
-function normalizeEmail(email: string | null | undefined): string | null {
-  const normalized = email?.trim().toLowerCase();
-  return normalized ? normalized : null;
 }

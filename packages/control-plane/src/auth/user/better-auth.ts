@@ -10,22 +10,20 @@ const MS_PER_SECOND = 1000;
 export const SESSION_EXPIRES_IN_MS = 7 * 24 * 60 * 60 * MS_PER_SECOND;
 export const SESSION_UPDATE_AGE_MS = 24 * 60 * 60 * MS_PER_SECOND;
 
+export interface SocialProviderAuthConfig {
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly getUserInfo: ProviderProfileResolver;
+}
+
 export interface UserAuthConfig {
   readonly database: D1Database;
   readonly publicWebOrigin: string;
   readonly secret: string;
   readonly userProjection: CanonicalUserProjection;
   readonly identityProjection: AccountIdentityProjection;
-  readonly github?: {
-    readonly clientId: string;
-    readonly clientSecret: string;
-    readonly getUserInfo: ProviderProfileResolver;
-  };
-  readonly google?: {
-    readonly clientId: string;
-    readonly clientSecret: string;
-    readonly getUserInfo: ProviderProfileResolver;
-  };
+  readonly github?: SocialProviderAuthConfig;
+  readonly google?: SocialProviderAuthConfig;
 }
 
 /**

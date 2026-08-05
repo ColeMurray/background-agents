@@ -42,10 +42,18 @@ export default {
       const requestId = crypto.randomUUID();
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
       const db = env.DB;
-      // Identity reconciliation rides the existing half-hourly trigger — the
+      // The image-build scheduler is the trigger's original job and runs
+      // first: the shared invocation budget must never make identity backlog
+      // size a prerequisite for image scheduling.
+      await runImageBuildScheduler(env, db, {
+        request_id: requestId,
+        trace_id: requestId,
+      });
+      // Identity reconciliation rides the same half-hourly trigger — the
       // sign-in bridge mechanisms swallow their own failures and lean on this
-      // sweep to repair what they missed. Its failure must never starve the
-      // image-build scheduler (and vice versa).
+      // sweep to repair what they missed. Bounded by design: repairs are
+      // fixed statements and residuals are COUNT(*) aggregates, so backlog
+      // size never inflates this invocation's memory or wall clock.
       try {
         await runIdentityReconciliation(db);
       } catch (error) {
@@ -54,10 +62,6 @@ export default {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      await runImageBuildScheduler(env, db, {
-        request_id: requestId,
-        trace_id: requestId,
-      });
       return;
     }
     if (event.cron !== "* * * * *") {

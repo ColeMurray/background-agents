@@ -11,9 +11,12 @@ interface RecordedStatement {
 function createFakeDb(options?: {
   firstResults?: (Record<string, unknown> | null)[];
   throwOn?: "first" | "batch" | "run";
+  /** Per-statement `meta.changes` for batch results (defaults to 1 each). */
+  batchChanges?: number[];
 }) {
   const statements: RecordedStatement[] = [];
   const batches: RecordedStatement[][] = [];
+  const recordsByStatement = new WeakMap<SqlStatement, RecordedStatement>();
   let firstCallIndex = 0;
 
   function statement(sql: string): SqlStatement {
@@ -38,6 +41,7 @@ function createFakeDb(options?: {
         return { results: [] as T[], meta: { changes: 0 } };
       },
     };
+    recordsByStatement.set(stmt, recorded);
     return stmt;
   }
 
@@ -48,9 +52,12 @@ function createFakeDb(options?: {
     async batch(batchStatements: SqlStatement[]) {
       if (options?.throwOn === "batch") throw new Error("D1 batch failed");
       batches.push(
-        batchStatements.map(() => statements[statements.length - 1] ?? { sql: "", params: [] })
+        batchStatements.map((entry) => recordsByStatement.get(entry) ?? { sql: "", params: [] })
       );
-      return batchStatements.map(() => ({ results: [], meta: { changes: 1 } }));
+      return batchStatements.map((_, index) => ({
+        results: [],
+        meta: { changes: options?.batchChanges?.[index] ?? 1 },
+      }));
     },
   };
 
@@ -169,6 +176,63 @@ describe("SignInReconciliation", () => {
       entry.sql.includes("SELECT id FROM users WHERE email IS NOT NULL")
     );
     expect(ownerLookups.length).toBe(2);
+  });
+
+  it("enforces the zero-account invariant inside the writes, not just the read", async () => {
+    const { db, batches } = createFakeDb({
+      firstResults: [
+        null, // no auth account for the subject
+        { user_id: "11111111111111111111111111111111" }, // identity match
+        { count: 0 }, // target auth user bears no accounts (stale read)
+        null, // no canonical owner of the email
+        null, // no auth owner of the email
+      ],
+    });
+    const reconciliation = new SignInReconciliation(db);
+    const wrapped = reconciliation.wrapResolver("github", async () => PROFILE);
+    await wrapped({});
+
+    expect(batches).toHaveLength(1);
+    const accountInsert = batches[0].find((entry) =>
+      entry.sql.includes("INSERT INTO auth_accounts")
+    );
+    // The INSERT re-checks the invariant so a concurrent attach between the
+    // COUNT read and the batch cannot bypass Better Auth's linking gate.
+    expect(accountInsert?.sql).toContain("WHERE NOT EXISTS");
+    expect(accountInsert?.sql).toContain("ON CONFLICT DO NOTHING");
+    // The batch fake records real statements — the repair UPDATE keeps its
+    // own zero-account guard.
+    const repairUpdate = batches[0].find((entry) => entry.sql.includes("UPDATE OR IGNORE"));
+    expect(repairUpdate?.sql).toContain("NOT EXISTS");
+  });
+
+  it("falls through to the email tier when a concurrent callback attached an account first", async () => {
+    const { db, statements } = createFakeDb({
+      firstResults: [
+        null, // no auth account for the subject
+        { user_id: "11111111111111111111111111111111" }, // identity match
+        { count: 0 }, // stale zero-account read
+        null, // no canonical owner of the email
+        null, // no auth owner of the email
+        null, // email tier: no canonical owner
+      ],
+      // auth_users insert applied, repair skipped, account INSERT skipped by
+      // its in-write guard (a concurrent callback attached first), users
+      // update skipped.
+      batchChanges: [1, 0, 0, 0],
+    });
+    const reconciliation = new SignInReconciliation(db);
+    const wrapped = reconciliation.wrapResolver("github", async () => PROFILE);
+
+    await expect(wrapped({})).resolves.toBe(PROFILE);
+
+    // Materialization did not complete, so the email tier ran.
+    const ownerLookups = statements.filter((entry) =>
+      entry.sql.includes("SELECT id FROM users WHERE email IS NOT NULL")
+    );
+    expect(ownerLookups.length).toBe(2);
+    const events = errorSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(events.some((entry: string) => entry.includes("failed"))).toBe(false);
   });
 
   it("propagates inner resolver failures untouched (admission errors must keep failing sign-in)", async () => {

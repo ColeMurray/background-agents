@@ -1,5 +1,6 @@
 import { getSignInProviderIssuer } from "@open-inspect/shared/sign-in-provider";
 import { generateId } from "../auth/crypto";
+import { normalizeEmail } from "./email";
 import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase } from "./sql-database";
 
@@ -81,17 +82,6 @@ interface UserIdentityRow {
   provider_email: string | null;
   provider_issuer: string | null;
   created_at: number;
-}
-
-// ── Normalization ───────────────────────────────────────────────────
-
-/**
- * Canonical email normalization for every write and lookup: idx_users_email
- * is COLLATE NOCASE but not whitespace-normalizing, so an untrimmed write
- * could create a whitespace-variant duplicate of an existing email.
- */
-function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
 }
 
 // ── Row mappers ─────────────────────────────────────────────────────
@@ -198,7 +188,7 @@ export class UserStore {
   async createUser(user: NewUser): Promise<User> {
     const id = generateId();
     const now = Date.now();
-    const email = user.email ? normalizeEmail(user.email) : null;
+    const email = normalizeEmail(user.email);
 
     await this.db
       .prepare(
@@ -220,7 +210,7 @@ export class UserStore {
   async createIdentity(identity: NewUserIdentity): Promise<UserIdentity> {
     const id = generateId();
     const now = Date.now();
-    const email = identity.providerEmail ? normalizeEmail(identity.providerEmail) : null;
+    const email = normalizeEmail(identity.providerEmail);
     const issuer = getSignInProviderIssuer(identity.provider);
 
     await this.db
@@ -264,6 +254,7 @@ export class UserStore {
       values.push(updates.avatarUrl);
     }
     if (updates.email !== undefined) {
+      // A blank email normalizes to null — treated as absent, never stored.
       sets.push("email = ?");
       values.push(normalizeEmail(updates.email));
     }
@@ -283,7 +274,7 @@ export class UserStore {
   // ── Private ─────────────────────────────────────────────────────
 
   private async doResolveOrCreate(identity: ProviderIdentity): Promise<ResolvedUser> {
-    const normalizedEmail = identity.providerEmail ? normalizeEmail(identity.providerEmail) : null;
+    const normalizedEmail = normalizeEmail(identity.providerEmail);
 
     // Step 1: Look up by provider identity
     const existing = await this.getIdentity(identity.provider, identity.providerUserId);

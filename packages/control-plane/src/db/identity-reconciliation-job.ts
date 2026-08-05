@@ -18,18 +18,19 @@ export async function runIdentityReconciliation(
 ): Promise<IdentityReconciliationStats> {
   const store = new IdentityReconciliationStore(db);
   const repairs = await store.applySafeRepairs();
-  const report = await store.report();
+  // Aggregate counts only: the scheduled cycle must stay bounded regardless
+  // of backlog size — row-level enumeration is the operator report's job.
+  const residuals = await store.residuals();
 
   const stats: IdentityReconciliationStats = {
     ...repairs,
-    residualOrphanAccounts: report.accountsMissingIdentity.filter((row) => !row.hasCanonicalUser)
-      .length,
-    residualAccountBearingDrift: report.authUserDrift.filter((row) => row.accountCount > 0).length,
-    residualZeroAccountDrift: report.authUserDrift.filter((row) => row.accountCount === 0).length,
-    residualAccountBearingStrands: report.canonicalLessAuthUsers.filter(
-      (row) => row.accountCount > 0
-    ).length,
-    residualSharedSubjectConflicts: report.sharedSubjectConflicts.length,
+    residualOrphanAccounts: residuals.orphanAccounts,
+    residualMissingProjections: residuals.missingProjections,
+    residualAccountBearingDrift: residuals.accountBearingDrift,
+    residualZeroAccountDrift: residuals.zeroAccountDrift,
+    residualAccountBearingStrands: residuals.accountBearingStrands,
+    residualSharedSubjectConflicts: residuals.sharedSubjectConflicts,
+    residualEmailReservations: residuals.emailReservations,
   };
 
   for (const failure of repairs.repairFailures) {
@@ -59,6 +60,24 @@ export async function runIdentityReconciliation(
     logger.warn("Auth users hold account-bearing email drift for operator review", {
       event: "auth.reconciliation_account_drift",
       account_bearing_drift: stats.residualAccountBearingDrift,
+    });
+  }
+  if (stats.residualMissingProjections > 0) {
+    // Canonical-backed accounts with no identity projection should have been
+    // auto-repaired this cycle — a residual means the repair step failed or
+    // raced, and bot ingress will mint phantom splits until it heals.
+    logger.warn("Identity projections remain missing after repair", {
+      event: "auth.reconciliation_missed_projections",
+      missing_projections: stats.residualMissingProjections,
+    });
+  }
+  if (stats.residualEmailReservations > 0) {
+    // Canonical users whose email a different auth user reserves: invisible
+    // to R2's same-id join, sign-in lands them on the reserving row (a split
+    // for the merge script), so the standing state needs its own alarm.
+    logger.warn("Canonical user emails are reserved by different auth users", {
+      event: "auth.reconciliation_email_reservations",
+      email_reservations: stats.residualEmailReservations,
     });
   }
   return stats;

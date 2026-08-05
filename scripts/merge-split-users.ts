@@ -59,7 +59,14 @@ function sqlLiteral(value: unknown): string {
   throw new Error(`Unsupported SQL parameter type: ${typeof value}`);
 }
 
-/** Inline positional `?` parameters as escaped literals (wrangler --command has no binding). */
+/**
+ * Inline positional `?` parameters as escaped literals (wrangler --command
+ * has no binding). Every `?` character is treated as a placeholder — a
+ * literal `?` inside a quoted string or comment would make the placeholder
+ * count disagree with the bound parameter count and fail loudly below, never
+ * silently misbind. None of the statements this script executes contain one;
+ * if a future statement must, extend this to a quote-aware scan.
+ */
 function inlineParams(sql: string, params: unknown[]): string {
   let index = 0;
   const rendered = sql.replaceAll("?", () => {
@@ -167,6 +174,9 @@ interface CliOptions {
   verbose: boolean;
 }
 
+const VALUE_OPTIONS = new Set(["database", "survivor", "loser", "surviving-email"]);
+const FLAG_OPTIONS = new Set(["execute", "local", "verbose"]);
+
 function parseArgs(argv: string[]): CliOptions {
   const values = new Map<string, string>();
   const flags = new Set<string>();
@@ -174,10 +184,14 @@ function parseArgs(argv: string[]): CliOptions {
     const arg = argv[index];
     if (!arg.startsWith("--")) throw new Error(`Unexpected argument: ${arg}`);
     const name = arg.slice(2);
-    if (["execute", "local", "verbose"].includes(name)) {
+    if (FLAG_OPTIONS.has(name)) {
       flags.add(name);
       continue;
     }
+    // Unknown names are rejected before consuming a value: on a destructive
+    // tool, a typo (`--exec`, `--surviving_email`) must fail, not silently
+    // change what the run does.
+    if (!VALUE_OPTIONS.has(name)) throw new Error(`Unknown option: --${name}`);
     const value = argv[++index];
     if (value === undefined) throw new Error(`Missing value for --${name}`);
     values.set(name, value);
@@ -207,17 +221,19 @@ async function main(): Promise<void> {
       "Note: the wrangler transport executes statements sequentially (not atomically). " +
         "The merge is ordered loss-free and idempotent — if a run fails partway, re-run it."
     );
-    if (options.survivingEmail) {
-      const survivorAuthRow = await db
-        .prepare(`SELECT id FROM auth_users WHERE id = ?`)
-        .bind(options.survivorId)
-        .first();
-      if (survivorAuthRow) {
-        console.error(
-          "WARNING: --surviving-email has no effect because the survivor already has an auth " +
-            "row — its existing email is kept and drives any canonical email backfill."
-        );
-      }
+  }
+  // Emitted in dry-run too: the preview is where an operator inspects the
+  // plan, so an ineffective flag must be visible before --execute.
+  if (options.survivingEmail) {
+    const survivorAuthRow = await db
+      .prepare(`SELECT id FROM auth_users WHERE id = ?`)
+      .bind(options.survivorId)
+      .first();
+    if (survivorAuthRow) {
+      console.error(
+        "WARNING: --surviving-email has no effect because the survivor already has an auth " +
+          "row — its existing email is kept and drives any canonical email backfill."
+      );
     }
   }
 

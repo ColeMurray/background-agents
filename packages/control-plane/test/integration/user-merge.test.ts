@@ -367,6 +367,158 @@ describe("mergeUsers", () => {
     expect(await getAuthUserRow(LOSER)).not.toBeNull();
   });
 
+  it("resumes after an interruption that already parked the loser's email", async () => {
+    // Mid-merge state from a sequential-transport failure: the loser's auth
+    // email is parked on the placeholder, the survivor's auth row does not
+    // exist yet, and the loser's canonical row still holds the real email.
+    await insertCanonicalUser({ id: SURVIVOR, email: null, displayName: "Bot Row" });
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com" });
+    await insertAuthUser({
+      id: LOSER,
+      email: `merged-${LOSER}@merge.invalid`,
+      emailVerified: 1,
+    });
+    await insertAuthAccount({
+      id: "acc41111111111111111111111111111",
+      accountId: "583231",
+      providerId: "github",
+      userId: LOSER,
+    });
+
+    // No explicit survivingEmail: the re-run must recover it on its own.
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts).toMatchObject({
+      authUserCreatedForSurvivor: 1,
+      authAccountsMoved: 1,
+      usersDeleted: 1,
+    });
+    // The surviving email came from the loser's canonical row; the parked
+    // placeholder never propagates, and verification does not transfer to an
+    // email that was not the loser's OAuth-proven auth email.
+    expect(await getAuthUserRow(SURVIVOR)).toMatchObject({
+      email: "person@example.com",
+      emailVerified: 0,
+    });
+    expect(await getAuthUserRow(LOSER)).toBeNull();
+    expect(
+      await env.DB.prepare(
+        `SELECT userId FROM auth_accounts WHERE providerId = 'github' AND accountId = '583231'`
+      ).first<{ userId: string }>()
+    ).toEqual({ userId: SURVIVOR });
+  });
+
+  it("resumes after an interruption that already created the survivor's auth row", async () => {
+    // Later interruption point: survivor auth row exists with the real
+    // email, loser row is still parked, accounts not yet re-pointed.
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com" });
+    await insertAuthUser({ id: SURVIVOR, email: "person@example.com", emailVerified: 1 });
+    await insertAuthUser({
+      id: LOSER,
+      email: `merged-${LOSER}@merge.invalid`,
+      emailVerified: 1,
+    });
+    await insertAuthAccount({
+      id: "acc51111111111111111111111111111",
+      accountId: "583231",
+      providerId: "github",
+      userId: LOSER,
+    });
+
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts).toMatchObject({ authAccountsMoved: 1, usersDeleted: 1 });
+    expect(await getAuthUserRow(SURVIVOR)).toMatchObject({
+      email: "person@example.com",
+      emailVerified: 1,
+    });
+    // The placeholder never reaches the canonical backfill.
+    expect(
+      await env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(SURVIVOR).first<{
+        email: string;
+      }>()
+    ).toEqual({ email: "person@example.com" });
+    expect(await getAuthUserRow(LOSER)).toBeNull();
+  });
+
+  it("refuses up front when an interruption after parking would be unrecoverable", async () => {
+    // Canonical-less loser: parking its auth email would destroy the only
+    // stored copy, so the merge must demand an explicit surviving email
+    // before writing anything.
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertAuthUser({ id: LOSER, email: "only-copy@example.com", emailVerified: 1 });
+    await insertAuthAccount({
+      id: "acc61111111111111111111111111111",
+      accountId: "583231",
+      providerId: "github",
+      userId: LOSER,
+    });
+
+    await expect(mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER })).rejects.toThrow(
+      /not be resumable/
+    );
+    // Nothing was written — the loser's auth email is untouched.
+    expect(await getAuthUserRow(LOSER)).toMatchObject({ email: "only-copy@example.com" });
+
+    // With the email supplied explicitly, the same merge proceeds (and the
+    // command line is re-runnable if interrupted).
+    const result = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      survivingEmail: "only-copy@example.com",
+    });
+    expect(result.counts.authUserCreatedForSurvivor).toBe(1);
+    expect(await getAuthUserRow(SURVIVOR)).toMatchObject({ email: "only-copy@example.com" });
+  });
+
+  it("normalizes legacy unnormalized auth emails before comparing or storing them", async () => {
+    await insertCanonicalUser({ id: SURVIVOR, email: null });
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com" });
+    // A legacy auth row written before trim/lowercase normalization.
+    await insertAuthUser({ id: LOSER, email: " Person@Example.COM ", emailVerified: 1 });
+
+    const result = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(result.counts.authUserCreatedForSurvivor).toBe(1);
+    // The stored surviving email is normalized, it still counts as the
+    // loser's OAuth-proven email (verification transfers), and the canonical
+    // backfill matches the reconciliation report's lower(trim(...)) rule.
+    expect(await getAuthUserRow(SURVIVOR)).toMatchObject({
+      email: "person@example.com",
+      emailVerified: 1,
+    });
+    const report = await new IdentityReconciliationStore(env.DB).report();
+    expect(report.authUserDrift).toEqual([]);
+  });
+
+  it("previews the canonical backfill with execute parity for a blank-email survivor", async () => {
+    // Empty-string canonical email: the TS gate and the SQL predicate must
+    // agree, so dry-run and execute report the same backfill count.
+    await env.DB.prepare(
+      `INSERT INTO users (id, email, created_at, updated_at) VALUES (?, '', ?, ?)`
+    )
+      .bind(SURVIVOR, SEED_NOW_MS, SEED_NOW_MS)
+      .run();
+    await insertCanonicalUser({ id: LOSER, email: "person@example.com" });
+    await insertAuthUser({ id: LOSER, email: "person@example.com", emailVerified: 1 });
+
+    const preview = await mergeUsers(env.DB, {
+      survivorId: SURVIVOR,
+      loserId: LOSER,
+      dryRun: true,
+    });
+    const executed = await mergeUsers(env.DB, { survivorId: SURVIVOR, loserId: LOSER });
+
+    expect(preview.counts.canonicalEmailBackfilled).toBe(1);
+    expect(executed.counts.canonicalEmailBackfilled).toBe(preview.counts.canonicalEmailBackfilled);
+    expect(
+      await env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(SURVIVOR).first<{
+        email: string;
+      }>()
+    ).toEqual({ email: "person@example.com" });
+  });
+
   it("rejects a missing survivor and a self-merge", async () => {
     await insertCanonicalUser({ id: LOSER, email: null });
 

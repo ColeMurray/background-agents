@@ -24,14 +24,16 @@ const SIGN_IN_PROVIDER_SQL_LIST = SQL_SIGN_IN_PROVIDERS.map((entry) => `'${entry
  * registration a legitimate auth row briefly exists with no canonical user
  * and no account; sweeping it mid-flight would fail that sign-in.
  */
-const STRAND_SWEEP_MIN_AGE_SECONDS = 300;
+const STRAND_SWEEP_MIN_AGE_MS = 300_000;
+/** SQLite strftime('%s') compares in seconds; converted once at the bind site. */
+const STRAND_SWEEP_MIN_AGE_SECONDS = Math.floor(STRAND_SWEEP_MIN_AGE_MS / 1000);
 
 /**
  * Consistency reporting and scheduled reconciliation between the canonical
  * identity registry (users/user_identities) and the Better Auth registry
  * (auth_users/auth_accounts).
  *
- * The four report parts are anti-join based on purpose: a single conflict
+ * The report parts are anti-join based on purpose: a single conflict
  * query only sees rows present on both sides, and the failure modes this
  * design guards against are *missing* rows. The reports double as migration
  * 0057's postcondition suite.
@@ -75,11 +77,28 @@ export interface SharedSubjectConflict {
   accountId: string;
 }
 
+/**
+ * R5: canonical users whose normalized email is reserved by a *different*
+ * auth user while they have no same-id auth row of their own. Invisible to
+ * R2 (whose same-id join needs an auth row to exist): 0057's seed and the
+ * sign-in email tier both skip this state, so without this report a
+ * suppressed seed would leave a clean-looking postcondition suite. The
+ * affected user still signs in — implicit linking lands them on the
+ * reserving row — producing a split for the merge script rather than a
+ * lockout.
+ */
+export interface CanonicalEmailReservation {
+  userId: string;
+  reservingAuthUserId: string;
+  reservingAccountCount: number;
+}
+
 export interface IdentityConsistencyReport {
   accountsMissingIdentity: AccountMissingIdentity[];
   authUserDrift: AuthUserDrift[];
   canonicalLessAuthUsers: CanonicalLessAuthUser[];
   sharedSubjectConflicts: SharedSubjectConflict[];
+  emailReservations: CanonicalEmailReservation[];
 }
 
 export interface IdentityRepairStats {
@@ -93,12 +112,34 @@ export interface IdentityRepairStats {
   repairFailures: { step: "sweep" | "align" | "project"; message: string }[];
 }
 
+/**
+ * Aggregate residual counts for the scheduled cycle. COUNT(*)-only so the
+ * half-hourly job never materializes backlog rows into Worker memory —
+ * row-level enumeration stays with `report()` for operator use.
+ */
+export interface IdentityResidualCounts {
+  /** R1 rows with no canonical user — FK-blocked, never auto-repairable. */
+  orphanAccounts: number;
+  /**
+   * R1 rows WITH a canonical user — projection should have healed them, so a
+   * nonzero residual means the repair failed or raced and must alarm.
+   */
+  missingProjections: number;
+  accountBearingDrift: number;
+  zeroAccountDrift: number;
+  accountBearingStrands: number;
+  sharedSubjectConflicts: number;
+  emailReservations: number;
+}
+
 export interface IdentityReconciliationStats extends IdentityRepairStats {
   residualOrphanAccounts: number;
+  residualMissingProjections: number;
   residualAccountBearingDrift: number;
   residualZeroAccountDrift: number;
   residualAccountBearingStrands: number;
   residualSharedSubjectConflicts: number;
+  residualEmailReservations: number;
 }
 
 interface AccountMissingIdentityRow {
@@ -112,7 +153,7 @@ export class IdentityReconciliationStore {
   constructor(private readonly db: SqlDatabase) {}
 
   async report(): Promise<IdentityConsistencyReport> {
-    const [r1, r2, r3, r4] = await this.db.batch([
+    const [r1, r2, r3, r4, r5] = await this.db.batch([
       this.db.prepare(
         `SELECT
            auth_accounts.providerId AS providerId,
@@ -167,6 +208,21 @@ export class IdentityReconciliationStore {
          WHERE auth_accounts.userId <> user_identities.user_id
          ORDER BY auth_accounts.providerId, auth_accounts.accountId`
       ),
+      this.db.prepare(
+        `SELECT
+           users.id AS userId,
+           auth_users.id AS reservingAuthUserId,
+           (SELECT COUNT(*) FROM auth_accounts WHERE auth_accounts.userId = auth_users.id)
+             AS reservingAccountCount
+         FROM users
+         JOIN auth_users
+           ON auth_users.email = lower(trim(users.email))
+          AND auth_users.id <> users.id
+         WHERE users.email IS NOT NULL
+           AND length(trim(users.email)) > 0
+           AND NOT EXISTS (SELECT 1 FROM auth_users AS own WHERE own.id = users.id)
+         ORDER BY users.id`
+      ),
     ]);
 
     return {
@@ -179,6 +235,92 @@ export class IdentityReconciliationStore {
       authUserDrift: r2.results as AuthUserDrift[],
       canonicalLessAuthUsers: r3.results as CanonicalLessAuthUser[],
       sharedSubjectConflicts: r4.results as SharedSubjectConflict[],
+      emailReservations: r5.results as CanonicalEmailReservation[],
+    };
+  }
+
+  /**
+   * The report's classes as COUNT(*) aggregates, for the scheduled cycle.
+   * Predicates mirror `report()` exactly; only the projection differs.
+   */
+  async residuals(): Promise<IdentityResidualCounts> {
+    const missingIdentityPredicate = `
+      auth_accounts.providerId IN (${SIGN_IN_PROVIDER_SQL_LIST})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM user_identities
+        WHERE user_identities.provider = auth_accounts.providerId
+          AND user_identities.provider_user_id = auth_accounts.accountId
+      )`;
+    const driftPredicate = `
+      (
+        users.email IS NULL
+        OR lower(trim(users.email)) <> auth_users.email
+        OR auth_users.emailVerified = 0
+      )`;
+    const accountCount = `(
+      SELECT COUNT(*) FROM auth_accounts WHERE auth_accounts.userId = auth_users.id
+    )`;
+    const [
+      orphanAccounts,
+      missingProjections,
+      accountBearingDrift,
+      zeroAccountDrift,
+      accountBearingStrands,
+      sharedSubjectConflicts,
+      emailReservations,
+    ] = await this.db.batch<{ count: number }>([
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM auth_accounts
+         WHERE ${missingIdentityPredicate}
+           AND NOT EXISTS (SELECT 1 FROM users WHERE users.id = auth_accounts.userId)`
+      ),
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM auth_accounts
+         WHERE ${missingIdentityPredicate}
+           AND EXISTS (SELECT 1 FROM users WHERE users.id = auth_accounts.userId)`
+      ),
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM auth_users
+         JOIN users ON users.id = auth_users.id
+         WHERE ${driftPredicate} AND ${accountCount} > 0`
+      ),
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM auth_users
+         JOIN users ON users.id = auth_users.id
+         WHERE ${driftPredicate} AND ${accountCount} = 0`
+      ),
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM auth_users
+         WHERE NOT EXISTS (SELECT 1 FROM users WHERE users.id = auth_users.id)
+           AND ${accountCount} > 0`
+      ),
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM auth_accounts
+         JOIN user_identities
+           ON user_identities.provider = auth_accounts.providerId
+          AND user_identities.provider_user_id = auth_accounts.accountId
+         WHERE auth_accounts.userId <> user_identities.user_id`
+      ),
+      this.db.prepare(
+        `SELECT COUNT(*) AS count FROM users
+         JOIN auth_users
+           ON auth_users.email = lower(trim(users.email))
+          AND auth_users.id <> users.id
+         WHERE users.email IS NOT NULL
+           AND length(trim(users.email)) > 0
+           AND NOT EXISTS (SELECT 1 FROM auth_users AS own WHERE own.id = users.id)`
+      ),
+    ]);
+    const count = (result: { results: { count: number }[] }) => result.results[0]?.count ?? 0;
+    return {
+      orphanAccounts: count(orphanAccounts),
+      missingProjections: count(missingProjections),
+      accountBearingDrift: count(accountBearingDrift),
+      zeroAccountDrift: count(zeroAccountDrift),
+      accountBearingStrands: count(accountBearingStrands),
+      sharedSubjectConflicts: count(sharedSubjectConflicts),
+      emailReservations: count(emailReservations),
     };
   }
 
@@ -281,7 +423,13 @@ export class IdentityReconciliationStore {
                'https://github.com',
                'https://accounts.google.com'
              ),
-             CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000
+             -- strftime returns NULL for an unparseable createdAt, which
+             -- would violate created_at NOT NULL and permanently fail this
+             -- repair step. Fall back to now.
+             coalesce(
+               CAST(strftime('%s', auth_accounts.createdAt) AS INTEGER) * 1000,
+               CAST(strftime('%s', 'now') AS INTEGER) * 1000
+             )
            FROM auth_accounts
            JOIN users ON users.id = auth_accounts.userId
            WHERE auth_accounts.providerId IN (${SIGN_IN_PROVIDER_SQL_LIST})
