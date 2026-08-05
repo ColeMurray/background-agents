@@ -3,13 +3,13 @@ import { recordSchema, type AgentResponse } from "./artifacts";
 import { isValidSandboxTimeoutMs } from "./integrations";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
-import type { Session } from "./sessions";
 import {
   messageSourceSchema,
   sessionStatusSchema,
   type SandboxStatus,
+  type Session,
   type SessionStatus,
-} from "./statuses";
+} from "./sessions";
 
 export interface UserPreferences {
   userId: string;

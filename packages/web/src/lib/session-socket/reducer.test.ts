@@ -187,12 +187,13 @@ describe("sessionSocketReducer", () => {
           replay: {
             events: [{ type: "git_sync", status: "completed", sandboxId: "sb-1", timestamp: 10 }],
             hasMore: true,
-            cursor: { timestamp: 10, id: "evt-10" },
+            cursor: { timestamp: 10, id: "evt-10", sequence: 10 },
           },
         }),
         { type: "history_requested" }
       );
       expect(base.loadingHistory).toBe(true);
+      expect(base.cursor).toEqual({ timestamp: 10, id: "evt-10", sequence: 10 });
 
       const state = reduce(
         base,

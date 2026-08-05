@@ -19,7 +19,8 @@ function eventRow(
   id: string,
   type: EventRow["type"],
   data: Record<string, unknown> | string,
-  createdAt: number
+  createdAt: number,
+  timelineSequence?: number
 ): EventRow {
   return {
     id,
@@ -27,6 +28,7 @@ function eventRow(
     data: typeof data === "string" ? data : JSON.stringify(data),
     message_id: null,
     created_at: createdAt,
+    timeline_sequence: timelineSequence,
   };
 }
 
@@ -44,7 +46,7 @@ describe("SessionEventStream", () => {
     it("returns parsed replay events and the oldest cursor from the loaded window", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow("e1", "tool_call", { type: "tool_call", tool: "read_file" }, 1000),
+        eventRow("e1", "tool_call", { type: "tool_call", tool: "read_file" }, 1000, 41),
         eventRow("e2", "tool_result", { type: "tool_result", result: "ok" }, 2000),
       ]);
 
@@ -56,7 +58,7 @@ describe("SessionEventStream", () => {
           { type: "tool_result", result: "ok" },
         ],
         hasMore: false,
-        cursor: { timestamp: 1000, id: "e1" },
+        cursor: { timestamp: 1000, id: "e1", sequence: 41 },
       });
     });
 
@@ -92,23 +94,23 @@ describe("SessionEventStream", () => {
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
         events: [eventRow("e1", "tool_call", { type: "tool_call", tool: "write_file" }, 1000)],
         hasMore: false,
-        nextCursor: { kind: "timeline", createdAt: 1000, id: "e1" },
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "e1", sequence: 41 },
       });
 
       const page = stream.getHistoryPage({
-        cursor: { timestamp: 2000, id: "cursor-id" },
+        cursor: { timestamp: 2000, id: "cursor-id", sequence: 42 },
         limit: 100,
       });
 
       expect(repository.getEventTimelinePage).toHaveBeenCalledWith({
-        cursor: { kind: "timeline", createdAt: 2000, id: "cursor-id" },
+        cursor: { kind: "timeline", createdAt: 2000, id: "cursor-id", sequence: 42 },
         excludeTypes: ["heartbeat"],
         limit: 100,
       });
       expect(page).toEqual({
         items: [{ type: "tool_call", tool: "write_file" }],
         hasMore: false,
-        cursor: { timestamp: 1000, id: "e1" },
+        cursor: { timestamp: 1000, id: "e1", sequence: 41 },
       });
     });
 

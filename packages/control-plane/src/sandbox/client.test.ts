@@ -451,6 +451,8 @@ describe("ModalClient", () => {
       cloneToken: "clone-token",
       cloneHost: "gitlab.com",
       cloneUsername: "oauth2",
+      callbackUrl: "https://worker.test/image-builds/build-complete",
+      failureCallbackUrl: "https://worker.test/image-builds/build-failed",
       buildExecutionTimeoutSeconds: 1800,
       providerSessionTimeoutSeconds: 2400,
     });
@@ -464,6 +466,8 @@ describe("ModalClient", () => {
       clone_token: "clone-token",
       clone_host: "gitlab.com",
       clone_username: "oauth2",
+      callback_url: "https://worker.test/image-builds/build-complete",
+      failure_callback_url: "https://worker.test/image-builds/build-failed",
     });
     const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
     expect(body).toEqual({
@@ -474,6 +478,8 @@ describe("ModalClient", () => {
       clone_token: "clone-token",
       clone_host: "gitlab.com",
       clone_username: "oauth2",
+      callback_url: "https://worker.test/image-builds/build-complete",
+      failure_callback_url: "https://worker.test/image-builds/build-failed",
       build_execution_timeout_seconds: 1800,
       build_timeout_seconds: 2400,
     });
@@ -492,8 +498,6 @@ describe("ModalClient", () => {
     await client.startImageBuildSandbox({
       buildId: "imgb-1",
       providerSessionId: "modal-session-1",
-      callbackUrl: "https://cp.test/image-builds/build-complete",
-      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
       callbackToken: "cb-token-1",
     });
 
@@ -505,8 +509,6 @@ describe("ModalClient", () => {
     expect(body).toEqual({
       build_id: "imgb-1",
       provider_session_id: "modal-session-1",
-      callback_url: "https://cp.test/image-builds/build-complete",
-      failure_callback_url: "https://cp.test/image-builds/build-failed",
       callback_token: "cb-token-1",
     });
   });

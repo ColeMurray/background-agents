@@ -98,6 +98,29 @@ export function applyTitleUpdate(
   };
 }
 
+export function applySessionReadState(
+  data: SessionListResponse | undefined,
+  sessionId: string,
+  readState: Session["readState"]
+): SessionListResponse | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    sessions: data.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      if (!readState) return session;
+      const currentMessageId = session.readState?.latestMessageId;
+      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
+        return session;
+      }
+      return {
+        ...session,
+        readState,
+      };
+    }),
+  };
+}
+
 export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
   const seen = new Set(existing.map((session) => session.id));
   const merged = [...existing];

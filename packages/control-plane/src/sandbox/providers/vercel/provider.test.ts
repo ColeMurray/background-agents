@@ -128,12 +128,16 @@ const VERCEL_MAX_SANDBOX_TIMEOUT_MS = 45 * 60 * 1000;
 function environmentBuildConfig() {
   return {
     buildId: "envimg-1",
-    environmentId: "env_flagship",
+    scopeKind: "environment" as const,
+    scopeId: "env_flagship",
     repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: "main" }],
     callbackUrl: "https://control-plane.test/image-builds/build-complete",
     failureCallbackUrl: "https://control-plane.test/image-builds/build-failed",
     callbackToken: "callback-token",
     buildExecutionTimeoutSeconds: 1800,
+    providerSessionTimeoutSeconds: 2400,
+    onProviderSessionCreated: async () => undefined,
+    correlation: { trace_id: "trace-1", request_id: "request-1" },
   };
 }
 
@@ -587,7 +591,7 @@ describe("VercelSandboxProvider", () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    const result = await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       userEnvVars: {
         USER_SECRET: "value",
@@ -603,7 +607,7 @@ describe("VercelSandboxProvider", () => {
     expect(createCall).toEqual(
       expect.objectContaining({
         runtime: "node24",
-        timeoutMs: 1800 * 1000,
+        timeoutMs: 2400 * 1000,
         sourceSnapshotId: "base-snapshot-1",
       })
     );
@@ -640,9 +644,8 @@ describe("VercelSandboxProvider", () => {
             "https://control-plane.test/image-builds/build-failed",
         },
       }),
-      undefined
+      { trace_id: "trace-1", request_id: "request-1" }
     );
-    expect(result).toEqual({ buildId: "envimg-1", status: "building" });
   });
 
   it("reports a compatible authoritative runtime version for image builds", () => {
@@ -657,9 +660,10 @@ describe("VercelSandboxProvider", () => {
     const onProviderSessionCreated = vi.fn(async () => undefined);
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    const result = await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "envimg-1",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
@@ -668,8 +672,10 @@ describe("VercelSandboxProvider", () => {
       failureCallbackUrl: "https://control-plane.test/environment-images/build-failed",
       callbackToken: "callback-token",
       buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
       cloneToken: "clone-token",
       onProviderSessionCreated,
+      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -711,16 +717,15 @@ describe("VercelSandboxProvider", () => {
             "https://control-plane.test/environment-images/build-failed",
         },
       }),
-      undefined
+      { trace_id: "trace-1", request_id: "request-1" }
     );
-    expect(result).toEqual({ buildId: "envimg-1", status: "building" });
   });
 
   it("honors an explicit build timeout below the Vercel limit for image builds", async () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       providerSessionTimeoutSeconds: 40 * 60,
     });
@@ -732,7 +737,7 @@ describe("VercelSandboxProvider", () => {
     const client = createMockClient();
     const provider = new VercelSandboxProvider(client, providerConfig);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       providerSessionTimeoutSeconds: 70 * 60,
     });
@@ -762,7 +767,7 @@ describe("VercelSandboxProvider", () => {
     const provider = new VercelSandboxProvider(client, providerConfig);
     const onProviderSessionCreated = vi.fn(async () => undefined);
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       ...environmentBuildConfig(),
       onProviderSessionCreated,
     });
