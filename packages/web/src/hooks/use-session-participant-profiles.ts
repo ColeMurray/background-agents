@@ -18,9 +18,7 @@ export function useSessionParticipantProfiles(
   const { data, mutate } = useSWR<unknown>(
     `/api/sessions/${sessionId}/participant-profiles` as const
   );
-  const attemptedUnknownIdsRef = useRef<Set<string>>(null);
-  if (attemptedUnknownIdsRef.current === null) attemptedUnknownIdsRef.current = new Set();
-  const attemptedUnknownIds = attemptedUnknownIdsRef.current;
+  const attemptedUnknownIds = useRef(new Set<string>());
 
   const profiles = useMemo<Record<string, SessionParticipantProfile>>(() => {
     const parsed = sessionParticipantProfilesResponseSchema.safeParse(data);
@@ -36,19 +34,19 @@ export function useSessionParticipantProfiles(
   }, [events, participants]);
 
   useEffect(() => {
-    attemptedUnknownIds.clear();
-  }, [attemptedUnknownIds, sessionId]);
+    attemptedUnknownIds.current.clear();
+  }, [sessionId]);
 
   useEffect(() => {
     if (data === undefined) return;
     const unknownIds = [...observedUserIds].filter(
-      (userId) => !profiles[userId] && !attemptedUnknownIds.has(userId)
+      (userId) => !profiles[userId] && !attemptedUnknownIds.current.has(userId)
     );
     if (unknownIds.length === 0) return;
 
-    for (const userId of unknownIds) attemptedUnknownIds.add(userId);
+    for (const userId of unknownIds) attemptedUnknownIds.current.add(userId);
     void mutate();
-  }, [attemptedUnknownIds, data, mutate, observedUserIds, profiles]);
+  }, [data, mutate, observedUserIds, profiles]);
 
   const profiledParticipants = useMemo(
     () =>

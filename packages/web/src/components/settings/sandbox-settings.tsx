@@ -594,7 +594,7 @@ export function SandboxSettingsEditor({
       </div>
 
       <div>
-        <p className="block text-sm font-medium text-foreground mb-1.5">Service Ports</p>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Service Ports</label>
         <p className="text-xs text-muted-foreground mb-2">
           Ports code-server and the web terminal bind to. Leave blank for the defaults (
           {DEFAULT_CODE_SERVER_PORT} and {DEFAULT_TERMINAL_PORT}). Change a port to free the default
@@ -638,7 +638,7 @@ export function SandboxSettingsEditor({
 
       <div>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
-          <p className="block text-sm font-medium text-foreground">Tunnel Ports</p>
+          <label className="block text-sm font-medium text-foreground">Tunnel Ports</label>
           <Button
             type="button"
             variant="subtle"
@@ -683,7 +683,7 @@ export function SandboxSettingsEditor({
       </div>
 
       <div>
-        <p className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</p>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</label>
         <p className="text-xs text-muted-foreground mb-2">
           Limit agent-spawned child sessions to prevent runaway sandbox usage.
         </p>
@@ -724,7 +724,7 @@ export function SandboxSettingsEditor({
       </div>
 
       <div>
-        <p className="block text-sm font-medium text-foreground mb-1.5">Resources</p>
+        <label className="block text-sm font-medium text-foreground mb-1.5">Resources</label>
         <p className="text-xs text-muted-foreground mb-2">
           Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
           reservation.
