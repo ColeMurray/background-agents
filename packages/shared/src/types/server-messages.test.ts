@@ -31,6 +31,52 @@ describe("artifact_updated server message", () => {
   });
 });
 
+describe("VNC session protocol", () => {
+  it("preserves VNC access information in subscribed session state", () => {
+    const parsed = serverMessageSchema.parse({
+      type: "subscribed",
+      sessionId: "session-1",
+      state: {
+        id: "session-1",
+        title: null,
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: "main",
+        branchName: null,
+        status: "active",
+        sandboxStatus: "ready",
+        messageCount: 0,
+        createdAt: 1,
+        vncUrl: "https://desktop.example",
+        vncPassword: "secret",
+      },
+      artifacts: [],
+      participantId: "participant-1",
+    });
+
+    expect(parsed).toMatchObject({
+      state: {
+        vncUrl: "https://desktop.example",
+        vncPassword: "secret",
+      },
+    });
+  });
+
+  it("parses VNC access information", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "vnc_info",
+        url: "https://desktop.example",
+        password: "secret",
+      })
+    ).toEqual({
+      type: "vnc_info",
+      url: "https://desktop.example",
+      password: "secret",
+    });
+  });
+});
+
 describe("Session.pullRequestSummary contract", () => {
   it("is optional on the session list contract and counts by display status", () => {
     expectTypeOf<Session["pullRequestSummary"]>().toEqualTypeOf<PullRequestSummary | undefined>();

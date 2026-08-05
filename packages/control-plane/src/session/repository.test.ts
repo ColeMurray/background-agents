@@ -134,6 +134,7 @@ describe("SessionRepository", () => {
         "user",
         0,
         0,
+        0,
         null,
         null,
         1000,
@@ -480,6 +481,24 @@ describe("SessionRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_spawn_error");
       expect(mock.calls[0].params).toEqual(["Failed to spawn sandbox", 123456]);
+    });
+  });
+
+  describe("VNC access", () => {
+    it("stores and clears VNC credentials", () => {
+      repo.updateSandboxVnc("https://vnc.test", "encrypted-password");
+      repo.clearSandboxVnc();
+
+      expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
+      expect(mock.calls[0].params).toEqual(["https://vnc.test", "encrypted-password"]);
+      expect(mock.calls[1].query).toContain("SET vnc_url = NULL, vnc_password = NULL");
+    });
+
+    it("can clear only the VNC URL", () => {
+      repo.clearSandboxVncUrl();
+
+      expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
+      expect(mock.calls[0].query).not.toContain("vnc_password");
     });
   });
 

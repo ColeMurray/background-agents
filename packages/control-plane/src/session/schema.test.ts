@@ -243,6 +243,23 @@ describe("applyMigrations", () => {
     expect(backfill).toBeDefined();
   });
 
+  it("adds VNC session and sandbox fields for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("vnc_enabled INTEGER NOT NULL DEFAULT 0");
+    expect(SCHEMA_SQL).toContain("vnc_url TEXT");
+    expect(SCHEMA_SQL).toContain("vnc_password TEXT");
+
+    const migration = MIGRATIONS.find((migration) => migration.id === 39);
+    expect(typeof migration?.run).toBe("function");
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+    expect(mock.calls.map((call) => call.query)).toEqual(
+      expect.arrayContaining([
+        "ALTER TABLE sandbox ADD COLUMN vnc_url TEXT",
+        "ALTER TABLE sandbox ADD COLUMN vnc_password TEXT",
+        "ALTER TABLE session ADD COLUMN vnc_enabled INTEGER NOT NULL DEFAULT 0",
+      ])
+    );
+  });
+
   it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");

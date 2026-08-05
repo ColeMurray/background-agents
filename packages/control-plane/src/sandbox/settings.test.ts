@@ -121,9 +121,12 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({ terminalEnabled: true });
   });
 
-  it("accepts valid codeServerPort and terminalPort", () => {
-    expect(normalizeSandboxSettings({ codeServerPort: 8081, terminalPort: 7000 })).toEqual({
+  it("accepts valid service ports", () => {
+    expect(
+      normalizeSandboxSettings({ codeServerPort: 8081, vncPort: 6081, terminalPort: 7000 })
+    ).toEqual({
       codeServerPort: 8081,
+      vncPort: 6081,
       terminalPort: 7000,
     });
   });
@@ -135,6 +138,7 @@ describe("normalizeSandboxSettings", () => {
     expect(() => normalizeSandboxSettings({ terminalPort: 70000 })).toThrow(
       SandboxSettingsValidationError
     );
+    expect(() => normalizeSandboxSettings({ vncPort: 0 })).toThrow(SandboxSettingsValidationError);
   });
 
   it("rejects the reserved internal terminal port", () => {
@@ -153,6 +157,15 @@ describe("normalizeSandboxSettings", () => {
     expect(() => normalizeSandboxSettings({ codeServerPort: 9000, terminalPort: 9000 })).toThrow(
       SandboxSettingsValidationError
     );
+    expect(() => normalizeSandboxSettings({ vncPort: 3000, tunnelPorts: [3000] })).toThrow(
+      SandboxSettingsValidationError
+    );
+  });
+
+  it("allows tunnels on default ports when the corresponding service is disabled", () => {
+    expect(normalizeSandboxSettings({ tunnelPorts: [8080, 6080, 7680] })).toEqual({
+      tunnelPorts: [8080, 6080, 7680],
+    });
   });
 
   it("frees the default port for a tunnel when code-server is moved", () => {
@@ -174,6 +187,9 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({
       codeServerPort: 9000,
       tunnelPorts: [3000],
+    });
+    expect(normalizeSandboxSettings({ codeServerPort: 6080 }, { invalid: "omit" })).toEqual({
+      codeServerPort: 6080,
     });
   });
 

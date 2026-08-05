@@ -191,6 +191,11 @@ function createIntegrationSettingsDbMock(
                 settings: JSON.stringify({ enabledRepos: null, defaults: { enabled: true } }),
               };
             }
+            if (integrationId === "vnc") {
+              return {
+                settings: JSON.stringify({ enabledRepos: null, defaults: { enabled: true } }),
+              };
+            }
             if (integrationId === "sandbox") {
               return {
                 settings: JSON.stringify({
@@ -691,6 +696,7 @@ describe("SchedulerDO", () => {
       expect(initBody.repoId).toBeNull();
       expect(initBody.defaultBranch).toBeNull();
       expect(initBody.codeServerEnabled).toBe(false);
+      expect(initBody.vncEnabled).toBe(false);
       expect(mockSessionStoreCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           repoOwner: null,
@@ -973,6 +979,7 @@ describe("SchedulerDO", () => {
       expect(res.status).toBe(200);
       const initBody = await getInitBody(fetchMock);
       expect(initBody.codeServerEnabled).toBe(true);
+      expect(initBody.vncEnabled).toBe(true);
       expect(initBody.sandboxSettings).toEqual({ tunnelPorts: [5173], terminalEnabled: true });
     });
 
