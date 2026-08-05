@@ -6,10 +6,7 @@
  * to OpenComputer rather than being driven by OpenInspect's lifecycle manager.
  */
 
-import {
-  DEFAULT_BUILD_TIMEOUT_SECONDS,
-  type SandboxSettings,
-} from "@open-inspect/shared/types/integrations";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import { createLogger } from "../../logger";
 import type { SourceControlProviderName } from "../../source-control";
@@ -396,7 +393,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
           openinspect_build_id: config.buildId,
           openinspect_environment: config.scopeId,
         },
-        timeoutSeconds: config.providerSessionTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS,
+        timeoutSeconds: config.providerSessionTimeoutSeconds,
         secretStore: secretStore?.name,
       });
       providerObjectId = sandbox.id;
@@ -406,12 +403,16 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       await this.client.startRuntime(sandbox.id, {
         [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sandbox.id,
       });
+      // The OpenComputer REST client takes no correlation argument, so the
+      // trace cannot be forwarded downstream yet — it is recorded on this
+      // trigger log line only. Spread first so the explicit fields (notably
+      // sandbox_id, the new build sandbox) win over correlation's.
       log.info("opencomputer.environment_image_build_triggered", {
+        ...config.correlation,
         build_id: config.buildId,
         scope_kind: config.scopeKind,
         scope_id: config.scopeId,
         sandbox_id: sandbox.id,
-        ...config.correlation,
       });
     } catch (error) {
       if (providerObjectId) {

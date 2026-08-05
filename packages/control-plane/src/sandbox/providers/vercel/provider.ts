@@ -2,10 +2,7 @@
  * Vercel Sandbox provider implementation.
  */
 
-import {
-  DEFAULT_BUILD_TIMEOUT_SECONDS,
-  type SandboxSettings,
-} from "@open-inspect/shared/types/integrations";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
@@ -295,9 +292,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         {
           name: sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: resolveVercelTimeoutMs(
-            config.providerSessionTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS
-          ),
+          timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
           tags: {
             openinspect_framework: "open-inspect",
@@ -318,7 +313,10 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.correlation
       );
 
+      // Spread correlation first so the explicit fields (notably session_id,
+      // the new provider session) win over correlation's.
       log.info("vercel.environment_image_build_triggered", {
+        ...config.correlation,
         build_id: config.buildId,
         scope_kind: config.scopeKind,
         scope_id: config.scopeId,

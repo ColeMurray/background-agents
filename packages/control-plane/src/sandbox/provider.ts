@@ -34,10 +34,15 @@ export interface ImageBuildProviderTriggerConfig {
   userEnvVars?: Record<string, string>;
   cloneToken?: string;
   buildExecutionTimeoutSeconds: number;
-  /** Provider-session lifetime in seconds, including deferred finalization headroom. */
-  providerSessionTimeoutSeconds?: number;
+  /**
+   * Provider-session lifetime in seconds, including deferred finalization
+   * headroom. Always resolved by the adapter layer
+   * (resolveImageBuildProviderSessionTimeoutSeconds) — providers apply it
+   * verbatim instead of choosing their own default.
+   */
+  providerSessionTimeoutSeconds: number;
   onProviderSessionCreated: (providerSessionId: string) => Promise<void>;
-  correlation?: CorrelationContext;
+  correlation: CorrelationContext;
 }
 
 /**

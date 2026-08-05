@@ -135,7 +135,9 @@ function environmentBuildConfig() {
     failureCallbackUrl: "https://control-plane.test/image-builds/build-failed",
     callbackToken: "callback-token",
     buildExecutionTimeoutSeconds: 1800,
+    providerSessionTimeoutSeconds: 2400,
     onProviderSessionCreated: async () => undefined,
+    correlation: { trace_id: "trace-1", request_id: "request-1" },
   };
 }
 
@@ -605,7 +607,7 @@ describe("VercelSandboxProvider", () => {
     expect(createCall).toEqual(
       expect.objectContaining({
         runtime: "node24",
-        timeoutMs: 1800 * 1000,
+        timeoutMs: 2400 * 1000,
         sourceSnapshotId: "base-snapshot-1",
       })
     );
@@ -642,7 +644,7 @@ describe("VercelSandboxProvider", () => {
             "https://control-plane.test/image-builds/build-failed",
         },
       }),
-      undefined
+      { trace_id: "trace-1", request_id: "request-1" }
     );
   });
 
@@ -670,8 +672,10 @@ describe("VercelSandboxProvider", () => {
       failureCallbackUrl: "https://control-plane.test/environment-images/build-failed",
       callbackToken: "callback-token",
       buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
       cloneToken: "clone-token",
       onProviderSessionCreated,
+      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -713,7 +717,7 @@ describe("VercelSandboxProvider", () => {
             "https://control-plane.test/environment-images/build-failed",
         },
       }),
-      undefined
+      { trace_id: "trace-1", request_id: "request-1" }
     );
   });
 
