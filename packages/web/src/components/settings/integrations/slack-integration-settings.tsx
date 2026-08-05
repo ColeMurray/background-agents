@@ -3,27 +3,42 @@
 import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
+import { DEFAULT_MENTIONS_POLICY } from "@open-inspect/shared/slack";
 import {
-  DEFAULT_MENTIONS_POLICY,
+  encodeRepositoryPathSegments,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  Environment,
+  ListEnvironmentsResponse,
+} from "@open-inspect/shared/types/environments";
+import {
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
   MAX_SLACK_ROUTING_RULES,
-  MODEL_OPTIONS,
-  type EnrichedRepository,
   type SlackGlobalConfig,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRepoSettings,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import { MODEL_OPTIONS } from "@open-inspect/shared/models";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
+import { ENVIRONMENTS_KEY } from "@/hooks/use-environments";
+import { environmentOptionValue, parseEnvironmentOptionValue } from "@/lib/session-target";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/site-config";
 import { RadioCard } from "@/components/ui/form-controls";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -104,6 +119,7 @@ export function SlackIntegrationSettings() {
   const { data: repoSettingsData, isLoading: repoSettingsLoading } =
     useSWR<RepoListResponse>(REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
+  const { data: environmentsData } = useSWR<ListEnvironmentsResponse>(ENVIRONMENTS_KEY);
 
   if (globalLoading || repoSettingsLoading) {
     return <IntegrationSettingsSkeleton />;
@@ -112,6 +128,11 @@ export function SlackIntegrationSettings() {
   const settings = globalData?.settings;
   const repoOverrides = repoSettingsData?.repos ?? [];
   const availableRepos = reposData?.repos ?? [];
+  const availableEnvironments = environmentsData?.environments ?? [];
+  // Stale-target warnings must not fire while a list is still loading — an
+  // empty-because-loading list is not an authoritative "target is gone".
+  const reposLoaded = reposData !== undefined;
+  const environmentsLoaded = environmentsData !== undefined;
 
   return (
     <div>
@@ -134,7 +155,13 @@ export function SlackIntegrationSettings() {
 
       <GlobalSettingsSection settings={settings} />
 
-      <RoutingRulesSection settings={settings} availableRepos={availableRepos} />
+      <RoutingRulesSection
+        settings={settings}
+        availableRepos={availableRepos}
+        availableEnvironments={availableEnvironments}
+        reposLoaded={reposLoaded}
+        environmentsLoaded={environmentsLoaded}
+      />
 
       <Section
         title="Repository overrides"
@@ -155,6 +182,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
   const [mentionsPolicy, setMentionsPolicy] = useState<SlackMentionsPolicy>(
     settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY
   );
+  const [sessionInstructions, setSessionInstructions] = useState(
+    settings?.defaults?.sessionInstructions ?? ""
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
@@ -164,6 +194,7 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
     setAgentNotificationsEnabled(settings?.defaults?.agentNotificationsEnabled ?? false);
     setModel(settings?.defaults?.model ?? "");
     setMentionsPolicy(settings?.defaults?.mentionsPolicy ?? DEFAULT_MENTIONS_POLICY);
+    setSessionInstructions(settings?.defaults?.sessionInstructions ?? "");
   }, [settings, dirty, saving]);
 
   const selectedModelEnabled = model ? enabledModels.includes(model) : true;
@@ -180,18 +211,24 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
       // preserve them by writing a blob that keeps just the rules (rather than
       // deleting the whole row); otherwise clear the row entirely.
       const existingRules = settings?.defaults?.routingRules;
-      const res = existingRules?.length
-        ? await fetch(GLOBAL_SETTINGS_KEY, {
+      const resetBody: SlackGlobalConfig | null = existingRules?.length
+        ? { defaults: { routingRules: existingRules } }
+        : null;
+      const res = resetBody
+        ? await browserApiFetch(GLOBAL_SETTINGS_KEY, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ settings: { defaults: { routingRules: existingRules } } }),
+            body: JSON.stringify({ settings: resetBody }),
           })
-        : await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+        : await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the post-reset blob before revalidation (see
+        // handleSave for why).
+        mutate(GLOBAL_SETTINGS_KEY, { settings: resetBody });
         setAgentNotificationsEnabled(false);
         setModel("");
         setMentionsPolicy(DEFAULT_MENTIONS_POLICY);
+        setSessionInstructions("");
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -212,17 +249,21 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         agentNotificationsEnabled,
         model: model || undefined,
         mentionsPolicy,
+        sessionInstructions: sessionInstructions || undefined,
       }),
     };
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
       });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the saved blob before revalidation: the other
+        // global sections merge against this snapshot, so a stale one would
+        // let a back-to-back save resurrect pre-save defaults.
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Settings saved.");
         setDirty(false);
       } else {
@@ -332,6 +373,32 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
         </div>
       </div>
 
+      <div className="mb-4">
+        <label
+          htmlFor="slack-session-instructions"
+          className="block text-sm font-medium text-foreground mb-1"
+        >
+          Session Instructions
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Custom instructions appended to agent prompts for all Slack-initiated sessions. Use this
+          to guide how the agent approaches requests (e.g., coding standards, preferred tools, PR
+          conventions).
+        </p>
+        <Textarea
+          id="slack-session-instructions"
+          value={sessionInstructions}
+          onChange={(e) => {
+            setSessionInstructions(e.target.value);
+            setDirty(true);
+          }}
+          rows={3}
+          maxLength={MAX_SESSION_INSTRUCTIONS_LENGTH}
+          placeholder="e.g., Always run tests before pushing changes. Prefer minimal diffs."
+          className="resize-y"
+        />
+      </div>
+
       <div className="flex items-center gap-2">
         <Button onClick={handleSave} disabled={saving || !dirty}>
           {saving ? "Saving..." : "Save"}
@@ -350,8 +417,9 @@ function GlobalSettingsSection({ settings }: { settings: SlackGlobalConfig | nul
             <AlertDialogTitle>Reset to defaults</AlertDialogTitle>
             <AlertDialogDescription>
               Reset Slack defaults? The master switch will turn off, the default model will use the
-              system default, and mentions policy will return to <strong>allow</strong>.
-              Per-repository overrides and routing rules are not affected.
+              system default, mentions policy will return to <strong>allow</strong>, and session
+              instructions will be cleared. Per-repository overrides and routing rules are not
+              affected.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -380,14 +448,18 @@ function RepoOverridesSection({
 
   const handleAdd = async () => {
     if (!addingRepo) return;
-    const [owner, name] = addingRepo.split("/");
+    const repository = parseRepositoryFullName(addingRepo);
+    if (!repository) return;
 
     try {
-      const res = await fetch(`/api/integration-settings/slack/repos/${owner}/${name}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: {} }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: {} }),
+        }
+      );
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         setAddingRepo("");
@@ -444,7 +516,7 @@ function deriveOverrideMode(settings: SlackRepoSettings): OverrideMode {
 }
 
 function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
-  const [mode, setMode] = useState<OverrideMode>(deriveOverrideMode(entry.settings));
+  const [mode, setMode] = useState<OverrideMode>(() => deriveOverrideMode(entry.settings));
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -454,18 +526,22 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   }, [entry.settings, dirty, saving]);
 
   const handleSave = async () => {
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
     setSaving(true);
-    const [owner, name] = entry.repo.split("/");
     const settings: SlackRepoSettings = {};
     if (mode === "on") settings.agentNotificationsEnabled = true;
     if (mode === "off") settings.agentNotificationsEnabled = false;
 
     try {
-      const res = await fetch(`/api/integration-settings/slack/repos/${owner}/${name}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        }
+      );
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         setDirty(false);
@@ -482,11 +558,15 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   };
 
   const handleDelete = async () => {
-    const [owner, name] = entry.repo.split("/");
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
     try {
-      const res = await fetch(`/api/integration-settings/slack/repos/${owner}/${name}`, {
-        method: "DELETE",
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "DELETE",
+        }
+      );
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
         toast.success(`Override for ${entry.repo} removed.`);
@@ -537,6 +617,7 @@ interface DraftRoutingRule {
   /** Stable key for list rendering; not persisted. */
   id: number;
   keyword: string;
+  /** Select value: a repo fullName or an `env:<id>` environment value. */
   target: string;
 }
 
@@ -547,16 +628,33 @@ function toDraftRoutingRules(rules: SlackRoutingRule[] | undefined): DraftRoutin
   return (rules ?? []).map((rule) => ({
     id: draftRoutingRuleIdCounter++,
     keyword: rule.keyword,
-    target: rule.target,
+    target: rule.targetType === "environment" ? environmentOptionValue(rule.target) : rule.target,
   }));
+}
+
+/** Map a draft row back to the stored rule shape: env: values split into target + targetType. */
+function toStoredRoutingRule(draft: DraftRoutingRule): SlackRoutingRule {
+  const keyword = draft.keyword.trim();
+  const value = draft.target.trim();
+  const environmentId = parseEnvironmentOptionValue(value);
+  return environmentId
+    ? { keyword, target: environmentId, targetType: "environment" }
+    : { keyword, target: value };
 }
 
 function RoutingRulesSection({
   settings,
   availableRepos,
+  availableEnvironments,
+  reposLoaded,
+  environmentsLoaded,
 }: {
   settings: SlackGlobalConfig | null | undefined;
   availableRepos: EnrichedRepository[];
+  availableEnvironments: Environment[];
+  /** False while the list is loading — suppresses stale-target warnings. */
+  reposLoaded: boolean;
+  environmentsLoaded: boolean;
 }) {
   const [rules, setRules] = useState<DraftRoutingRule[]>(() =>
     toDraftRoutingRules(settings?.defaults?.routingRules)
@@ -582,7 +680,8 @@ function RoutingRulesSection({
   };
 
   const addRule = () => {
-    setRules((prev) => [...prev, { id: draftRoutingRuleIdCounter++, keyword: "", target: "" }]);
+    const id = draftRoutingRuleIdCounter++;
+    setRules((prev) => [...prev, { id, keyword: "", target: "" }]);
     setDirty(true);
   };
 
@@ -592,9 +691,9 @@ function RoutingRulesSection({
   };
 
   const handleSave = async () => {
-    const trimmed = rules.map((r) => ({ keyword: r.keyword.trim(), target: r.target.trim() }));
+    const trimmed = rules.map(toStoredRoutingRule);
     if (trimmed.some((r) => !r.keyword || !r.target)) {
-      toast.error("Every routing rule needs a keyword and a target repository.");
+      toast.error("Every routing rule needs a keyword and a target.");
       return;
     }
     if (trimmed.length > MAX_SLACK_ROUTING_RULES) {
@@ -615,13 +714,15 @@ function RoutingRulesSection({
     };
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
       });
       if (res.ok) {
-        mutate(GLOBAL_SETTINGS_KEY);
+        // Seed the cache with the saved blob before revalidation (see the
+        // Defaults section save for why).
+        mutate(GLOBAL_SETTINGS_KEY, { settings: body });
         toast.success("Routing rules saved.");
         setDirty(false);
       } else {
@@ -635,25 +736,32 @@ function RoutingRulesSection({
     }
   };
 
+  const repoItems = availableRepos.map((r) => (
+    <SelectItem key={r.fullName} value={r.fullName.toLowerCase()}>
+      {r.fullName}
+    </SelectItem>
+  ));
+
   return (
     <Section
       title="Routing rules"
-      description="Map keywords to repositories. When a Slack message contains a keyword, the agent is routed to that repository before falling back to channel association or automatic detection."
+      description="Map keywords to repositories or environments. When a Slack message contains a keyword, the agent is routed to that target before falling back to channel association or automatic detection."
     >
       {rules.length > 0 ? (
         <div className="space-y-3 mb-4">
           {rules.map((rule) => {
-            const target = rule.target.trim().toLowerCase();
-            const staleTarget = target !== "" && !accessibleRepos.has(target);
+            const rawTarget = rule.target.trim();
+            const environmentId = parseEnvironmentOptionValue(rawTarget);
+            const isEnvironmentTarget = environmentId !== null;
+            const selectValue = isEnvironmentTarget ? rawTarget : rawTarget.toLowerCase();
+            const staleTarget =
+              rawTarget !== "" &&
+              (isEnvironmentTarget
+                ? environmentsLoaded && !availableEnvironments.some((e) => e.id === environmentId)
+                : reposLoaded && !accessibleRepos.has(selectValue));
             const duplicateKeyword =
               rule.keyword.trim() !== "" &&
               (keywordCounts.get(rule.keyword.trim().toLowerCase()) ?? 0) > 1;
-
-            // A target that is no longer accessible must still render so the user
-            // can see and re-point it (Radix Select needs a matching item).
-            const targetOptions = staleTarget
-              ? [...availableRepos.map((r) => r.fullName), rule.target]
-              : availableRepos.map((r) => r.fullName);
 
             return (
               <div key={rule.id}>
@@ -668,16 +776,45 @@ function RoutingRulesSection({
                   <span className="text-muted-foreground" aria-hidden="true">
                     &rarr;
                   </span>
-                  <Select value={target} onValueChange={(v) => updateRule(rule.id, { target: v })}>
-                    <SelectTrigger className="flex-1" aria-label="Routing target repository">
-                      <SelectValue placeholder="Select a repository..." />
+                  <Select
+                    value={selectValue}
+                    onValueChange={(v) => updateRule(rule.id, { target: v })}
+                  >
+                    <SelectTrigger className="flex-1" aria-label="Routing target">
+                      <SelectValue placeholder="Select a target..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {targetOptions.map((fullName) => (
-                        <SelectItem key={fullName} value={fullName.toLowerCase()}>
-                          {fullName}
+                      {availableEnvironments.length > 0 ? (
+                        <>
+                          <SelectGroup>
+                            <SelectLabel>Environments</SelectLabel>
+                            {availableEnvironments.map((environment) => (
+                              <SelectItem
+                                key={environment.id}
+                                value={environmentOptionValue(environment.id)}
+                              >
+                                {environment.name}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                          <SelectGroup>
+                            <SelectLabel>Repositories</SelectLabel>
+                            {repoItems}
+                          </SelectGroup>
+                        </>
+                      ) : (
+                        repoItems
+                      )}
+                      {/* A target that is no longer available must still render so
+                          the user can see and re-point it (Radix Select needs a
+                          matching item). */}
+                      {staleTarget && (
+                        <SelectItem value={selectValue}>
+                          {isEnvironmentTarget
+                            ? `Deleted environment (${environmentId})`
+                            : rawTarget}
                         </SelectItem>
-                      ))}
+                      )}
                     </SelectContent>
                   </Select>
                   <Button variant="destructive" size="sm" onClick={() => removeRule(rule.id)}>
@@ -686,16 +823,22 @@ function RoutingRulesSection({
                 </div>
                 {(staleTarget || duplicateKeyword) && (
                   <div className="mt-1 ml-1 space-y-0.5">
-                    {staleTarget && (
-                      <p className="text-xs text-warning">
-                        <code>{rule.target}</code> is not in your accessible repositories — this
-                        rule is ignored until access is restored.
-                      </p>
-                    )}
+                    {staleTarget &&
+                      (isEnvironmentTarget ? (
+                        <p className="text-xs text-warning">
+                          This environment no longer exists — this rule is ignored until it points
+                          at a valid target.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-warning">
+                          <code>{rule.target}</code> is not in your accessible repositories — this
+                          rule is ignored until access is restored.
+                        </p>
+                      ))}
                     {duplicateKeyword && (
                       <p className="text-xs text-warning">
                         This keyword is used by more than one rule — matching messages will ask
-                        which repository to use.
+                        which target to use.
                       </p>
                     )}
                   </div>
@@ -707,7 +850,7 @@ function RoutingRulesSection({
       ) : (
         <p className="text-sm text-muted-foreground mb-4">
           No routing rules yet. Add one to route messages containing a keyword to a specific
-          repository.
+          repository or environment.
         </p>
       )}
 
@@ -721,8 +864,8 @@ function RoutingRulesSection({
       </div>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        Keywords match whole words, case-insensitively. Point each keyword at one repository; the
-        same keyword on two repositories will prompt for a choice instead of guessing.
+        Keywords match whole words, case-insensitively. Point each keyword at one repository or
+        environment; the same keyword on two targets will prompt for a choice instead of guessing.
       </p>
     </Section>
   );

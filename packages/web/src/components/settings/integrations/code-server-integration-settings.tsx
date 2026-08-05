@@ -4,13 +4,18 @@ import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
-  type EnrichedRepository,
-  type CodeServerSettings,
-  type CodeServerGlobalConfig,
-} from "@open-inspect/shared";
+  encodeRepositoryPathSegments,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
+import type {
+  CodeServerSettings,
+  CodeServerGlobalConfig,
+} from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsSkeleton } from "./integration-settings-skeleton";
 import { Button } from "@/components/ui/button";
 import { RadioCard } from "@/components/ui/form-controls";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   Select,
   SelectContent,
@@ -118,7 +123,7 @@ function GlobalSettingsSection({
     setSaving(true);
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
         mutate(GLOBAL_SETTINGS_KEY);
@@ -148,7 +153,7 @@ function GlobalSettingsSection({
     }
 
     try {
-      const res = await fetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
@@ -313,14 +318,18 @@ function RepoOverridesSection({
 
   const handleAdd = async () => {
     if (!addingRepo) return;
-    const [owner, name] = addingRepo.split("/");
+    const repository = parseRepositoryFullName(addingRepo);
+    if (!repository) return;
 
     try {
-      const res = await fetch(`/api/integration-settings/code-server/repos/${owner}/${name}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings: { enabled: true } }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings: { enabled: true } }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -376,17 +385,20 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   const [dirty, setDirty] = useState(false);
 
   const handleSave = async () => {
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
     setSaving(true);
-
-    const [owner, name] = entry.repo.split("/");
     const settings: CodeServerSettings = { enabled };
 
     try {
-      const res = await fetch(`/api/integration-settings/code-server/repos/${owner}/${name}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ settings }),
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ settings }),
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);
@@ -404,12 +416,16 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   };
 
   const handleDelete = async () => {
-    const [owner, name] = entry.repo.split("/");
+    const repository = parseRepositoryFullName(entry.repo);
+    if (!repository) return;
 
     try {
-      const res = await fetch(`/api/integration-settings/code-server/repos/${owner}/${name}`, {
-        method: "DELETE",
-      });
+      const res = await browserApiFetch(
+        `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}`,
+        {
+          method: "DELETE",
+        }
+      );
 
       if (res.ok) {
         mutate(REPO_SETTINGS_KEY);

@@ -1,8 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { TriggerCondition, AutomationEventSource, JsonPathFilter } from "@open-inspect/shared";
-import { conditionRegistry } from "@open-inspect/shared";
+import type {
+  TriggerCondition,
+  AutomationEventSource,
+  JsonPathFilter,
+} from "@open-inspect/shared/triggers";
+import { conditionRegistry } from "@open-inspect/shared/triggers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -41,7 +45,7 @@ const CONDITION_LABELS: Record<string, string> = {
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
-export const CHECK_CONCLUSION_OPTIONS = [
+const CHECK_CONCLUSION_OPTIONS = [
   "success",
   "failure",
   "neutral",

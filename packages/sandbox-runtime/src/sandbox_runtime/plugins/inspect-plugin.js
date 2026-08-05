@@ -7,6 +7,7 @@
 import { tool } from "@opencode-ai/plugin";
 import { z } from "zod";
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -45,9 +46,67 @@ function getSessionId() {
   }
 }
 
-async function getCurrentBranch() {
+// Canonical repository manifest written by the supervisor — the single owner
+// of the /workspace checkout layout. Mirrors REPO_MANIFEST_FILE_PATH in
+// sandbox_runtime/constants.py.
+const REPO_MANIFEST_PATH = "/tmp/oi-repo-manifest.json";
+
+// Ordered repository list {owner, name, path} from the supervisor's manifest
+// (empty when the manifest is absent, e.g. tool run outside a sandbox boot).
+function getRepositories() {
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    const manifest = JSON.parse(readFileSync(REPO_MANIFEST_PATH, "utf8"));
+    const repositories = Array.isArray(manifest?.repositories) ? manifest.repositories : [];
+    return repositories
+      .map((entry) => ({
+        owner: String(entry?.owner || "").trim(),
+        name: String(entry?.name || "").trim(),
+        path: String(entry?.path || "").trim(),
+      }))
+      .filter((entry) => entry.owner && entry.name && entry.path);
+  } catch (e) {
+    console.log("[create-pull-request] Failed to read repo manifest:", e.message);
+    return [];
+  }
+}
+
+/** Resolve an owner/name argument, preserving nested owners and manifest casing. */
+export function resolveRepositoryTarget(repo, repositories) {
+  const requested = String(repo || "").trim();
+
+  if (repositories.length > 0) {
+    const normalized = requested.toLowerCase();
+    return (
+      repositories.find(
+        (repository) => `${repository.owner}/${repository.name}`.toLowerCase() === normalized
+      ) || null
+    );
+  }
+
+  const separator = requested.lastIndexOf("/");
+  if (separator <= 0 || separator === requested.length - 1) {
+    return null;
+  }
+
+  const owner = requested.slice(0, separator);
+  const name = requested.slice(separator + 1);
+  return owner.split("/").some((segment) => !segment) ? null : { owner, name };
+}
+
+export function formatPullRequestSuccess(result) {
+  const status =
+    result?.state === "draft"
+      ? "The pull request is in draft mode."
+      : "The pull request is now ready for review.";
+  return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\n${status}`;
+}
+
+async function getCurrentBranch(repoPath) {
+  try {
+    const gitArgs = repoPath
+      ? ["-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD"]
+      : ["rev-parse", "--abbrev-ref", "HEAD"];
+    const { stdout } = await execFileAsync("git", gitArgs, {
       timeout: 5000,
     });
     const branch = stdout.trim();
@@ -81,8 +140,19 @@ export default tool({
     baseBranch: z
       .string()
       .optional()
+      .describe("Target branch to merge into. Defaults to the session's base branch."),
+    repo: z
+      .string()
+      .optional()
       .describe(
-        "Target branch to merge into. Defaults to the repository's default branch (usually 'main')."
+        'Target repository as "owner/name". Required when the session spans multiple ' +
+          "repositories; may be omitted for single-repository sessions."
+      ),
+    draft: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether to open the pull request as a draft. Set to true only when the user explicitly asks for a draft; otherwise omit this field so the pull request is ready for review. Note: repository policy may still require draft mode."
       ),
   },
   async execute(args, context) {
@@ -90,7 +160,32 @@ export default tool({
     const title = args.title || "Changes from OpenCode session";
     const body = args.body || "Automated PR created via create-pull-request tool";
     const baseBranch = args.baseBranch; // undefined if not provided, server will use default
-    const headBranch = await getCurrentBranch();
+    const draft = args.draft; // undefined if not provided, server falls back to repo setting
+
+    // Resolve the target repository for multi-repo sessions.
+    const repositories = getRepositories();
+    const validValues = repositories.map((r) => `${r.owner}/${r.name}`).join(", ");
+    let repoOwner;
+    let repoName;
+    let repoPath;
+    if (args.repo) {
+      const target = resolveRepositoryTarget(args.repo, repositories);
+      if (!target && repositories.length > 0) {
+        return `Failed to create pull request: ${args.repo} is not part of this session. Valid values: ${validValues}.`;
+      }
+      if (!target) {
+        return 'Failed to create pull request: repo must be "owner/name".';
+      }
+      // Use the manifest's canonical casing and path — checkout directories
+      // and the control plane's member records are case-sensitive.
+      repoOwner = target.owner;
+      repoName = target.name;
+      repoPath = target.path;
+    } else if (repositories.length > 1) {
+      return `Failed to create pull request: this session spans multiple repositories — pass repo with one of: ${validValues}.`;
+    }
+
+    const headBranch = await getCurrentBranch(repoPath);
 
     try {
       const sessionId = getSessionId();
@@ -118,6 +213,9 @@ export default tool({
           body: body,
           baseBranch: baseBranch,
           headBranch: headBranch,
+          repoOwner: repoOwner,
+          repoName: repoName,
+          draft: draft,
           timestamp: Date.now(),
         }),
       });
@@ -155,7 +253,7 @@ export default tool({
       }
 
       console.log(`[create-pull-request] SUCCESS: PR #${result.prNumber} created`);
-      return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\nThe PR is now ready for review.`;
+      return formatPullRequestSuccess(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(`[create-pull-request] ERROR: ${message}`);

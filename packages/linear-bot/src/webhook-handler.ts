@@ -3,9 +3,11 @@
  * Extracted from index.ts for modularity.
  */
 
+import { createSessionResponseSchema } from "@open-inspect/shared";
+import { z } from "zod";
 import type {
   Env,
-  CallbackContext,
+  LinearCallbackContext,
   LinearIssueDetails,
   AgentSessionWebhook,
   AgentSessionWebhookIssue,
@@ -17,30 +19,35 @@ import {
   fetchIssueDetails,
   fetchUser,
   updateAgentSession,
-  getRepoSuggestions,
 } from "./utils/linear-client";
 import type { LinearApiClient } from "./utils/linear-client";
-import { buildInternalAuthHeaders } from "./utils/internal";
-import { splitRepoFullName } from "./utils/repo";
-import { classifyRepo } from "./classifier";
-import { getAvailableRepos } from "./classifier/repos";
-import { getLinearConfig } from "./utils/integration-config";
+import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { makePlan } from "./plan";
+import { extractModelFromLabels, resolveSessionModelSettings } from "./model-resolution";
 import {
-  resolveStaticRepo,
-  extractModelFromLabels,
-  resolveSessionModelSettings,
-} from "./model-resolution";
-import {
-  getTeamRepoMapping,
-  getProjectRepoMapping,
-  getUserPreferences,
-  lookupIssueSession,
-  storeIssueSession,
-} from "./kv-store";
+  resolveSessionTarget,
+  resolveStoredSessionTarget,
+  resolveTargetIntegration,
+  targetId,
+  targetLabel,
+  targetRequestFields,
+  type SessionTarget,
+} from "./target-resolution";
+import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-store";
 
 const log = createLogger("handler");
+
+const sessionEventsSummaryResponseSchema = z.object({
+  events: z.array(
+    z.object({
+      type: z.literal("token"),
+      data: z.object({
+        content: z.string(),
+      }),
+    })
+  ),
+});
 
 export function escapeHtml(s: string): string {
   return s
@@ -125,21 +132,13 @@ export function buildFollowUpPrompt(params: {
   ].join("\n");
 }
 
-async function getAuthHeaders(env: Env, traceId?: string): Promise<Record<string, string>> {
-  return {
-    "Content-Type": "application/json",
-    ...(await buildInternalAuthHeaders(env.INTERNAL_CALLBACK_SECRET, traceId)),
-  };
-}
-
 /**
  * Create a session via the control plane.
  */
 async function createSession(
   env: Env,
+  target: SessionTarget,
   params: {
-    repoOwner: string;
-    repoName: string;
     title: string;
     model: string;
     reasoningEffort?: string;
@@ -149,14 +148,21 @@ async function createSession(
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
-  const headers = await getAuthHeaders(env, traceId);
-  const response = await env.CONTROL_PLANE.fetch("https://internal/sessions", {
+  const url = "https://internal/sessions";
+  const body = JSON.stringify({
+    ...targetRequestFields(target),
+    title: params.title,
+    model: params.model,
+    reasoningEffort: params.reasoningEffort,
+    actorDisplayName: params.actorDisplayName,
+    actorEmail: params.actorEmail,
+  });
+  const response = await signedControlPlaneFetch(env, {
     method: "POST",
-    headers,
-    body: JSON.stringify({
-      ...params,
-      spawnSource: "linear-bot",
-    }),
+    url,
+    body,
+    actor: params.actorUserId ? `linear:${params.actorUserId}` : undefined,
+    traceId,
   });
 
   if (!response.ok) {
@@ -169,8 +175,11 @@ async function createSession(
     return { ok: false, status: response.status, body };
   }
 
-  const result = (await response.json()) as { sessionId: string };
-  return { ok: true, sessionId: result.sessionId };
+  const result = createSessionResponseSchema.safeParse(await response.json().catch(() => null));
+  if (!result.success) {
+    return { ok: false, status: response.status, body: "invalid response" };
+  }
+  return { ok: true, sessionId: result.data.sessionId };
 }
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────────
@@ -182,11 +191,12 @@ async function getAgentSessionLinearClient(params: {
   agentSessionId: string;
   issue: AgentSessionWebhookIssue;
   mode: "start" | "follow_up";
+  expectedAppUserId: string;
 }): Promise<LinearApiClient | null> {
-  const { env, traceId, orgId, agentSessionId, issue, mode } = params;
+  const { env, traceId, orgId, agentSessionId, issue, mode, expectedAppUserId } = params;
 
   try {
-    return await getLinearClientOrThrow(env, orgId);
+    return await getLinearClientOrThrow(env, orgId, expectedAppUserId);
   } catch (err) {
     if (!(err instanceof LinearAuthError)) throw err;
 
@@ -211,12 +221,21 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   if (issueId) {
     const existingSession = await lookupIssueSession(env, issueId);
     if (existingSession) {
-      const headers = await getAuthHeaders(env, traceId);
+      const stopUrl = `https://internal/sessions/${existingSession.sessionId}/stop`;
       try {
-        const stopRes = await env.CONTROL_PLANE.fetch(
-          `https://internal/sessions/${existingSession.sessionId}/stop`,
-          { method: "POST", headers }
-        );
+        const stopRes = await signedControlPlaneFetch(env, {
+          method: "POST",
+          url: stopUrl,
+          traceId,
+        });
+        if (!stopRes.ok) {
+          log.error("agent_session.stop_failed", {
+            trace_id: traceId,
+            session_id: existingSession.sessionId,
+            stop_status: stopRes.status,
+          });
+          return;
+        }
         log.info("agent_session.stopped", {
           trace_id: traceId,
           agent_session_id: agentSessionId,
@@ -230,6 +249,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
           session_id: existingSession.sessionId,
           error: e instanceof Error ? e : new Error(String(e)),
         });
+        return;
       }
       await env.LINEAR_KV.delete(`issue:${issueId}`);
     }
@@ -243,6 +263,77 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   });
 }
 
+function getNewSessionActorUserId(webhook: AgentSessionWebhook): string | undefined {
+  return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId ?? undefined;
+}
+
+function shouldTransitionIssueOnStart(webhook: AgentSessionWebhook): boolean {
+  return webhook.action === "created" && Boolean(webhook.agentSession.creatorId?.trim());
+}
+
+function getFollowUp(webhook: AgentSessionWebhook): {
+  content: string;
+  source: "linear_agent_activity" | "linear_comment" | "linear_fallback";
+  actorUserId?: string;
+} {
+  const activityBody = webhook.agentActivity?.content?.body;
+  if (activityBody) {
+    return {
+      content: activityBody,
+      source: "linear_agent_activity",
+      actorUserId: webhook.agentActivity?.userId,
+    };
+  }
+
+  const comment = webhook.agentSession.comment;
+  if (comment?.body) {
+    return {
+      content: comment.body,
+      source: "linear_comment",
+      actorUserId: comment.userId,
+    };
+  }
+
+  return { content: "Follow-up on the issue.", source: "linear_fallback" };
+}
+
+function buildLinearCallbackContext(params: {
+  webhook: AgentSessionWebhook;
+  issue: AgentSessionWebhookIssue;
+  model: string;
+  repoFullName?: string;
+  emitToolProgressActivities?: boolean;
+  transitionIssueOnStart?: boolean;
+}): LinearCallbackContext {
+  const {
+    webhook,
+    issue,
+    model,
+    repoFullName,
+    emitToolProgressActivities,
+    transitionIssueOnStart,
+  } = params;
+  const context = {
+    source: "linear" as const,
+    issueId: issue.id,
+    issueIdentifier: issue.identifier,
+    issueUrl: issue.url,
+    repoFullName,
+    model,
+    agentSessionId: webhook.agentSession.id,
+    organizationId: webhook.organizationId,
+    appUserId: webhook.appUserId,
+    emitToolProgressActivities,
+  };
+  if (transitionIssueOnStart === true) {
+    return { ...context, transitionIssueOnStart: true };
+  }
+  return {
+    ...context,
+    ...(transitionIssueOnStart === false ? { transitionIssueOnStart: false as const } : {}),
+  };
+}
+
 async function handleFollowUp(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
@@ -251,9 +342,8 @@ async function handleFollowUp(
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
-  const comment = webhook.agentSession.comment;
-  const agentActivity = webhook.agentActivity;
   const orgId = webhook.organizationId;
+  const followUp = getFollowUp(webhook);
 
   const client = await getAgentSessionLinearClient({
     env,
@@ -262,17 +352,23 @@ async function handleFollowUp(
     agentSessionId,
     issue,
     mode: "follow_up",
+    expectedAppUserId: webhook.appUserId,
   });
   if (!client) return;
 
   const existingSession = await lookupIssueSession(env, issue.id);
   if (!existingSession) return;
-
-  const followUpContent =
-    agentActivity?.content?.body || comment?.body || "Follow-up on the issue.";
-  const followUpMetadata = agentActivity?.content?.body
-    ? { followUpSource: "linear_agent_activity", followUpAuthor: "linear" }
-    : { followUpSource: "linear_comment", followUpAuthor: "unknown" };
+  const existingTarget = await resolveStoredSessionTarget(env, existingSession, traceId);
+  const currentIntegration = existingTarget
+    ? await resolveTargetIntegration(env, existingTarget)
+    : null;
+  const callbackContext = buildLinearCallbackContext({
+    webhook,
+    issue,
+    model: existingSession.model,
+    repoFullName: currentIntegration?.callbackRepoFullName,
+    emitToolProgressActivities: currentIntegration?.config.emitToolProgressActivities,
+  });
 
   await emitAgentActivity(
     client,
@@ -284,47 +380,46 @@ async function handleFollowUp(
     true
   );
 
-  const headers = await getAuthHeaders(env, traceId);
   let sessionContextSummary = "";
   try {
-    const eventsRes = await env.CONTROL_PLANE.fetch(
-      `https://internal/sessions/${existingSession.sessionId}/events?limit=20`,
-      { method: "GET", headers }
-    );
+    const eventsUrl = `https://internal/sessions/${existingSession.sessionId}/events?type=token&limit=20`;
+    const eventsRes = await signedControlPlaneFetch(env, {
+      method: "GET",
+      url: eventsUrl,
+      traceId,
+    });
     if (eventsRes.ok) {
-      const eventsData = (await eventsRes.json()) as {
-        events: Array<{ type: string; data: Record<string, unknown> }>;
-      };
-      const recentTokens = eventsData.events.filter((e) => e.type === "token").slice(-1);
-      if (recentTokens.length > 0) {
-        const lastContent = String(recentTokens[0].data.content ?? "");
-        if (lastContent) {
-          sessionContextSummary = lastContent.slice(0, 500);
-        }
+      const eventsData = sessionEventsSummaryResponseSchema.safeParse(await eventsRes.json());
+      const latestContent = eventsData.success
+        ? eventsData.data.events[0]?.data.content
+        : undefined;
+      if (latestContent) {
+        sessionContextSummary = latestContent.slice(0, 500);
       }
     }
   } catch {
     /* best effort */
   }
 
-  const promptRes = await env.CONTROL_PLANE.fetch(
-    `https://internal/sessions/${existingSession.sessionId}/prompt`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        content: buildFollowUpPrompt({
-          issueIdentifier: issue.identifier,
-          followUpContent,
-          followUpSource: followUpMetadata.followUpSource,
-          followUpAuthor: followUpMetadata.followUpAuthor,
-          sessionContextSummary,
-        }),
-        authorId: `linear:${webhook.appUserId}`,
-        source: "linear",
-      }),
-    }
-  );
+  const promptUrl = `https://internal/sessions/${existingSession.sessionId}/prompt`;
+  const promptBody = JSON.stringify({
+    content: buildFollowUpPrompt({
+      issueIdentifier: issue.identifier,
+      followUpContent: followUp.content,
+      followUpSource: followUp.source,
+      followUpAuthor: followUp.actorUserId ? "linear" : "unknown",
+      sessionContextSummary,
+    }),
+    source: "linear",
+    callbackContext,
+  });
+  const promptRes = await signedControlPlaneFetch(env, {
+    method: "POST",
+    url: promptUrl,
+    body: promptBody,
+    actor: followUp.actorUserId ? `linear:${followUp.actorUserId}` : undefined,
+    traceId,
+  });
 
   if (promptRes.ok) {
     await emitAgentActivity(client, agentSessionId, {
@@ -365,6 +460,7 @@ async function handleNewSession(
     agentSessionId,
     issue,
     mode: "start",
+    expectedAppUserId: webhook.appUserId,
   });
   if (!client) return;
 
@@ -385,137 +481,35 @@ async function handleNewSession(
   const labelNames = labels.map((l) => l.name);
   const projectInfo = issueDetails?.project || issue.project;
 
-  // ─── Resolve repo ─────────────────────────────────────────────────────
+  // ─── Resolve target ───────────────────────────────────────────────────
 
-  let repoOwner: string | null = null;
-  let repoName: string | null = null;
-  let repoFullName: string | null = null;
-  let classificationReasoning: string | null = null;
+  const resolved = await resolveSessionTarget({
+    env,
+    client,
+    agentSessionId,
+    issue,
+    labelNames,
+    projectInfo,
+    comment,
+    traceId,
+  });
+  if (!resolved) return;
 
-  // 1. Check project→repo mapping FIRST
-  if (projectInfo?.id) {
-    const projectMapping = await getProjectRepoMapping(env);
-    const mapped = projectMapping[projectInfo.id];
-    if (mapped) {
-      repoOwner = mapped.owner;
-      repoName = mapped.name;
-      repoFullName = `${mapped.owner}/${mapped.name}`;
-      classificationReasoning = `Project "${projectInfo.name}" is mapped to ${repoFullName}`;
-    }
-  }
+  const { target, reasoning: classificationReasoning } = resolved;
+  const label = targetLabel(target);
 
-  // 2. Check static team→repo mapping (override)
-  if (!repoOwner) {
-    const teamMapping = await getTeamRepoMapping(env);
-    const teamId = issue.team?.id ?? "";
-    if (teamId && teamMapping[teamId] && teamMapping[teamId].length > 0) {
-      const staticRepo = resolveStaticRepo(teamMapping, teamId, labelNames);
-      if (staticRepo) {
-        repoOwner = staticRepo.owner;
-        repoName = staticRepo.name;
-        repoFullName = `${staticRepo.owner}/${staticRepo.name}`;
-        classificationReasoning = `Team static mapping`;
-      }
-    }
-  }
-
-  // 3. Try Linear's built-in issueRepositorySuggestions API
-  if (!repoOwner) {
-    const repos = await getAvailableRepos(env, traceId);
-    if (repos.length > 0) {
-      const candidates = repos.map((r) => ({
-        hostname: "github.com",
-        repositoryFullName: `${r.owner}/${r.name}`,
-      }));
-
-      const suggestions = await getRepoSuggestions(client, issue.id, agentSessionId, candidates);
-      const topSuggestion = suggestions.find((s) => s.confidence >= 0.7);
-      if (topSuggestion) {
-        // Split on the last slash — GitLab nested-group paths
-        // ("group/subgroup/project") carry slashes in the owner.
-        const { owner, name } = splitRepoFullName(topSuggestion.repositoryFullName);
-        repoOwner = owner;
-        repoName = name;
-        repoFullName = topSuggestion.repositoryFullName;
-        classificationReasoning = `Linear suggested ${repoFullName} (confidence: ${Math.round(topSuggestion.confidence * 100)}%)`;
-      }
-    }
-  }
-
-  // 4. Fall back to our LLM classification
-  if (!repoOwner) {
-    await emitAgentActivity(
-      client,
-      agentSessionId,
-      {
-        type: "thought",
-        body: "Classifying repository using AI...",
-      },
-      true
-    );
-
-    const classification = await classifyRepo(
-      env,
-      issue.title,
-      issue.description,
-      labelNames,
-      projectInfo?.name,
-      issue.team?.name ?? null,
-      issue.team?.key ?? null,
-      comment?.body,
-      traceId
-    );
-
-    if (classification.needsClarification || !classification.repo) {
-      const altList = (classification.alternatives || [])
-        .map((r) => `- **${r.fullName}**: ${r.description}`)
-        .join("\n");
-
-      await emitAgentActivity(client, agentSessionId, {
-        type: "elicitation",
-        body: `I couldn't determine which repository to work on.\n\n${classification.reasoning}\n\n**Available repositories:**\n${altList || "None available"}\n\nPlease reply with the repository name (e.g., \`owner/repo\`).`,
-      });
-
-      log.warn("agent_session.classification_uncertain", {
-        trace_id: traceId,
-        issue_identifier: issue.identifier,
-        confidence: classification.confidence,
-        reasoning: classification.reasoning,
-      });
-      return;
-    }
-
-    repoOwner = classification.repo.owner;
-    repoName = classification.repo.name;
-    repoFullName = classification.repo.fullName;
-    classificationReasoning = classification.reasoning;
-  }
-
-  if (!repoOwner || !repoName || !repoFullName) {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "elicitation",
-      body: "I couldn't determine which repository to work on. Please reply with the repository name (e.g., `owner/repo`).",
-    });
-    log.warn("agent_session.repo_resolution_failed", {
-      trace_id: traceId,
-      issue_identifier: issue.identifier,
-    });
-    return;
-  }
-
-  const integrationConfig = await getLinearConfig(env, repoFullName.toLowerCase());
-  if (
-    integrationConfig.enabledRepos !== null &&
-    !integrationConfig.enabledRepos.includes(repoFullName.toLowerCase())
-  ) {
+  const integration = await resolveTargetIntegration(env, target);
+  const integrationConfig = integration.config;
+  if (!integration.enabled) {
     await emitAgentActivity(client, agentSessionId, {
       type: "error",
-      body: `The Linear integration is not enabled for \`${repoFullName}\`.`,
+      body: `The Linear integration is not enabled for ${integration.notEnabledSubject}.`,
     });
     log.info("agent_session.repo_not_enabled", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
-      repo: repoFullName,
+      target: targetId(target),
+      repo: integration.settingsRepo,
     });
     return;
   }
@@ -526,15 +520,15 @@ async function handleNewSession(
   let userReasoningEffort: string | undefined;
   let actorDisplayName: string | undefined;
   let actorEmail: string | undefined;
-  const appUserId = webhook.appUserId;
-  if (appUserId) {
-    const prefs = await getUserPreferences(env, appUserId);
+  const sessionActorUserId = getNewSessionActorUserId(webhook);
+  if (sessionActorUserId) {
+    const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {
       userModel = prefs.model;
     }
     userReasoningEffort = prefs?.reasoningEffort;
 
-    const linearUser = await fetchUser(client, appUserId);
+    const linearUser = await fetchUser(client, sessionActorUserId);
     actorDisplayName = linearUser?.name;
     actorEmail = linearUser?.email ?? undefined;
   }
@@ -559,20 +553,19 @@ async function handleNewSession(
     agentSessionId,
     {
       type: "thought",
-      body: `Creating coding session on ${repoFullName} (model: ${model})...`,
+      body: `Creating coding session on ${label} (model: ${model})...`,
     },
     true
   );
 
   const sessionResult = await createSession(
     env,
+    target,
     {
-      repoOwner: repoOwner!,
-      repoName: repoName!,
       title: `${issue.identifier}: ${issue.title}`,
       model,
       reasoningEffort,
-      actorUserId: appUserId,
+      actorUserId: sessionActorUserId,
       actorDisplayName,
       actorEmail,
     },
@@ -587,7 +580,7 @@ async function handleNewSession(
     log.error("control_plane.create_session", {
       trace_id: traceId,
       issue_identifier: issue.identifier,
-      repo: repoFullName,
+      target: targetId(target),
       http_status: sessionResult.status,
       response_body: sessionResult.body.slice(0, 500),
       duration_ms: Date.now() - startTime,
@@ -595,15 +588,21 @@ async function handleNewSession(
     return;
   }
 
-  const headers = await getAuthHeaders(env, traceId);
   const session = sessionResult;
+  const callbackContext = buildLinearCallbackContext({
+    webhook,
+    issue,
+    model,
+    repoFullName: integration.callbackRepoFullName,
+    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
+    transitionIssueOnStart: shouldTransitionIssueOnStart(webhook),
+  });
 
   await storeIssueSession(env, issue.id, {
     sessionId: session.sessionId,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
-    repoOwner: repoOwner!,
-    repoName: repoName!,
+    ...targetRequestFields(target),
     model,
     agentSessionId,
     createdAt: Date.now(),
@@ -628,31 +627,19 @@ async function handleNewSession(
     prompt += `\n\n## Additional Instructions\n\n${integrationConfig.issueSessionInstructions}`;
   }
 
-  const callbackContext: CallbackContext = {
+  const promptUrl = `https://internal/sessions/${session.sessionId}/prompt`;
+  const promptBody = JSON.stringify({
+    content: prompt,
     source: "linear",
-    issueId: issue.id,
-    issueIdentifier: issue.identifier,
-    issueUrl: issue.url,
-    repoFullName: repoFullName!,
-    model,
-    agentSessionId,
-    organizationId: orgId,
-    emitToolProgressActivities: integrationConfig.emitToolProgressActivities,
-  };
-
-  const promptRes = await env.CONTROL_PLANE.fetch(
-    `https://internal/sessions/${session.sessionId}/prompt`,
-    {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        content: prompt,
-        authorId: `linear:${webhook.appUserId}`,
-        source: "linear",
-        callbackContext,
-      }),
-    }
-  );
+    callbackContext,
+  });
+  const promptRes = await signedControlPlaneFetch(env, {
+    method: "POST",
+    url: promptUrl,
+    body: promptBody,
+    actor: sessionActorUserId ? `linear:${sessionActorUserId}` : undefined,
+    traceId,
+  });
 
   if (!promptRes.ok) {
     let promptErrBody = "";
@@ -678,7 +665,7 @@ async function handleNewSession(
 
   await emitAgentActivity(client, agentSessionId, {
     type: "thought",
-    body: `Working on \`${repoFullName}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
   });
 
   log.info("agent_session.session_created", {
@@ -686,7 +673,7 @@ async function handleNewSession(
     session_id: session.sessionId,
     agent_session_id: agentSessionId,
     issue_identifier: issue.identifier,
-    repo: repoFullName,
+    target: targetId(target),
     model,
     classification_reasoning: classificationReasoning,
     duration_ms: Date.now() - startTime,
@@ -714,7 +701,11 @@ export async function handleAgentSessionEvent(
   });
 
   // Stop handling
-  if (webhook.action === "stopped" || webhook.action === "cancelled") {
+  if (
+    webhook.agentActivity?.signal === "stop" ||
+    webhook.action === "stopped" ||
+    webhook.action === "cancelled"
+  ) {
     return handleStop(webhook, env, traceId);
   }
 

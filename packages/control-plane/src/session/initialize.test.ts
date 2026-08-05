@@ -230,6 +230,7 @@ describe("initializeSession", () => {
     expect(body.model).toBe("anthropic/claude-sonnet-4-6");
     expect(body.reasoningEffort).toBeNull();
     expect(body.userId).toBe("user-1");
+    expect(body.canonicalUserId).toBe("platform-user-1");
     expect(body.scmLogin).toBe("acmedev");
     expect(body.scmName).toBe("Acme Dev");
     expect(body.scmEmail).toBe("dev@acme.test");

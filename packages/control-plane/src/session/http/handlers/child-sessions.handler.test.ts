@@ -36,6 +36,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     code_server_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
+    environment_id: null,
     created_at: 1000,
     updated_at: 2000,
     ...overrides,
@@ -50,6 +51,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
     scm_login: "octocat",
     scm_email: "octocat@example.com",
     scm_name: "The Octocat",
+    auth_name: null,
     role: "owner",
     scm_access_token_encrypted: "enc-access",
     scm_refresh_token_encrypted: "enc-refresh",
@@ -93,6 +95,7 @@ function createArtifact(overrides: Partial<ArtifactRow> = {}): ArtifactRow {
     url: "https://example.com/pr/1",
     metadata: null,
     created_at: 1,
+    updated_at: 1,
     ...overrides,
   };
 }
@@ -142,6 +145,7 @@ function createHandler() {
     artifact.metadata ? (JSON.parse(artifact.metadata) as Record<string, unknown>) : null
   );
   const broadcast = vi.fn();
+  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
 
   const handler = createChildSessionsHandler({
     repository,
@@ -149,7 +153,7 @@ function createHandler() {
     getSandbox,
     getPublicSessionId,
     parseArtifactMetadata,
-    broadcast,
+    messenger,
   });
 
   return {
@@ -187,7 +191,12 @@ describe("createChildSessionsHandler", () => {
 
   it("maps spawn context from session and owner participant", async () => {
     const { handler, getSession, repository } = createHandler();
-    getSession.mockReturnValue(createSession({ reasoning_effort: "high" }));
+    getSession.mockReturnValue(
+      createSession({
+        reasoning_effort: "high",
+        sandbox_settings: '{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000]}',
+      })
+    );
     repository.listParticipants.mockReturnValue([createParticipant()]);
 
     const response = handler.getSpawnContext();
@@ -200,6 +209,7 @@ describe("createChildSessionsHandler", () => {
       model: "anthropic/claude-haiku-4-5",
       reasoningEffort: "high",
       baseBranch: "main",
+      sandboxTimeoutMs: 14_400_000,
       owner: {
         userId: "user-1",
         scmUserId: null,

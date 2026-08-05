@@ -1,4 +1,4 @@
-import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared";
+import { computeHmacHex, timingSafeEqual } from "@open-inspect/shared/auth";
 
 export async function verifyWebhookSignature(
   secret: string,

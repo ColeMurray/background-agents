@@ -3,19 +3,19 @@
 import { useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import { useAutomation } from "@/hooks/use-automations";
 import {
   AutomationForm,
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { BackIcon } from "@/components/ui/icons";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 export default function EditAutomationPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const router = useRouter();
   const { automation, loading } = useAutomation(id);
   const [submitting, setSubmitting] = useState(false);
@@ -26,7 +26,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
     setError("");
 
     try {
-      const res = await fetch(`/api/automations/${id}`, {
+      const res = await browserApiFetch(`/api/automations/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
@@ -58,7 +58,9 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       <div className="h-full flex flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Automation not found.</p>
         <Link href="/automations">
-          <button className="text-sm text-accent hover:underline">Back to Automations</button>
+          <button type="button" className="text-sm text-accent hover:underline">
+            Back to Automations
+          </button>
         </Link>
       </div>
     );
@@ -69,14 +71,7 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3 flex items-center gap-2">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
             <Link
               href={`/automations/${id}`}
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
@@ -102,9 +97,8 @@ export default function EditAutomationPage({ params }: { params: Promise<{ id: s
             mode="edit"
             initialValues={{
               name: automation.name,
-              repoOwner: automation.repoOwner ?? undefined,
-              repoName: automation.repoName ?? undefined,
-              baseBranch: automation.baseBranch ?? undefined,
+              repositories: automation.repositories,
+              environmentIds: automation.environmentIds,
               model: automation.model,
               reasoningEffort: automation.reasoningEffort,
               scheduleCron: automation.scheduleCron ?? "0 9 * * *",

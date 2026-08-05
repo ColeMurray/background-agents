@@ -19,7 +19,9 @@ def _make_supervisor(tmp_path) -> SandboxSupervisor:
         },
     ):
         sup = SandboxSupervisor()
+    sup.workspace_path = tmp_path
     sup.repo_path = tmp_path / "app"
+    sup.repositories = sup._parse_repositories()
     return sup
 
 
@@ -57,7 +59,7 @@ class TestSetupScriptSkip:
         sup.repo_path.mkdir(parents=True, exist_ok=True)
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is True
         mock_exec.assert_not_called()
@@ -67,7 +69,7 @@ class TestSetupScriptSkip:
         # repo_path does not exist at all
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is True
         mock_exec.assert_not_called()
@@ -89,7 +91,7 @@ class TestSetupScriptSuccess:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is True
 
@@ -101,7 +103,7 @@ class TestSetupScriptSuccess:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ) as mock_exec:
-            await sup.run_setup_script()
+            await sup.run_setup_script(sup.repositories[0])
 
         mock_exec.assert_called_once()
         call_args = mock_exec.call_args
@@ -117,7 +119,7 @@ class TestSetupScriptSuccess:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is True
 
@@ -132,7 +134,7 @@ class TestSetupScriptSuccess:
                 "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
             ) as mock_exec,
         ):
-            await sup.run_setup_script()
+            await sup.run_setup_script(sup.repositories[0])
 
         env_arg = mock_exec.call_args[1]["env"]
         assert "MY_VAR" in env_arg
@@ -155,7 +157,7 @@ class TestSetupScriptFailure:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is False
 
@@ -168,9 +170,27 @@ class TestSetupScriptFailure:
             new_callable=AsyncMock,
             side_effect=OSError("exec failed"),
         ):
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is False
+
+    async def test_build_failure_log_omits_hook_output(self, tmp_path):
+        sup = _make_supervisor(tmp_path)
+        sup.boot_mode = "build"
+        sup.log = MagicMock()
+        _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
+        fake_proc = _fake_process(returncode=1, stdout=b"secret from repository hook\n")
+
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
+        ):
+            result = await sup.run_setup_script(sup.repositories[0])
+
+        assert result is False
+        failure = sup.log.error.call_args
+        assert failure.args == ("setup.failed",)
+        assert failure.kwargs["exit_code"] == 1
+        assert "output_tail" not in failure.kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +204,7 @@ class TestSetupScriptTimeout:
     async def test_timeout_kills_process(self, tmp_path):
         sup = _make_supervisor(tmp_path)
         _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process()
+        fake_proc = _fake_process(returncode=None)
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
         fake_proc.stdout = MagicMock()
         fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")
@@ -192,11 +212,31 @@ class TestSetupScriptTimeout:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is False
         fake_proc.kill.assert_called_once()
         fake_proc.wait.assert_awaited_once()
+
+    async def test_build_timeout_log_omits_hook_output(self, tmp_path):
+        sup = _make_supervisor(tmp_path)
+        sup.boot_mode = "build"
+        sup.log = MagicMock()
+        _create_setup_script(sup.repo_path)
+        fake_proc = _fake_process(returncode=None)
+        fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
+        fake_proc.stdout = MagicMock()
+        fake_proc.stdout.read = AsyncMock(return_value=b"secret partial output\n")
+
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
+        ):
+            result = await sup.run_setup_script(sup.repositories[0])
+
+        assert result is False
+        timeout = sup.log.error.call_args
+        assert timeout.args == ("setup.timeout",)
+        assert "output_tail" not in timeout.kwargs
 
     async def test_default_timeout_300(self, tmp_path):
         sup = _make_supervisor(tmp_path)
@@ -218,7 +258,7 @@ class TestSetupScriptTimeout:
             import os
 
             os.environ.pop("SETUP_TIMEOUT_SECONDS", None)
-            await sup.run_setup_script()
+            await sup.run_setup_script(sup.repositories[0])
 
         assert captured_timeout["value"] == 300
 
@@ -239,7 +279,7 @@ class TestSetupScriptTimeout:
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
-            await sup.run_setup_script()
+            await sup.run_setup_script(sup.repositories[0])
 
         assert captured_timeout["value"] == 60
 
@@ -260,7 +300,7 @@ class TestSetupScriptTimeout:
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
-            result = await sup.run_setup_script()
+            result = await sup.run_setup_script(sup.repositories[0])
 
         assert result is True
         assert captured_timeout["value"] == 300
@@ -278,7 +318,7 @@ class TestSetupInRun:
         sup = _make_supervisor(tmp_path)
 
         # Mock all phases
-        sup.perform_git_sync = AsyncMock(return_value=True)
+        sup.sync_repositories = AsyncMock(return_value=[])
         sup.run_setup_script = AsyncMock(return_value=True)
         sup.run_start_script = AsyncMock(return_value=True)
         sup.start_opencode = AsyncMock()
@@ -307,7 +347,7 @@ class TestSetupInRun:
         sup = _make_supervisor(tmp_path)
 
         # Mock all phases
-        sup._quick_git_fetch = AsyncMock()
+        sup.sync_repositories = AsyncMock(return_value=[])
         sup.run_setup_script = AsyncMock(return_value=True)
         sup.run_start_script = AsyncMock(return_value=True)
         sup.start_opencode = AsyncMock()

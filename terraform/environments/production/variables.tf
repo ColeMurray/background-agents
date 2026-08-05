@@ -110,28 +110,35 @@ variable "modal_environment_web_suffix" {
 }
 
 # =============================================================================
-# GitHub OAuth App Credentials
+# GitHub OAuth Sign-In Credentials
 # =============================================================================
 
 variable "github_client_id" {
-  description = "GitHub OAuth App client ID"
+  description = "GitHub App client ID used for OAuth sign-in. Set together with github_client_secret to enable GitHub sign-in; leave both empty for Google-only sign-in."
   type        = string
+  default     = ""
+
+  validation {
+    condition     = (trimspace(var.github_client_id) == "") == (trimspace(var.github_client_secret) == "")
+    error_message = "github_client_id and github_client_secret must be set together with non-whitespace values, or both left empty."
+  }
 }
 
 variable "github_client_secret" {
-  description = "GitHub OAuth App client secret"
+  description = "GitHub App client secret used for OAuth sign-in. Set together with github_client_id to enable GitHub sign-in."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # =============================================================================
 # Google OAuth Credentials (Optional — enables "Sign in with Google")
 # =============================================================================
 # Set both google_client_id and google_client_secret to enable Google login for
-# non-developer users (PMs, support agents). Leave both empty for GitHub-only
-# deployments, which stay byte-unchanged. A Google session authenticates the user
-# but carries no SCM credentials; git operations continue to use the shared
-# GitHub App installation, and PRs fall back to the App bot.
+# non-developer users (PMs, support agents). Leave both empty when Google sign-in
+# is not wanted. A Google session authenticates the user but carries no SCM
+# credentials; git operations continue to use the shared GitHub App installation,
+# and PRs fall back to the App bot.
 
 variable "google_client_id" {
   description = "Google OAuth 2.0 client ID. Set together with google_client_secret to enable Google login; leave both empty to keep the deployment GitHub-only."
@@ -139,8 +146,8 @@ variable "google_client_id" {
   default     = ""
 
   validation {
-    condition     = (var.google_client_id == "") == (var.google_client_secret == "")
-    error_message = "google_client_id and google_client_secret must be set together (both non-empty) or both left empty. Setting only one silently disables Google login."
+    condition     = (trimspace(var.google_client_id) == "") == (trimspace(var.google_client_secret) == "")
+    error_message = "google_client_id and google_client_secret must be set together with non-whitespace values, or both left empty."
   }
 }
 
@@ -306,12 +313,6 @@ variable "repo_secrets_encryption_key" {
   sensitive   = true
 }
 
-variable "internal_callback_secret" {
-  description = "Shared secret for internal service communication (generate with: openssl rand -base64 32)"
-  type        = string
-  sensitive   = true
-}
-
 variable "modal_api_secret" {
   description = "Shared secret for authenticating control plane to Modal API calls (generate with: openssl rand -hex 32)"
   type        = string
@@ -446,10 +447,60 @@ variable "vercel_snapshot_expiration_ms" {
   default     = 0
 }
 
-variable "nextauth_secret" {
-  description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
+# -----------------------------------------------------------------------------
+# E2B (only required when sandbox_provider = "e2b")
+# -----------------------------------------------------------------------------
+
+variable "e2b_api_key" {
+  description = "E2B REST API key — runtime (control-plane → E2B API + code-server HMAC)"
   type        = string
   sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "e2b" || length(var.e2b_api_key) > 0
+    error_message = "e2b_api_key must be set when sandbox_provider = 'e2b'."
+  }
+}
+
+variable "e2b_api_url" {
+  description = "E2B REST API base URL"
+  type        = string
+  default     = "https://api.e2b.app"
+}
+
+variable "e2b_template_id" {
+  description = "E2B template name built by the e2b-infra module and used for fresh sandboxes"
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.sandbox_provider != "e2b" || length(var.e2b_template_id) > 0
+    error_message = "e2b_template_id must be set when sandbox_provider = 'e2b'."
+  }
+}
+
+variable "e2b_sandbox_timeout_seconds" {
+  description = "Sandbox TTL in seconds. Default assumes a paid E2B plan. Hobby caps TTL at 3600 — set 3300."
+  type        = number
+  default     = 7200
+}
+
+variable "e2b_auto_pause" {
+  description = "Pause (not kill) the sandbox when its TTL expires, so it stays resumable and auto-resumes on activity. Default true."
+  type        = bool
+  default     = true
+}
+
+variable "nextauth_secret" {
+  description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(regexall("\\S", var.nextauth_secret)) >= 32
+    error_message = "nextauth_secret must contain at least 32 non-whitespace characters."
+  }
 }
 
 # =============================================================================
@@ -457,13 +508,13 @@ variable "nextauth_secret" {
 # =============================================================================
 
 variable "sandbox_provider" {
-  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', or 'opencomputer'"
+  description = "Sandbox backend for session execution: 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'"
   type        = string
   default     = "modal"
 
   validation {
-    condition     = contains(["modal", "daytona", "vercel", "opencomputer"], var.sandbox_provider)
-    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', or 'opencomputer'."
+    condition     = contains(["modal", "daytona", "vercel", "opencomputer", "e2b"], var.sandbox_provider)
+    error_message = "sandbox_provider must be 'modal', 'daytona', 'vercel', 'opencomputer', or 'e2b'."
   }
 }
 

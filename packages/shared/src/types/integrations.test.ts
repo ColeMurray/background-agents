@@ -3,11 +3,27 @@ import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_SLACK_ROUTING_RULES,
+  isValidSandboxTimeoutMs,
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("isValidSandboxTimeoutMs", () => {
+  it("accepts safe positive whole-second millisecond values", () => {
+    expect(isValidSandboxTimeoutMs(1_000)).toBe(true);
+    expect(isValidSandboxTimeoutMs(14_400_000)).toBe(true);
+  });
+
+  it.each([undefined, "1000", 0, -1_000, 1_500, 1_000.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid timeout %s",
+    (value) => {
+      expect(isValidSandboxTimeoutMs(value)).toBe(false);
+    }
+  );
+});
 
 describe("resolveBuildTimeoutSeconds", () => {
   it("defaults when no setting is present", () => {
@@ -87,6 +103,41 @@ describe("normalizeRoutingRules", () => {
     ]);
   });
 
+  it("preserves environment rules with targetType, trimming but not lowercasing the id", () => {
+    expect(
+      normalizeRoutingRules([
+        { keyword: "  FullStack ", target: " env_ABC123 ", targetType: "environment" },
+      ])
+    ).toEqual([{ keyword: "fullstack", target: "env_ABC123", targetType: "environment" }]);
+  });
+
+  it("normalizes repository rules to the bare shape even when targetType is set explicitly", () => {
+    expect(
+      normalizeRoutingRules([{ keyword: "api", target: "Acme/API", targetType: "repository" }])
+    ).toEqual([{ keyword: "api", target: "acme/api" }]);
+  });
+
+  it("keeps the same keyword pointing at a repository and an environment as distinct rules", () => {
+    expect(
+      normalizeRoutingRules([
+        { keyword: "frontend", target: "acme/web" },
+        { keyword: "frontend", target: "env_abc123", targetType: "environment" },
+      ])
+    ).toEqual([
+      { keyword: "frontend", target: "acme/web" },
+      { keyword: "frontend", target: "env_abc123", targetType: "environment" },
+    ]);
+  });
+
+  it("de-dupes identical environment rules", () => {
+    expect(
+      normalizeRoutingRules([
+        { keyword: "fullstack", target: "env_abc123", targetType: "environment" },
+        { keyword: "FullStack", target: "env_abc123", targetType: "environment" },
+      ])
+    ).toEqual([{ keyword: "fullstack", target: "env_abc123", targetType: "environment" }]);
+  });
+
   it("caps the number of rules at MAX_SLACK_ROUTING_RULES", () => {
     const many: SlackRoutingRule[] = Array.from(
       { length: MAX_SLACK_ROUTING_RULES + 25 },
@@ -96,6 +147,34 @@ describe("normalizeRoutingRules", () => {
       })
     );
     expect(normalizeRoutingRules(many)).toHaveLength(MAX_SLACK_ROUTING_RULES);
+  });
+});
+
+describe("slackIntegrationSettingsRoutingResponseSchema", () => {
+  it("parses a valid routing settings response", () => {
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse({
+      settings: {
+        defaults: {
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("parses a null settings response", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({ settings: null }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed routing rules", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({
+        settings: { defaults: { routingRules: [{ keyword: "frontend" }] } },
+      }).success
+    ).toBe(false);
   });
 });
 

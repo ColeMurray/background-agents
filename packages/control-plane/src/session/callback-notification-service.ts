@@ -7,8 +7,11 @@
  * - HMAC payload signing for callback authentication
  */
 
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
+import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
+import { deliverWithRetry } from "./callback-delivery";
+import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
 
 /**
@@ -25,7 +28,11 @@ export interface CallbackRepository {
  * Narrow env interface — only the bindings CallbackNotificationService needs.
  */
 export interface CallbackServiceEnv {
-  INTERNAL_CALLBACK_SECRET?: string;
+  // Destination-bot signing keys for callback bodies; the CP
+  // holds every bot's key as verifier and signs callbacks with the
+  // destination's own.
+  SERVICE_AUTH_SECRET_SLACK_BOT?: string;
+  SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
   SLACK_BOT?: Fetcher;
   LINEAR_BOT?: Fetcher;
   SCHEDULER_CALLBACK?: Fetcher;
@@ -39,6 +46,7 @@ export interface CallbackServiceDeps {
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -49,11 +57,19 @@ export interface CallbackServiceDeps {
  */
 const NOTIFIED_CALL_IDS_CAP = 500;
 
+interface CallbackDeliveryResult {
+  delivered: boolean;
+  attempts: number;
+  httpStatus?: number;
+  rejectReason?: string;
+}
+
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
+  private readonly sleep: (ms: number) => Promise<void>;
   private _lastToolCallCallbackTs = 0;
   private readonly notifiedCallIds = new Set<string>();
 
@@ -62,6 +78,7 @@ export class CallbackNotificationService {
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
+    this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
   private markCallIdNotified(callId: string): void {
@@ -80,21 +97,63 @@ export class CallbackNotificationService {
   }
 
   /**
-   * Resolve the callback service binding based on the message source.
-   * Returns the appropriate Fetcher for the originating client.
+   * Where a non-automation callback goes and which key signs it — one
+   * decision, so destination and signing key cannot diverge (the CP signs
+   * with the DESTINATION bot's secret). Automation callbacks
+   * are routed to the SchedulerDO before this is consulted. Non-linear
+   * sources default to the slack bot for backward compatibility (web
+   * sources, etc.).
    */
-  private getBinding(source: string | null): Fetcher | undefined {
-    switch (source) {
-      case "automation":
-        return this.env.SCHEDULER_CALLBACK;
-      case "linear":
-        return this.env.LINEAR_BOT;
-      case "slack":
-        return this.env.SLACK_BOT;
-      default:
-        // Default to SLACK_BOT for backward compatibility (web sources, etc.)
-        return this.env.SLACK_BOT;
+  private resolveCallbackRoute(source: string | null): {
+    binding: Fetcher | undefined;
+    secret: string | undefined;
+  } {
+    const destination: CallbackDestination = source === "linear" ? "linear-bot" : "slack-bot";
+    return {
+      binding: destination === "linear-bot" ? this.env.LINEAR_BOT : this.env.SLACK_BOT,
+      secret: callbackSigningSecret(this.env, destination),
+    };
+  }
+
+  /** Notify the Linear worker after a Linear message is dispatched to a live sandbox. */
+  async notifyStarted(messageId: string): Promise<void> {
+    const message = this.repository.getMessageCallbackContext(messageId);
+    if (!message?.callback_context || message.source !== "linear") {
+      this.log.debug("callback.started", {
+        message_id: messageId,
+        outcome: "skipped",
+        skip_reason: message?.callback_context ? "non_linear_source" : "no_callback_context",
+      });
+      return;
     }
+
+    const { binding, secret } = this.resolveCallbackRoute("linear");
+    if (!secret) {
+      this.log.debug("callback.started", {
+        message_id: messageId,
+        outcome: "skipped",
+        skip_reason: "no_secret",
+      });
+      return;
+    }
+    if (!binding) {
+      this.log.debug("callback.started", {
+        message_id: messageId,
+        outcome: "skipped",
+        skip_reason: "no_binding",
+      });
+      return;
+    }
+
+    await notifyLinearStarted({
+      messageId,
+      callbackContext: message.callback_context,
+      sessionId: this.getSessionId(),
+      secret,
+      binding,
+      log: this.log,
+      sleep: this.sleep,
+    });
   }
 
   /**
@@ -102,96 +161,106 @@ export class CallbackNotificationService {
    * Routes to the correct service binding based on the message source.
    */
   async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
-    // Safely query for callback context
-    const message = this.repository.getMessageCallbackContext(messageId);
-    if (!message?.callback_context) {
-      this.log.debug("No callback context for message, skipping notification", {
-        message_id: messageId,
-      });
-      return;
-    }
+    const sessionId = this.getSessionId();
+    const startedAt = Date.now();
+    let source: string | null = null;
+    let result: CallbackDeliveryResult = {
+      delivered: false,
+      attempts: 0,
+      rejectReason: "unexpected_error",
+    };
+    let thrownError: unknown;
 
-    const context = JSON.parse(message.callback_context);
+    try {
+      const message = this.repository.getMessageCallbackContext(messageId);
+      if (!message?.callback_context) {
+        result.rejectReason = "no_callback_context";
+        return;
+      }
 
-    // Route automation callbacks to SchedulerDO (different URL + payload)
-    if (context.source === "automation") {
-      return this.notifyAutomationComplete(context, success, error, messageId);
-    }
+      const context = JSON.parse(message.callback_context);
+      source = context.source === "automation" ? "automation" : (message.source ?? null);
 
-    if (!this.env.INTERNAL_CALLBACK_SECRET) {
-      this.log.debug("INTERNAL_CALLBACK_SECRET not configured, skipping notification");
-      return;
-    }
+      // Route automation callbacks to SchedulerDO (different URL + payload).
+      if (source === "automation") {
+        result = await this.notifyAutomationComplete(context, success, error, messageId);
+        return;
+      }
 
-    // Resolve the callback binding based on message source
-    const source = message.source ?? null;
-    const binding = this.getBinding(source);
-    if (!binding) {
-      this.log.debug("No callback binding for source, skipping notification", {
+      const { binding, secret } = this.resolveCallbackRoute(source);
+      if (!secret) {
+        result.rejectReason = "no_secret";
+        return;
+      }
+      if (!binding) {
+        result.rejectReason = "no_binding";
+        return;
+      }
+
+      const timestamp = Date.now();
+      const payloadData = {
+        sessionId,
+        messageId,
+        success,
+        ...(error != null ? { error } : {}),
+        timestamp,
+        context,
+      };
+      const signature = await this.signPayload(payloadData, secret);
+      const payload = { ...payloadData, signature };
+      result = await deliverWithRetry(
+        (signal) =>
+          binding.fetch("https://internal/callbacks/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            signal,
+          }),
+        this.sleep,
+        ({ attempt, response, error: deliveryError }) => {
+          this.log.warn("callback.complete_delivery_attempt_failed", {
+            message_id: messageId,
+            session_id: sessionId,
+            source,
+            attempt,
+            ...(response ? { http_status: response.status } : {}),
+            ...(deliveryError !== undefined
+              ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
+              : {}),
+          });
+        }
+      );
+    } catch (caught) {
+      thrownError = caught;
+      throw caught;
+    } finally {
+      const outcome =
+        thrownError !== undefined
+          ? "error"
+          : result.rejectReason
+            ? "rejected"
+            : result.delivered
+              ? "success"
+              : "error";
+      const fields = {
+        session_id: sessionId,
         message_id: messageId,
         source,
-      });
-      return;
+        outcome,
+        duration_ms: Date.now() - startedAt,
+        attempts: result.attempts,
+        retries: Math.max(0, result.attempts - 1),
+        ...(result.httpStatus !== undefined ? { http_status: result.httpStatus } : {}),
+        ...(result.rejectReason && thrownError === undefined
+          ? { reject_reason: result.rejectReason }
+          : {}),
+        ...(thrownError !== undefined
+          ? { error: thrownError instanceof Error ? thrownError : new Error(String(thrownError)) }
+          : {}),
+      };
+      if (outcome === "error") this.log.error("callback.complete_delivery", fields);
+      else this.log.info("callback.complete_delivery", fields);
     }
-
-    const sessionId = this.getSessionId();
-    const timestamp = Date.now();
-
-    // Build payload without signature
-    const payloadData = {
-      sessionId,
-      messageId,
-      success,
-      ...(error != null ? { error } : {}),
-      timestamp,
-      context,
-    };
-
-    // Sign the payload
-    const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
-
-    const payload = { ...payloadData, signature };
-
-    // Try with retry (max 2 attempts)
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await binding.fetch("https://internal/callbacks/complete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        if (response.ok) {
-          this.log.info("Callback succeeded", { message_id: messageId, source });
-          return;
-        }
-
-        const responseText = await response.text();
-        this.log.error("Callback failed", {
-          message_id: messageId,
-          source,
-          status: response.status,
-          response_text: responseText,
-        });
-      } catch (e) {
-        this.log.error("Callback attempt failed", {
-          message_id: messageId,
-          source,
-          attempt: attempt + 1,
-          error: e instanceof Error ? e : String(e),
-        });
-      }
-
-      // Wait before retry
-      if (attempt < 1) {
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    }
-
-    this.log.error("Failed to notify callback client after retries", {
-      message_id: messageId,
-      source,
-    });
   }
 
   /**
@@ -203,11 +272,10 @@ export class CallbackNotificationService {
     success: boolean,
     error: string | undefined,
     messageId: string
-  ): Promise<void> {
+  ): Promise<CallbackDeliveryResult> {
     const binding = this.env.SCHEDULER_CALLBACK;
     if (!binding) {
-      this.log.warn("No SCHEDULER_CALLBACK binding, skipping automation notification");
-      return;
+      return { delivered: false, attempts: 0, rejectReason: "no_binding" };
     }
 
     const payload = {
@@ -221,42 +289,30 @@ export class CallbackNotificationService {
       automationName: context.automationName,
     };
 
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const response = await binding.fetch("https://internal/internal/run-complete", {
+    return deliverWithRetry(
+      (signal) =>
+        binding.fetch("https://internal/internal/run-complete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-        });
-        if (response.ok) {
-          this.log.info("Automation callback succeeded", {
-            automation_id: context.automationId,
-            run_id: context.runId,
-          });
-          return;
-        }
-        const text = await response.text().catch(() => "");
-        this.log.error("Automation callback failed", {
+          signal,
+        }),
+      this.sleep,
+      ({ attempt, response, error: deliveryError }) => {
+        this.log.warn("callback.complete_delivery_attempt_failed", {
+          message_id: messageId,
+          session_id: this.getSessionId(),
+          source: "automation",
           automation_id: context.automationId,
           run_id: context.runId,
-          status: response.status,
-          response_text: text.slice(0, 500),
-        });
-      } catch (e) {
-        this.log.error("Automation callback attempt failed", {
-          automation_id: context.automationId,
-          run_id: context.runId,
-          attempt: attempt + 1,
-          error: e instanceof Error ? e : String(e),
+          attempt,
+          ...(response ? { http_status: response.status } : {}),
+          ...(deliveryError !== undefined
+            ? { error: deliveryError instanceof Error ? deliveryError : String(deliveryError) }
+            : {}),
         });
       }
-      if (attempt < 1) await new Promise((r) => setTimeout(r, 1000));
-    }
-
-    this.log.error("Failed to notify scheduler after retries", {
-      automation_id: context.automationId,
-      run_id: context.runId,
-    });
+    );
   }
 
   /**
@@ -300,21 +356,11 @@ export class CallbackNotificationService {
       });
       return;
     }
-    if (!this.env.INTERNAL_CALLBACK_SECRET) {
-      this.log.debug("callback.tool_call", {
-        message_id: messageId,
-        tool,
-        outcome: "skipped",
-        skip_reason: "no_secret",
-      });
-      return;
-    }
-
     const source = message.source ?? null;
 
-    // Automation runs have no tool-call progress consumer: getBinding routes them
-    // to the SchedulerDO, which only implements /internal/run-complete — every
-    // /callbacks/tool_call forward 404s. Skip rather than spam best-effort calls.
+    // Automation runs have no tool-call progress consumer: the SchedulerDO
+    // only implements /internal/run-complete — every /callbacks/tool_call
+    // forward 404s. Skip rather than spam best-effort calls.
     if (source === "automation") {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -326,7 +372,16 @@ export class CallbackNotificationService {
       return;
     }
 
-    const binding = this.getBinding(source);
+    const { binding, secret } = this.resolveCallbackRoute(source);
+    if (!secret) {
+      this.log.debug("callback.tool_call", {
+        message_id: messageId,
+        tool,
+        outcome: "skipped",
+        skip_reason: "no_secret",
+      });
+      return;
+    }
     if (!binding) {
       this.log.debug("callback.tool_call", {
         message_id: messageId,
@@ -351,7 +406,7 @@ export class CallbackNotificationService {
       context,
     };
 
-    const signature = await this.signPayload(payloadData, this.env.INTERNAL_CALLBACK_SECRET);
+    const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };
 
     try {

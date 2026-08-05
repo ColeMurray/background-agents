@@ -10,13 +10,13 @@ joining across service boundaries.
 
 Every log line includes:
 
-| Field       | Type   | Description                                      |
-| ----------- | ------ | ------------------------------------------------ |
-| `level`     | string | `debug` \| `info` \| `warn` \| `error`           |
-| `service`   | string | `control-plane` \| `modal-infra` \| `slack-bot`  |
-| `component` | string | Sub-area (e.g. `router`, `session-do`, `bridge`) |
-| `msg`       | string | Stable event identifier for querying             |
-| `ts`        | number | Epoch milliseconds                               |
+| Field       | Type   | Description                                              |
+| ----------- | ------ | -------------------------------------------------------- |
+| `level`     | string | `debug` \| `info` \| `warn` \| `error`                   |
+| `service`   | string | `web` \| `control-plane` \| `modal-infra` \| `slack-bot` |
+| `component` | string | Sub-area (e.g. `router`, `session-do`, `bridge`)         |
+| `msg`       | string | Stable event identifier for querying                     |
+| `ts`        | number | Epoch milliseconds                                       |
 
 ## Correlation Fields
 
@@ -51,6 +51,13 @@ For Slack with Modal, the path is: **slack-bot -> control-plane -> modal-infra -
 2. Control-plane router propagates `trace_id` into Durable Object and provider calls.
 3. Provider-specific clients or endpoints bind the same trace to sandbox startup logs where
    supported.
+
+### Web API correlation
+
+The Next.js API layer accepts a valid inbound `x-trace-id` or generates one at the `/api` edge. It
+also generates a fresh hop-local `x-request-id` for the web response and logs. When the web service
+calls the control-plane, it forwards only `x-trace-id`; the control-plane still generates its own
+per-hop `request_id`.
 
 To trace a full request: filter by `trace_id` across all three services, or narrow by `session_id` +
 `message_id` for a specific prompt run.
@@ -88,46 +95,64 @@ Wide events use `outcome` to indicate result:
 | -------------- | ----------- | ------------------------------------------------------------------- | ----------------------------- |
 | `http.request` | info, error | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome` | One per incoming HTTP request |
 
-#### Repo Image Builds (`component: "router"`)
+#### Image Builds (`component: "image-builds:*"` / `"router:image-builds"`)
 
-| Event                                        | Level | Key Fields                                                                                                                                            | Description                                                                  |
-| -------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `repo_image.build_triggered`                 | info  | `build_id`, `repo_owner`, `repo_name`, `trace_id`, `request_id`                                                                                       | Repo image build accepted by the active backend                              |
-| `repo_image.build_complete_received`         | info  | `build_id`, `provider`, `provider_session_id`, `base_sha`, `trace_id`, `request_id`                                                                   | Provider-session runtime reported success; control-plane finalization begins |
-| `repo_image.<provider>_finalize_start`       | info  | `build_id`, `provider_session_id`, `trace_id`, `request_id`                                                                                           | Control plane started finalizing the provider image artifact                 |
-| `repo_image.build_complete`                  | info  | `build_id`, `provider`, `provider_image_id`, `provider_session_id`, `base_sha`, `replaced_image_id`, `snapshot_duration_ms`, `trace_id`, `request_id` | Repo image artifact marked ready                                             |
-| `repo_image.build_superseded`                | info  | `build_id`, `provider`, `provider_image_id`, `provider_session_id`, `duration_ms`, `trace_id`, `request_id`                                           | Build completed after a newer ready image already existed                    |
-| `repo_image.build_failed`                    | info  | `build_id`, `provider`, `error_message`, `provider_session_id`, `trace_id`, `request_id`                                                              | Runtime reported a failed repo image build                                   |
-| `repo_image.callback_auth_failed`            | warn  | `build_id`, `provider`, `provider_session_id`, `trace_id`, `request_id`                                                                               | Repo image callback had invalid auth, replay, or session binding             |
-| `repo_image.build_complete_error`            | error | `build_id`, `finalized_image_id`, `error`, `trace_id`, `request_id`                                                                                   | Provider-image completion path threw before ready state                      |
-| `repo_image.<provider>_finalize_error`       | error | `build_id`, `provider_session_id`, `provider_image_id`, `error`, `duration_ms`, `trace_id`, `request_id`                                              | Provider-session finalization threw before or after creating an image        |
-| `repo_image.<provider>_finalize_not_applied` | warn  | `build_id`, `provider_session_id`, `provider_image_id`, `duration_ms`, `trace_id`, `request_id`                                                       | Finalization succeeded after the build row stopped accepting completion      |
-| `repo_image.trigger_mark_failed_error`       | warn  | `build_id`, `error`, `trace_id`, `request_id`                                                                                                         | Build trigger failed and the route could not mark the build failed           |
-| `repo_image.trigger_error`                   | error | `repo_owner`, `repo_name`, `error`, `trace_id`, `request_id`                                                                                          | Manual or scheduled build trigger failed                                     |
+One `image_build.*` vocabulary covers both scope kinds; events carry `scope_kind` (`repo` |
+`environment`) and `scope_id` (lowercase `owner/name` or an environment id).
+
+| Event                                                     | Level | Key Fields                                                                                                           | Description                                                                |
+| --------------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `image_build.build_triggered`                             | info  | `build_id`, `scope_kind`, `scope_id`, `repositories_fingerprint`, `trace_id`, `request_id`                           | Build registered and accepted by the active provider                       |
+| `image_build.build_complete_received`                     | info  | `build_id`, `scope_kind`, `scope_id`, `provider`, `provider_session_id`, `runtime_version`, `trace_id`, `request_id` | Runtime success was accepted for Queue finalization                        |
+| `image_build.build_failed`                                | info  | `build_id`, `scope_kind`, `scope_id`, `provider`, `error_message`, `provider_session_id`, `trace_id`, `request_id`   | Runtime reported a failed build                                            |
+| `image_build.callback_auth_failed`                        | warn  | `build_id`, `provider`, `provider_session_id`, `trace_id`, `request_id`                                              | Build callback had invalid auth or session binding                         |
+| `image_build.finalization_job_invalid`                    | error | `queue_message_id`, `attempts`                                                                                       | Malformed Queue command was rejected                                       |
+| `image_build.finalization_error`                          | error | `build_id`, `queue_message_id`, `attempts`, `error`                                                                  | Queue finalization threw; retries exhaust to the DLQ                       |
+| `image_build.scheduler_tick`                              | info  | phase counters, `provider`, `trace_id`, `request_id`                                                                 | One provider-neutral maintenance scan completed                            |
+| `image_build.scheduler_finalization_republish_failed`     | warn  | `error`                                                                                                              | Finalization-recovery scan was skipped                                     |
+| `image_build.scheduler_finalization_republish_row_failed` | warn  | `build_id`, `error`                                                                                                  | One recovery command could not be published; the scan continued            |
+| `image_build.scheduler_stale_failed`                      | warn  | `error`                                                                                                              | Stale-build marking phase was skipped                                      |
+| `image_build.scheduler_session_cleanup_phase_failed`      | warn  | `error`                                                                                                              | Provider-session cleanup scan was skipped                                  |
+| `image_build.scheduler_session_cleanup_failed`            | warn  | `build_id`, `provider`, `provider_session_id`, `error`                                                               | One terminal build-session cleanup failed; the scan continued              |
+| `image_build.scheduler_reconciliation_phase_failed`       | warn  | `error`                                                                                                              | Scope-reconciliation phase was skipped                                     |
+| `image_build.scheduler_scope_failed`                      | warn  | `scope_kind`, `scope_id`, `error`                                                                                    | One scope could not be reconciled; the scan continued                      |
+| `image_build.scheduler_artifact_cleanup_failed`           | warn  | `error`                                                                                                              | Provider-artifact/history cleanup phase was skipped                        |
+| `image_build.scheduler_source_control_unavailable`        | warn  | `error`                                                                                                              | Rebuild reconciliation was disabled because source control was unavailable |
+| `image_build.trigger_mark_failed_error`                   | warn  | `build_id`, `error`, `trace_id`, `request_id`                                                                        | Build trigger failed and the workflow could not mark the build failed      |
+| `image_build.build_failed_error`                          | error | `build_id`, `error`, `trace_id`, `request_id`                                                                        | Failure callback could not mark the build failed                           |
+| `image_build.trigger_error`                               | error | `scope_kind`, `scope_id`, `error`, `trace_id`, `request_id`                                                          | Manual or scheduled build trigger failed                                   |
+| `image_build.late_artifact_recorded`                      | info  | `build_id`, `provider`, `provider_image_id`, `trace_id`, `request_id`                                                | Artifact reported after the row left `building`; recorded for the reaper   |
+| `image_build.save_hook_trigger`                           | info  | `scope_kind`, `scope_id`, `result`, `build_id`, `trace_id`, `request_id`                                             | Entity save (env save, repo toggle-on) kicked a prebuild                   |
+| `image_build.save_hook_trigger_failed`                    | warn  | `scope_kind`, `scope_id`, `error`, `trace_id`, `request_id`                                                          | Save-hook prebuild kick failed (the entity save itself succeeded)          |
+| `image_build.secrets_change_superseded`                   | info  | `scope_kind`, `scope_id`, `superseded`, `trace_id`, `request_id`                                                     | Secret change retired the scope's live images before the rebuild           |
+| `image_build.toggle`                                      | info  | `scope_kind`, `scope_id`, `enabled`, `trace_id`, `request_id`                                                        | Repo prebuild toggle written                                               |
+| `image_build.cleanup` / `image_build.stale_marked`        | info  | `deleted`, `reaped_superseded` / `count`, `trace_id`, `request_id`                                                   | Scheduler-driven maintenance results                                       |
 
 #### Session Durable Object (`component: "session-do"`)
 
-| Event             | Level      | Key Fields                                                                                                     | Description                    |
-| ----------------- | ---------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `do.request`      | info       | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                            | One per DO internal route call |
-| `ws.connect`      | info, warn | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`         | WebSocket lifecycle            |
-| `prompt.enqueue`  | info       | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position` | Message queued                 |
-| `prompt.dispatch` | info       | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                  | Message sent to sandbox        |
-| `prompt.complete` | info, warn | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                    | Prompt run finished            |
+| Event                        | Level       | Key Fields                                                                                                            | Description                           |
+| ---------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `do.request`                 | info        | `http_method`, `http_path`, `http_status`, `duration_ms`, `outcome`                                                   | One per DO internal route call        |
+| `ws.connect`                 | info, warn  | `ws_type` (sandbox\|client), `outcome`, `reject_reason`, `sandbox_id`, `participant_id`, `duration_ms`                | WebSocket lifecycle                   |
+| `prompt.enqueue`             | info        | `message_id`, `source`, `author_id`, `user_id`, `model`, `content_length`, `has_attachments`, `queue_position`        | Message queued                        |
+| `prompt.dispatch`            | info        | `message_id`, `outcome`, `reason`, `model`, `has_sandbox_ws`, `queue_wait_ms`                                         | Message sent to sandbox               |
+| `prompt.complete`            | info, warn  | `message_id`, `outcome`, `total_duration_ms`, `processing_duration_ms`, `queue_duration_ms`                           | Prompt run finished                   |
+| `callback.complete_delivery` | info, error | `session_id`, `message_id`, `source`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason` | Completion callback delivery result   |
+| `callback.started_delivery`  | info, error | `session_id`, `message_id`, `outcome`, `duration_ms`, `attempts`, `retries`, `http_status`, `reject_reason`           | Linear start-callback delivery result |
 
 #### Lifecycle Manager (`component: "lifecycle-manager"`)
 
-| Event                     | Level | Key Fields                                       | Description                |
-| ------------------------- | ----- | ------------------------------------------------ | -------------------------- |
-| `sandbox.spawn`           | info  | `expected_sandbox_id`, `repo_owner`, `repo_name` | Spawn attempt started      |
-| `sandbox.spawned`         | info  | `sandbox_id`, `provider_object_id`               | Spawn succeeded            |
-| `sandbox.spawn_failed`    | error | `error`                                          | Spawn failed               |
-| `sandbox.restore`         | info  | `snapshot_image_id`                              | Restore attempt started    |
-| `sandbox.restored`        | info  | `sandbox_id`, `provider_object_id`               | Restore succeeded          |
-| `sandbox.snapshot`        | info  | `reason`, `provider_object_id`                   | Snapshot attempt started   |
-| `sandbox.snapshot_saved`  | info  | `image_id`, `reason`                             | Snapshot saved             |
-| `sandbox.heartbeat_stale` | warn  | `last_heartbeat_ms`, `threshold_ms`              | Heartbeat missed           |
-| `sandbox.timeout`         | info  | `last_activity`, `timeout_ms`                    | Inactivity timeout reached |
+Dashboards and alerts must migrate `sandbox.spawned` and `sandbox.spawn_failed` to `sandbox.spawn`
+outcomes, and `sandbox.restored` to `sandbox.restore` outcomes.
+
+| Event                     | Level       | Key Fields                                                                                                              | Description                |
+| ------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `sandbox.spawn`           | info, error | `outcome`, `duration_ms`, `sandbox_id`, `expected_sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error` | Spawn completed            |
+| `sandbox.restore`         | info, error | `outcome`, `duration_ms`, `snapshot_image_id`, `sandbox_id`, `provider_object_id`, `repo_owner`, `repo_name`, `error`   | Restore completed          |
+| `sandbox.snapshot`        | info        | `reason`, `provider_object_id`                                                                                          | Snapshot attempt started   |
+| `sandbox.snapshot_saved`  | info        | `image_id`, `reason`                                                                                                    | Snapshot saved             |
+| `sandbox.heartbeat_stale` | warn        | `last_heartbeat_ms`, `threshold_ms`                                                                                     | Heartbeat missed           |
+| `sandbox.timeout`         | info        | `last_activity`, `timeout_ms`                                                                                           | Inactivity timeout reached |
 
 #### Provider Clients
 
@@ -166,14 +191,15 @@ Wide events use `outcome` to indicate result:
 
 #### Bridge (`component: "bridge"`)
 
-| Event               | Level      | Key Fields                                      | Description                          |
-| ------------------- | ---------- | ----------------------------------------------- | ------------------------------------ |
-| `bridge.connect`    | info       | `outcome`                                       | WebSocket connected to control-plane |
-| `bridge.disconnect` | info, warn | `reason`, `ws_close_code`                       | WebSocket disconnected               |
-| `bridge.reconnect`  | info       | `attempt`, `delay_s`                            | Reconnection attempt                 |
-| `prompt.start`      | info       | `message_id`, `model`                           | Prompt processing started            |
-| `prompt.run`        | info       | `message_id`, `model`, `outcome`, `duration_ms` | Prompt processing completed (wide)   |
-| `prompt.error`      | error      | `message_id`, `exc`                             | Prompt processing failed             |
+| Event                 | Level      | Key Fields                                                                                                                                                     | Description                                           |
+| --------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `bridge.connect`      | info       | `outcome`                                                                                                                                                      | WebSocket connected to control-plane                  |
+| `bridge.disconnect`   | info, warn | `reason`, `ws_close_code`, `connection_duration_seconds`, `total_connected_duration_seconds`, `connection_count`, `reconnect_count`, `reconnect_attempt_count` | WebSocket disconnected with lifetime aggregates       |
+| `bridge.reconnect`    | info       | `attempt`, `reconnect_attempt_count`, `delay_s`                                                                                                                | Reconnection attempt                                  |
+| `bridge.run_complete` | info       | `outcome`, `connection_count`, `reconnect_count`, `reconnect_attempt_count`, `total_connected_duration_seconds`                                                | Bridge process exited with aggregate connection stats |
+| `prompt.start`        | info       | `message_id`, `model`                                                                                                                                          | Prompt processing started                             |
+| `prompt.run`          | info       | `message_id`, `model`, `outcome`, `duration_ms`                                                                                                                | Prompt processing completed (wide)                    |
+| `prompt.error`        | error      | `message_id`, `exc`                                                                                                                                            | Prompt processing failed                              |
 
 #### Git Operations (`component: "bridge"` / `"supervisor"`)
 
@@ -213,12 +239,38 @@ Wide events use `outcome` to indicate result:
 | `slack.app_home`                  | error       | `user_id`, `outcome`, `slack_error`                                                           | App Home publish failed          |
 | `kv.get` / `kv.put` / `kv.delete` | error, warn | `key_prefix`, contextual IDs                                                                  | KV storage operation failed      |
 
+#### Attachments (`component: "attachments"`)
+
+| Event                              | Level | Key Fields                                                    | Description                              |
+| ---------------------------------- | ----- | ------------------------------------------------------------- | ---------------------------------------- |
+| `slack.attachment.untrusted_url`   | warn  | `trace_id`, `file_id`, `file_mode`                            | Non-Slack or remote file rejected        |
+| `slack.attachment.download_failed` | warn  | `trace_id`, `file_id`, `http_status`                          | Slack file download returned an error    |
+| `slack.attachment.download_error`  | warn  | `trace_id`, `file_id`, `error`                                | Slack file download threw or timed out   |
+| `slack.attachment.size_rejected`   | warn  | `trace_id`, `file_id`, `size_bytes`                           | Download response failed the byte cap    |
+| `slack.attachment.too_large`       | warn  | `trace_id`, `file_id`, `size_bytes`                           | Slack metadata exceeded the byte cap     |
+| `slack.attachment.upload_failed`   | warn  | `trace_id`, `session_id`, `file_id`, `http_status` or `error` | Session attachment upload was rejected   |
+| `slack.attachment.upload_error`    | warn  | `trace_id`, `session_id`, `file_id`, `error`                  | Session attachment upload threw          |
+| `slack.attachment.notify_failed`   | warn  | `trace_id`, `channel`, `slack_error`                          | Could not post the dropped-image warning |
+
 #### Callback (`component: "callback"`)
 
-| Event               | Level       | Key Fields                                                                                                             | Description                   |
-| ------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `http.request`      | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `session_id`, `message_id`, `outcome`, `duration_ms`            | One per /callbacks/complete   |
-| `callback.complete` | info, error | `trace_id`, `session_id`, `message_id`, `channel`, `agent_success`, `tool_call_count`, `artifact_count`, `duration_ms` | Completion callback processed |
+| Event                          | Level       | Key Fields                                                                                                                                     | Description                            |
+| ------------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| `http.request`                 | info, warn  | `trace_id`, `http_method`, `http_path`, `http_status`, `session_id`, `message_id`, `delivery_id`, `outcome`, `duration_ms`                     | Completion callback validated/enqueued |
+| `slack.completion.enqueue`     | error       | `trace_id`, `session_id`, `message_id`, `delivery_id`, `error`                                                                                 | Queue send failed                      |
+| `slack.completion.job_invalid` | error       | `queue_message_id`, `issues`                                                                                                                   | Invalid queued payload discarded       |
+| `slack.completion.unhandled`   | error       | `delivery_id`, `session_id`, `message_id`, `error`                                                                                             | Unexpected consumer error              |
+| `callback.complete`            | info, error | `trace_id`, `session_id`, `message_id`, `channel`, `agent_success`, `tool_call_count`, `artifact_count`, `media_artifact_count`, `duration_ms` | Queued completion delivery processed   |
+
+#### Completion Media (`component: "completion-media"`)
+
+| Event                         | Level | Key Fields                                                                                                      | Description                        |
+| ----------------------------- | ----- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `slack.media.fetch`           | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `artifact_type`, `http_status`, `outcome`                | Protected media retrieval failed   |
+| `slack.media.get_upload_url`  | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                                 | Slack upload ticket request failed |
+| `slack.media.upload_bytes`    | warn  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `slack_error`, `outcome`                                 | Byte upload failed                 |
+| `slack.media.complete_upload` | warn  | `trace_id`, `session_id`, `message_id`, `slack_file_ids`, `slack_error`, `outcome`                              | Batch file sharing failed          |
+| `slack.media.delivery`        | info  | `trace_id`, `session_id`, `message_id`, `artifact_id`, `size_bytes`, `uploaded`, `failed`, `omitted`, `outcome` | Media attached or skipped          |
 
 #### Extractor (`component: "extractor"`)
 
@@ -241,6 +293,30 @@ Wide events use `outcome` to indicate result:
 ---
 
 ## Debugging Scenarios
+
+### "Why did an attached Slack image not reach the agent?"
+
+Follow the request by `trace_id` through file discovery, download, session upload, and prompt
+submission.
+
+```
+# 1. Could the bot recover and trust the Slack file metadata?
+service="slack-bot" trace_id="<TRACE_ID>" msg="slack.attachment.file_lookup_failed"
+service="slack-bot" trace_id="<TRACE_ID>" msg="slack.attachment.untrusted_url"
+
+# 2. Did the Slack-hosted download fail or exceed 10 MiB?
+service="slack-bot" component="attachments" trace_id="<TRACE_ID>" msg="slack.attachment.*"
+
+# 3. Did the control plane accept the session attachment before the prompt?
+service="slack-bot" component="attachments" trace_id="<TRACE_ID>" msg="slack.attachment.upload*"
+service="slack-bot" component="handler" trace_id="<TRACE_ID>" msg="control_plane.send_prompt"
+```
+
+`slack.attachment.file_lookup_failed` is emitted by `handler` or `target-selection`, depending on
+whether lookup failed during initial handling or after repository clarification. An HTTP failure
+while downloading often means the bot lacks `files:read` or was not reinstalled after the scope was
+added. Size events enforce 10 MiB per image; the bot forwards at most six images per message. If a
+text-plus-image request loses images, the text still runs and the bot attempts an in-thread warning.
 
 ### "What happened to message X?"
 
@@ -396,7 +472,8 @@ service="modal-infra" msg="opencode.crash"
 The following must **never** appear in logs:
 
 - Authorization headers
-- HMAC tokens (`INTERNAL_CALLBACK_SECRET` derivatives)
+- HMAC tokens derived from `MODAL_API_SECRET` (control plane → Modal), and sig1 service signatures
+  derived from the per-service `SERVICE_AUTH_SECRET`s
 - GitHub App private keys or installation tokens
 - GitHub OAuth access/refresh tokens
 - Sandbox auth tokens

@@ -20,6 +20,43 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
+  it("rejects a prompt sent before subscribing without enqueuing it", async () => {
+    const name = `ws-client-nosub-prompt-${Date.now()}`;
+    await initNamedSession(name);
+
+    const { ws } = await openClientWs(name);
+
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (evt) => resolve({ code: evt.code }));
+    });
+
+    ws.send(JSON.stringify({ type: "prompt", content: "hello" }));
+
+    // Unsubscribed sockets have no client mapping — the DO closes them
+    // with 4002 and never enqueues the prompt.
+    const { code } = await closed;
+    expect(code).toBe(4002);
+
+    const id = env.SESSION.idFromName(name);
+    const stub = env.SESSION.get(id);
+    const rows = await queryDO<{ count: number }>(stub, "SELECT COUNT(*) AS count FROM messages");
+    expect(rows[0].count).toBe(0);
+  });
+
+  it("rejects typing before subscribing", async () => {
+    const name = `ws-client-nosub-typing-${Date.now()}`;
+    await initNamedSession(name);
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+
+    ws.send(JSON.stringify({ type: "typing" }));
+
+    await expect(closed).resolves.toEqual({ code: 4002 });
+  });
+
   it("subscribe with valid token sends subscribed + state", async () => {
     const name = `ws-client-sub-${Date.now()}`;
     await initNamedSession(name, { repoOwner: "acme", repoName: "web-app" });
@@ -237,7 +274,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     await queryDO(
       stub,
-      "INSERT INTO artifacts (id, type, url, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
       "artifact-pr-1",
       "pr",
       "https://github.com/acme/web-app/pull/42",
@@ -247,6 +284,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
         head: "feature/test",
         base: "main",
       }),
+      createdAt,
       createdAt
     );
 
@@ -266,6 +304,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
           base: "main",
         },
         createdAt,
+        updatedAt: createdAt,
       },
     ]);
 
@@ -348,6 +387,45 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(participants.some((p) => p.participantId === tab1.participantId)).toBe(true);
 
     tab1.ws.close();
+  });
+
+  it("uses canonical profile IDs for bot participant subscription and presence", async () => {
+    const name = `ws-client-canonical-presence-${Date.now()}`;
+    await initNamedSession(name);
+    const watcher = await openClientWs(name, { subscribe: true, userId: "user-1" });
+    const collector = collectMessages(watcher.ws, {
+      until: (msg) =>
+        msg.type === "presence_update" &&
+        (msg.participants as Array<{ userId: string }>).some(
+          (participant) => participant.userId === "canonical-bot"
+        ),
+      timeoutMs: 2000,
+    });
+
+    const bot = await openClientWs(name, {
+      subscribe: true,
+      userId: "slack:U123",
+      canonicalUserId: "canonical-bot",
+    });
+    const subscribed = bot.messages.find((message) => message.type === "subscribed") as {
+      participant: { userId: string };
+    };
+    expect(subscribed.participant.userId).toBe("canonical-bot");
+
+    const messages = await collector;
+    const presence = messages.find(
+      (message) =>
+        message.type === "presence_update" &&
+        (message.participants as Array<{ userId: string }>).some(
+          (participant) => participant.userId === "canonical-bot"
+        )
+    ) as { participants: Array<{ userId: string }> };
+    expect(presence.participants).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: "canonical-bot" })])
+    );
+
+    bot.ws.close();
+    watcher.ws.close();
   });
 
   it("closing the only socket for a participant broadcasts presence_leave", async () => {

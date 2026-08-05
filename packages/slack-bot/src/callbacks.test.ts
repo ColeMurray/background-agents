@@ -1,23 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { callbacksRouter } from "./callbacks";
-import { extractAgentResponse } from "./completion/extractor";
-import type * as ExtractorModule from "./completion/extractor";
 import type { Env } from "./types";
-
-// The automation-complete post path reuses the interactive completion path, which
-// fetches the agent's response from the control-plane. Stub that extraction so the
-// handler test asserts the in-thread post + reaction clear without reconstructing
-// the event-fetch protocol.
-vi.mock("./completion/extractor", async (importOriginal) => {
-  const actual = await importOriginal<typeof ExtractorModule>();
-  return { ...actual, extractAgentResponse: vi.fn() };
-});
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
     SLACK_KV: {} as KVNamespace,
+    SLACK_COMPLETION_QUEUE: { send: vi.fn(async () => {}) } as unknown as Queue,
     CONTROL_PLANE: { fetch: vi.fn() } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
@@ -27,7 +17,7 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
     ANTHROPIC_API_KEY: "test-key",
-    INTERNAL_CALLBACK_SECRET: "callback-secret",
+    SERVICE_AUTH_SECRET: "callback-secret",
     LOG_LEVEL: "error",
     ...overrides,
   };
@@ -125,6 +115,21 @@ describe("POST /callbacks/tool_call", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
+  it("rejects signed tool calls with partial Slack context", async () => {
+    const payload = await makeToolCallPayload({
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+      },
+    });
+    const { response, ctx } = await postToolCall(payload);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid payload" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed JSON payloads", async () => {
     const ctx = makeCtx();
     const response = await makeApp().fetch(
@@ -144,10 +149,7 @@ describe("POST /callbacks/tool_call", () => {
 
   it("returns 500 when callback signing is not configured", async () => {
     const payload = await makeToolCallPayload();
-    const { response, ctx } = await postToolCall(
-      payload,
-      makeEnv({ INTERNAL_CALLBACK_SECRET: "" })
-    );
+    const { response, ctx } = await postToolCall(payload, makeEnv({ SERVICE_AUTH_SECRET: "" }));
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "not configured" });
@@ -158,6 +160,26 @@ describe("POST /callbacks/tool_call", () => {
     const payload = await makeToolCallPayload({}, "wrong-secret");
     const { response, ctx } = await postToolCall(payload);
 
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "unauthorized" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("accepts callbacks signed with the bot's per-service secret", async () => {
+    const payload = await makeToolCallPayload({}, "slack-service-secret");
+    const { response } = await postToolCall(
+      payload,
+      makeEnv({ SERVICE_AUTH_SECRET: "slack-service-secret" })
+    );
+    expect(response.status).not.toBe(401);
+  });
+
+  it("rejects callbacks signed with the retired shared secret", async () => {
+    const payload = await makeToolCallPayload();
+    const { response, ctx } = await postToolCall(
+      payload,
+      makeEnv({ SERVICE_AUTH_SECRET: "slack-service-secret" })
+    );
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "unauthorized" });
     expect(ctx.waitUntil).not.toHaveBeenCalled();
@@ -290,6 +312,142 @@ async function postCallback(path: string, payload: unknown, env = makeEnv(), ctx
   return { response, env, ctx };
 }
 
+describe("POST /callbacks/complete", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function completeCallbackData(overrides: Record<string, unknown> = {}) {
+    return {
+      sessionId: "session-1",
+      messageId: "message-1",
+      success: true,
+      timestamp: 1778900000000,
+      context: {
+        source: "slack",
+        channel: "C123",
+        threadTs: "111.222",
+        repoFullName: "acme/app",
+        model: "anthropic/claude-haiku-4-5",
+      },
+      ...overrides,
+    };
+  }
+
+  it("rejects a partial completion payload", async () => {
+    const payload = await signPayload(
+      completeCallbackData({
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+        },
+      })
+    );
+    const { response, ctx } = await postCallback("/callbacks/complete", payload);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid payload" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("awaits durable enqueue and strips callback-only fields", async () => {
+    const pending = createDeferred<void>();
+    const env = makeEnv({
+      SLACK_COMPLETION_QUEUE: {
+        send: vi.fn(() => pending.promise),
+      } as unknown as Queue,
+    });
+    const payload = await signPayload(
+      completeCallbackData({
+        extraTopLevel: "preserve-me",
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          extraNested: "preserve-me-too",
+        },
+      })
+    );
+    let settled = false;
+    const responsePromise = postCallback("/callbacks/complete", payload, env).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    pending.resolve();
+    const { response, ctx } = await responsePromise;
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: 1,
+        source: "session",
+        sessionId: "session-1",
+        messageId: "message-1",
+        channel: "C123",
+        threadTs: "111.222",
+        traceId: "trace-1",
+      }),
+      { contentType: "json" }
+    );
+    const queued = vi.mocked(env.SLACK_COMPLETION_QUEUE.send).mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(queued).not.toHaveProperty("signature");
+    expect(queued).not.toHaveProperty("extraTopLevel");
+  });
+
+  it("queues an automation-sourced job when the context carries an automation id", async () => {
+    const env = makeEnv();
+    const payload = await signPayload(
+      completeCallbackData({
+        context: {
+          source: "slack",
+          channel: "C123",
+          threadTs: "111.222",
+          repoFullName: "acme/app",
+          model: "anthropic/claude-haiku-4-5",
+          automationId: "automation-1",
+        },
+      })
+    );
+
+    const { response } = await postCallback("/callbacks/complete", payload, env);
+
+    expect(response.status).toBe(200);
+    // A thread follow-up on an automation completes through this interactive
+    // route; without the marker it would be ineligible to decline a reply.
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "automation" }),
+      { contentType: "json" }
+    );
+  });
+
+  it("returns 503 when enqueue fails", async () => {
+    const env = makeEnv({
+      SLACK_COMPLETION_QUEUE: {
+        send: vi.fn(async () => {
+          throw new Error("queue unavailable");
+        }),
+      } as unknown as Queue,
+    });
+    const payload = await signPayload(completeCallbackData());
+
+    const { response, ctx } = await postCallback("/callbacks/complete", payload, env);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "completion enqueue failed" });
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /callbacks/automation-complete", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -299,6 +457,11 @@ describe("POST /callbacks/automation-complete", () => {
     return {
       channel: "C123",
       reactionMessageTs: "111.222",
+      sessionId: "session-9",
+      messageId: "msg-9",
+      success: true,
+      repoFullName: "acme/app",
+      model: "anthropic/claude-haiku-4-5",
       ...overrides,
     };
   }
@@ -318,63 +481,33 @@ describe("POST /callbacks/automation-complete", () => {
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("clears the reaction without posting when the run carries no session coordinates", async () => {
-    // No sessionId/messageId (e.g. version skew) — falls back to a reaction clear.
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(completeData());
+  it("rejects payloads without complete session coordinates", async () => {
+    const { sessionId: _, messageId: __, ...incomplete } = completeData();
+    const payload = await signPayload(incomplete);
     const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
 
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    expect(slackCall(fetchMock, "chat.postMessage")).toBeUndefined();
-    const reaction = slackCall(fetchMock, "reactions.remove");
-    expect(reaction).toBeDefined();
-    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
+    expect(response.status).toBe(400);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("posts the agent result in-thread and clears the reaction", async () => {
-    vi.mocked(extractAgentResponse).mockResolvedValue({
-      textContent: "Fixed the bug and opened a PR.",
-      toolCalls: [],
-      artifacts: [],
-      success: true,
-    });
-    const fetchMock = okFetchMock();
-    const payload = await signPayload(
-      completeData({
+  it("enqueues the same completion job shape without waitUntil", async () => {
+    const env = makeEnv();
+    const payload = await signPayload(completeData());
+    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload, env);
+
+    expect(response.status).toBe(200);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+    expect(env.SLACK_COMPLETION_QUEUE.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "automation",
         sessionId: "session-9",
         messageId: "msg-9",
-        success: true,
-        repoFullName: "acme/app",
-        model: "anthropic/claude-haiku-4-5",
-      })
+        channel: "C123",
+        threadTs: "111.222",
+        reactionMessageTs: "111.222",
+      }),
+      { contentType: "json" }
     );
-    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
-
-    expect(response.status).toBe(200);
-    await flushWaitUntil(ctx);
-
-    // The agent's response is posted into the triggering message's thread.
-    const post = slackCall(fetchMock, "chat.postMessage");
-    expect(post).toBeDefined();
-    expect(post!.body).toMatchObject({ channel: "C123", thread_ts: "111.222" });
-    expect(JSON.stringify(post!.body)).toContain("Fixed the bug");
-
-    // ...and the eyes reaction is still cleared.
-    const reaction = slackCall(fetchMock, "reactions.remove");
-    expect(reaction).toBeDefined();
-    expect(reaction!.body).toMatchObject({ channel: "C123", timestamp: "111.222", name: "eyes" });
-  });
-
-  it("does not crash when clearing the reaction throws", async () => {
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
-    const payload = await signPayload(completeData());
-    const { response, ctx } = await postCallback("/callbacks/automation-complete", payload);
-
-    expect(response.status).toBe(200);
-    // The fire-and-forget handler must swallow the throw, not reject in waitUntil.
-    await expect(flushWaitUntil(ctx)).resolves.toBeUndefined();
   });
 });
 

@@ -10,16 +10,22 @@ export const SessionInternalPaths = {
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
   createMediaArtifact: "/internal/create-media-artifact",
+  attachments: "/internal/attachments",
   participants: "/internal/participants",
   events: "/internal/events",
   artifacts: "/internal/artifacts",
   messages: "/internal/messages",
   createPr: "/internal/create-pr",
+  // Static path + artifactId query param: the router matches paths as exact
+  // strings, so the artifact id cannot ride in the path.
+  pullRequestArtifactSnapshot: "/internal/pull-request-artifact-snapshot",
+  pullRequestsRefresh: "/internal/pull-requests-refresh",
   wsToken: "/internal/ws-token",
   archive: "/internal/archive",
   unarchive: "/internal/unarchive",
   verifySandboxToken: "/internal/verify-sandbox-token",
   openaiTokenRefresh: "/internal/openai-token-refresh",
+  xaiTokenRefresh: "/internal/xai-token-refresh",
   scmCredentials: "/internal/scm-credentials",
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",
@@ -27,6 +33,11 @@ export const SessionInternalPaths = {
   updateTitle: "/internal/update-title",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",
+  diffState: "/internal/diff-state",
+  diffStore: "/internal/diff-store",
+  diffFailure: "/internal/diff-failure",
+  diffResolveFile: "/internal/diff-resolve-file",
+  diffRetry: "/internal/diff-retry",
 } as const;
 
 export type SessionInternalPath = (typeof SessionInternalPaths)[keyof typeof SessionInternalPaths];

@@ -8,10 +8,10 @@ import {
   postMessage,
   sanitizeAgentText,
   SLACK_DENIAL_STATUS,
-  type SlackGlobalSettings,
   type SlackNotifySuccessOutput,
   type SlackWireDenialReason,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
+import type { SlackGlobalSettings } from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
@@ -55,7 +55,7 @@ export async function handleSlackNotify(
   const parsed = await parseBody(request);
   if (parsed instanceof Response) return parsed;
 
-  const session = await new SessionIndexStore(env.DB).get(sessionId);
+  const session = await new SessionIndexStore(ctx.db).get(sessionId);
   if (!session) {
     return failureResponse("invalid_input", "Session not found.");
   }
@@ -84,7 +84,7 @@ export async function handleSlackNotify(
     return failureResponse("feature_unavailable", "Slack bot token is not configured.");
   }
 
-  const settingsStore = new IntegrationSettingsStore(env.DB);
+  const settingsStore = new IntegrationSettingsStore(ctx.db);
   const settings = repoScope
     ? (await settingsStore.getResolvedConfig("slack", repoScope)).settings
     : ((await settingsStore.getGlobal("slack"))?.defaults ?? {});

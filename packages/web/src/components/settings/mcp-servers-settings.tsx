@@ -2,7 +2,7 @@
 
 import { useState, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared";
+import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
 import {
   useMcpServers,
   createMcpServer,
@@ -267,6 +267,8 @@ function McpServerForm({
   radioPrefix,
   hasExistingCredentials,
 }: McpServerFormProps) {
+  const selectedRepoScopes = new Set(form.repoScopes);
+
   return (
     <>
       <div>
@@ -282,6 +284,7 @@ function McpServerForm({
         <Label className="mb-1.5">Type</Label>
         <div className="flex gap-2">
           <button
+            type="button"
             onClick={() => setForm({ ...form, type: "local" })}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "local"
@@ -293,6 +296,7 @@ function McpServerForm({
             Local
           </button>
           <button
+            type="button"
             onClick={() => setForm({ ...form, type: "remote" })}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-sm border transition ${
               form.type === "remote"
@@ -367,7 +371,7 @@ function McpServerForm({
               <div className="border border-border max-h-40 overflow-y-auto rounded-sm">
                 {repos.map((repo) => {
                   const fullName = repo.fullName.toLowerCase();
-                  const isChecked = form.repoScopes.includes(fullName);
+                  const isChecked = selectedRepoScopes.has(fullName);
                   return (
                     <label
                       key={repo.fullName}
@@ -646,6 +650,7 @@ export function McpServersSettings() {
                       aria-label={server.enabled ? "Disable" : "Enable"}
                     />
                     <button
+                      type="button"
                       onClick={() => setDeleteTarget(server.id)}
                       className="px-2 py-1 text-xs text-destructive hover:text-destructive/80 transition"
                     >

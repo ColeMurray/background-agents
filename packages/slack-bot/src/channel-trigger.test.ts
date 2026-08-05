@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type * as SharedModule from "@open-inspect/shared";
+import type * as SlackModule from "@open-inspect/shared/slack";
 import type { Env } from "./types";
 
 const {
@@ -16,10 +16,10 @@ const {
   mockAddReaction: vi.fn(),
 }));
 
-vi.mock("@open-inspect/shared", async () => {
-  const actual = await vi.importActual<typeof SharedModule>("@open-inspect/shared");
+vi.mock("@open-inspect/shared/slack", async () => {
+  const actual = await vi.importActual<typeof SlackModule>("@open-inspect/shared/slack");
   return {
-    ...actual, // keep the real normalizeSlackEvent, internal-auth helpers, cache store
+    ...actual, // keep the real Slack client functions not under test
     verifySlackSignature: mockVerifySlackSignature,
     authTest: mockAuthTest,
     getChannelInfo: mockGetChannelInfo,
@@ -52,7 +52,12 @@ function createMockKV() {
 }
 
 /** Control-plane fetch mock: serves the watched-channel set and records forwards. */
-function makeControlPlaneFetch(watched: string[], triggered: number, steered: number) {
+function makeControlPlaneFetch(
+  watched: string[],
+  triggered: number,
+  steered: number,
+  forwardResponse?: unknown
+) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : String(input);
     if (url.includes("/integration-settings/slack/watched-channels")) {
@@ -63,17 +68,26 @@ function makeControlPlaneFetch(watched: string[], triggered: number, steered: nu
     }
     if (url.includes("/internal/slack-event")) {
       const skipped = triggered === 0 && steered === 0 ? 1 : 0;
-      return new Response(JSON.stringify({ ok: true, triggered, skipped, steered }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify(forwardResponse ?? { ok: true, triggered, skipped, steered }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
     return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
   });
 }
 
 function makeEnv(
-  opts: { triggersEnabled?: boolean; watched?: string[]; triggered?: number; steered?: number } = {}
+  opts: {
+    triggersEnabled?: boolean;
+    watched?: string[];
+    triggered?: number;
+    steered?: number;
+    forwardResponse?: unknown;
+  } = {}
 ): Env {
   return {
     SLACK_KV: createMockKV() as unknown as KVNamespace,
@@ -81,7 +95,8 @@ function makeEnv(
       fetch: makeControlPlaneFetch(
         opts.watched ?? ["C123"],
         opts.triggered ?? 1,
-        opts.steered ?? 0
+        opts.steered ?? 0,
+        opts.forwardResponse
       ),
     } as unknown as Fetcher,
     DEPLOYMENT_NAME: "test",
@@ -91,7 +106,7 @@ function makeEnv(
     CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "secret",
-    INTERNAL_CALLBACK_SECRET: "internal-secret",
+    SERVICE_AUTH_SECRET: "internal-secret",
     SLACK_TRIGGERS_ENABLED: opts.triggersEnabled ? "true" : undefined,
   } as unknown as Env;
 }
@@ -205,6 +220,20 @@ describe("channel-message automation triggers (POST /events)", () => {
     await flushWaitUntil(ctx);
 
     expect(mockAddReaction).toHaveBeenCalledWith("xoxb-test", "C123", "1700000000.000200", "eyes");
+  });
+
+  it("does not react when the control-plane forward response is malformed", async () => {
+    const env = makeEnv({
+      triggersEnabled: true,
+      watched: ["C123"],
+      forwardResponse: { triggered: "1", skipped: 0, steered: 0 },
+    });
+    const ctx = makeCtx();
+
+    await app.fetch(channelMessageRequest({}), env, ctx);
+    await flushWaitUntil(ctx);
+
+    expect(mockAddReaction).not.toHaveBeenCalled();
   });
 
   it("does not forward when the kill switch is off (default)", async () => {

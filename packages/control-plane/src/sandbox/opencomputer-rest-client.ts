@@ -23,7 +23,7 @@ export interface OpenComputerRestConfig {
   /** OpenComputer API key */
   apiKey: string;
   /** Declarative template identifier containing the OpenInspect runtime */
-  template: string;
+  template?: string;
   /** Header used for API key authentication. Defaults to X-API-Key. */
   authHeaderName?: string;
   /** Optional prefix for the API key header value, e.g. "Bearer ". */
@@ -91,6 +91,10 @@ export type OpenComputerCheckpointRetentionPolicy = typeof OPENCOMPUTER_CHECKPOI
 export interface OpenComputerCreateCheckpointOptions {
   kind?: typeof OPENCOMPUTER_CHECKPOINT_KIND;
   retentionPolicy?: OpenComputerCheckpointRetentionPolicy;
+}
+
+export interface OpenComputerDeleteSandboxOptions {
+  deleteSecretStore?: boolean;
 }
 
 export interface OpenComputerExecResult {
@@ -182,6 +186,13 @@ const RUNTIME_HOSTS_BOOTSTRAP =
   "printf '%s\\n' '127.0.0.1 localhost' | sudo tee -a /etc/hosts >/dev/null; " +
   "grep -Eq '^[[:space:]]*::1[[:space:]].*\\blocalhost\\b' /etc/hosts || " +
   "printf '%s\\n' '::1 localhost ip6-localhost ip6-loopback' | sudo tee -a /etc/hosts >/dev/null";
+// Runtime version the sandbox reports back to the image-build callback.
+// OpenComputer launches the runtime via `exec`, which does NOT inherit the
+// image's baked env, so SANDBOX_VERSION must be re-exported here — otherwise the
+// runtime reports an empty version and the build-complete callback is rejected
+// (runtime-version floor check). Keep in sync with the value baked in
+// packages/opencomputer-infra/src/build-template.ts (SANDBOX_VERSION).
+const OPENCOMPUTER_SANDBOX_VERSION = "v56-opencode-1-18-11";
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
   `VIRTUAL_ENV=${PYTHON_VENV} ` +
@@ -192,6 +203,7 @@ const RUNTIME_ENV_EXPORTS =
   `NO_PROXY=${LOCAL_NO_PROXY} ` +
   `no_proxy=${LOCAL_NO_PROXY} ` +
   `PATH=${PYTHON_VENV}/bin:/home/sandbox/.npm-global/bin:${USER_BIN}:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin ` +
+  `SANDBOX_VERSION=${OPENCOMPUTER_SANDBOX_VERSION} ` +
   RUNTIME_CA_EXPORTS;
 const RUNTIME_CA_BOOTSTRAP =
   `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates >/tmp/openinspect-update-ca.log 2>&1 || true; ` +
@@ -210,8 +222,6 @@ export class OpenComputerRestClient {
   constructor(public readonly config: OpenComputerRestConfig) {
     if (!config.apiUrl) throw new Error("OpenComputerRestClient requires apiUrl");
     if (!config.apiKey) throw new Error("OpenComputerRestClient requires apiKey");
-    if (!config.template) throw new Error("OpenComputerRestClient requires template");
-
     this.baseUrl = config.apiUrl.replace(/\/+$/, "");
     this.paths = { ...DEFAULT_PATHS, ...(config.paths ?? {}) };
   }
@@ -341,8 +351,21 @@ export class OpenComputerRestClient {
     });
   }
 
-  async deleteSandbox(id: string): Promise<void> {
-    await this.request<void>("DELETE", this.expandPath(this.paths.sandbox, { id }), TIMEOUT_GET_MS);
+  async deleteSandbox(
+    id: string,
+    options?: OpenComputerDeleteSandboxOptions,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const params = new URLSearchParams();
+    if (options?.deleteSecretStore) params.set("deleteSecretStore", "true");
+    const query = params.toString() ? `?${params.toString()}` : "";
+    await this.request<void>(
+      "DELETE",
+      `${this.expandPath(this.paths.sandbox, { id })}${query}`,
+      TIMEOUT_GET_MS,
+      undefined,
+      signal
+    );
   }
 
   async startRuntime(id: string, extraEnv: Record<string, string> = {}): Promise<void> {
@@ -381,7 +404,8 @@ export class OpenComputerRestClient {
   async createCheckpoint(
     id: string,
     name: string,
-    options: OpenComputerCreateCheckpointOptions = {}
+    options: OpenComputerCreateCheckpointOptions = {},
+    signal?: AbortSignal
   ): Promise<OpenComputerCheckpointResponse> {
     return await this.request<OpenComputerCheckpointResponse>(
       "POST",
@@ -391,15 +415,18 @@ export class OpenComputerRestClient {
         name,
         kind: options.kind ?? OPENCOMPUTER_CHECKPOINT_KIND,
         retentionPolicy: options.retentionPolicy ?? OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
-      }
+      },
+      signal
     );
   }
 
-  async deleteCheckpoint(id: string, checkpointId: string): Promise<void> {
+  async deleteCheckpoint(id: string, checkpointId: string, signal?: AbortSignal): Promise<void> {
     await this.request<void>(
       "DELETE",
       this.expandPath(this.paths.checkpoint, { id, checkpointId }),
-      TIMEOUT_CHECKPOINT_MS
+      TIMEOUT_CHECKPOINT_MS,
+      undefined,
+      signal
     );
   }
 
@@ -428,7 +455,8 @@ export class OpenComputerRestClient {
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     timeoutMs: number,
-    body?: unknown
+    body?: unknown,
+    externalSignal?: AbortSignal
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -438,19 +466,13 @@ export class OpenComputerRestClient {
       const init: RequestInit = {
         method,
         headers: this.getHeaders(),
-        signal: controller.signal,
+        signal: externalSignal
+          ? AbortSignal.any([controller.signal, externalSignal])
+          : controller.signal,
       };
       if (body !== undefined) init.body = JSON.stringify(body);
 
-      let response: Response;
-      try {
-        response = await fetch(url, init);
-      } catch (error) {
-        if (controller.signal.aborted) {
-          throw new Error(`OpenComputer request timed out after ${timeoutMs}ms`);
-        }
-        throw error;
-      }
+      const response = await fetch(url, init);
 
       if (response.status === 404) {
         const text = await response.text();
@@ -467,6 +489,18 @@ export class OpenComputerRestClient {
         return (await response.json()) as T;
       }
       return undefined as T;
+    } catch (error) {
+      // The per-call timeout fires controller.abort(); the resulting AbortError
+      // — from fetch OR a body read — must surface as an attributed timeout so
+      // it is actionable in logs and build error_messages. The message must
+      // contain "timeout" so SandboxProviderError classifies it transient
+      // (isTransientNetworkError), not permanent — otherwise it trips the
+      // circuit breaker. Our typed API errors (OpenComputer*Error) have
+      // distinct names and rethrow unchanged.
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`OpenComputer request timeout after ${timeoutMs}ms (${method} ${path})`);
+      }
+      throw error;
     } finally {
       clearTimeout(timeoutId);
     }

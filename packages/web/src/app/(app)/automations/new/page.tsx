@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useSidebarContext } from "@/components/sidebar-layout";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
 import {
   AutomationForm,
   type AutomationFormValues,
@@ -11,12 +11,12 @@ import { WebhookConfig } from "@/components/automations/webhook-config";
 import { getTemplateById } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
-import { SidebarIcon, BackIcon } from "@/components/ui/icons";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
+import { BackIcon } from "@/components/ui/icons";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 import Link from "next/link";
 
 function NewAutomationContent() {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -40,7 +40,7 @@ function NewAutomationContent() {
     setError("");
 
     try {
-      const res = await fetch("/api/automations", {
+      const res = await browserApiFetch("/api/automations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(values),
@@ -78,14 +78,7 @@ function NewAutomationContent() {
         {!isOpen && (
           <header className="border-b border-border-muted flex-shrink-0">
             <div className="px-4 py-3 flex items-center gap-2">
-              <button
-                onClick={toggle}
-                className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-                title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-                aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              >
-                <SidebarIcon className="w-4 h-4" />
-              </button>
+              <CollapsedSidebarControls />
             </div>
           </header>
         )}
@@ -133,14 +126,7 @@ function NewAutomationContent() {
       {!isOpen && (
         <header className="border-b border-border-muted flex-shrink-0">
           <div className="px-4 py-3 flex items-center gap-2">
-            <button
-              onClick={toggle}
-              className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </button>
+            <CollapsedSidebarControls />
             <Link
               href="/automations"
               className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"

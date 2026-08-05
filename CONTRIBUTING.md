@@ -6,7 +6,7 @@ contributing to the project.
 ## Getting Started
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/open-inspect.git`
+2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/background-agents.git`
 3. Run the setup script: `bash .openinspect/setup.sh`
 4. Create a branch for your changes: `git checkout -b feature/your-feature-name`
 

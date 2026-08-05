@@ -1,4 +1,4 @@
-import { openView } from "@open-inspect/shared";
+import { openView } from "@open-inspect/shared/slack";
 import {
   BRANCH_INPUT_ACTION_ID,
   BRANCH_INPUT_BLOCK_ID,

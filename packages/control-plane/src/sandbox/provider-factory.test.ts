@@ -52,4 +52,32 @@ describe("createSandboxProviderFromEnv", () => {
       "DAYTONA_AUTO_ARCHIVE_INTERVAL_MINUTES must be a valid number"
     );
   });
+
+  it("rejects malformed E2B auto-pause configuration", () => {
+    const env = createEnv({
+      E2B_API_KEY: "e2b-key",
+      E2B_TEMPLATE_ID: "tmpl",
+      E2B_AUTO_PAUSE: "tru",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "e2b")).toThrow(
+      "E2B_AUTO_PAUSE must be a valid boolean"
+    );
+  });
+
+  it("requires an OpenComputer template for starts but not existing-session cleanup", () => {
+    const env = createEnv({
+      OPENCOMPUTER_API_URL: "https://opencomputer.test",
+      OPENCOMPUTER_API_KEY: "opencomputer-key",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "opencomputer")).toThrow(
+      "OPENCOMPUTER_TEMPLATE"
+    );
+    expect(() =>
+      createSandboxProviderFromEnv(env, "opencomputer", {
+        requireOpenComputerTemplate: false,
+      })
+    ).not.toThrow();
+  });
 });

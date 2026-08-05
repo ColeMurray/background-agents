@@ -4,6 +4,7 @@ export interface EventTimelineCursor {
   kind: "timeline";
   createdAt: number;
   id: string;
+  sequence?: number;
 }
 
 export interface LegacyEventCursor {
@@ -18,13 +19,20 @@ export type ParseEventCursorResult<TCursor> =
   | { ok: false; error: string };
 
 export function eventTimelineCursorFromRow(
-  event: Pick<EventRow, "created_at" | "id">
+  event: Pick<EventRow, "created_at" | "id" | "timeline_sequence">
 ): EventTimelineCursor {
-  return { kind: "timeline", createdAt: event.created_at, id: event.id };
+  return {
+    kind: "timeline",
+    createdAt: event.created_at,
+    id: event.id,
+    ...(event.timeline_sequence === undefined ? {} : { sequence: event.timeline_sequence }),
+  };
 }
 
 export function encodeEventTimelineCursor(cursor: EventTimelineCursor): string {
-  return `${cursor.createdAt}:${encodeURIComponent(cursor.id)}`;
+  return cursor.sequence === undefined
+    ? `${cursor.createdAt}:${encodeURIComponent(cursor.id)}`
+    : `${cursor.createdAt}:${cursor.sequence}:${encodeURIComponent(cursor.id)}`;
 }
 
 export function parseEventTimelineCursor(
@@ -62,7 +70,16 @@ function decodeCompositeEventCursor(raw: string): EventTimelineCursor | null {
   if (!Number.isSafeInteger(createdAt) || createdAt < 0) return null;
 
   try {
-    const id = decodeURIComponent(raw.slice(separator + 1));
+    const remainder = raw.slice(separator + 1);
+    const sequenceSeparator = remainder.indexOf(":");
+    if (sequenceSeparator > 0) {
+      const sequence = Number(remainder.slice(0, sequenceSeparator));
+      const id = decodeURIComponent(remainder.slice(sequenceSeparator + 1));
+      if (Number.isSafeInteger(sequence) && sequence >= 0 && id) {
+        return { kind: "timeline", createdAt, sequence, id };
+      }
+    }
+    const id = decodeURIComponent(remainder);
     return id ? { kind: "timeline", createdAt, id } : null;
   } catch {
     return null;

@@ -140,6 +140,12 @@ describe("GlobalSecretsStore", () => {
     expect(secrets).toEqual({ FOO: "two" });
   });
 
+  it("rejects keys that collide after normalization", async () => {
+    await expect(store.setSecrets({ foo: "one", FOO: "two" })).rejects.toThrow(
+      "Duplicate secret key 'FOO' after normalization"
+    );
+  });
+
   it("rejects reserved keys", async () => {
     await expect(store.setSecrets({ PATH: "nope" })).rejects.toBeInstanceOf(SecretsValidationError);
   });

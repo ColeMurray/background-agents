@@ -1,12 +1,14 @@
 import {
-  buildAgentResponseFromEvents,
-  getArtifactLabelFromArtifact,
   type ArtifactInfo,
   type ChildSessionDetail,
   type ChildSessionFinalResponse,
   type ChildSessionTrajectory,
   type EventResponse,
 } from "@open-inspect/shared";
+import {
+  buildAgentResponseFromEvents,
+  getArtifactLabelFromArtifact,
+} from "@open-inspect/shared/completion/extractor";
 import {
   encodeEventTimelineCursor,
   parseEventTimelineCursor,

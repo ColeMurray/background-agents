@@ -70,6 +70,7 @@ brew install node@22
      - Workers KV Storage: **Edit**
      - Workers R2 Storage: **Edit**
      - D1: **Edit**
+     - Queues: **Edit** (required for durable image-build finalization)
    - If you manage Cloudflare routes/custom domains through Terraform, also add:
      - Workers Routes: **Edit**
 
@@ -94,18 +95,27 @@ brew install node@22
 1. **Sign up** at [Modal](https://modal.com)
 2. **Create API Token** at Modal Settings
 
-### 5. GitHub Apps
+### 5. Sign-In Providers and GitHub Repository Access
 
-1. **OAuth App** - For user authentication
-   - Create at: https://github.com/settings/developers
-   - Callback URL: `https://<your-vercel-app>.vercel.app/api/auth/callback/github`
+A GitHub App installation is always required for repository access in sandboxes. Create it at
+https://github.com/settings/apps and convert its private key to PKCS#8:
 
-2. **GitHub App** - For repository access in sandboxes
-   - Create at: https://github.com/settings/apps
-   - Convert private key to PKCS#8 format:
-     ```bash
-     openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
-     ```
+```bash
+openssl pkcs8 -topk8 -inform PEM -outform PEM -nocrypt -in key.pem -out key-pkcs8.pem
+```
+
+Choose at least one sign-in provider:
+
+- **GitHub sign-in:** set the GitHub App client ID and client secret together, and configure
+  `/api/auth/callback/github`.
+- **Google sign-in:** set the Google OAuth client ID and client secret together, and configure
+  `/api/auth/callback/google`.
+- Configure both pairs to offer both providers. Google-only is supported, but the GitHub App
+  repository credentials remain required.
+
+Google sign-in requires provider-neutral admission through an exact email/domain allowlist, unless
+the deployment explicitly opts into unsafe allow-all. GitHub-only admission may also use GitHub
+usernames or organizations.
 
 ### 6. Slack App
 
@@ -113,6 +123,15 @@ Create at [Slack API](https://api.slack.com/apps) and note:
 
 - Bot OAuth Token (`xoxb-...`)
 - Signing Secret
+
+The bot token requires `app_mentions:read`, `chat:write`, `channels:history`, `channels:read`,
+`groups:history`, `groups:read`, `im:history`, `im:read`, `files:read`, `files:write`, and
+`reactions:write`. Reinstall the app after changing scopes.
+
+Before upgrading any deployment, add **Queues: Edit** to the Cloudflare API token before running
+`terraform apply`; image-build finalization now provisions a Queue and dead-letter Queue. For Slack
+deployments, also add `files:write` and `files:read`, reinstall the Slack app, and update the
+deployed bot token if Slack issued a replacement before deploying this version.
 
 ## Quick Start
 
@@ -184,7 +203,6 @@ WEB_PLATFORM # Optional; defaults to vercel
 VERCEL_API_TOKEN
 VERCEL_TEAM_ID
 VERCEL_PROJECT_ID
-NEXTAUTH_URL # Used by the Vercel web deploy workflow
 
 # Modal
 MODAL_TOKEN_ID
@@ -212,9 +230,13 @@ VERCEL_SANDBOX_RUNTIME # Optional; defaults to node24
 VERCEL_SNAPSHOT_EXPIRATION_MS # Optional; defaults to 0
 VERCEL_SANDBOX_API_BASE_URL # Optional advanced Vercel Sandbox API base URL override
 
-# GitHub OAuth App
+# Optional GitHub sign-in pair (set both or neither)
 GH_OAUTH_CLIENT_ID
 GH_OAUTH_CLIENT_SECRET
+
+# Optional Google sign-in pair (set both or neither)
+GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET
 
 # GitHub App
 GH_APP_ID
@@ -243,8 +265,7 @@ ANTHROPIC_API_KEY
 # Security Secrets
 TOKEN_ENCRYPTION_KEY
 REPO_SECRETS_ENCRYPTION_KEY
-INTERNAL_CALLBACK_SECRET
-NEXTAUTH_SECRET
+NEXTAUTH_SECRET # Browser-auth secret; legacy Actions secret name
 
 # Access control
 ALLOWED_USERS
@@ -431,8 +452,8 @@ MODAL_WORKSPACE_SLUG="<workspace>" # or "<workspace>-<modal_environment_web_suff
 curl https://${MODAL_WORKSPACE_SLUG}--open-inspect-api-health.modal.run
 # Daytona and Vercel use their provider APIs directly, so there is no Open-Inspect shim health URL.
 
-# 3. Verify Vercel deployment (replace with your Vercel app URL)
-curl https://<your-vercel-app>.vercel.app
+# 3. Verify the web deployment
+curl -I "$(terraform output -raw web_app_url)"
 
 # 4. Test authenticated endpoint (should return 401)
 curl https://open-inspect-control-plane-prod.<subdomain>.workers.dev/sessions
@@ -468,6 +489,7 @@ variables.
    - `Workers KV Storage: Edit`
    - `Workers R2 Storage: Edit`
    - `D1: Edit`
+   - `Queues: Edit`
    - `Workers Routes: Edit` if you manage routes/custom domains through Terraform
 
 ## Adding New Environments

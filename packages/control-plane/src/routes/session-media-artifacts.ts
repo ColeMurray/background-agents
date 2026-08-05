@@ -1,4 +1,10 @@
-import type { ScreenshotArtifactMetadata, VideoArtifactMetadata } from "@open-inspect/shared";
+import type {
+  ScreenshotArtifactMetadata,
+  SessionArtifact,
+  VideoArtifactMetadata,
+} from "@open-inspect/shared";
+import { sessionArtifactSchema } from "@open-inspect/shared";
+import { z } from "zod";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { ObjectStorage } from "../storage/object-storage";
@@ -7,6 +13,31 @@ import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-media");
+
+const listArtifactsResponseSchema = z.object({
+  artifacts: z.array(sessionArtifactSchema),
+});
+
+const getArtifactResponseSchema = z.object({
+  artifact: sessionArtifactSchema.nullable(),
+});
+
+/**
+ * Reads a runtime response body as JSON, normalizing empty/non-JSON bodies to
+ * `null` so the schema boundary below rejects them instead of throwing.
+ */
+async function readJsonBody(response: Response): Promise<unknown> {
+  return response.json().catch(() => null);
+}
+
+/**
+ * The runtime omits `updatedAt` on artifacts written before PR lifecycle
+ * tracking, so fall back to `createdAt` (the documented consumer rule) rather
+ * than rejecting the response.
+ */
+function toArtifactResponse(artifact: SessionArtifact): ArtifactResponse {
+  return { ...artifact, updatedAt: artifact.updatedAt ?? artifact.createdAt };
+}
 
 async function parseErrorMessage(response: Response, fallback: string): Promise<string> {
   const responseText = await response.text();
@@ -96,8 +127,9 @@ export async function listSessionArtifactsFromRuntime(
       : error("Failed to list session artifacts", 500);
   }
 
-  const data = (await response.json()) as { artifacts: ArtifactResponse[] };
-  return data.artifacts;
+  const parsed = listArtifactsResponseSchema.safeParse(await readJsonBody(response));
+  if (!parsed.success) return error("Failed to list session artifacts", 500);
+  return parsed.data.artifacts.map(toArtifactResponse);
 }
 
 export async function getSessionArtifactFromRuntime(
@@ -117,6 +149,7 @@ export async function getSessionArtifactFromRuntime(
       : error("Failed to fetch session artifact", 500);
   }
 
-  const data = (await response.json()) as { artifact: ArtifactResponse | null };
-  return data.artifact;
+  const parsed = getArtifactResponseSchema.safeParse(await readJsonBody(response));
+  if (!parsed.success) return error("Failed to fetch session artifact", 500);
+  return parsed.data.artifact ? toArtifactResponse(parsed.data.artifact) : null;
 }

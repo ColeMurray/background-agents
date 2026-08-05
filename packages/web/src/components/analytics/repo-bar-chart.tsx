@@ -1,6 +1,6 @@
 import type { TooltipContentProps } from "recharts";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { AnalyticsBreakdownResponse } from "@open-inspect/shared";
+import type { AnalyticsBreakdownResponse } from "@open-inspect/shared/types/analytics";
 import { formatAnalyticsCount } from "@/lib/analytics";
 import { formatSessionCost } from "@/lib/session-cost";
 

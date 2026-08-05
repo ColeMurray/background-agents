@@ -1,6 +1,6 @@
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
-import type { SlackChannelListing } from "@open-inspect/shared";
+import { useAuthSession } from "@/lib/auth-session";
+import type { SlackChannelListing } from "@open-inspect/shared/slack";
 
 interface SlackChannelsResponse {
   channels: SlackChannelListing[];
@@ -17,7 +17,7 @@ interface SlackChannelsResponse {
  * Slack channel to resolve — without violating the rules of hooks.
  */
 export function useSlackChannels(enabled = true) {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
 
   const { data, isLoading } = useSWR<SlackChannelsResponse>(
     enabled && session ? "/api/integrations/slack/channels" : null

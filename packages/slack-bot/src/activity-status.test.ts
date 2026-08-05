@@ -207,6 +207,19 @@ describe("setAssistantThreadStatus", () => {
     });
   });
 
+  it("rejects Slack error envelopes without a string error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: 123 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    await expect(
+      setAssistantThreadStatus("xoxb-test", "C123", "111.222", "Reading auth.ts")
+    ).resolves.toEqual({ ok: false, error: "invalid_response" });
+  });
+
   it.each([
     [new Response("oops", { status: 500 }), { ok: false, error: "http_500" }],
     [new Response("{", { status: 200 }), { ok: false, error: "invalid_response" }],

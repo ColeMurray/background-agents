@@ -29,7 +29,7 @@ async function handleSetRepoSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) {
+  if (!ctx.db) {
     return error("Secrets storage is not configured", 503);
   }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
@@ -41,7 +41,6 @@ async function handleSetRepoSecrets(
   const { owner, name } = params;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
 
   const body = await parseJsonBody<{ secrets?: Record<string, string> }>(request);
   if (body instanceof Response) return body;
@@ -50,7 +49,7 @@ async function handleSetRepoSecrets(
     return error("Request body must include secrets object", 400);
   }
 
-  const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
     const result = await store.setSecrets(
@@ -104,7 +103,7 @@ async function handleListRepoSecrets(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) {
+  if (!ctx.db) {
     return error("Secrets storage is not configured", 503);
   }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
@@ -116,10 +115,9 @@ async function handleListRepoSecrets(
   const { owner, name } = params;
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
 
-  const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
-  const globalStore = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const globalStore = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
     const [secrets, globalSecrets] = await Promise.all([
@@ -170,7 +168,7 @@ async function handleDeleteRepoSecret(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) {
+  if (!ctx.db) {
     return error("Secrets storage is not configured", 503);
   }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
@@ -187,9 +185,8 @@ async function handleDeleteRepoSecret(
   }
 
   const resolved = await resolveRepoOrError(env, owner, name, ctx, logger);
-  if (resolved instanceof Response) return resolved;
 
-  const store = new RepoSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new RepoSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
     const normalizedKey = normalizeKey(key);
@@ -236,7 +233,7 @@ async function handleSetGlobalSecrets(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) {
+  if (!ctx.db) {
     return error("Secrets storage is not configured", 503);
   }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
@@ -250,7 +247,7 @@ async function handleSetGlobalSecrets(
     return error("Request body must include secrets object", 400);
   }
 
-  const store = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
     const result = await store.setSecrets(body.secrets);
@@ -289,14 +286,14 @@ async function handleListGlobalSecrets(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) {
+  if (!ctx.db) {
     return error("Secrets storage is not configured", 503);
   }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
     return error("REPO_SECRETS_ENCRYPTION_KEY not configured", 500);
   }
 
-  const store = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
     const secrets = await store.listSecretKeys();
@@ -325,7 +322,7 @@ async function handleDeleteGlobalSecret(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  if (!env.DB) {
+  if (!ctx.db) {
     return error("Secrets storage is not configured", 503);
   }
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
@@ -337,7 +334,7 @@ async function handleDeleteGlobalSecret(
     return error("Key is required");
   }
 
-  const store = new GlobalSecretsStore(env.DB, env.REPO_SECRETS_ENCRYPTION_KEY);
+  const store = new GlobalSecretsStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
 
   try {
     const normalizedKey = normalizeKey(key);

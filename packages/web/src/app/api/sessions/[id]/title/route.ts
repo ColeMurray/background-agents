@@ -1,8 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
-import { controlPlaneFetch } from "@/lib/control-plane";
+import { getServerAuthSession } from "@/lib/server-auth-session";
+import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 export function parseSessionTitlePatchBody(body: unknown): { title?: string } | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
@@ -14,13 +13,12 @@ export function parseSessionTitlePatchBody(body: unknown): { title?: string } | 
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions);
+  const session = await getServerAuthSession();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;
-  const userId = session.user.id || session.user.email || "anonymous";
 
   let body: { title?: string } | null;
   try {
@@ -33,10 +31,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 
   try {
-    const response = await controlPlaneFetch(`/sessions/${id}/title`, {
+    const response = await controlPlaneUserFetch(`/sessions/${id}/title`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, title: body.title }),
+      // userId is derived by the control plane from the Bearer principal and
+      // is rejected in the body under strict enforcement.
+      body: JSON.stringify({ title: body.title }),
     });
 
     const data = await response.json();

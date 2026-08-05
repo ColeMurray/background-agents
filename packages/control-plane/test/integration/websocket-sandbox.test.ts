@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
+import type { SessionDO } from "../../src/session/durable-object";
 import {
+  collectMessages,
   initNamedSession,
+  openClientWs,
   openSandboxWs,
   seedSandboxAuth,
   queryDO,
@@ -59,12 +63,11 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     const name = `ws-sandbox-stopped-${Date.now()}`;
     const { stub } = await initNamedSession(name);
 
-    // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env)
-    // before forcing stopped, otherwise it can race and overwrite the status.
-    await waitForSandboxStatus(stub, "failed");
-
-    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
-    await queryDO(stub, "UPDATE sandbox SET status = ?", "stopped");
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "stopped",
+    });
 
     const { ws, response } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
@@ -78,12 +81,13 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
   it("sandbox connect sets status to ready", async () => {
     const name = `ws-sandbox-ready-${Date.now()}`;
     const { stub } = await initNamedSession(name);
-    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
-
-    // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env).
-    // The spawn failure sets status to "failed" which we need to happen before
-    // the WS connect sets it to "ready", otherwise the two race.
-    await waitForSandboxStatus(stub, "failed");
+    // Model the production boot sequence: the sandbox connects while the
+    // lifecycle is still in "connecting", and the WS accept flips it to ready.
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
 
     const { ws } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
@@ -97,6 +101,116 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     const state = await stateRes.json<{ sandbox: { status: string } }>();
     expect(state.sandbox.status).toBe("ready");
 
+    ws!.close();
+  });
+
+  it.each([1000, 1001])(
+    "allows the active sandbox to reconnect after close code %s",
+    async (closeCode) => {
+      const name = `ws-sandbox-reconnect-${closeCode}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      await seedSandboxAuth(stub, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+        status: "ready",
+      });
+
+      const { ws: firstWs } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(firstWs).not.toBeNull();
+      firstWs!.accept();
+
+      const closed = new Promise<void>((resolve) => {
+        firstWs!.addEventListener("close", () => resolve());
+      });
+      firstWs!.close(closeCode, closeCode === 1001 ? "Going away" : "Normal closure");
+      await closed;
+
+      const stateAfterClose = await stub.fetch("http://internal/internal/state");
+      const state = await stateAfterClose.json<{ sandbox: { status: string } }>();
+      expect(state.sandbox.status).toBe("ready");
+
+      const { ws: reconnectedWs, response } = await openSandboxWs(name, {
+        authToken: SANDBOX_TOKEN,
+        sandboxId: SANDBOX_ID,
+      });
+      expect(response.status).toBe(101);
+      expect(reconnectedWs).not.toBeNull();
+      reconnectedWs!.accept();
+      reconnectedWs!.close();
+    }
+  );
+
+  it("refreshes heartbeat on reconnect before an old disconnect alarm runs", async () => {
+    const name = `ws-sandbox-reconnect-heartbeat-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    const { ws: firstWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(firstWs).not.toBeNull();
+    firstWs!.accept();
+
+    const closed = new Promise<void>((resolve) => {
+      firstWs!.addEventListener("close", () => resolve());
+    });
+    firstWs!.close(1001, "Going away");
+    await closed;
+
+    const oldHeartbeat = Date.now() - 10 * 60 * 1000;
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
+    });
+
+    const { ws: reconnectedWs, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(response.status).toBe(101);
+    expect(reconnectedWs).not.toBeNull();
+    reconnectedWs!.accept();
+
+    const sandboxAfterReconnect = await queryDO<{ last_heartbeat: number; status: string }>(
+      stub,
+      "SELECT last_heartbeat, status FROM sandbox"
+    );
+    expect(sandboxAfterReconnect[0].last_heartbeat).toBeGreaterThan(oldHeartbeat);
+
+    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+
+    const sandboxAfterAlarm = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    expect(sandboxAfterAlarm[0].status).toBe("ready");
+
+    reconnectedWs!.close();
+  });
+
+  it("failed sandbox can reconnect and self-heal to ready", async () => {
+    const name = `ws-sandbox-selfheal-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    // The WS upgrade gate deliberately admits "failed" sandboxes: a slow boot
+    // that outlived the connecting watchdog recovers here, unlike stopped or
+    // stale which are rejected with 410.
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "failed",
+    });
+
+    const { ws } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(ws).not.toBeNull();
+    ws!.accept();
+    await waitForSandboxStatus(stub, "ready");
     ws!.close();
   });
 
@@ -141,5 +255,57 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(matching.length).toBeGreaterThanOrEqual(1);
 
     ws!.close();
+  });
+
+  it("accepts step_finish messages with structured token usage", async () => {
+    const name = `ws-sandbox-step-finish-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const tokenUsage = {
+      total: 223,
+      input: 219,
+      output: 4,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    };
+    const collector = collectMessages(clientWs, {
+      until: (msg) =>
+        msg.type === "sandbox_event" &&
+        (msg.event as Record<string, unknown> | undefined)?.type === "step_finish",
+    });
+
+    sandboxWs!.send(
+      JSON.stringify({
+        type: "step_finish",
+        messageId: "msg-step-finish-1",
+        cost: 0.001,
+        tokens: tokenUsage,
+        reason: "end_turn",
+        sandboxId: SANDBOX_ID,
+        timestamp: Date.now(),
+      })
+    );
+
+    const messages = await collector;
+    const stepFinish = messages.find(
+      (msg) =>
+        msg.type === "sandbox_event" &&
+        (msg.event as Record<string, unknown> | undefined)?.type === "step_finish"
+    );
+
+    expect(stepFinish).toBeDefined();
+    expect((stepFinish!.event as { tokens: unknown }).tokens).toEqual(tokenUsage);
+
+    sandboxWs!.close();
+    clientWs.close();
   });
 });

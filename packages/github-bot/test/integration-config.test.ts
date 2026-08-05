@@ -2,13 +2,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../src/types";
 import type { Logger } from "../src/logger";
 
-vi.mock("../src/utils/internal", () => ({
-  generateInternalToken: vi.fn().mockResolvedValue("test-internal-token"),
-  buildInternalAuthHeaders: vi.fn().mockResolvedValue({
-    Authorization: "Bearer test-internal-token",
-  }),
-}));
-
 import { getGitHubConfig } from "../src/utils/integration-config";
 
 function createMockLogger(): Logger {
@@ -26,7 +19,7 @@ function createMockEnv(fetchImpl: (url: string, init?: RequestInit) => Promise<R
     GITHUB_KV: { get: vi.fn(), put: vi.fn() },
     CONTROL_PLANE: { fetch: vi.fn(fetchImpl) },
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
-    INTERNAL_CALLBACK_SECRET: "test-secret",
+    SERVICE_AUTH_SECRET: "test-secret",
   } as unknown as Env;
 }
 
@@ -68,6 +61,83 @@ describe("getGitHubConfig", () => {
       commentActionInstructions: null,
     });
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("accepts nullable config fields from successful response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            config: {
+              model: null,
+              reasoningEffort: null,
+              autoReviewOnOpen: false,
+              enabledRepos: ["acme/widgets"],
+              allowedTriggerUsers: ["octocat"],
+              codeReviewInstructions: null,
+              commentActionInstructions: null,
+            },
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    const result = await getGitHubConfig(env, "acme/widgets");
+
+    expect(result).toEqual({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: ["acme/widgets"],
+      allowedTriggerUsers: ["octocat"],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
+    });
+  });
+
+  it("returns fail-closed config and logs warn on malformed response", async () => {
+    const env = createMockEnv(() =>
+      Promise.resolve(new Response(JSON.stringify({ config: { model: 123 } }), { status: 200 }))
+    );
+    const log = createMockLogger();
+
+    const result = await getGitHubConfig(env, "acme/widgets", log);
+
+    expect(result).toEqual({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: [],
+      allowedTriggerUsers: [],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.invalid_response",
+      expect.objectContaining({ repo: "acme/widgets", fallback: "fail_closed" })
+    );
+  });
+
+  it("returns fail-closed config and logs warn on invalid JSON response", async () => {
+    const env = createMockEnv(() => Promise.resolve(new Response("not json", { status: 200 })));
+    const log = createMockLogger();
+
+    const result = await getGitHubConfig(env, "acme/widgets", log);
+
+    expect(result).toEqual({
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      autoReviewOnOpen: false,
+      enabledRepos: [],
+      allowedTriggerUsers: [],
+      codeReviewInstructions: null,
+      commentActionInstructions: null,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "config.invalid_response",
+      expect.objectContaining({ repo: "acme/widgets", fallback: "fail_closed" })
+    );
   });
 
   it("returns fail-closed config and logs warn on network error", async () => {

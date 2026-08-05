@@ -5,6 +5,7 @@ import type { Session } from "@open-inspect/shared";
 import { formatRelativeTime } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { buildSessionSearchValue } from "@/lib/session-list";
 import { AutomationsIcon, BranchIcon, PlusIcon, SettingsIcon } from "@/components/ui/icons";
 import { AppIcon } from "@/components/ui/app-icon";
 import {
@@ -50,8 +51,8 @@ export function GlobalCommandMenu({
   onNewSession,
   sessions,
 }: GlobalCommandMenuProps) {
-  const recentSessions = useMemo(
-    () => sessions.filter((session) => session.status !== "archived").slice(0, 25),
+  const searchableSessions = useMemo(
+    () => sessions.filter((session) => session.status !== "archived"),
     [sessions]
   );
 
@@ -91,11 +92,11 @@ export function GlobalCommandMenu({
             </CommandItem>
           </CommandGroup>
 
-          {recentSessions.length > 0 && (
+          {searchableSessions.length > 0 && (
             <>
               <CommandSeparator />
               <CommandGroup heading="Sessions">
-                {recentSessions.map((session) => {
+                {searchableSessions.map((session) => {
                   const repoLabel = formatRepoLabel(session.repoOwner, session.repoName);
                   const sessionTitle = session.title || repoLabel;
                   const timestamp = session.updatedAt || session.createdAt;
@@ -103,7 +104,7 @@ export function GlobalCommandMenu({
                   return (
                     <CommandItem
                       key={session.id}
-                      value={`${session.id} ${sessionTitle} ${repoLabel}`}
+                      value={buildSessionSearchValue(session)}
                       onSelect={() => handleSelect(() => onNavigate(buildSessionUrl(session)))}
                       className="items-start"
                     >

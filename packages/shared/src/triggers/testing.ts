@@ -11,10 +11,10 @@ import type {
   LinearAutomationEvent,
   SlackAutomationEvent,
 } from "./types";
-import type { TriggerCondition } from "./conditions";
 import { matchesConditions } from "./conditions";
+import type { TriggerCondition } from "./types";
 import { conditionRegistry } from "./registry";
-import type { Automation } from "../types";
+import type { Automation } from "../types/automations";
 
 type EventForSource<S extends AutomationEventSource> = Extract<AutomationEvent, { source: S }>;
 
@@ -112,10 +112,9 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
   return {
     id: "auto-test",
     name: "Test Automation",
-    repoOwner: "test-owner",
-    repoName: "test-repo",
-    baseBranch: "main",
-    repoId: 1,
+    repositories: [
+      { repoOwner: "test-owner", repoName: "test-repo", repoId: 1, baseBranch: "main" },
+    ],
     instructions: "Test instructions",
     triggerType: "sentry",
     scheduleCron: null,
@@ -131,6 +130,7 @@ export function makeTriggerAutomation(overrides?: Partial<Automation>): Automati
     deletedAt: null,
     eventType: "issue.created",
     triggerConfig: { conditions: [] },
+    environmentIds: [],
     ...overrides,
   };
 }

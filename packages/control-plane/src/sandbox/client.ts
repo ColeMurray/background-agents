@@ -5,11 +5,14 @@
  * All requests are authenticated using HMAC-signed tokens.
  */
 
-import { generateInternalToken, type SandboxSettings } from "@open-inspect/shared";
-import type { McpServerConfig } from "@open-inspect/shared";
+import { generateInternalToken } from "@open-inspect/shared/auth";
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
+import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
+import { z } from "zod";
 import { createLogger } from "../logger";
 import type { CorrelationContext } from "../logger";
-import { buildSessionConfig } from "./sandbox-env";
+import { buildSessionConfig, toRepositoryConfigPayload } from "./sandbox-env";
+import type { SessionRepositoryInfo } from "./provider";
 
 const log = createLogger("modal-client");
 
@@ -18,6 +21,100 @@ const MODAL_APP_NAME = "open-inspect";
 
 // Modal's default environment name; unrelated to the git branch named "main".
 const DEFAULT_MODAL_ENVIRONMENT = "main";
+
+const modalErrorResponseSchema = z.object({
+  success: z.literal(false),
+  error: z.string().optional(),
+});
+
+const modalTunnelUrlsSchema = z.record(z.string(), z.string());
+
+const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      sandbox_id: z.string(),
+      modal_object_id: z.string().nullable().optional(),
+      status: z.string(),
+      created_at: z.number(),
+      code_server_url: z.string().nullable().optional(),
+      code_server_password: z.string().nullable().optional(),
+      ttyd_url: z.string().nullable().optional(),
+      tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z
+      .object({
+        sandbox_id: z.string().optional(),
+        modal_object_id: z.string().nullable().optional(),
+        code_server_url: z.string().nullable().optional(),
+        code_server_password: z.string().nullable().optional(),
+        ttyd_url: z.string().nullable().optional(),
+        tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
+      })
+      .optional(),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z
+      .object({
+        image_id: z.string(),
+      })
+      .optional(),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const createImageBuildSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      // Non-empty: the previous hand-rolled check rejected a blank id.
+      provider_session_id: z.string().min(1),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+/**
+ * Image-build operations (start/terminate) only signal success or failure; their
+ * `data` payload is never read, so it is deliberately left unvalidated.
+ */
+const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const deleteProviderImageModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      provider_image_id: z.string(),
+      deleted: z.boolean(),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    throw new Error("Modal API error: Invalid response");
+  }
+  return result.data;
+}
 
 /**
  * Build the Modal endpoint workspace slug from the raw workspace and environment web suffix.
@@ -38,14 +135,16 @@ function getModalBaseUrl(workspace: string, environmentWebSuffix?: string): stri
  */
 export function buildModalSandboxDashboardUrl(params: {
   workspace: string | undefined;
-  environment?: string | undefined;
+  // Modal workspace environment (unrelated to the Environment entity); named
+  // modalEnvironment to keep the term unambiguous (design §7.1).
+  modalEnvironment?: string | undefined;
   providerObjectId: string | null | undefined;
 }): string | null {
   if (!params.workspace || !params.providerObjectId) return null;
   const workspace = encodeURIComponent(params.workspace);
-  const environment = encodeURIComponent(params.environment || DEFAULT_MODAL_ENVIRONMENT);
+  const modalEnvironment = encodeURIComponent(params.modalEnvironment || DEFAULT_MODAL_ENVIRONMENT);
   const providerObjectId = encodeURIComponent(params.providerObjectId);
-  return `https://modal.com/apps/${workspace}/${environment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
+  return `https://modal.com/apps/${workspace}/${modalEnvironment}/deployed/${MODAL_APP_NAME}?activeTab=sandboxes&sandboxId=${providerObjectId}`;
 }
 
 export interface CreateSandboxRequest {
@@ -55,19 +154,19 @@ export interface CreateSandboxRequest {
   repoName: string | null;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  snapshotId?: string;
   opencodeSessionId?: string;
   provider?: string;
   model?: string;
   userEnvVars?: Record<string, string>;
-  repoImageId?: string | null;
-  repoImageSha?: string | null;
+  prebuiltImageId?: string | null;
+  prebuiltImageSha?: string | null;
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
+  repositories?: SessionRepositoryInfo[];
 }
 
 export interface CreateSandboxResponse {
@@ -98,6 +197,7 @@ export interface RestoreSandboxRequest {
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
+  repositories?: SessionRepositoryInfo[];
 }
 
 export interface RestoreSandboxResponse {
@@ -115,6 +215,7 @@ export interface SnapshotSandboxRequest {
   providerObjectId: string;
   sessionId: string;
   reason: string;
+  signal?: AbortSignal;
 }
 
 export interface SnapshotSandboxResponse {
@@ -123,50 +224,56 @@ export interface SnapshotSandboxResponse {
   error?: string;
 }
 
-export interface WarmSandboxRequest {
-  repoOwner: string;
-  repoName: string;
-  controlPlaneUrl?: string;
-}
-
-export interface WarmSandboxResponse {
-  sandboxId: string;
-  status: string;
-}
-
-export interface BuildRepoImageRequest {
-  repoOwner: string;
-  repoName: string;
-  defaultBranch: string;
+export interface SnapshotBuildSandboxRequest {
   buildId: string;
+  providerSessionId: string;
+  signal?: AbortSignal;
+}
+
+export interface CreateImageBuildSandboxRequest {
+  /** Scope kind ("repo" | "environment") — accepted by Modal for logging only. */
+  scopeKind: ImageBuildScopeKind;
+  /** Scope id (lowercase owner/name or environment id) — logging only. */
+  scopeId: string;
+  buildId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  cloneToken?: string;
+  cloneHost?: string;
+  cloneUsername?: string;
   callbackUrl: string;
+  failureCallbackUrl: string;
   userEnvVars?: Record<string, string>;
-  /**
-   * Build sandbox lifetime, in seconds. Already capped at
-   * MAX_BUILD_TIMEOUT_SECONDS by the trigger.
-   * Omitted → Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
-   */
-  buildTimeoutSeconds?: number;
+  buildExecutionTimeoutSeconds: number;
+  /** Provider-session lifetime, including deferred Queue finalization headroom. */
+  providerSessionTimeoutSeconds: number;
 }
 
-export interface BuildRepoImageResponse {
+export interface CreateImageBuildSandboxResponse {
+  providerSessionId: string;
+}
+
+export interface StartImageBuildSandboxRequest {
   buildId: string;
-  status: string;
+  providerSessionId: string;
+  callbackToken: string;
+}
+
+export interface TerminateImageBuildSandboxRequest {
+  buildId: string;
+  providerSessionId: string;
+  reason: string;
+  signal?: AbortSignal;
 }
 
 export interface DeleteProviderImageRequest {
   providerImageId: string;
+  signal?: AbortSignal;
 }
 
 export interface DeleteProviderImageResponse {
   providerImageId: string;
   deleted: boolean;
-}
-
-interface ModalApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
 }
 
 /**
@@ -190,11 +297,12 @@ export class ModalApiError extends Error {
  */
 export class ModalClient {
   private createSandboxUrl: string;
-  private warmSandboxUrl: string;
-  private healthUrl: string;
   private snapshotSandboxUrl: string;
+  private snapshotBuildSandboxUrl: string;
   private restoreSandboxUrl: string;
-  private buildRepoImageUrl: string;
+  private createImageBuildSandboxUrl: string;
+  private startImageBuildSandboxUrl: string;
+  private terminateImageBuildSandboxUrl: string;
   private deleteProviderImageUrl: string;
   private secret: string;
 
@@ -208,11 +316,12 @@ export class ModalClient {
     this.secret = secret;
     const baseUrl = getModalBaseUrl(workspace, environmentWebSuffix);
     this.createSandboxUrl = `${baseUrl}-api-create-sandbox.modal.run`;
-    this.warmSandboxUrl = `${baseUrl}-api-warm-sandbox.modal.run`;
-    this.healthUrl = `${baseUrl}-api-health.modal.run`;
     this.snapshotSandboxUrl = `${baseUrl}-api-snapshot-sandbox.modal.run`;
+    this.snapshotBuildSandboxUrl = `${baseUrl}-api-snapshot-build-sandbox.modal.run`;
     this.restoreSandboxUrl = `${baseUrl}-api-restore-sandbox.modal.run`;
-    this.buildRepoImageUrl = `${baseUrl}-api-build-repo-image.modal.run`;
+    this.createImageBuildSandboxUrl = `${baseUrl}-api-create-build-sandbox.modal.run`;
+    this.startImageBuildSandboxUrl = `${baseUrl}-api-start-build-sandbox.modal.run`;
+    this.terminateImageBuildSandboxUrl = `${baseUrl}-api-terminate-build-sandbox.modal.run`;
     this.deleteProviderImageUrl = `${baseUrl}-api-delete-provider-image.modal.run`;
   }
 
@@ -256,19 +365,24 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          snapshot_id: request.snapshotId || null,
           opencode_session_id: request.opencodeSessionId || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
           user_env_vars: request.userEnvVars || null,
-          repo_image_id: request.repoImageId || null,
-          repo_image_sha: request.repoImageSha || null,
+          repo_image_id: request.prebuiltImageId || null,
+          repo_image_sha: request.prebuiltImageSha || null,
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
+          // Flat keys matching SessionConfig field names — Modal's create
+          // handler builds its SessionConfig from the request by field name
+          // (unlike restore, which carries a nested session_config).
+          repositories: request.repositories?.length
+            ? request.repositories.map(toRepositoryConfigPayload)
+            : null,
         }),
       });
 
@@ -279,31 +393,22 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        sandbox_id: string;
-        modal_object_id?: string;
-        status: string;
-        created_at: number;
-        code_server_url?: string;
-        code_server_password?: string;
-        ttyd_url?: string;
-        tunnel_urls?: Record<string, string>;
-      }>;
+      const result = parseModalApiResponse(createSandboxModalResponseSchema, await response.json());
 
-      if (!result.success || !result.data) {
+      if (!result.success) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
       outcome = "success";
       return {
         sandboxId: result.data.sandbox_id,
-        modalObjectId: result.data.modal_object_id,
+        modalObjectId: result.data.modal_object_id ?? undefined,
         status: result.data.status,
         createdAt: result.data.created_at,
-        codeServerUrl: result.data.code_server_url,
-        codeServerPassword: result.data.code_server_password,
-        ttydUrl: result.data.ttyd_url,
-        tunnelUrls: result.data.tunnel_urls,
+        codeServerUrl: result.data.code_server_url ?? undefined,
+        codeServerPassword: result.data.code_server_password ?? undefined,
+        ttydUrl: result.data.ttyd_url ?? undefined,
+        tunnelUrls: result.data.tunnel_urls ?? undefined,
       };
     } finally {
       log.info("modal.request", {
@@ -358,14 +463,10 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        sandbox_id: string;
-        modal_object_id?: string;
-        code_server_url?: string;
-        code_server_password?: string;
-        ttyd_url?: string;
-        tunnel_urls?: Record<string, string>;
-      }>;
+      const result = parseModalApiResponse(
+        restoreSandboxModalResponseSchema,
+        await response.json()
+      );
 
       if (!result.success) {
         return { success: false, error: result.error || "Unknown restore error" };
@@ -375,11 +476,11 @@ export class ModalClient {
       return {
         success: true,
         sandboxId: result.data?.sandbox_id,
-        modalObjectId: result.data?.modal_object_id,
-        codeServerUrl: result.data?.code_server_url,
-        codeServerPassword: result.data?.code_server_password,
-        ttydUrl: result.data?.ttyd_url,
-        tunnelUrls: result.data?.tunnel_urls,
+        modalObjectId: result.data?.modal_object_id ?? undefined,
+        codeServerUrl: result.data?.code_server_url ?? undefined,
+        codeServerPassword: result.data?.code_server_password ?? undefined,
+        ttydUrl: result.data?.ttyd_url ?? undefined,
+        tunnelUrls: result.data?.tunnel_urls ?? undefined,
       };
     } finally {
       log.info("modal.request", {
@@ -413,6 +514,7 @@ export class ModalClient {
       const response = await fetch(this.snapshotSandboxUrl, {
         method: "POST",
         headers,
+        signal: request.signal,
         body: JSON.stringify({
           sandbox_id: request.providerObjectId,
           session_id: request.sessionId,
@@ -427,7 +529,10 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{ image_id: string }>;
+      const result = parseModalApiResponse(
+        snapshotSandboxModalResponseSchema,
+        await response.json()
+      );
       if (!result.success) {
         return { success: false, error: result.error || "Unknown snapshot error" };
       }
@@ -454,56 +559,54 @@ export class ModalClient {
   }
 
   /**
-   * Pre-warm a sandbox for faster startup.
+   * Snapshot an image-build sandbox after Modal verifies its bound build tags.
    */
-  async warmSandbox(
-    request: WarmSandboxRequest,
+  async snapshotBuildSandbox(
+    request: SnapshotBuildSandboxRequest,
     correlation?: CorrelationContext
-  ): Promise<WarmSandboxResponse> {
+  ): Promise<SnapshotSandboxResponse> {
     const startTime = Date.now();
-    const endpoint = "warmSandbox";
+    const endpoint = "snapshotBuildSandbox";
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.warmSandboxUrl, {
+      const response = await fetch(this.snapshotBuildSandboxUrl, {
         method: "POST",
         headers,
+        signal: request.signal,
         body: JSON.stringify({
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          control_plane_url: request.controlPlaneUrl || "",
+          build_id: request.buildId,
+          provider_session_id: request.providerSessionId,
         }),
       });
 
       httpStatus = response.status;
-
       if (!response.ok) {
         const text = await response.text();
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        sandbox_id: string;
-        status: string;
-      }>;
-
-      if (!result.success || !result.data) {
-        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      const result = parseModalApiResponse(
+        snapshotSandboxModalResponseSchema,
+        await response.json()
+      );
+      if (!result.success) {
+        return { success: false, error: result.error || "Unknown snapshot error" };
+      }
+      if (!result.data?.image_id) {
+        return { success: false, error: "Snapshot response missing image_id" };
       }
 
       outcome = "success";
-      return {
-        sandboxId: result.data.sandbox_id,
-        status: result.data.status,
-      };
+      return { success: true, imageId: result.data.image_id };
     } finally {
       log.info("modal.request", {
         event: "modal.request",
         endpoint,
-        repo_owner: request.repoOwner,
-        repo_name: request.repoName,
+        build_id: request.buildId,
+        sandbox_id: request.providerSessionId,
         trace_id: correlation?.trace_id,
         request_id: correlation?.request_id,
         http_status: httpStatus,
@@ -513,54 +616,38 @@ export class ModalClient {
     }
   }
 
-  /**
-   * Check Modal API health.
-   * Note: Health endpoint does not require authentication.
-   */
-  async health(): Promise<{ status: string; service: string }> {
-    const response = await fetch(this.healthUrl);
-
-    if (!response.ok) {
-      throw new ModalApiError(`Modal API error: ${response.status}`, response.status);
-    }
-
-    const result = (await response.json()) as ModalApiResponse<{
-      status: string;
-      service: string;
-    }>;
-
-    if (!result.success || !result.data) {
-      throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
-    }
-
-    return result.data;
-  }
-
-  /**
-   * Trigger an async image build on Modal.
-   */
-  async buildRepoImage(
-    request: BuildRepoImageRequest,
+  async createImageBuildSandbox(
+    request: CreateImageBuildSandboxRequest,
     correlation?: CorrelationContext
-  ): Promise<BuildRepoImageResponse> {
+  ): Promise<CreateImageBuildSandboxResponse> {
     const startTime = Date.now();
-    const endpoint = "buildRepoImage";
+    const endpoint = "createImageBuildSandbox";
     let httpStatus: number | undefined;
     let outcome: "success" | "error" = "error";
 
     try {
       const headers = await this.getPostHeaders(correlation);
-      const response = await fetch(this.buildRepoImageUrl, {
+      const response = await fetch(this.createImageBuildSandboxUrl, {
         method: "POST",
         headers,
         body: JSON.stringify({
-          repo_owner: request.repoOwner,
-          repo_name: request.repoName,
-          default_branch: request.defaultBranch,
+          scope_kind: request.scopeKind,
+          scope_id: request.scopeId,
           build_id: request.buildId,
+          repositories: request.repositories.map(toRepositoryConfigPayload),
+          clone_token: request.cloneToken,
+          clone_host: request.cloneHost,
+          clone_username: request.cloneUsername,
           callback_url: request.callbackUrl,
+          failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
-          build_timeout_seconds: request.buildTimeoutSeconds ?? null,
+          build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
+          provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
+          // Transitional duplicate under the pre-rename key: the control plane
+          // and Modal deploy the same commit via independent pipelines, so an
+          // older Modal may still read only build_timeout_seconds during the
+          // skew window. Drop once both planes are known to be past the rename.
+          build_timeout_seconds: request.providerSessionTimeoutSeconds,
         }),
       });
 
@@ -571,27 +658,107 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        build_id: string;
-        status: string;
-      }>;
+      const result = parseModalApiResponse(
+        createImageBuildSandboxModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
       outcome = "success";
       return {
-        buildId: result.data.build_id,
-        status: result.data.status,
+        providerSessionId: result.data.provider_session_id,
       };
     } finally {
       log.info("modal.request", {
         event: "modal.request",
         endpoint,
         build_id: request.buildId,
-        repo_owner: request.repoOwner,
-        repo_name: request.repoName,
+        scope_kind: request.scopeKind,
+        scope_id: request.scopeId,
+        trace_id: correlation?.trace_id,
+        request_id: correlation?.request_id,
+        http_status: httpStatus,
+        duration_ms: Date.now() - startTime,
+        outcome,
+      });
+    }
+  }
+
+  async startImageBuildSandbox(
+    request: StartImageBuildSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    await this.postImageBuildOperation(
+      this.startImageBuildSandboxUrl,
+      "startImageBuildSandbox",
+      request,
+      {
+        build_id: request.buildId,
+        provider_session_id: request.providerSessionId,
+        callback_token: request.callbackToken,
+      },
+      correlation
+    );
+  }
+
+  async terminateImageBuildSandbox(
+    request: TerminateImageBuildSandboxRequest,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    await this.postImageBuildOperation(
+      this.terminateImageBuildSandboxUrl,
+      "terminateImageBuildSandbox",
+      request,
+      {
+        build_id: request.buildId,
+        provider_session_id: request.providerSessionId,
+        reason: request.reason,
+      },
+      correlation
+    );
+  }
+
+  private async postImageBuildOperation(
+    url: string,
+    endpoint: string,
+    request: { buildId: string; providerSessionId: string; signal?: AbortSignal },
+    body: Record<string, unknown>,
+    correlation?: CorrelationContext
+  ): Promise<void> {
+    const startTime = Date.now();
+    let httpStatus: number | undefined;
+    let outcome: "success" | "error" = "error";
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: await this.getPostHeaders(correlation),
+        signal: request.signal,
+        body: JSON.stringify(body),
+      });
+      httpStatus = response.status;
+      if (!response.ok) {
+        throw new ModalApiError(
+          `Modal API error: ${response.status} ${await response.text()}`,
+          response.status
+        );
+      }
+      const result = parseModalApiResponse(
+        imageBuildOperationModalResponseSchema,
+        await response.json()
+      );
+      if (result.success === false) {
+        throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
+      }
+      outcome = "success";
+    } finally {
+      log.info("modal.request", {
+        event: "modal.request",
+        endpoint,
+        build_id: request.buildId,
+        sandbox_id: request.providerSessionId,
         trace_id: correlation?.trace_id,
         request_id: correlation?.request_id,
         http_status: httpStatus,
@@ -618,6 +785,7 @@ export class ModalClient {
       const response = await fetch(this.deleteProviderImageUrl, {
         method: "POST",
         headers,
+        signal: request.signal,
         body: JSON.stringify({
           provider_image_id: request.providerImageId,
         }),
@@ -630,12 +798,12 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        provider_image_id: string;
-        deleted: boolean;
-      }>;
+      const result = parseModalApiResponse(
+        deleteProviderImageModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 

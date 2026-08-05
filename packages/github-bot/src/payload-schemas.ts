@@ -15,6 +15,15 @@ const repositorySchema = z.object({
   private: z.boolean(),
 });
 
+const webhookSummaryRepositorySchema = z.object({
+  owner: githubUserSchema,
+  name: z.string(),
+});
+
+const webhookNumberedObjectSchema = z.object({
+  number: z.number().optional(),
+});
+
 const pullRequestSchema = z.object({
   number: z.number(),
   title: z.string(),
@@ -69,7 +78,30 @@ export const reviewCommentPayloadSchema = z.object({
   sender: githubSenderSchema,
 });
 
+export const webhookSummaryPayloadSchema = z
+  .object({
+    action: z.unknown().optional(),
+    repository: webhookSummaryRepositorySchema.nullable().optional(),
+    sender: githubUserSchema.nullable().optional(),
+    pull_request: webhookNumberedObjectSchema.nullable().optional(),
+    issue: webhookNumberedObjectSchema.nullable().optional(),
+  })
+  .passthrough();
+
+export const requestedReviewerPayloadSchema = z
+  .object({
+    requested_reviewer: githubUserSchema.nullable().optional(),
+  })
+  .passthrough();
+
+export const webhookActionPayloadSchema = z
+  .object({
+    action: z.unknown().optional(),
+  })
+  .passthrough();
+
 export type PullRequestOpenedPayload = z.infer<typeof pullRequestOpenedPayloadSchema>;
 export type ReviewRequestedPayload = z.infer<typeof reviewRequestedPayloadSchema>;
 export type IssueCommentPayload = z.infer<typeof issueCommentPayloadSchema>;
 export type ReviewCommentPayload = z.infer<typeof reviewCommentPayloadSchema>;
+export type WebhookSummaryPayload = z.infer<typeof webhookSummaryPayloadSchema>;

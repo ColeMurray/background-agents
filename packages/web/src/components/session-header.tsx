@@ -1,14 +1,25 @@
 "use client";
 
 import { useEffect, useState, type RefObject } from "react";
-import { useSidebarContext } from "@/components/sidebar-layout";
-import { Button } from "@/components/ui/button";
-import { SidebarIcon } from "@/components/ui/icons";
+import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
+import { MobileSessionActions } from "@/components/mobile-session-actions";
+import type { SessionActionProps } from "@/components/session-actions";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
-import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
+
+const SANDBOX_STATUS_COLORS: Record<string, string> = {
+  pending: "text-muted-foreground",
+  warming: "text-warning",
+  spawning: "text-warning",
+  syncing: "text-accent",
+  ready: "text-success",
+  running: "text-accent",
+  stopped: "text-muted-foreground",
+  stale: "text-muted-foreground",
+  failed: "text-destructive",
+};
 
 export type SessionHeaderProps = {
   sessionState: SessionSocketState["sessionState"];
@@ -19,10 +30,12 @@ export type SessionHeaderProps = {
   };
   connected: boolean;
   connecting: boolean;
-  participants: SessionSocketState["participants"];
   isDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
+  actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onOpenMobileDetails: () => void;
+  actions: SessionActionProps;
   renameSession: (title: string) => Promise<boolean | undefined>;
 };
 
@@ -31,13 +44,15 @@ export function SessionHeader({
   fallbackSessionInfo,
   connected,
   connecting,
-  participants,
   isDetailsOpen,
   detailsButtonRef,
+  actionsButtonRef,
   onToggleDetails,
+  onOpenMobileDetails,
+  actions,
   renameSession,
 }: SessionHeaderProps) {
-  const { isOpen, toggle } = useSidebarContext();
+  const { isOpen } = useSidebarContext();
   const hasFallbackSessionInfo =
     fallbackSessionInfo.repoOwner !== null ||
     fallbackSessionInfo.repoName !== null ||
@@ -101,21 +116,12 @@ export function SessionHeader({
     <header className="border-b border-border-muted flex-shrink-0">
       <div className="px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {!isOpen && (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={toggle}
-              title={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-              aria-label={`Open sidebar (${SHORTCUT_LABELS.TOGGLE_SIDEBAR})`}
-            >
-              <SidebarIcon className="w-4 h-4" />
-            </Button>
-          )}
+          {!isOpen && <CollapsedSidebarControls />}
           <div>
             {isRenaming ? (
               <input
                 autoFocus
+                aria-label="Session title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 onFocus={(e) => e.currentTarget.select()}
@@ -132,20 +138,15 @@ export function SessionHeader({
                 className="text-sm bg-transparent text-foreground outline-none focus:ring-inset focus:ring-ring font-medium max-w-40 truncate"
               />
             ) : (
-              <h1
-                className="text-sm font-medium text-foreground max-w-40 truncate cursor-text"
-                onClick={handleStartRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    handleStartRename();
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                title="Click to rename"
-              >
-                {resolvedTitle}
+              <h1 className="max-w-40 truncate text-sm font-medium text-foreground">
+                <button
+                  type="button"
+                  className="max-w-full truncate cursor-text text-left"
+                  onClick={handleStartRename}
+                  title="Click to rename"
+                >
+                  {resolvedTitle}
+                </button>
               </h1>
             )}
             <p className="text-sm text-muted-foreground">{repoLabel}</p>
@@ -156,13 +157,19 @@ export function SessionHeader({
             ref={detailsButtonRef}
             type="button"
             onClick={onToggleDetails}
-            className="lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
+            className="hidden md:block lg:hidden px-3 py-1.5 text-sm text-muted-foreground border border-border-muted hover:text-foreground hover:bg-muted transition"
             aria-label="Toggle session details"
             aria-controls="session-details-dialog"
             aria-expanded={isDetailsOpen}
           >
             Details
           </button>
+          <MobileSessionActions
+            {...actions}
+            triggerRef={actionsButtonRef}
+            onOpenDetails={onOpenMobileDetails}
+            onOpenMedia={onOpenMobileDetails}
+          />
           <div className="md:hidden">
             <CombinedStatusDot
               connected={connected}
@@ -176,7 +183,6 @@ export function SessionHeader({
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
-            <ParticipantsList participants={participants} />
           </div>
         </div>
       </div>
@@ -184,13 +190,7 @@ export function SessionHeader({
   );
 }
 
-export function ConnectionStatus({
-  connected,
-  connecting,
-}: {
-  connected: boolean;
-  connecting: boolean;
-}) {
+function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
   if (connecting) {
     return (
       <span className="flex items-center gap-1 text-xs text-warning">
@@ -217,7 +217,7 @@ export function ConnectionStatus({
   );
 }
 
-export function SandboxStatus({
+function SandboxStatus({
   status,
   dashboardUrl,
 }: {
@@ -226,19 +226,7 @@ export function SandboxStatus({
 }) {
   if (!status) return null;
 
-  const colors: Record<string, string> = {
-    pending: "text-muted-foreground",
-    warming: "text-warning",
-    spawning: "text-warning",
-    syncing: "text-accent",
-    ready: "text-success",
-    running: "text-accent",
-    stopped: "text-muted-foreground",
-    stale: "text-muted-foreground",
-    failed: "text-destructive",
-  };
-
-  const className = `text-xs ${colors[status] || colors.pending}`;
+  const className = `text-xs ${SANDBOX_STATUS_COLORS[status] || SANDBOX_STATUS_COLORS.pending}`;
   const label = `Sandbox: ${status}`;
 
   if (dashboardUrl) {
@@ -261,7 +249,7 @@ export function SandboxStatus({
   return <span className={className}>{label}</span>;
 }
 
-export function CombinedStatusDot({
+function CombinedStatusDot({
   connected,
   connecting,
   sandboxStatus,
@@ -296,34 +284,5 @@ export function CombinedStatusDot({
     <span title={label} className="flex items-center">
       <span className={`w-2.5 h-2.5 rounded-full ${color}${pulse ? " animate-pulse" : ""}`} />
     </span>
-  );
-}
-
-export function ParticipantsList({
-  participants,
-}: {
-  participants: SessionSocketState["participants"];
-}) {
-  if (participants.length === 0) return null;
-
-  const uniqueParticipants = Array.from(new Map(participants.map((p) => [p.userId, p])).values());
-
-  return (
-    <div className="flex -space-x-2">
-      {uniqueParticipants.slice(0, 3).map((p) => (
-        <div
-          key={p.userId}
-          className="w-8 h-8 rounded-full bg-card flex items-center justify-center text-xs font-medium text-foreground border-2 border-white"
-          title={p.name}
-        >
-          {p.name.charAt(0).toUpperCase()}
-        </div>
-      ))}
-      {uniqueParticipants.length > 3 && (
-        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium text-foreground border-2 border-white">
-          +{uniqueParticipants.length - 3}
-        </div>
-      )}
-    </div>
   );
 }

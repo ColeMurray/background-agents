@@ -1,12 +1,19 @@
 import type { Session } from "@open-inspect/shared";
+import type { BrowserApiPath } from "./browser-api-fetch";
+import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
+const COMMAND_MENU_SESSIONS_LIMIT = 100;
 export const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = "me";
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",
   limit: SESSIONS_PAGE_SIZE,
   offset: 0,
+});
+export const COMMAND_MENU_SESSIONS_KEY = buildSessionsPageKey({
+  excludeStatus: "archived",
+  limit: COMMAND_MENU_SESSIONS_LIMIT,
 });
 
 export interface SessionListResponse {
@@ -19,14 +26,16 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
+  excludeAutomationLineage,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
+  excludeAutomationLineage?: boolean;
   createdBy?: readonly string[];
-}) {
+}): BrowserApiPath {
   const searchParams = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -38,6 +47,10 @@ export function buildSessionsPageKey({
 
   if (excludeStatus) {
     searchParams.set("excludeStatus", excludeStatus);
+  }
+
+  if (excludeAutomationLineage) {
+    searchParams.set("excludeAutomationLineage", "true");
   }
 
   for (const userId of createdBy ?? []) {
@@ -85,6 +98,29 @@ export function applyTitleUpdate(
   };
 }
 
+export function applySessionReadState(
+  data: SessionListResponse | undefined,
+  sessionId: string,
+  readState: Session["readState"]
+): SessionListResponse | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    sessions: data.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      if (!readState) return session;
+      const currentMessageId = session.readState?.latestMessageId;
+      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
+        return session;
+      }
+      return {
+        ...session,
+        readState,
+      };
+    }),
+  };
+}
+
 export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
   const seen = new Set(existing.map((session) => session.id));
   const merged = [...existing];
@@ -100,4 +136,14 @@ export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
 
 export function removeSessionFromList(sessions: Session[], sessionId: string) {
   return sessions.filter((session) => session.id !== sessionId);
+}
+
+export function buildSessionSearchValue(session: Session): string {
+  const repositoryLabels = session.repositories?.length
+    ? session.repositories.map((repository) =>
+        formatRepoLabel(repository.repoOwner, repository.repoName)
+      )
+    : [formatRepoLabel(session.repoOwner, session.repoName)];
+
+  return [session.id, session.title, ...repositoryLabels].filter(Boolean).join(" ");
 }

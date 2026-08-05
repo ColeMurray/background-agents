@@ -14,8 +14,8 @@ Open-Inspect provides a hosted background coding agent that can:
 - Create PRs with proper commit attribution to the prompting user
 - Run on a schedule — cron jobs, Sentry alerts, and webhook-triggered automations
 - Spawn parallel sub-tasks that work in separate sandboxes simultaneously
-- Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), or
-  OpenCode Zen
+- Use your choice of AI model — Anthropic Claude, OpenAI Codex (via ChatGPT subscription), xAI Grok
+  (via SuperGrok subscription), or OpenCode Zen
 
 ## Security Model (Single-Tenant Only)
 
@@ -120,6 +120,7 @@ built for internal use where all employees are trusted and have access to compan
 | [sandbox-runtime](packages/sandbox-runtime)       | Shared in-sandbox agent runtime             |
 | [modal-infra](packages/modal-infra)               | Modal sandbox infrastructure                |
 | [daytona-infra](packages/daytona-infra)           | Daytona snapshot infrastructure             |
+| [e2b-infra](packages/e2b-infra)                   | E2B sandbox template infrastructure         |
 | [opencomputer-infra](packages/opencomputer-infra) | OpenComputer template infrastructure        |
 | [slack-bot](packages/slack-bot)                   | Slack integration (sessions from messages)  |
 | [github-bot](packages/github-bot)                 | GitHub integration (auto-review, @mention)  |
@@ -146,10 +147,21 @@ Sessions start near-instantly through multiple layers of warming:
 
 - **Filesystem snapshots** — After each prompt, sandbox state is saved; follow-up sessions restore
   instead of re-cloning
-- **Pre-built repo images** — Toggle per-repo in Settings; rebuilt every 30 minutes with latest
-  commits and dependencies
+- **Pre-built images** — Toggle per-repo (Settings > Images) or per-environment (Settings >
+  Environments); rebuilt every 30 minutes with latest commits and dependencies
 - **Proactive warming** — Sandbox begins spinning up as soon as you start typing, before you hit
   Enter
+
+### Multi-Repository Sessions & Environments
+
+One session can work across several repositories in a single sandbox:
+
+- **Ad-hoc sets** — Pick up to 10 repositories in the new-session picker; each is cloned side by
+  side and the agent can make coordinated changes and open a PR per repository
+- **Environments** — Save a repository set as a named environment with its own secrets scope and
+  optional prebuilt images, then launch it from the picker like any repository
+- See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#environments) for the model and
+  [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md) for environment prebuilds
 
 ### Multiplayer Sessions
 
@@ -175,15 +187,19 @@ await configureGitIdentity({
 
 Choose the AI model that fits your task, with per-session reasoning effort controls:
 
-| Provider     | Models                                                               |
-| ------------ | -------------------------------------------------------------------- |
-| Anthropic    | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8, Fable 5      |
-| OpenAI       | GPT 5.2, GPT 5.4, GPT 5.5, GPT 5.2 Codex, 5.3 Codex, 5.3 Codex Spark |
-| OpenCode Zen | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)        |
+| Provider         | Models                                                            |
+| ---------------- | ----------------------------------------------------------------- |
+| Anthropic        | Claude Haiku 4.5, Sonnet 4.5/4.6, Opus 4.5/4.6/4.7/4.8/5, Fable 5 |
+| OpenAI           | GPT 5.4, GPT 5.5, 5.3 Codex, 5.3 Codex Spark                      |
+| xAI / SuperGrok  | Grok models (opt-in)                                              |
+| OpenCode Zen     | Kimi K2.5/K2.6, MiniMax M2.5, Qwen3.7 Max, GLM 5/5.1 (opt-in)     |
+| Z.AI Coding Plan | GLM 5.2 (opt-in)                                                  |
 
 OpenAI models work with your existing ChatGPT subscription via OAuth — no separate API key needed.
-See **[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
-**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** for OpenAI setup instructions.
+Grok models work with an eligible SuperGrok subscription through control-plane-managed OAuth. See
+**[docs/AVAILABLE_MODELS.md](docs/AVAILABLE_MODELS.md)** for the full model list and
+**[docs/OPENAI_MODELS.md](docs/OPENAI_MODELS.md)** or **[docs/GROK_MODELS.md](docs/GROK_MODELS.md)**
+for subscription setup instructions.
 
 ### Client Integrations
 
@@ -191,8 +207,9 @@ Interact with agents from wherever your team already works:
 
 - **Web UI** — Full session management with real-time streaming, model/reasoning selectors, terminal
   panel, and multiplayer presence
-- **Slack Bot** — @mention or DM to start a session; replies thread back with results. Per-user
-  model and branch preferences via App Home. See [Slack integration](docs/integrations/SLACK.md)
+- **Slack Bot** — @mention or DM to start a session, with PNG, JPEG, WebP, and GIF prompt
+  attachments; replies thread back with results. Per-user model and branch preferences via App Home.
+  See [Slack integration](docs/integrations/SLACK.md)
 - **GitHub Bot** — Auto-review on PR open or respond to @mentions in PR comments. Configurable
   per-repo. See [GitHub integration](docs/integrations/GITHUB.md)
 - **Linear Bot** — Mention or assign the agent on an issue to start a coding session, post progress
@@ -206,6 +223,8 @@ Schedule recurring tasks or react to external events — no human in the loop:
 - **Cron schedules** — Hourly, daily, weekly, monthly, or custom 5-field cron with timezone support
 - **Sentry alerts** — Auto-triage on new errors, regressions, or critical metric alerts
 - **Inbound webhooks** — JSONPath condition filters to gate which payloads spawn sessions
+- **Multi-repo fan-out** — One scheduled automation can run across up to 10 repositories, opening a
+  separate session and pull request for each
 - Auto-pause after 3 consecutive failures, manual trigger button, full run history
 
 See **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)** for setup instructions.
@@ -222,16 +241,16 @@ Every session runs in an isolated sandbox backend with a full development enviro
 - **Port tunneling:** Expose up to 10 dev server ports via encrypted tunnels. URLs are available
   in-sandbox at `/workspace/.tunnels.env` before `.openinspect/start.sh` runs
   ([details](docs/HOW_IT_WORKS.md#tunnel-urls-inside-the-sandbox))
-- **Repo secrets:** AES-256-GCM encrypted, scoped per-repo or globally, injected as env vars at
-  spawn time. Supports bulk `.env` paste import
+- **Secrets:** AES-256-GCM encrypted, scoped globally, per-repo, or per-environment, injected as env
+  vars at spawn time. Supports bulk `.env` paste import
 
-### Sub-Task Spawning
+### Child Sessions
 
 Agents can decompose work into parallel child sessions:
 
-- `spawn-task` creates a child session in its own sandbox and returns immediately
+- `spawn-child` creates a child session in its own sandbox and returns immediately
 - Parent continues working while children run in parallel on separate branches
-- `get-task-status` and `cancel-task` for coordination
+- `get-child-status` and `cancel-child` coordinate child sessions
 - Depth limits and per-repo guardrails enforced
 
 ### Repository Lifecycle Scripts
@@ -252,9 +271,9 @@ docker compose up -d postgres redis
 ```
 
 - `setup.sh` runs for image builds and fresh sessions
-- `setup.sh` is skipped for repo-image and snapshot-restore starts
+- `setup.sh` is skipped for prebuilt-image and snapshot-restore starts
 - `setup.sh` failures are non-fatal for fresh sessions, but fatal in image build mode
-- `start.sh` runs for every non-build session startup (fresh, repo-image, snapshot-restore)
+- `start.sh` runs for every non-build session startup (fresh, prebuilt-image, snapshot-restore)
 - `start.sh` failures are strict: if present and it fails, session startup fails
 - Default timeouts:
   - `SETUP_TIMEOUT_SECONDS` (default `300`)
@@ -276,6 +295,7 @@ built with:
 - [Daytona](https://www.daytona.io) - Cloud development sandboxes
 - [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) - Cloud sandbox infrastructure
 - [OpenComputer](https://www.opencomputer.dev) - Cloud sandbox infrastructure
+- [E2B](https://e2b.dev) - Cloud sandbox infrastructure
 - [Cloudflare Workers](https://workers.cloudflare.com) - Edge computing
 - [OpenCode](https://opencode.ai) - Coding agent runtime
 - [Next.js](https://nextjs.org) - Web framework

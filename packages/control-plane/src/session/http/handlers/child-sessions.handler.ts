@@ -1,5 +1,7 @@
 import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
+import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
+import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
@@ -26,12 +28,7 @@ export interface ChildSessionsHandlerDeps {
   parseArtifactMetadata: (
     artifact: Pick<ArtifactRow, "id" | "metadata">
   ) => Record<string, unknown> | null;
-  broadcast: (message: {
-    type: "child_session_update";
-    childSessionId: string;
-    status: SessionStatus;
-    title: string | null;
-  }) => void;
+  messenger: SessionMessenger;
 }
 
 export interface ChildSessionsHandler {
@@ -53,6 +50,12 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       if (!owner) {
         return Response.json({ error: "No owner participant found" }, { status: 404 });
       }
+      let sandboxTimeoutMs: number | undefined;
+      try {
+        sandboxTimeoutMs = parsePersistedSandboxSettings(session.sandbox_settings).sandboxTimeoutMs;
+      } catch {
+        sandboxTimeoutMs = undefined;
+      }
       const context: SpawnContext = {
         repoOwner: session.repo_owner,
         repoName: session.repo_name,
@@ -60,8 +63,10 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         model: session.model,
         reasoningEffort: session.reasoning_effort ?? null,
         baseBranch: session.base_branch,
+        sandboxTimeoutMs,
         owner: {
           userId: owner.user_id,
+          ...(owner.canonical_user_id ? { canonicalUserId: owner.canonical_user_id } : {}),
           scmUserId: owner.scm_user_id,
           scmLogin: owner.scm_login,
           scmName: owner.scm_name,
@@ -141,7 +146,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
       }
 
-      deps.broadcast({
+      deps.messenger.broadcast({
         type: "child_session_update",
         childSessionId: body.childSessionId,
         status: body.status,

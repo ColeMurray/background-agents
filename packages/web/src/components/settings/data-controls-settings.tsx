@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
@@ -14,6 +14,7 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { formatRelativeTime } from "@/lib/time";
+import { browserApiFetch } from "@/lib/browser-api-fetch";
 
 const PAGE_SIZE = 20;
 const ARCHIVED_SESSIONS_KEY = buildSessionsPageKey({
@@ -26,13 +27,13 @@ export function DataControlsSettings() {
   const [extraSessions, setExtraSessions] = useState<SessionItem[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
-  const [offset, setOffset] = useState(0);
+  const offsetRef = useRef(0);
 
   const { data, isLoading: loading } = useSWR<SessionListResponse>(ARCHIVED_SESSIONS_KEY, {
     onSuccess: (data) => {
       const fetched = data.sessions || [];
       setHasMore(data.hasMore);
-      setOffset(fetched.length);
+      offsetRef.current = fetched.length;
       setExtraSessions([]);
     },
   });
@@ -43,11 +44,11 @@ export function DataControlsSettings() {
   const handleLoadMore = useCallback(async () => {
     setLoadingMore(true);
     try {
-      const res = await fetch(
+      const res = await browserApiFetch(
         buildSessionsPageKey({
           status: "archived",
           limit: PAGE_SIZE,
-          offset,
+          offset: offsetRef.current,
         })
       );
       if (res.ok) {
@@ -55,18 +56,20 @@ export function DataControlsSettings() {
         const fetched: SessionItem[] = resData.sessions || [];
         setExtraSessions((prev) => [...prev, ...fetched]);
         setHasMore(resData.hasMore);
-        setOffset((prev) => prev + fetched.length);
+        offsetRef.current += fetched.length;
       }
     } catch (error) {
       console.error("Failed to fetch archived sessions:", error);
     } finally {
       setLoadingMore(false);
     }
-  }, [offset]);
+  }, []);
 
   const handleUnarchive = async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/unarchive`, { method: "POST" });
+      const res = await browserApiFetch(`/api/sessions/${sessionId}/unarchive`, {
+        method: "POST",
+      });
       if (!res.ok) {
         toast.error("Failed to unarchive session");
         return;
@@ -84,7 +87,7 @@ export function DataControlsSettings() {
       // Server-side list shifts down by one, so the next Load more must
       // start one offset earlier to avoid skipping the session that took
       // this row's slot.
-      setOffset((prev) => prev - 1);
+      offsetRef.current -= 1;
       mutate(isUnarchivedSessionListKey);
     } catch {
       toast.error("Failed to unarchive session");

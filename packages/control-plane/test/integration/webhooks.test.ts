@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SELF, env } from "cloudflare:test";
 import { AutomationStore, type AutomationRow } from "../../src/db/automation-store";
 import { hashApiKey } from "../../src/auth/webhook-key";
 import { encryptToken } from "../../src/auth/crypto";
 import { cleanD1Tables } from "./cleanup";
+import { fetchRuns } from "./run-helpers";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -97,10 +98,71 @@ const sentryIssuePayload = {
   actor: { type: "application", id: 1, name: "Sentry" },
 };
 
+const sentryIssueCreatedPayload = {
+  action: "created",
+  installation: { uuid: "installation-1" },
+  data: {
+    issue: {
+      id: "67890",
+      shortId: "TEST-2",
+      title: "TypeError: Cannot read properties of undefined",
+      culprit: "src/App.tsx in BrokenCheckout",
+      level: "error",
+      status: "unresolved",
+      project: { id: "2", slug: "test-project", name: "Test" },
+      count: "1",
+      firstSeen: "2026-08-03T20:00:00Z",
+      lastSeen: "2026-08-03T20:00:00Z",
+      web_url: "https://sentry.io/issues/67890/",
+    },
+  },
+  actor: { type: "application", id: "sentry", name: "Sentry" },
+};
+
+const sentryMetricWarningPayload = {
+  action: "warning",
+  data: {
+    metric_alert: {
+      id: 456,
+      title: "Error rate > 3%",
+      alert_rule: { id: 789, name: "Elevated error rate" },
+      date_started: "2026-08-03T20:00:00Z",
+      current_trigger: { label: "warning" },
+    },
+    description_text: "Error rate exceeded 3%",
+    description_title: "Metric Alert",
+    web_url: "https://sentry.io/alerts/456/",
+  },
+};
+
 // ─── Sentry webhook tests (per-automation) ───────────────────────────────────
 
 describe("POST /webhooks/sentry/:id", () => {
   beforeEach(cleanD1Tables);
+
+  it("creates an automation run for a current Sentry issue.created webhook", async () => {
+    const automation = await createSentryAutomation();
+    const body = JSON.stringify(sentryIssueCreatedPayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Sentry-Hook-Resource": "issue",
+        "sentry-hook-signature": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    const result = await response.json<{ ok: boolean; skipped?: boolean }>();
+    expect(result.ok).toBe(true);
+    expect(result.skipped).not.toBe(true);
+
+    const runs = await fetchRuns(automation.id);
+    expect(runs).toHaveLength(1);
+  });
 
   it("accepts valid signature (does not return 401)", async () => {
     const automation = await createSentryAutomation();
@@ -111,6 +173,7 @@ describe("POST /webhooks/sentry/:id", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        "Sentry-Hook-Resource": "event_alert",
         "sentry-hook-signature": signature,
       },
       body,
@@ -170,6 +233,119 @@ describe("POST /webhooks/sentry/:id", () => {
     const result = await response.json<{ ok: boolean; skipped: boolean }>();
     expect(result.ok).toBe(true);
     expect(result.skipped).toBe(true);
+  });
+
+  it("returns a skipped response for a signed non-object JSON payload", async () => {
+    const automation = await createSentryAutomation();
+    const body = "null";
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Sentry-Hook-Resource": "issue",
+        "sentry-hook-signature": signature,
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, skipped: true });
+  });
+
+  it("logs why an authenticated Sentry webhook was skipped", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const automation = await createSentryAutomation();
+    const unsupportedPayload = {
+      action: "must-not-be-logged",
+      data: { issue: { id: "12345", privateContext: "must-not-be-logged" } },
+    };
+    const body = JSON.stringify(unsupportedPayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    try {
+      const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Sentry-Hook-Resource": "issue",
+          "sentry-hook-signature": signature,
+        },
+        body,
+      });
+
+      expect(response.status).toBe(200);
+      const logEntries = warnSpy.mock.calls.flatMap(([line]) => {
+        if (typeof line !== "string") return [];
+        try {
+          return [JSON.parse(line) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      });
+      expect(logEntries).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          service: "control-plane",
+          component: "sentry-webhook",
+          event: "sentry.webhook_skipped",
+          reason: "invalid_shape",
+          automation_id: automation.id,
+          configured_event_type: "issue.created",
+          sentry_resource: "issue",
+          sentry_action: "other",
+          request_id: expect.any(String),
+          trace_id: expect.any(String),
+        })
+      );
+      expect(JSON.stringify(warnSpy.mock.calls)).not.toContain("must-not-be-logged");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn for an intentionally ignored metric alert action", async () => {
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const automation = await createSentryAutomation({ event_type: "metric_alert.critical" });
+    const body = JSON.stringify(sentryMetricWarningPayload);
+    const signature = await signSentryPayload(body, SENTRY_TEST_SECRET);
+
+    try {
+      const response = await SELF.fetch(`https://test.local/webhooks/sentry/${automation.id}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Sentry-Hook-Resource": "metric_alert",
+          "sentry-hook-signature": signature,
+        },
+        body,
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true, skipped: true });
+
+      const infoEntries = infoSpy.mock.calls.flatMap(([line]) => {
+        if (typeof line !== "string") return [];
+        try {
+          return [JSON.parse(line) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      });
+      expect(infoEntries).toContainEqual(
+        expect.objectContaining({
+          event: "sentry.webhook_skipped",
+          reason: "unsupported_action",
+          sentry_resource: "metric_alert",
+        })
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 
   it("returns 404 for non-sentry automation", async () => {

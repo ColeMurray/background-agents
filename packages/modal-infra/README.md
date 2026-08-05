@@ -9,7 +9,8 @@ This package provides the data plane for Open-Inspect:
 - **Sandboxes**: Isolated development environments running OpenCode
 - **Images**: Pre-built container images with all development tools
 - **Snapshots**: Filesystem snapshots for fast startup and session persistence
-- **Scheduler**: Image rebuilding infrastructure (currently disabled)
+- **Image builds**: Short-lived provider sessions that the control plane creates, starts, snapshots,
+  and terminates
 
 ## Architecture
 
@@ -46,7 +47,9 @@ Base image definition with:
 - **bridge.py**: WebSocket bridge to control plane
 - **types.py**: Event and configuration types
 
-### Auth (`src/auth/`)
+### Auth (`sandbox_runtime.auth`)
+
+Provided by `packages/sandbox-runtime/src/sandbox_runtime/auth/`:
 
 - **github_app.py**: GitHub App token generation for repo access
 - **internal.py**: HMAC authentication for control plane requests
@@ -55,9 +58,9 @@ Base image definition with:
 
 - **web_api.py**: HTTP endpoints called by the control plane
 
-### Scheduler (`src/scheduler/`)
-
-- **image_builder.py**: Image rebuild infrastructure (scheduling currently disabled)
+Image rebuild evaluation and residual cleanup run in the provider-neutral
+control-plane scheduler. Modal only owns its short-lived create, start,
+snapshot, terminate, and delete provider operations.
 
 ## Usage
 
@@ -101,18 +104,20 @@ pip install -e ".[dev]"
 ### Deploy
 
 ```bash
-# Deploy the app (recommended)
-modal deploy deploy.py
+# Build the dynamic Sandbox image, then deploy the app (recommended)
+uv run python deploy.py --build-sandbox-image
+uv run modal deploy deploy.py
 
-# Alternative: deploy the src package directly
-modal deploy -m src
+# Alternative app deployment after the same eager image-build step
+uv run modal deploy -m src
 
 # Run locally for development
 modal run src/
 ```
 
 > **Note**: Never deploy `src/app.py` directly - it only defines the app and shared resources.
-> Use `deploy.py` or `-m src` to ensure all function modules are registered.
+> Build the Sandbox image first, then use `deploy.py` or `-m src` to ensure all function modules
+> are registered.
 
 ## HTTP API
 
@@ -127,9 +132,13 @@ Endpoint URLs follow the pattern: `https://{workspace}--open-inspect-{endpoint}.
 |----------|--------|------|-------------|
 | `api-health` | GET | No | Health check |
 | `api-create-sandbox` | POST | Yes | Create a new sandbox |
-| `api-warm-sandbox` | POST | Yes | Pre-warm a sandbox |
 | `api-snapshot-sandbox` | POST | Yes | Take filesystem snapshot |
 | `api-restore-sandbox` | POST | Yes | Restore sandbox from snapshot |
+| `api-create-build-sandbox` | POST | Yes | Create a dormant, tagged sandbox for a prebuilt-image build |
+| `api-start-build-sandbox` | POST | Yes | Start the bound build runtime; results POST back to the control plane's `/image-builds/*` callbacks |
+| `api-snapshot-build-sandbox` | POST | Yes | Snapshot the exact tagged build sandbox |
+| `api-terminate-build-sandbox` | POST | Yes | Terminate the exact tagged build sandbox (idempotent when already absent) |
+| `api-delete-provider-image` | POST | Yes | Best-effort delete of a replaced provider image |
 
 ### Example: Create Sandbox
 

@@ -1,4 +1,4 @@
-import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared";
+import { isValidModel, isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   BRANCH_INPUT_BLOCK_ID,
   BRANCH_MODAL_CALLBACK_ID,

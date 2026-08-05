@@ -1,0 +1,67 @@
+import { publishAppHome } from "../app-home";
+import { handleChannelTrigger } from "../channel-trigger";
+import { isDmDispatchable } from "../dm-utils";
+import type { BackgroundTaskScheduler } from "../messages/blocks";
+import type { Env } from "../types";
+import { handleAppMention, handleDirectMessage } from "./message-handler";
+import type { SlackEventPayload } from "./payload";
+
+/**
+ * Re-exported so existing importers keep a single dispatcher-facing name; the
+ * type is inferred from `slackEventPayloadSchema` in `./payload`.
+ */
+export type { SlackEventPayload };
+
+export async function handleSlackEvent(
+  payload: SlackEventPayload,
+  env: Env,
+  traceId: string | undefined,
+  scheduleBackground: BackgroundTaskScheduler
+): Promise<void> {
+  if (payload.type !== "event_callback" || !payload.event) return;
+  const event = payload.event;
+  if (event.bot_id) return;
+  if (event.type === "app_home_opened" && event.tab === "home" && event.user) {
+    await publishAppHome(env, event.user);
+    return;
+  }
+  if (isDmDispatchable(event)) {
+    await handleDirectMessage(
+      {
+        type: event.type,
+        // file_share messages may carry no text at all.
+        text: event.text ?? "",
+        user: event.user!,
+        channel: event.channel!,
+        ts: event.ts!,
+        thread_ts: event.thread_ts,
+        channel_type: event.channel_type,
+        files: event.files,
+        attachments: event.attachments,
+      },
+      env,
+      traceId,
+      scheduleBackground
+    );
+    return;
+  }
+  if (event.type === "app_mention" && event.text && event.user && event.channel && event.ts) {
+    await handleAppMention(
+      {
+        type: event.type,
+        text: event.text,
+        user: event.user,
+        channel: event.channel,
+        ts: event.ts,
+        thread_ts: event.thread_ts,
+        files: event.files,
+        attachments: event.attachments,
+      },
+      env,
+      traceId,
+      scheduleBackground
+    );
+    return;
+  }
+  if (event.type === "message") await handleChannelTrigger(event, env, traceId);
+}

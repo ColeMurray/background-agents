@@ -6,7 +6,7 @@ import {
   type SlackNotifySuccessOutput,
   type SlackNotifyToolEnvelope,
   slackNotifyToolEnvelopeSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
 import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
@@ -101,6 +101,7 @@ export function SlackNotifyEvent({
   return (
     <div className="py-0.5">
       <button
+        type="button"
         onClick={onToggle}
         className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
       >

@@ -5,7 +5,12 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository, type SqlStorage, type SqlResult } from "./repository";
+import { SessionRepository } from "./repository";
+import {
+  AttachmentClaimConflictError,
+  SessionAttachmentRepository,
+} from "./session-attachment-repository";
+import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
  * Create a mock SqlStorage that tracks calls and returns configurable data.
@@ -14,6 +19,7 @@ function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const mockData: Map<string, unknown[]> = new Map();
   const rowsWrittenByQuery: Map<string, number> = new Map();
+  let defaultRowsWritten = 0;
   let oneValue: unknown = null;
 
   const sql: SqlStorage = {
@@ -31,7 +37,7 @@ function createMockSql() {
           return oneValue;
         },
         get rowsWritten() {
-          return consumed ? (rowsWrittenByQuery.get(query) ?? 0) : 0;
+          return consumed ? (rowsWrittenByQuery.get(query) ?? defaultRowsWritten) : 0;
         },
       };
     },
@@ -46,6 +52,9 @@ function createMockSql() {
     setRowsWritten(query: string, rowsWritten: number) {
       rowsWrittenByQuery.set(query, rowsWritten);
     },
+    setDefaultRowsWritten(rowsWritten: number) {
+      defaultRowsWritten = rowsWritten;
+    },
     setOne(value: unknown) {
       oneValue = value;
     },
@@ -53,6 +62,7 @@ function createMockSql() {
       calls.length = 0;
       mockData.clear();
       rowsWrittenByQuery.clear();
+      defaultRowsWritten = 0;
       oneValue = null;
     },
   };
@@ -64,7 +74,11 @@ describe("SessionRepository", () => {
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql);
+    repo = new SessionRepository(
+      mock.sql,
+      (closure) => closure(),
+      new SessionAttachmentRepository(mock.sql)
+    );
   });
 
   // === SESSION ===
@@ -120,6 +134,7 @@ describe("SessionRepository", () => {
         "user",
         0,
         0,
+        null,
         null,
         1000,
         2000,
@@ -235,6 +250,116 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("SET total_cost = total_cost + ?");
       expect(mock.calls[0].query).toContain("updated_at = ?");
       expect(mock.calls[0].params).toEqual([0.0123, 5000]);
+    });
+  });
+
+  // === SESSION REPOSITORIES ===
+
+  describe("replaceSessionRepositories", () => {
+    it("deletes existing rows before inserting the new set in order", () => {
+      repo.replaceSessionRepositories([
+        { position: 0, repoOwner: "acme", repoName: "frontend", repoId: 1, baseBranch: "main" },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "backend",
+          repoId: null,
+          baseBranch: "develop",
+        },
+      ]);
+
+      expect(mock.calls.length).toBe(3);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+      expect(mock.calls[1].query).toContain("INSERT INTO session_repositories");
+      expect(mock.calls[1].params).toEqual([0, "acme", "frontend", 1, "main"]);
+      expect(mock.calls[2].params).toEqual([1, "acme", "backend", null, "develop"]);
+    });
+
+    it("clears all rows when given an empty set", () => {
+      repo.replaceSessionRepositories([]);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("DELETE FROM session_repositories");
+    });
+  });
+
+  describe("getSessionRepositoryRows", () => {
+    it("returns rows ordered by position", () => {
+      const rows = [
+        { position: 0, repo_owner: "acme", repo_name: "frontend" },
+        { position: 1, repo_owner: "acme", repo_name: "backend" },
+      ];
+      mock.setData(`SELECT * FROM session_repositories ORDER BY position`, rows);
+
+      expect(repo.getSessionRepositoryRows()).toEqual(rows);
+    });
+
+    it("returns an empty list for pre-feature sessions", () => {
+      expect(repo.getSessionRepositoryRows()).toEqual([]);
+    });
+  });
+
+  describe("setSessionDiffBaselines", () => {
+    it("writes each baseline once using position and repository identity", () => {
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(mock.calls[0].query).toContain("WHERE position = ?");
+      expect(mock.calls[0].query).toContain("repo_owner = ?");
+      expect(mock.calls[0].query).toContain("repo_name = ?");
+      expect(mock.calls[0].query).toContain("base_sha IS NULL");
+      expect(mock.calls[0].params).toEqual(["a".repeat(40), 0, "acme", "web"]);
+      expect(mock.calls[1].query).toContain("UPDATE session SET base_sha");
+      expect(mock.calls[1].query).toContain("base_sha IS NULL");
+      expect(mock.calls[1].params).toEqual(["a".repeat(40), "acme", "web"]);
+      expect(mock.calls[2].query).toContain("WHERE position = ?");
+      expect(mock.calls[2].params).toEqual(["b".repeat(40), 1, "acme", "web"]);
+    });
+
+    it("applies all baseline updates in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+
+      repo.setSessionDiffBaselines([
+        {
+          position: 0,
+          repoOwner: "acme",
+          repoName: "web",
+          baseSha: "a".repeat(40),
+          isPrimary: true,
+        },
+        {
+          position: 1,
+          repoOwner: "acme",
+          repoName: "api",
+          baseSha: "b".repeat(40),
+          isPrimary: false,
+        },
+      ]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls).toHaveLength(3);
     });
   });
 
@@ -419,6 +544,7 @@ describe("SessionRepository", () => {
       repo.createParticipant({
         id: "p-1",
         userId: "user-1",
+        canonicalUserId: "canonical-user-1",
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
@@ -434,6 +560,7 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "p-1",
         "user-1",
+        "canonical-user-1",
         "gh-123",
         "testuser",
         "Test User",
@@ -464,6 +591,7 @@ describe("SessionRepository", () => {
         null,
         null,
         null,
+        null,
         "member",
         1000,
       ]);
@@ -475,13 +603,16 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
+        scmEmail: "new@example.com",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
-      expect(mock.calls[0].params[0]).toBe(null); // scmUserId
-      expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[7]).toBe("p-1"); // participantId
+      expect(mock.calls[0].params[0]).toBe(null); // canonicalUserId
+      expect(mock.calls[0].params[1]).toBe(null); // scmUserId
+      expect(mock.calls[0].params[2]).toBe("newlogin");
+      expect(mock.calls[0].params[4]).toBe("new@example.com");
+      expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });
 
@@ -550,11 +681,11 @@ describe("SessionRepository", () => {
       const message = { id: "msg-1", created_at: 1000 };
       // The query is dynamic, so we match by result
       mock.setData(
-        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`,
         [message]
       );
       expect(repo.getNextPendingMessage()).toEqual(message);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
     });
   });
 
@@ -586,6 +717,46 @@ describe("SessionRepository", () => {
         "pending",
         1000,
       ]);
+    });
+  });
+
+  describe("createMessageWithAttachments", () => {
+    const message = {
+      id: "msg-1",
+      authorId: "p-1",
+      content: "Look",
+      source: "web" as const,
+      status: "pending" as const,
+      createdAt: 1000,
+    };
+
+    it("claims every upload and creates the message in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+      mock.setDefaultRowsWritten(2);
+
+      repo.createMessageWithAttachments(message, ["up-1", "up-2"]);
+
+      expect(transactions).toBe(1);
+      expect(mock.calls[0].query).toContain("UPDATE attachments SET message_id");
+      expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO messages");
+    });
+
+    it("fails before creating the message when not every upload can be claimed", () => {
+      mock.setDefaultRowsWritten(1);
+
+      expect(() => repo.createMessageWithAttachments(message, ["up-1", "up-2"])).toThrow(
+        AttachmentClaimConflictError
+      );
+      expect(mock.calls).toHaveLength(1);
     });
   });
 
@@ -681,7 +852,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("timeline_sequence");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "token:msg-1",
@@ -718,6 +889,53 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("upsertToolCallEvent", () => {
+    it("scopes child call IDs and preserves the first event position on updates", () => {
+      const event = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "call-1",
+        status: "running",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+        isSubtask: true,
+        childSessionId: "child-1",
+        taskCallId: "task-1",
+      };
+
+      repo.upsertToolCallEvent("msg-1", event, 1000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].query).not.toContain("created_at = excluded.created_at");
+      expect(mock.calls[0].params).toEqual([
+        'tool_call:["msg-1","child-1","call-1"]',
+        "tool_call",
+        JSON.stringify(event),
+        "msg-1",
+        1000,
+      ]);
+    });
+
+    it("uses a different identity for a parent call with the same call ID", () => {
+      const event = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "call-1",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+
+      repo.upsertToolCallEvent("msg-1", event, 1000);
+
+      expect(mock.calls[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
+    });
+  });
+
   describe("upsertExecutionCompleteEvent", () => {
     it("upserts completion event by deterministic message key", () => {
       const event = {
@@ -732,7 +950,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("timeline_sequence");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "execution_complete:msg-1",
@@ -772,7 +990,7 @@ describe("SessionRepository", () => {
   describe("listEventPage", () => {
     it("returns in deterministic descending order", () => {
       repo.listEventPage({ limit: 50 });
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, timeline_sequence DESC");
     });
 
     it("filters by type", () => {
@@ -803,7 +1021,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore and trims overflow", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e3", created_at: 5000, type: "token", data: "{}" },
         { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
@@ -824,7 +1042,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(
-        "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?"
+        "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
       );
       expect(mock.calls[0].params).toEqual([51]);
     });
@@ -857,7 +1075,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore=false when a timeline page fits within the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e2", created_at: 4000, type: "token", data: "{}" },
         { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
@@ -871,7 +1089,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore=true and trims overflow when a timeline page exceeds the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e3", created_at: 5000, type: "token", data: "{}" },
         { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
@@ -892,9 +1110,11 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       // Inner subquery selects newest events via DESC
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC LIMIT ?");
+      expect(mock.calls[0].query).toContain(
+        "ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
+      );
       // Outer query re-sorts to chronological ASC for replay
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, timeline_sequence ASC");
       expect(mock.calls[0].params).toEqual([500]);
     });
   });
@@ -902,7 +1122,7 @@ describe("SessionRepository", () => {
   // === ARTIFACTS ===
 
   describe("createArtifact", () => {
-    it("stores artifact", () => {
+    it("stores artifact with updated_at starting at created_at", () => {
       repo.createArtifact({
         id: "art-1",
         type: "pr",
@@ -913,12 +1133,35 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO artifacts");
+      expect(mock.calls[0].query).toContain("updated_at");
       expect(mock.calls[0].params).toEqual([
         "art-1",
         "pr",
         "https://github.com/owner/repo/pull/1",
         '{"number":1}',
         1000,
+        1000,
+      ]);
+    });
+  });
+
+  describe("updateArtifact", () => {
+    it("updates url, metadata, and updated_at in place", () => {
+      repo.updateArtifact("art-1", {
+        url: "https://github.com/owner/renamed/pull/1",
+        metadata: '{"number":1}',
+        updatedAt: 3000,
+      });
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain(
+        "UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?"
+      );
+      expect(mock.calls[0].params).toEqual([
+        "https://github.com/owner/renamed/pull/1",
+        '{"number":1}',
+        3000,
+        "art-1",
       ]);
     });
   });

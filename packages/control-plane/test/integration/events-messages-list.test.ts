@@ -123,7 +123,7 @@ describe("GET /internal/events", () => {
 
     expect(page1.events.map((event) => event.id)).toEqual(["evt-tie-4", "evt-tie-3"]);
     expect(page1.hasMore).toBe(true);
-    expect(page1.cursor).toBe(`${createdAt}:evt-tie-3`);
+    expect(page1.cursor).toBe(`${createdAt}:4:evt-tie-3`);
 
     const res2 = await stub.fetch(
       `http://internal/internal/events?type=error&limit=2&cursor=${encodeURIComponent(page1.cursor)}`
@@ -191,6 +191,33 @@ describe("GET /internal/events", () => {
     for (const event of seeded) {
       expect(event.type).toBe("tool_call");
     }
+  });
+
+  it("filters warning events", async () => {
+    const { stub } = await initSession();
+    const baseTime = Date.now();
+
+    await seedEvents(stub, [
+      {
+        id: "evt-warning",
+        type: "warning",
+        data: JSON.stringify({ type: "warning", scope: "media", message: "Upload skipped" }),
+        createdAt: baseTime,
+      },
+      {
+        id: "evt-error",
+        type: "error",
+        data: JSON.stringify({ type: "error", message: "Upload failed" }),
+        createdAt: baseTime + 1,
+      },
+    ]);
+
+    const res = await stub.fetch("http://internal/internal/events?type=warning");
+    expect(res.status).toBe(200);
+
+    const body = await res.json<{ events: Array<{ id: string; type: string }> }>();
+    expect(body.events.map((event) => event.id)).toEqual(["evt-warning"]);
+    expect(body.events[0]?.type).toBe("warning");
   });
 });
 

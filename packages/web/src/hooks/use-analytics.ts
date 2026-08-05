@@ -1,15 +1,16 @@
-import { useSession } from "next-auth/react";
+import { useAuthSession } from "@/lib/auth-session";
 import useSWR from "swr";
 import type {
   AnalyticsBreakdownResponse,
   AnalyticsDays,
+  AnalyticsPullRequestsResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/analytics";
 import { ANALYTICS_REFRESH_INTERVAL_MS } from "@/lib/analytics";
 
 export function useAnalyticsDashboard(days: AnalyticsDays) {
-  const { data: session } = useSession();
+  const { data: session } = useAuthSession();
   const refreshInterval = ANALYTICS_REFRESH_INTERVAL_MS;
 
   const summary = useSWR<AnalyticsSummaryResponse>(
@@ -32,16 +33,23 @@ export function useAnalyticsDashboard(days: AnalyticsDays) {
     { refreshInterval }
   );
 
+  const pullRequests = useSWR<AnalyticsPullRequestsResponse>(
+    session ? `/api/analytics/pull-requests?days=${days}` : null,
+    { refreshInterval }
+  );
+
   return {
     summary: summary.data,
     timeseries: timeseries.data,
     repoBreakdown: repos.data,
     userBreakdown: users.data,
+    pullRequests: pullRequests.data,
     loading:
       (!summary.data && summary.isLoading) ||
       (!timeseries.data && timeseries.isLoading) ||
       (!repos.data && repos.isLoading) ||
-      (!users.data && users.isLoading),
-    error: summary.error ?? timeseries.error ?? repos.error ?? users.error,
+      (!users.data && users.isLoading) ||
+      (!pullRequests.data && pullRequests.isLoading),
+    error: summary.error ?? timeseries.error ?? repos.error ?? users.error ?? pullRequests.error,
   };
 }

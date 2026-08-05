@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
+  parseSlackTriggerMetadata,
   type SlackRunMetadata,
   type SlackCompletionContext,
 } from "./slack-completion";
@@ -24,6 +25,20 @@ function ctx(overrides?: Partial<SlackCompletionContext>): SlackCompletionContex
     ...overrides,
   };
 }
+
+describe("parseSlackTriggerMetadata", () => {
+  it("parses valid Slack trigger metadata", () => {
+    expect(parseSlackTriggerMetadata(JSON.stringify(meta()))).toEqual(meta());
+  });
+
+  it("returns null for malformed JSON", () => {
+    expect(parseSlackTriggerMetadata("{")).toBeNull();
+  });
+
+  it("returns null for partial metadata", () => {
+    expect(parseSlackTriggerMetadata(JSON.stringify({ channel: "C1" }))).toBeNull();
+  });
+});
 
 describe("buildSlackCompletionNotification", () => {
   it("returns null for a non-slack run (no metadata)", () => {

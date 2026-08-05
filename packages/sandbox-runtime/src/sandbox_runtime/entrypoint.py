@@ -2,7 +2,7 @@
 """
 Sandbox entrypoint - manages OpenCode server and bridge lifecycle.
 
-Runs as PID 1 inside the sandbox. Responsibilities:
+Runs as the sandbox's configured main command. Responsibilities:
 1. Perform git sync with latest code
 2. Run repo hooks (setup/start) based on boot mode
 3. Start OpenCode server
@@ -11,32 +11,72 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 6. Handle graceful shutdown on SIGTERM/SIGINT
 """
 
+import argparse
 import asyncio
+import contextlib
+import filecmp
 import json
 import os
 import re
 import shutil
 import signal
 import time
+from collections.abc import AsyncIterator, Awaitable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import httpx
 
 from .constants import (
+    BIN_INSTALL_DIR_ENV_VAR,
+    BOOT_WARNINGS_FILE_PATH,
     CODE_SERVER_PORT,
     CODE_SERVER_PORT_ENV_VAR,
+    DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+    REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
+    TUNNEL_ENV_SANDBOX_ID_KEY,
 )
+from .diff_baseline import resolve_session_diff_baselines
+from .git_excludes import install_runtime_git_excludes
 from .log_config import configure_logging, get_logger
+from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
+from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
 
 configure_logging()
 
-BIN_INSTALL_DIR_ENV_VAR = "OPENINSPECT_BIN_INSTALL_DIR"
+# asyncio.StreamReader raises (rather than returns) once a single line exceeds
+# its buffer, which defaults to 64 KiB. Child-process log lines — JSON events
+# carrying command output or diffs — can legitimately run larger, so the log
+# forwarders read with this more generous per-line limit before a line has to
+# be truncated.
+_LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
+
+# Substituted for a single log line too large to forward intact, so the gap is
+# visible instead of silently dropped.
+_TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
+_ResultT = TypeVar("_ResultT")
+
+
+@dataclass(frozen=True)
+class RepositoryBootResult:
+    """State produced by repository synchronization and hook execution."""
+
+    git_sync_success: bool
+    repository_shas: list[dict[str, str]]
+    setup_success: bool | None
+    start_success: bool | None
+
+
+class ImageBuildExecutionCancelled(Exception):
+    """A handled process signal interrupted image-build work."""
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -64,18 +104,8 @@ AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 # fresh token is needed (the precedence logic lives there, in Python). If it
 # prints one we export it as GH_TOKEN; otherwise gh runs with its own env.
 GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
-GH_WRAPPER_BODY = (
-    "#!/bin/sh\n"
-    f'REAL_GH="{GH_WRAPPER_REAL_PATH}"\n'
-    # stderr is left attached so the helper's diagnostic surfaces when a
-    # refresh fails — otherwise the user just sees an opaque gh 401.
-    "token=$(python3 -m sandbox_runtime.credentials.git_credential_helper gh-token || true)\n"
-    'if [ -n "$token" ]; then\n'
-    # export (not `env GH_TOKEN=… exec`) so the token never lands in argv.
-    '  export GH_TOKEN="$token"\n'
-    "fi\n"
-    'exec "$REAL_GH" "$@"\n'
-)
+GH_WRAPPER_INSTALL_PATH = Path("/usr/local/bin/gh")
+GH_WRAPPER_BODY = Path(__file__).with_name("gh-wrapper.sh").read_text()
 
 
 class SandboxSupervisor:
@@ -105,13 +135,13 @@ class SandboxSupervisor:
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
 
-    def __init__(self):
+    def __init__(self, shutdown_event: asyncio.Event | None = None):
         self.opencode_process: asyncio.subprocess.Process | None = None
         self.bridge_process: asyncio.subprocess.Process | None = None
         self.code_server_process: asyncio.subprocess.Process | None = None
         self.ttyd_process: asyncio.subprocess.Process | None = None
         self.ttyd_proxy_process: asyncio.subprocess.Process | None = None
-        self.shutdown_event = asyncio.Event()
+        self.shutdown_event = shutdown_event or asyncio.Event()
         self.git_sync_complete = asyncio.Event()
         self.opencode_ready = asyncio.Event()
         self.boot_mode = "unknown"
@@ -140,6 +170,14 @@ class SandboxSupervisor:
         )
         self.session_id_file = Path("/tmp/opencode-session-id")
 
+        # Ordered repository list. SESSION_CONFIG.repositories is the source
+        # of truth; absent, a one-entry list is synthesized from the scalar
+        # env so every downstream path iterates the same shape. repo_path
+        # stays the primary's path (repositories[0] mirrors REPO_OWNER/NAME).
+        self.repo_config_error: str | None = None
+        self.repositories = self._parse_repositories()
+        self.is_multi_repo = len(self.repositories) > 1
+
         # Logger
         session_id = self.session_config.get("session_id", "")
         self.log = get_logger(
@@ -154,13 +192,34 @@ class SandboxSupervisor:
         """The branch to clone/fetch — defaults to 'main'."""
         return self.session_config.get("branch") or "main"
 
-    def _build_repo_url(self) -> str:
-        """Build the plain HTTPS URL for the repository.
+    def _parse_repositories(self) -> list[RepoEntry]:
+        """Build the ordered repository list, deferring config errors to run().
+
+        A RepoConfigError (unsafe or duplicate names — the checkout path
+        would escape /workspace or collide) cannot be reported from
+        __init__, so it is stashed and run() raises it through the normal
+        fatal-error path.
+        """
+        self.repo_config_error = None
+        try:
+            return parse_repositories(
+                self.session_config,
+                workspace_path=self.workspace_path,
+                scalar_owner=self.repo_owner,
+                scalar_name=self.repo_name,
+                scalar_branch=self.base_branch,
+            )
+        except RepoConfigError as e:
+            self.repo_config_error = str(e)
+            return []
+
+    def _build_repo_url(self, repo: RepoEntry) -> str:
+        """Build the plain HTTPS URL for a repository.
 
         Authentication is supplied per-request by the system git credential
         helper, so the remote URL itself never carries a secret.
         """
-        return f"https://{self.vcs_host}/{self.repo_owner}/{self.repo_name}.git"
+        return f"https://{self.vcs_host}/{repo.owner}/{repo.name}.git"
 
     def _redact_git_stderr(self, stderr_text: str) -> str:
         """Redact credential-bearing URLs from git stderr.
@@ -175,41 +234,72 @@ class SandboxSupervisor:
     # Git primitives
     # ------------------------------------------------------------------
 
-    async def _clone_repo(self) -> bool:
-        """Shallow-clone the repository.
+    async def _terminate_owned_subprocess(self, process: asyncio.subprocess.Process) -> None:
+        """Kill a child process group and wait until the owned process exits."""
+        if process.returncode is None:
+            process_id = getattr(process, "pid", None)
+            if isinstance(process_id, int):
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process_id, signal.SIGKILL)
+            else:
+                process.kill()
+        await asyncio.shield(process.wait())
+
+    async def _communicate_owned_subprocess(
+        self, process: asyncio.subprocess.Process
+    ) -> tuple[bytes, bytes]:
+        """Collect output while guaranteeing teardown when the caller is cancelled."""
+        try:
+            stdout, stderr = await process.communicate()
+            return stdout or b"", stderr or b""
+        except asyncio.CancelledError:
+            await self._terminate_owned_subprocess(process)
+            raise
+
+    async def _clone_repo(self, repo: RepoEntry) -> bool:
+        """Shallow-clone a repository.
 
         The remote URL is unauthenticated — the system-wide git credential
         helper supplies short-lived credentials per request.
         """
         self.log.info(
             "git.clone_start",
-            repo_owner=self.repo_owner,
-            repo_name=self.repo_name,
+            repo_owner=repo.owner,
+            repo_name=repo.name,
         )
 
-        result = await asyncio.create_subprocess_exec(
-            "git",
-            "clone",
-            "--depth",
-            str(self.CLONE_DEPTH_COMMITS),
-            "--branch",
-            self.base_branch,
-            self._build_repo_url(),
-            str(self.repo_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _stdout, stderr = await result.communicate()
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "clone",
+                "--depth",
+                str(self.CLONE_DEPTH_COMMITS),
+                "--branch",
+                repo.branch,
+                self._build_repo_url(repo),
+                str(repo.path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+            _stdout, stderr = await self._communicate_owned_subprocess(result)
+        except Exception as e:
+            # Keep sync_repositories' partial-failure contract: an OSError
+            # here must surface as a failed member, not abort the gather.
+            self.log.error("git.clone_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
+            return False
 
         if result.returncode != 0:
             self.log.error(
                 "git.clone_error",
+                repo_owner=repo.owner,
+                repo_name=repo.name,
                 stderr=self._redact_git_stderr(stderr.decode()),
                 exit_code=result.returncode,
             )
             return False
 
-        self.log.info("git.clone_complete", repo_path=str(self.repo_path))
+        self.log.info("git.clone_complete", repo_path=str(repo.path))
         return True
 
     async def _ensure_credential_helper_configured(self) -> None:
@@ -265,8 +355,9 @@ class SandboxSupervisor:
                 value,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await proc.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(proc)
             if proc.returncode != 0:
                 self.log.warn(
                     "credential_helper.config_failed",
@@ -280,23 +371,29 @@ class SandboxSupervisor:
     def _install_gh_wrapper(self) -> None:
         """Install the gh CLI wrapper at /usr/local/bin/gh.
 
-        See ``GH_WRAPPER_BODY`` for the wrapper's behaviour. Installed at boot
-        (rather than baked into the image) so it also patches snapshots and
-        repo images built before this migration.
+        The canonical wrapper artifact is also baked into non-root provider
+        images. Writable legacy images are patched at boot; a non-writable
+        legacy image fails clearly rather than running gh unauthenticated.
         """
-        wrapper_path = Path("/usr/local/bin/gh")
-        try:
-            # Only install if the real gh exists and we're not about to shadow
-            # ourselves (defensive against a previous wrapper at /usr/bin/gh).
-            if Path(GH_WRAPPER_REAL_PATH).exists() and (
-                not wrapper_path.exists() or wrapper_path.read_text() != GH_WRAPPER_BODY
-            ):
-                wrapper_path.write_text(GH_WRAPPER_BODY)
-                wrapper_path.chmod(0o755)
-        except OSError as e:
-            self.log.debug("gh_wrapper.install_failed", error=str(e))
+        real_path = Path(GH_WRAPPER_REAL_PATH)
+        if not os.access(real_path, os.X_OK):
+            return
 
-    async def _ensure_plain_origin(self) -> bool:
+        try:
+            if (
+                GH_WRAPPER_INSTALL_PATH.exists()
+                and GH_WRAPPER_INSTALL_PATH.read_text() == GH_WRAPPER_BODY
+                and os.access(GH_WRAPPER_INSTALL_PATH, os.X_OK)
+            ):
+                return
+            GH_WRAPPER_INSTALL_PATH.write_text(GH_WRAPPER_BODY)
+            GH_WRAPPER_INSTALL_PATH.chmod(0o755)
+        except OSError as e:
+            raise RuntimeError(
+                f"Cannot install authenticated gh wrapper at {GH_WRAPPER_INSTALL_PATH}: {e}"
+            ) from e
+
+    async def _ensure_plain_origin(self, repo: RepoEntry) -> bool:
         """Rewrite the `origin` remote to a credential-free HTTPS URL.
 
         Older workspaces/images (from before the credential-helper migration)
@@ -311,18 +408,19 @@ class SandboxSupervisor:
 
         Idempotent — safe to call on every boot.
         """
-        expected_url = self._build_repo_url()
+        expected_url = self._build_repo_url(repo)
         proc = await asyncio.create_subprocess_exec(
             "git",
             "remote",
             "set-url",
             "origin",
             expected_url,
-            cwd=self.repo_path,
+            cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await proc.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(proc)
         if proc.returncode != 0:
             self.log.error(
                 "git.set_url_failed",
@@ -332,7 +430,7 @@ class SandboxSupervisor:
             return False
         return True
 
-    async def _fetch_branch(self, branch: str) -> bool:
+    async def _fetch_branch(self, repo: RepoEntry, branch: str) -> bool:
         """Fetch a branch with an explicit refspec.
 
         Uses an explicit refspec so that ``refs/remotes/origin/<branch>`` is
@@ -343,11 +441,12 @@ class SandboxSupervisor:
             "fetch",
             "origin",
             f"{branch}:refs/remotes/origin/{branch}",
-            cwd=self.repo_path,
+            cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.error(
                 "git.fetch_error",
@@ -357,7 +456,7 @@ class SandboxSupervisor:
             return False
         return True
 
-    async def _checkout_branch(self, branch: str) -> bool:
+    async def _checkout_branch(self, repo: RepoEntry, branch: str) -> bool:
         """Create/reset a local branch to match the remote tip."""
         result = await asyncio.create_subprocess_exec(
             "git",
@@ -365,11 +464,12 @@ class SandboxSupervisor:
             "-B",
             branch,
             f"origin/{branch}",
-            cwd=self.repo_path,
+            cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.warn(
                 "git.checkout_error",
@@ -384,78 +484,268 @@ class SandboxSupervisor:
     # Git sync methods (compose the primitives above)
     # ------------------------------------------------------------------
 
-    async def _update_existing_repo(self) -> bool:
-        """Fetch the target branch and check it out in an existing repo.
+    async def _update_existing_repo(self, repo: RepoEntry) -> bool:
+        """Refresh an existing checkout without corrupting restored session state.
 
-        Used by both snapshot-restore and repo-image boot paths where the
-        repository already exists on disk.
+        A snapshot contains the session's HEAD, index, and worktree. Fetching
+        remote refs is safe there, but checkout/reset is not. Fresh clones and
+        explicitly initialized repository images still align to their requested
+        branch.
         """
-        if not self.has_repository:
-            self.log.info("git.update_skip", reason="no_repo_configured")
-            return True
-        if not self.repo_path.exists():
-            self.log.info("git.update_skip", reason="no_repo_path")
+        if not repo.path.exists():
+            self.log.info(
+                "git.update_skip",
+                reason="no_repo_path",
+                repo_owner=repo.owner,
+                repo_name=repo.name,
+            )
             return False
 
         try:
-            if not await self._ensure_plain_origin():
+            preserve_checkout = self.boot_mode == "snapshot_restore"
+            if preserve_checkout:
+                if not await self._ensure_plain_origin(repo):
+                    return False
+                return await self._fetch_branch(repo, repo.branch)
+            if not await self._ensure_plain_origin(repo):
                 return False
-            branch = self.base_branch
-            if not await self._fetch_branch(branch):
+            if not await self._fetch_branch(repo, repo.branch):
                 return False
-            return await self._checkout_branch(branch)
+            return await self._checkout_branch(repo, repo.branch)
         except Exception as e:
-            self.log.error("git.update_error", exc=e)
+            if preserve_checkout:
+                self.log.warn(
+                    "git.restore_refresh_error",
+                    exc=e,
+                    repo_owner=repo.owner,
+                    repo_name=repo.name,
+                )
+                return False
+            self.log.error("git.update_error", exc=e, repo_owner=repo.owner, repo_name=repo.name)
             return False
 
-    async def _get_head_sha(self) -> str:
-        """Return the HEAD SHA of the repo, or empty string on failure."""
-        if not self.repo_path.exists():
+    async def _get_head_sha(self, repo: RepoEntry) -> str:
+        """Return the HEAD SHA of a repo, or empty string on failure."""
+        if not repo.path.exists():
             return ""
         try:
             result = await asyncio.create_subprocess_exec(
                 "git",
                 "rev-parse",
                 "HEAD",
-                cwd=self.repo_path,
+                cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            stdout, _ = await result.communicate()
+            stdout, _ = await self._communicate_owned_subprocess(result)
             if result.returncode == 0:
                 return stdout.decode().strip()
         except Exception as e:
             self.log.warn("git.rev_parse_error", error=str(e))
         return ""
 
-    async def perform_git_sync(self) -> bool:
-        """Clone repository if needed, then sync to the target branch.
+    async def _sync_repo(self, repo: RepoEntry) -> bool:
+        """Sync one repository: update in place when present, clone when missing.
 
-        Returns:
-            True if sync completed successfully, False otherwise.
+        A fresh boot clones and aligns the requested branch. Snapshot restore
+        refreshes refs without switching or resetting the restored checkout.
         """
         self.log.debug(
             "git.sync_start",
-            repo_owner=self.repo_owner,
-            repo_name=self.repo_name,
-            repo_path=str(self.repo_path),
+            repo_owner=repo.owner,
+            repo_name=repo.name,
+            repo_path=str(repo.path),
         )
-
-        if not self.has_repository:
-            self.log.info("git.skip_clone", reason="no_repo_configured")
-            return True
-
-        if not self.repo_path.exists():
-            if not self.repo_owner or not self.repo_name:
-                self.log.info("git.skip_clone", reason="no_repo_configured")
-                return True
-            if not await self._clone_repo():
+        if not repo.path.exists():
+            if not await self._clone_repo(repo):
                 return False
+        return await self._update_existing_repo(repo)
 
-        return await self._update_existing_repo()
+    async def sync_repositories(self) -> list[RepoEntry]:
+        """Sync all repositories concurrently; returns the members that failed."""
+        if not self.repositories:
+            self.log.info("git.skip_clone", reason="no_repo_configured")
+            return []
 
-    def _install_tools(self, workdir: Path) -> None:
+        results = await asyncio.gather(*(self._sync_repo(repo) for repo in self.repositories))
+        return [repo for repo, ok in zip(self.repositories, results, strict=True) if not ok]
+
+    # ------------------------------------------------------------------
+    # Multi-repo workspace assembly
+    # ------------------------------------------------------------------
+
+    def _record_boot_warning(
+        self, *, scope: str, message: str, repo: RepoEntry | None = None
+    ) -> None:
+        """Queue a `warning` sandbox event for the bridge to forward on connect.
+
+        The supervisor has no control-plane event channel of its own (only the
+        fatal-error endpoint), and every boot warning happens before the
+        bridge exists — so warnings are appended to a file the bridge drains
+        after its WebSocket handshake.
+        """
+        entry: dict = {"scope": scope, "message": message}
+        if repo is not None:
+            entry["repoOwner"] = repo.owner
+            entry["repoName"] = repo.name
+        # `message` is a reserved LogRecord field — don't pass it as a log kwarg.
+        self.log.warn(
+            "supervisor.boot_warning",
+            scope=scope,
+            warning_message=message,
+            repo_owner=repo.owner if repo is not None else None,
+            repo_name=repo.name if repo is not None else None,
+        )
+        try:
+            with open(BOOT_WARNINGS_FILE_PATH, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            self.log.warn("supervisor.boot_warning_write_failed", exc=e)
+
+    def _opencode_workdir(self) -> Path:
+        """Root directory for OpenCode and code-server.
+
+        Single-repo sessions keep today's behavior (the repo itself when
+        cloned); multi-repo and repo-less sessions root at /workspace.
+        """
+        if (
+            len(self.repositories) == 1
+            and self.repo_path.exists()
+            and (self.repo_path / ".git").exists()
+        ):
+            return self.repo_path
+        return self.workspace_path
+
+    def _assemble_workspace_opencode(self) -> None:
+        """Merge member repos' .opencode/ into the workspace root (multi-repo only).
+
+        OpenCode discovers config relative to its cwd — /workspace for
+        multi-repo sessions — so per-repo custom tools/skills/commands would
+        never load. Files are copied in position order, last write wins with a
+        warning naming both members; the system tools installed afterwards
+        still override on filename collision (same as single-repo today).
+        """
+        if not self.is_multi_repo:
+            return
+
+        dest_root = self.workspace_path / ".opencode"
+        # The merged tree is generated state: rebuild it from scratch so
+        # entries removed from a member (or a removed member) don't survive
+        # snapshot/repo-image boots. System tools and staged deps are
+        # re-installed after assembly on every boot. node_modules is spared:
+        # assembly never writes into it (member node_modules are skipped), so
+        # it's purely image-managed — deleting it would force
+        # _stage_opencode_deps to re-copy the whole module tree on every
+        # snapshot restore instead of taking its skip-if-present fast path.
+        if dest_root.is_dir():
+            for child in dest_root.iterdir():
+                if child.name == "node_modules":
+                    continue
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+        provenance: dict[str, RepoEntry] = {}
+        for repo in self.repositories:
+            src_root = repo.path / ".opencode"
+            if not src_root.is_dir():
+                continue
+            for src in sorted(src_root.rglob("*")):
+                if not src.is_file():
+                    continue
+                rel = src.relative_to(src_root)
+                if any(part in ("node_modules", "__pycache__") for part in rel.parts):
+                    continue
+                prior = provenance.get(str(rel))
+                if prior is not None:
+                    self._record_boot_warning(
+                        scope="assembly",
+                        repo=repo,
+                        message=(
+                            f".opencode/{rel} from {prior.owner}/{prior.name} is overridden "
+                            f"by {repo.owner}/{repo.name} (later repositories win)"
+                        ),
+                    )
+                dest = dest_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                provenance[str(rel)] = repo
+
+        if provenance:
+            self.log.info(
+                "opencode.workspace_assembled",
+                file_count=len(provenance),
+                repo_count=len(self.repositories),
+            )
+
+    def _write_repo_manifest(self) -> None:
+        """Write the machine-readable repository manifest.
+
+        The bridge (push targeting) and the JS create-pull-request tool
+        resolve checkout paths through this file instead of re-deriving the
+        /workspace layout. Written before any child process starts and
+        rewritten on every boot so a snapshot never carries a stale member set.
+        """
+        try:
+            Path(REPO_MANIFEST_FILE_PATH).write_text(dump_repo_manifest(self.repositories))
+        except Exception as e:
+            self.log.warn("supervisor.repo_manifest_write_failed", exc=e)
+
+    def _write_workspace_manifest(self) -> None:
+        """Write the generated /workspace/AGENTS.md for multi-repo sessions.
+
+        Regenerated on every boot (restores included) so it always reflects
+        the session's member set; single-repo sessions are untouched.
+        """
+        if not self.is_multi_repo:
+            return
+
+        primary = self.repositories[0]
+        lines = [
+            "<!-- Generated by Open-Inspect on every boot. Do not edit. -->",
+            "",
+            "# Workspace",
+            "",
+            "This session spans multiple repositories, checked out side by side:",
+            "",
+            "| Path | Repository | Base branch |",
+            "| --- | --- | --- |",
+        ]
+        for repo in self.repositories:
+            lines.append(f"| `./{repo.name}/` | {repo.owner}/{repo.name} | `{repo.branch}` |")
+        lines.append("")
+
+        working_branch = str(self.session_config.get("working_branch_name") or "").strip()
+        if working_branch:
+            lines.append(f"All work happens on the branch `{working_branch}` in every repository.")
+            lines.append("")
+
+        member_docs = [repo for repo in self.repositories if (repo.path / "AGENTS.md").exists()]
+        if member_docs:
+            lines.append(
+                "Repository-specific instructions are NOT loaded automatically. "
+                "Read them before working in a repository:"
+            )
+            lines.append("")
+            lines.extend(f"- `./{repo.name}/AGENTS.md`" for repo in member_docs)
+            lines.append("")
+
+        lines.append(
+            "To open a pull request, call the `create-pull-request` tool once per repository "
+            f'with changes, passing its `repo` argument (e.g. `repo: "{primary.owner}/{primary.name}"`).'
+        )
+        lines.append("")
+
+        try:
+            (self.workspace_path / "AGENTS.md").write_text("\n".join(lines))
+            self.log.info("workspace.manifest_written", repo_count=len(self.repositories))
+        except Exception as e:
+            self.log.warn("workspace.manifest_write_failed", exc=e)
+
+    def _install_tools(self, workdir: Path) -> set[str]:
         """Copy custom tools into the .opencode/tool directory for OpenCode to discover."""
+        installed: set[str] = set()
         opencode_dir = workdir / ".opencode"
         tool_dest = opencode_dir / "tool"
 
@@ -466,12 +756,13 @@ class SandboxSupervisor:
 
         has_tools = legacy_tool.exists() or tools_dir.exists()
         if not has_tools:
-            return
+            return installed
 
         tool_dest.mkdir(parents=True, exist_ok=True)
 
         if legacy_tool.exists() and self.has_repository:
             shutil.copy(legacy_tool, tool_dest / "create-pull-request.js")
+            installed.add(".opencode/tool/create-pull-request.js")
 
         # Copy all .js files from tools/ — these must export tool() for OpenCode.
         # Tools listed in AGENT_TOOLS_GATED_ON_ENV are skipped unless their gate
@@ -486,20 +777,25 @@ class SandboxSupervisor:
                 if tool_file.name in AGENT_TOOLS_REQUIRING_REPOSITORY and not self.has_repository:
                     continue
                 shutil.copy(tool_file, tool_dest / tool_file.name)
+                installed.add(f".opencode/tool/{tool_file.name}")
 
         # Copy pre-built deps (package.json, package-lock.json, node_modules) from the image
         # staging directory so OpenCode's Npm.install() finds the tree in sync and skips the
         # arborist reify() that would otherwise block the first request.
         staged_at = time.monotonic()
-        self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+        installed.update(
+            f".opencode/{path}"
+            for path in self._stage_opencode_deps(Path("/app/opencode-deps"), opencode_dir)
+        )
         self.log.info(
             "opencode.repo_deps_staged",
             dir=str(opencode_dir),
             duration_ms=round((time.monotonic() - staged_at) * 1000),
         )
+        return installed
 
     @staticmethod
-    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> None:
+    def _stage_opencode_deps(deps_cache: Path, dest_dir: Path) -> set[str]:
         """Copy the pre-staged OpenCode plugin deps into dest_dir.
 
         Copies package.json, package-lock.json and node_modules from the image staging
@@ -508,15 +804,24 @@ class SandboxSupervisor:
         Npm.install() finds @opencode-ai/plugin in sync and skips the arborist reify() that
         would otherwise block the first request.
         """
+        installed: set[str] = set()
         for name in ("package.json", "package-lock.json"):
             src = deps_cache / name
             dest = dest_dir / name
             if src.exists() and not dest.exists():
                 shutil.copy2(src, dest)
+                installed.add(name)
+            elif src.is_file() and dest.is_file() and filecmp.cmp(src, dest, shallow=False):
+                installed.add(name)
         cached_modules = deps_cache / "node_modules"
         local_modules = dest_dir / "node_modules"
+        copied_modules = False
         if cached_modules.is_dir() and not local_modules.exists():
             shutil.copytree(cached_modules, local_modules, symlinks=True)
+            copied_modules = True
+        if copied_modules:
+            installed.add("node_modules/")
+        return installed
 
     @staticmethod
     def _resolve_opencode_global_config_dir() -> Path:
@@ -567,18 +872,21 @@ class SandboxSupervisor:
             duration_ms=round((time.monotonic() - seeded_at) * 1000),
         )
 
-    def _prepare_opencode_filesystem(self, workdir: Path) -> None:
+    def _prepare_opencode_filesystem(self, workdir: Path) -> set[str]:
         """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
 
         The global seed is best-effort (degrades to a slower reify); the rest fail fast.
         """
-        self._install_tools(workdir)
+        installed: set[str] = set()
+        self._assemble_workspace_opencode()
+        installed.update(self._install_tools(workdir))
         try:
             self._seed_global_opencode_deps()
         except Exception as e:
             self.log.warn("opencode.global_deps_seed_failed", exc=e)
-        self._install_skills(workdir)
+        installed.update(self._install_skills(workdir))
         self._install_bin_scripts()
+        return installed
 
     def _install_bin_scripts(self) -> None:
         """Install standalone CLI scripts into the sandbox bin directory.
@@ -591,20 +899,23 @@ class SandboxSupervisor:
         if not bin_dir.is_dir():
             return
 
+        install_dir = Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, DEFAULT_BIN_INSTALL_DIR))
+        install_dir.mkdir(parents=True, exist_ok=True)
         for script in bin_dir.iterdir():
-            if script.is_file() and script.suffix == ".js":
-                install_dir = Path(os.environ.get(BIN_INSTALL_DIR_ENV_VAR, "/usr/local/bin"))
-                install_dir.mkdir(parents=True, exist_ok=True)
-                dest = install_dir / script.stem
-                shutil.copy(script, dest)
-                dest.chmod(0o755)
-                self.log.info("bin.installed", script=script.stem)
+            if not script.is_file() or script.suffix not in {"", ".js"}:
+                continue
+            command_name = script.stem if script.suffix == ".js" else script.name
+            dest = install_dir / command_name
+            shutil.copy(script, dest)
+            dest.chmod(0o755)
+            self.log.info("bin.installed", script=command_name)
 
-    def _install_skills(self, workdir: Path) -> None:
+    def _install_skills(self, workdir: Path) -> set[str]:
         """Copy bundled Skills into the .opencode/skills directory."""
+        installed: set[str] = set()
         skills_dir = Path("/app/sandbox_runtime/skills")
         if not skills_dir.is_dir():
-            return
+            return installed
 
         skills_dest = workdir / ".opencode" / "skills"
         installed_any = False
@@ -623,47 +934,77 @@ class SandboxSupervisor:
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
                 symlinks=True,
             )
+            for source in skill_dir.rglob("*"):
+                relative = source.relative_to(skill_dir)
+                if any(part == "__pycache__" for part in relative.parts):
+                    continue
+                if source.name == ".DS_Store" or source.suffix == ".pyc":
+                    continue
+                if source.is_file() or source.is_symlink():
+                    installed.add((Path(".opencode/skills") / skill_dir.name / relative).as_posix())
             installed_any = True
 
         if installed_any:
             self.log.info("opencode.skills_installed", skills_path=str(skills_dest))
+        return installed
 
-    def _setup_openai_oauth(self) -> None:
-        """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
-        refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
-        if not refresh_token:
+    def _setup_managed_oauth(self) -> None:
+        """Write OpenCode OAuth sentinels for control-plane-managed providers."""
+        openai_managed = os.environ.get("OPENAI_OAUTH_MANAGED")
+        xai_managed = os.environ.get("XAI_OAUTH_MANAGED")
+        if not openai_managed and not xai_managed:
             return
 
         try:
             auth_dir = Path.home() / ".local" / "share" / "opencode"
             auth_dir.mkdir(parents=True, exist_ok=True)
 
-            openai_entry = {
+            oauth_entry = {
                 "type": "oauth",
                 "refresh": "managed-by-control-plane",
                 "access": "",
                 "expires": 0,
             }
-
-            account_id = os.environ.get("OPENAI_OAUTH_ACCOUNT_ID")
-            if account_id:
-                openai_entry["accountId"] = account_id
+            entries = {}
+            if openai_managed:
+                entries["openai"] = {**oauth_entry}
+            if xai_managed:
+                entries["xai"] = {**oauth_entry}
 
             auth_file = auth_dir / "auth.json"
             tmp_file = auth_dir / ".auth.json.tmp"
+
+            existing_entries = {}
+            if auth_file.exists():
+                try:
+                    existing = json.loads(auth_file.read_text())
+                    if isinstance(existing, dict):
+                        existing_entries = existing
+                except (OSError, json.JSONDecodeError):
+                    self.log.warn("managed_oauth.existing_auth_invalid")
+            existing_entries = {
+                key: value
+                for key, value in existing_entries.items()
+                if not (
+                    isinstance(value, dict)
+                    and value.get("refresh") == "managed-by-control-plane"
+                    and key not in entries
+                )
+            }
+            entries = {**existing_entries, **entries}
 
             # Write to a temp file created with 0o600 from the start, then
             # atomically rename so the target is never world-readable.
             fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
-                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+                os.write(fd, json.dumps(entries).encode())
             finally:
                 os.close(fd)
             tmp_file.replace(auth_file)
 
-            self.log.info("openai_oauth.setup")
+            self.log.info("managed_oauth.setup", providers=list(entries))
         except Exception as e:
-            self.log.warn("openai_oauth.setup_error", exc=e)
+            self.log.warn("managed_oauth.setup_error", exc=e)
 
     async def start_code_server(self) -> None:
         """Start code-server for browser-based VS Code editing."""
@@ -672,10 +1013,7 @@ class SandboxSupervisor:
             self.log.info("code_server.skip", reason="no_password")
             return
 
-        # Use repo path if cloned, otherwise /workspace
-        workdir = self.workspace_path
-        if self.repo_path.exists() and (self.repo_path / ".git").exists():
-            workdir = self.repo_path
+        workdir = self._opencode_workdir()
 
         code_server_port = _port_from_env(CODE_SERVER_PORT_ENV_VAR, CODE_SERVER_PORT)
         self.code_server_process = await asyncio.create_subprocess_exec(
@@ -690,21 +1028,50 @@ class SandboxSupervisor:
             env={**os.environ, "PASSWORD": password},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         asyncio.create_task(self._forward_code_server_logs())
         self.log.info("code_server.started", port=code_server_port)
 
+    async def _iter_process_lines(
+        self, stream: asyncio.StreamReader, *, error_event: str
+    ) -> AsyncIterator[str]:
+        """Yield decoded stdout lines from a child process, resiliently.
+
+        ``async for line in stream`` reads through ``StreamReader.readline``,
+        which raises (rather than returns) once a single line is larger than the
+        stream buffer and then ends iteration for good, silently dropping every
+        later line; an undecodable byte ends it just as permanently. This keeps
+        going instead — an oversized line becomes a truncation notice and bad
+        bytes are replaced — so forwarding survives for the life of the process.
+        """
+        while True:
+            try:
+                raw = await stream.readline()
+            except ValueError:
+                # Line exceeded the buffer limit. readline() has already dropped
+                # the offending bytes, so flag the gap and keep forwarding.
+                yield _TRUNCATED_LINE_NOTICE
+                continue
+            except Exception as e:
+                # An unexpected reader failure (e.g. a closed transport) is
+                # terminal for this stream — log once and stop.
+                self.log.warn(error_event, exc=e)
+                return
+            if not raw:
+                return  # EOF: the process closed its stdout.
+            yield raw.decode("utf-8", errors="replace").rstrip()
+
     async def _forward_code_server_logs(self) -> None:
         """Forward code-server stdout to supervisor stdout."""
         if not self.code_server_process or not self.code_server_process.stdout:
             return
-
-        try:
-            async for line in self.code_server_process.stdout:
-                self.log.info("code_server.stdout", line=line.decode().rstrip())
-        except Exception as e:
-            self.log.warn("code_server.log_forward_error", exc=e)
+        async for line in self._iter_process_lines(
+            self.code_server_process.stdout,
+            error_event="code_server.log_forward_error",
+        ):
+            self.log.info("code_server.stdout", line=line)
 
     def _resolve_mcp_servers(self) -> list[dict]:
         """Resolve MCP servers from session config."""
@@ -838,6 +1205,7 @@ class SandboxSupervisor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=os.environ.copy(),
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         asyncio.create_task(self._forward_ttyd_logs())
@@ -860,6 +1228,7 @@ class SandboxSupervisor:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=os.environ.copy(),
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         asyncio.create_task(self._forward_ttyd_proxy_logs())
@@ -869,23 +1238,21 @@ class SandboxSupervisor:
         """Forward ttyd stdout to supervisor stdout."""
         if not self.ttyd_process or not self.ttyd_process.stdout:
             return
-
-        try:
-            async for line in self.ttyd_process.stdout:
-                self.log.info("ttyd.stdout", line=line.decode().rstrip())
-        except Exception as e:
-            self.log.warn("ttyd.log_forward_error", exc=e)
+        async for line in self._iter_process_lines(
+            self.ttyd_process.stdout,
+            error_event="ttyd.log_forward_error",
+        ):
+            self.log.info("ttyd.stdout", line=line)
 
     async def _forward_ttyd_proxy_logs(self) -> None:
         """Forward ttyd proxy stdout to supervisor stdout."""
         if not self.ttyd_proxy_process or not self.ttyd_proxy_process.stdout:
             return
-
-        try:
-            async for line in self.ttyd_proxy_process.stdout:
-                self.log.info("ttyd_proxy.stdout", line=line.decode().rstrip())
-        except Exception as e:
-            self.log.warn("ttyd_proxy.log_forward_error", exc=e)
+        async for line in self._iter_process_lines(
+            self.ttyd_proxy_process.stdout,
+            error_event="ttyd_proxy.log_forward_error",
+        ):
+            self.log.info("ttyd_proxy.stdout", line=line)
 
     async def _wait_for_port(self, port: int, timeout_seconds: float | None = None) -> bool:
         timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
@@ -905,7 +1272,7 @@ class SandboxSupervisor:
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
-        self._setup_openai_oauth()
+        self._setup_managed_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
@@ -925,21 +1292,33 @@ class SandboxSupervisor:
                 opencode_config["mcp"] = mcp_config
                 self.log.info("mcp.configured", count=len(mcp_config))
 
-        # Determine working directory - use repo path if cloned, otherwise /workspace
-        workdir = self.workspace_path
-        if self.repo_path.exists() and (self.repo_path / ".git").exists():
-            workdir = self.repo_path
+        # Working directory: the repo for single-repo sessions, /workspace
+        # for multi-repo (every member visible) and repo-less sessions.
+        workdir = self._opencode_workdir()
 
-        self._prepare_opencode_filesystem(workdir)
+        installed_runtime_paths = self._prepare_opencode_filesystem(workdir)
 
-        # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
-        plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.js")
-        if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
+        managed_plugins = (
+            ("OPENAI_OAUTH_MANAGED", "codex-auth-plugin.js", "openai_oauth.plugin_deployed"),
+            ("XAI_OAUTH_MANAGED", "xai-auth-plugin.js", "xai_oauth.plugin_deployed"),
+        )
+        for marker, filename, log_event in managed_plugins:
+            plugin_source = Path(f"/app/sandbox_runtime/plugins/{filename}")
+            if not plugin_source.exists() or not os.environ.get(marker):
+                continue
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
-            self.log.info("openai_oauth.plugin_deployed")
+            shutil.copy(plugin_source, plugin_dir / filename)
+            installed_runtime_paths.add(f".opencode/plugins/{filename}")
+            self.log.info(log_event)
+
+        if installed_runtime_paths and (workdir / ".git").exists():
+            try:
+                install_runtime_git_excludes(workdir, installed_runtime_paths)
+            except Exception as error:
+                self.log.warn("opencode.git_excludes_failed", exc=error)
 
         env = {
             **os.environ,
@@ -965,6 +1344,7 @@ class SandboxSupervisor:
             env=env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         # Start log forwarder
@@ -979,12 +1359,11 @@ class SandboxSupervisor:
         """Forward OpenCode stdout to supervisor stdout."""
         if not self.opencode_process or not self.opencode_process.stdout:
             return
-
-        try:
-            async for line in self.opencode_process.stdout:
-                print(f"[opencode] {line.decode().rstrip()}")
-        except Exception as e:
-            print(f"[supervisor] Log forwarding error: {e}")
+        async for line in self._iter_process_lines(
+            self.opencode_process.stdout,
+            error_event="opencode.log_forward_error",
+        ):
+            print(f"[opencode] {line}")
 
     async def _wait_for_health(self) -> None:
         """Poll health endpoint until server is ready."""
@@ -1044,6 +1423,7 @@ class SandboxSupervisor:
             env=os.environ,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
         )
 
         # Start log forwarder for bridge
@@ -1069,13 +1449,12 @@ class SandboxSupervisor:
         """Forward bridge stdout to supervisor stdout."""
         if not self.bridge_process or not self.bridge_process.stdout:
             return
-
-        try:
-            async for line in self.bridge_process.stdout:
-                # Bridge already prefixes its output with [bridge], don't double it
-                print(line.decode().rstrip())
-        except Exception as e:
-            print(f"[supervisor] Bridge log forwarding error: {e}")
+        # Bridge already prefixes its output with [bridge], so forward verbatim.
+        async for line in self._iter_process_lines(
+            self.bridge_process.stdout,
+            error_event="bridge.log_forward_error",
+        ):
+            print(line)
 
     async def monitor_processes(self) -> None:
         """Monitor child processes and restart on crash."""
@@ -1256,18 +1635,19 @@ class SandboxSupervisor:
     async def _run_hook(
         self,
         *,
+        repo: RepoEntry,
         hook_name: str,
         relative_script_path: str,
         timeout_env_var: str,
         default_timeout_seconds: int,
     ) -> bool:
         """
-        Run a repo hook script if present.
+        Run one repository's hook script if present.
 
         Returns:
             True if script succeeded or was not present, False on failure/timeout.
         """
-        script_path = self.repo_path / relative_script_path
+        script_path = repo.path / relative_script_path
         start_time = time.time()
 
         if not script_path.exists():
@@ -1287,6 +1667,8 @@ class SandboxSupervisor:
         self.log.info(
             f"{hook_name}.start",
             script=str(script_path),
+            repo_owner=repo.owner,
+            repo_name=repo.name,
             timeout_seconds=timeout_seconds,
             boot_mode=self.boot_mode,
         )
@@ -1295,28 +1677,33 @@ class SandboxSupervisor:
             process = await asyncio.create_subprocess_exec(
                 "bash",
                 str(script_path),
-                cwd=self.repo_path,
+                cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._hook_env(),
+                start_new_session=True,
             )
 
             try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+                stdout, _ = await asyncio.wait_for(
+                    self._communicate_owned_subprocess(process),
+                    timeout=timeout_seconds,
+                )
             except TimeoutError:
-                process.kill()
+                if process.returncode is None:
+                    await self._terminate_owned_subprocess(process)
                 stdout = await process.stdout.read() if process.stdout else b""
-                await process.wait()
                 output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 duration_ms = int((time.time() - start_time) * 1000)
-                self.log.error(
-                    f"{hook_name}.timeout",
-                    timeout_seconds=timeout_seconds,
-                    output_tail=output_tail,
-                    script=str(script_path),
-                    duration_ms=duration_ms,
-                    boot_mode=self.boot_mode,
-                )
+                timeout_fields: dict[str, object] = {
+                    "timeout_seconds": timeout_seconds,
+                    "script": str(script_path),
+                    "duration_ms": duration_ms,
+                    "boot_mode": self.boot_mode,
+                }
+                if self.boot_mode != "build":
+                    timeout_fields["output_tail"] = output_tail
+                self.log.error(f"{hook_name}.timeout", **timeout_fields)
                 return False
 
             output_tail = "\n".join(
@@ -1335,14 +1722,15 @@ class SandboxSupervisor:
                 )
                 return True
 
-            self.log.error(
-                f"{hook_name}.failed",
-                exit_code=process.returncode,
-                output_tail=output_tail,
-                script=str(script_path),
-                duration_ms=duration_ms,
-                boot_mode=self.boot_mode,
-            )
+            failure_fields: dict[str, object] = {
+                "exit_code": process.returncode,
+                "script": str(script_path),
+                "duration_ms": duration_ms,
+                "boot_mode": self.boot_mode,
+            }
+            if self.boot_mode != "build":
+                failure_fields["output_tail"] = output_tail
+            self.log.error(f"{hook_name}.failed", **failure_fields)
             return False
 
         except Exception as e:
@@ -1356,31 +1744,36 @@ class SandboxSupervisor:
             )
             return False
 
-    async def run_setup_script(self) -> bool:
+    async def run_setup_script(self, repo: RepoEntry) -> bool:
         """
-        Run .openinspect/setup.sh if it exists in the cloned repo.
+        Run one repository's .openinspect/setup.sh if it exists.
 
-        Fresh-session failures are non-fatal. Build mode callers may treat
-        failures as fatal.
+        Fatality is the caller's (run()) decision: build boots fail on any
+        member, fresh boots warn and continue.
 
         Returns:
             True if script succeeded or was not present, False on failure/timeout.
         """
         return await self._run_hook(
+            repo=repo,
             hook_name="setup",
             relative_script_path=self.SETUP_SCRIPT_PATH,
             timeout_env_var="SETUP_TIMEOUT_SECONDS",
             default_timeout_seconds=self.DEFAULT_SETUP_TIMEOUT_SECONDS,
         )
 
-    async def run_start_script(self) -> bool:
+    async def run_start_script(self, repo: RepoEntry) -> bool:
         """
-        Run .openinspect/start.sh if it exists in the repository.
+        Run one repository's .openinspect/start.sh if it exists.
+
+        Fatality is the caller's (run()) decision: the primary stays fatal,
+        secondaries warn and continue.
 
         Returns:
             True if script succeeded or was not present, False on failure/timeout.
         """
         return await self._run_hook(
+            repo=repo,
             hook_name="start",
             relative_script_path=self.START_SCRIPT_PATH,
             timeout_env_var="START_TIMEOUT_SECONDS",
@@ -1404,8 +1797,27 @@ class SandboxSupervisor:
         return ports
 
     def _clear_stale_tunnel_env_file(self) -> None:
-        """Remove any pre-existing tunnel env file inherited from a snapshot."""
+        """Remove a tunnel env file left behind by a previous sandbox.
+
+        Presence alone doesn't mean stale: the manager's write only needs the
+        container agent, so it can land before this entrypoint runs. A file
+        tagged with our own SANDBOX_ID is that fresh write and must survive;
+        anything else (snapshot/image leftover with dead URLs, or untagged) is
+        cleared so `_wait_for_tunnel_env_file` blocks until fresh URLs arrive.
+        """
         path = Path(TUNNEL_ENV_FILE_PATH)
+        # exists() follows symlinks, so a dangling symlink reads as absent —
+        # but it must still be cleared or it can break the manager's write.
+        if not path.exists() and not path.is_symlink():
+            return
+        if self.sandbox_id and self.sandbox_id != "unknown":
+            try:
+                own_marker = f"{TUNNEL_ENV_SANDBOX_ID_KEY}={self.sandbox_id}"
+                if own_marker in path.read_text().splitlines():
+                    self.log.info("tunnel.fresh_file_kept", path=str(path))
+                    return
+            except Exception as e:
+                self.log.warn("tunnel.stale_check_read_failed", path=str(path), exc=e)
         try:
             path.unlink(missing_ok=True)
             self.log.info("tunnel.stale_file_cleared", path=str(path))
@@ -1460,7 +1872,154 @@ class SandboxSupervisor:
         )
         return False
 
-    async def run(self) -> None:
+    def _image_build_execution_timeout_seconds(self) -> int | None:
+        """Return the positive clone/setup budget configured for build mode."""
+        raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
+        if not raw_timeout:
+            return None
+        try:
+            timeout_seconds = int(raw_timeout)
+        except ValueError as error:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            ) from error
+        if timeout_seconds <= 0:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            )
+        return timeout_seconds
+
+    async def _run_repository_boot(self, expected_tunnel_ports: list[int]) -> RepositoryBootResult:
+        """Synchronize repositories and run the hooks for the current boot mode."""
+        if self.repo_config_error:
+            raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
+
+        self._write_repo_manifest()
+
+        if self.repositories:
+            await self._ensure_credential_helper_configured()
+
+        failed_repos = await self.sync_repositories()
+        git_sync_success = not failed_repos
+        if failed_repos:
+            if self.boot_mode in ("fresh", "build"):
+                failed_names = ", ".join(f"{repo.owner}/{repo.name}" for repo in failed_repos)
+                raise RuntimeError(f"git sync failed for {failed_names}")
+            for repo in failed_repos:
+                self._record_boot_warning(
+                    scope="sync",
+                    repo=repo,
+                    message=(
+                        f"Could not update {repo.owner}/{repo.name} from origin; "
+                        "the checkout may be stale."
+                    ),
+                )
+        self.repositories = await resolve_session_diff_baselines(
+            self.repositories,
+            discover_missing=self.boot_mode != "snapshot_restore",
+            get_head_sha=self._get_head_sha,
+        )
+        self._write_repo_manifest()
+
+        head_sha = ""
+        repository_shas: list[dict[str, str]] = []
+        if self.boot_mode == "build" and git_sync_success and self.repositories:
+            repository_shas = [
+                {
+                    "repoOwner": repo.owner,
+                    "repoName": repo.name,
+                    "baseSha": repo.base_sha or "",
+                }
+                for repo in self.repositories
+            ]
+            head_sha = repository_shas[0]["baseSha"]
+            if head_sha:
+                self.log.info(
+                    "git.sync_complete",
+                    head_sha=head_sha,
+                    repository_shas=repository_shas,
+                )
+        self.git_sync_complete.set()
+
+        setup_success: bool | None = None
+        if self.repositories and self.boot_mode in ("fresh", "build"):
+            setup_success = True
+            for repo in self.repositories:
+                if await self.run_setup_script(repo):
+                    continue
+                setup_success = False
+                if self.boot_mode == "build":
+                    raise RuntimeError(
+                        f"setup hook failed for {repo.owner}/{repo.name} in build mode"
+                    )
+                self._record_boot_warning(
+                    scope="setup",
+                    repo=repo,
+                    message=(
+                        f"setup.sh failed for {repo.owner}/{repo.name}; "
+                        "the session continues without it."
+                    ),
+                )
+
+        start_success: bool | None = None
+        if self.repositories and self.boot_mode != "build":
+            await self._wait_for_tunnel_env_file(expected_tunnel_ports)
+            start_success = True
+            for index, repo in enumerate(self.repositories):
+                if await self.run_start_script(repo):
+                    continue
+                start_success = False
+                if index == 0:
+                    raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
+                self._record_boot_warning(
+                    scope="start",
+                    repo=repo,
+                    message=(
+                        f"start.sh failed for {repo.owner}/{repo.name}; "
+                        "the session continues without it."
+                    ),
+                )
+
+        self._write_workspace_manifest()
+        return RepositoryBootResult(
+            git_sync_success=git_sync_success,
+            repository_shas=repository_shas,
+            setup_success=setup_success,
+            start_success=start_success,
+        )
+
+    async def _run_image_build_execution(
+        self, expected_tunnel_ports: list[int]
+    ) -> RepositoryBootResult:
+        """Run only clone and setup work inside the configured build budget."""
+        timeout_seconds = self._image_build_execution_timeout_seconds()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await self._run_until_shutdown(
+                    self._run_repository_boot(expected_tunnel_ports)
+                )
+        except TimeoutError as error:
+            raise RuntimeError(
+                f"image build exceeded its {timeout_seconds}-second execution timeout"
+            ) from error
+
+    async def _run_until_shutdown(self, operation: Awaitable[_ResultT]) -> _ResultT:
+        """Cancel one lifecycle operation when a handled shutdown signal wins."""
+        operation_task = asyncio.ensure_future(operation)
+        shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+        tasks = {operation_task, shutdown_task}
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if operation_task in done:
+                return operation_task.result()
+            raise ImageBuildExecutionCancelled
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
         """Main supervisor loop."""
         startup_start = time.time()
 
@@ -1496,9 +2055,8 @@ class SandboxSupervisor:
         elif from_repo_image:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
-        repo_image_callback = (
-            RepoImageBuildCallback.from_env(self.log) if image_build_mode else None
-        )
+        if image_build_mode and repo_image_callback is None:
+            repo_image_callback = RepoImageBuildCallback.from_env(self.log)
 
         # Clear stale tunnel file on every restore: a snapshot taken with
         # tunnels configured retains the previous session's URLs even if this
@@ -1507,72 +2065,39 @@ class SandboxSupervisor:
         if restored_from_snapshot or expected_tunnel_ports:
             self._clear_stale_tunnel_env_file()
 
-        # Set up signal handlers
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
+        # Boot warnings are per-boot; a snapshot can carry the previous
+        # boot's file, so always start clean.
+        Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
 
-        git_sync_success = False
-        head_sha = ""
         opencode_ready = False
         try:
-            # Phase 0: Make sure the git credential helper is configured
-            # before any git operation. New images do this in /etc/gitconfig,
-            # but snapshots/repo-images built before this migration won't.
-            if self.has_repository:
-                await self._ensure_credential_helper_configured()
-
-            # Phase 1: Git sync
-            if restored_from_snapshot:
-                git_sync_success = await self._update_existing_repo()
-                if not git_sync_success:
-                    self.log.warn(
-                        "git.snapshot_resync_failed",
-                        reason="origin rewrite or fetch failed; repo may be stale",
-                    )
-            elif from_repo_image:
-                git_sync_success = await self._update_existing_repo()
-            else:
-                git_sync_success = await self.perform_git_sync()
-            if image_build_mode and git_sync_success:
-                head_sha = await self._get_head_sha()
-                if head_sha:
-                    self.log.info("git.sync_complete", head_sha=head_sha)
-            self.git_sync_complete.set()
-
-            # Phase 2: Run setup script only for fresh or build boots.
-            setup_success: bool | None = None
-            if self.has_repository and self.boot_mode in ("fresh", "build"):
-                setup_success = await self.run_setup_script()
-                if image_build_mode and not setup_success:
-                    raise RuntimeError("setup hook failed in build mode")
-
-            # Phase 3: Run runtime start hook for all non-build boots. Wait for
-            # tunnel URLs first so dev servers booted by start.sh see fresh data.
-            start_success: bool | None = None
-            if self.has_repository and self.boot_mode != "build":
-                await self._wait_for_tunnel_env_file(expected_tunnel_ports)
-                start_success = await self.run_start_script()
-                if not start_success:
-                    raise RuntimeError("start hook failed")
-            else:
-                start_success = None
-
-            # Image build mode: signal completion then keep sandbox alive for
-            # snapshot_filesystem(). MCP packages are not pre-installed during
-            # builds — they are installed at first use via npx at session start.
             if image_build_mode:
+                boot_result = await self._run_image_build_execution(expected_tunnel_ports)
+                if self.shutdown_event.is_set():
+                    raise ImageBuildExecutionCancelled
                 duration_ms = int((time.time() - startup_start) * 1000)
-                self.log.info("image_build.complete", duration_ms=duration_ms)
+                runtime_version = os.environ.get("SANDBOX_VERSION", "")
+                self.log.info(
+                    "image_build.complete",
+                    duration_ms=duration_ms,
+                    runtime_version=runtime_version,
+                )
                 if repo_image_callback:
-                    reported = await repo_image_callback.report_success(
-                        base_sha=head_sha,
-                        build_duration_seconds=time.time() - startup_start,
+                    reported = await self._run_until_shutdown(
+                        repo_image_callback.report_success(
+                            build_duration_seconds=time.time() - startup_start,
+                            repository_shas=boot_result.repository_shas,
+                            runtime_version=runtime_version,
+                        )
                     )
                     if not reported:
                         raise RuntimeError("repo image build-complete callback failed")
+                # The sandbox remains available for deferred provider
+                # finalization after the bounded build execution completes.
                 await self.shutdown_event.wait()
-                return
+                return True
+
+            boot_result = await self._run_repository_boot(expected_tunnel_ports)
 
             # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
             for sidecar_name, starter in (
@@ -1611,9 +2136,9 @@ class SandboxSupervisor:
                 boot_mode=self.boot_mode,
                 restored_from_snapshot=restored_from_snapshot,
                 from_repo_image=from_repo_image,
-                git_sync_success=git_sync_success,
-                setup_success=setup_success,
-                start_success=start_success,
+                git_sync_success=boot_result.git_sync_success,
+                setup_success=boot_result.setup_success,
+                start_success=boot_result.start_success,
                 opencode_ready=opencode_ready,
                 duration_ms=duration_ms,
                 outcome="success",
@@ -1622,17 +2147,30 @@ class SandboxSupervisor:
             # Phase 6: Monitor processes
             await self.monitor_processes()
 
+        except ImageBuildExecutionCancelled:
+            self.log.info("image_build.cancelled", reason="shutdown_requested")
+            return True
         except Exception as e:
             self.log.error("supervisor.error", exc=e)
+            if image_build_mode and self.shutdown_event.is_set():
+                self.log.info("image_build.cancelled", reason="shutdown_requested")
+                return True
             if image_build_mode and repo_image_callback:
-                await repo_image_callback.report_failure(str(e))
+                try:
+                    await self._run_until_shutdown(repo_image_callback.report_failure(str(e)))
+                except ImageBuildExecutionCancelled:
+                    self.log.info("image_build.cancelled", reason="shutdown_requested")
+                    return True
             await self._report_fatal_error(str(e))
+            return False
 
         finally:
             await self.shutdown()
 
-    async def _handle_signal(self, sig: signal.Signals) -> None:
-        """Handle shutdown signal."""
+        return True
+
+    def request_shutdown(self, sig: signal.Signals) -> None:
+        """Record a process shutdown signal for the current lifecycle phase."""
         self.log.info("supervisor.signal", signal_name=sig.name)
         self.shutdown_event.set()
 
@@ -1689,11 +2227,32 @@ class SandboxSupervisor:
         self.log.info("supervisor.shutdown_complete")
 
 
-async def main():
-    """Entry point for the sandbox supervisor."""
-    supervisor = SandboxSupervisor()
-    await supervisor.run()
+def install_signal_handlers(supervisor: SandboxSupervisor) -> None:
+    """Route process signals to the one supervisor-owned shutdown event."""
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, supervisor.request_shutdown, sig)
+
+
+async def main(argv: list[str] | None = None) -> int:
+    """Run an interactive supervisor or a gated provider-session image build."""
+    parser = argparse.ArgumentParser(description="Open-Inspect sandbox supervisor")
+    parser.add_argument(
+        MODAL_IMAGE_BUILD_START_ARGUMENT,
+        dest="await_modal_image_build_token",
+        action="store_true",
+    )
+    args = parser.parse_args(argv)
+
+    shutdown_event = asyncio.Event()
+    supervisor = SandboxSupervisor(shutdown_event=shutdown_event)
+    install_signal_handlers(supervisor)
+
+    if not args.await_modal_image_build_token:
+        await supervisor.run()
+        return 0
+    return await run_modal_image_build(supervisor)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

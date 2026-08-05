@@ -1,53 +1,16 @@
 /**
  * Condition system for trigger-based automations.
  *
- * Each condition type's shape is defined once in ConditionConfigMap.
- * TypeScript derives the discriminated union and typed handler interfaces from it.
+ * TypeScript derives typed handler interfaces from the trigger configuration
+ * shapes, while this module owns runtime validation and evaluation.
  */
 
-import type { AutomationEvent, AutomationEventSource } from "./types";
-
-// ─── 1. ConditionConfigMap: single source of truth ───────────────────────────
-
-export interface ConditionConfigMap {
-  branch: { operator: "glob_match" | "exact"; value: string[] };
-  target_branch: { operator: "glob_match" | "exact"; value: string[] };
-  label: { operator: "any_of" | "none_of"; value: string[] };
-  path_glob: { operator: "any_match"; value: string[] };
-  actor: { operator: "include" | "exclude"; value: string[] };
-  check_conclusion: { operator: "eq"; value: string };
-  linear_status: { operator: "any_of"; value: string[] };
-  sentry_project: { operator: "any_of"; value: string[] };
-  sentry_level: { operator: "any_of"; value: string[] };
-  jsonpath: { operator: "all_match"; value: JsonPathFilter[] };
-  text_match: { operator: "contains" | "exact" | "regex"; value: TextMatchValue };
-  slack_channel: { operator: "any_of"; value: string[] };
-  slack_actor: { operator: "include" | "exclude"; value: string[] };
-}
-
-export interface JsonPathFilter {
-  path: string;
-  comparison: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
-  value?: string | number | boolean;
-}
-
-/** Value shape for the `text_match` condition (keyword / substring / regex). */
-export interface TextMatchValue {
-  /** Keyword/substring (contains/exact) or regular-expression source (regex). */
-  pattern: string;
-  /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
-  flags?: string;
-}
-
-// ─── 2. Derived discriminated union ──────────────────────────────────────────
-
-export type TriggerCondition = {
-  [K in keyof ConditionConfigMap]: { type: K } & ConditionConfigMap[K];
-}[keyof ConditionConfigMap];
-
-// ─── 3. Typed handler interface ──────────────────────────────────────────────
-
-export type ConditionType = keyof ConditionConfigMap;
+import type {
+  AutomationEvent,
+  AutomationEventSource,
+  ConditionType,
+  TriggerCondition,
+} from "./types";
 
 type ConditionOf<K extends ConditionType> = Extract<TriggerCondition, { type: K }>;
 
@@ -62,13 +25,13 @@ export interface ConditionHandler<K extends ConditionType> {
   appliesTo: AutomationEventSource[];
 }
 
-// ─── 4. Typed registry ───────────────────────────────────────────────────────
+// ─── Typed Registry ──────────────────────────────────────────────────────────
 
 export type ConditionRegistry = {
   [K in ConditionType]: ConditionHandler<K>;
 };
 
-// ─── 5. Dispatch ─────────────────────────────────────────────────────────────
+// ─── Dispatch ────────────────────────────────────────────────────────────────
 
 export function matchesConditions(
   conditions: TriggerCondition[],
@@ -81,7 +44,7 @@ export function matchesConditions(
   });
 }
 
-// ─── 6. Validation (called at automation creation time) ──────────────────────
+// ─── Validation (called at automation creation time) ────────────────────────
 
 export function validateConditions(
   conditions: TriggerCondition[],
@@ -99,10 +62,4 @@ export function validateConditions(
     if (err) errors.push(err);
   }
   return errors;
-}
-
-// ─── 7. TriggerConfig (stored as JSON in D1) ────────────────────────────────
-
-export interface TriggerConfig {
-  conditions: TriggerCondition[];
 }

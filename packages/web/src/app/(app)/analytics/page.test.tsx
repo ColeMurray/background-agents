@@ -9,7 +9,7 @@ import type {
   AnalyticsBreakdownResponse,
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/analytics";
 import AnalyticsPage from "./page";
 
 expect.extend(matchers);

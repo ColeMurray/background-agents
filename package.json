@@ -8,14 +8,16 @@
   ],
   "scripts": {
     "lint": "eslint .",
+    "lint:complexity": "node scripts/lint-complexity.mjs",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run test --workspaces --if-present",
+    "test:lint-complexity": "node --test scripts/lint-complexity-message.test.mjs",
     "test:coverage": "npm run test:coverage --workspaces --if-present",
     "test:integration": "npm run test:integration --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
+    "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
     "build:opencomputer-template": "npm run build-template -w @open-inspect/opencomputer-infra --",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },
