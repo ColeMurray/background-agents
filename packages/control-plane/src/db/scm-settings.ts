@@ -68,7 +68,7 @@ export class ScmSettingsStore {
         throw new ScmSettingsValidationError(`Unknown SCM global setting: ${key}`);
       }
     }
-    if (config.defaults) {
+    if (config.defaults !== undefined) {
       validateScmSettings(config.defaults);
     }
     await this.store.setGlobal(SCM_SETTINGS_KEY, config);

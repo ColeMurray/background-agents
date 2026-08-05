@@ -100,6 +100,14 @@ describe("ScmSettingsStore", () => {
     expect(delegate.setRepoSettings).not.toHaveBeenCalled();
   });
 
+  it.each([null, false])("rejects provided falsy global defaults: %j", async (defaults) => {
+    await expect(store.setGlobal({ defaults } as unknown as ScmGlobalConfig)).rejects.toThrow(
+      ScmSettingsValidationError
+    );
+
+    expect(delegate.setGlobal).not.toHaveBeenCalled();
+  });
+
   it("resolves a repo's effective settings from the underlying merged config", async () => {
     delegate.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
