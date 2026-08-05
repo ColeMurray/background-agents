@@ -50,9 +50,11 @@ function TaskDisclosure({ label, content }: { label: string; content: string }) 
 
 export function TaskActivityItem({
   event,
+  hasActivity,
   children,
 }: {
   event: ToolCallEvent;
+  hasActivity: boolean;
   children: ReactNode;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
@@ -61,7 +63,6 @@ export function TaskActivityItem({
   const agent = stringArg(event, "subagent_type");
   const taskId = stringArg(event, "task_id");
   const result = cleanTaskResult(event.output);
-
   return (
     <div className="py-0.5">
       <button
@@ -92,12 +93,14 @@ export function TaskActivityItem({
               {taskId && <span>Task ID: {taskId}</span>}
             </div>
           )}
-          <div className="border-l-2 border-border pl-3 py-1 space-y-1">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
-              Task activity
+          {hasActivity && (
+            <div className="border-l-2 border-border pl-3 py-1 space-y-1">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
+                Task activity
+              </div>
+              {children}
             </div>
-            {children}
-          </div>
+          )}
           {prompt && <TaskDisclosure label="Instructions" content={prompt} />}
           {result && <TaskDisclosure label="Result" content={result} />}
         </div>

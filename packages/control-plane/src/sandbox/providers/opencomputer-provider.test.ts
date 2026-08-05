@@ -335,17 +335,20 @@ describe("OpenComputerSandboxProvider", () => {
       codeServerPasswordSecret: "secret",
     });
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "build-bb",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
       callbackUrl: "https://control.example/image-builds/build-complete",
       failureCallbackUrl: "https://control.example/image-builds/build-failed",
       callbackToken: "callback-token",
       buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
       cloneToken: "clone-token",
       userEnvVars: {},
       onProviderSessionCreated: vi.fn(async () => undefined),
+      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     expect(client.createSandbox).toHaveBeenCalledWith(
@@ -663,9 +666,10 @@ describe("OpenComputerSandboxProvider", () => {
       llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
     });
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "build-1",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
       callbackUrl: "https://control.example/image-builds/build-complete",
       failureCallbackUrl: "https://control.example/image-builds/build-failed",
@@ -679,7 +683,9 @@ describe("OpenComputerSandboxProvider", () => {
         OI_REPO_IMAGE_CALLBACK_SECRET: "legacy-user-controlled",
         OI_IMAGE_BUILD_EXECUTION_TIMEOUT_SECONDS: "99999",
       },
+      providerSessionTimeoutSeconds: 2400,
       onProviderSessionCreated,
+      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     expect(client.createSandbox).toHaveBeenCalledWith(
@@ -732,9 +738,10 @@ describe("OpenComputerSandboxProvider", () => {
       codeServerPasswordSecret: "secret",
     });
 
-    await provider.triggerEnvironmentImageBuild({
+    await provider.triggerImageBuild({
       buildId: "envimg-1",
-      environmentId: "env_flagship",
+      scopeKind: "environment",
+      scopeId: "env_flagship",
       repositories: [
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
@@ -743,8 +750,10 @@ describe("OpenComputerSandboxProvider", () => {
       failureCallbackUrl: "https://control.example/environment-images/build-failed",
       callbackToken: "callback-token",
       buildExecutionTimeoutSeconds: 1800,
+      providerSessionTimeoutSeconds: 2400,
       cloneToken: "clone-token",
       onProviderSessionCreated,
+      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -789,14 +798,18 @@ describe("OpenComputerSandboxProvider", () => {
     });
 
     await expect(
-      provider.triggerEnvironmentImageBuild({
+      provider.triggerImageBuild({
         buildId: "build-1",
-        environmentId: "env_flagship",
+        scopeKind: "environment",
+        scopeId: "env_flagship",
         repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "main" }],
         callbackUrl: "https://control.example/image-builds/build-complete",
         failureCallbackUrl: "https://control.example/image-builds/build-failed",
         callbackToken: "callback-token",
         buildExecutionTimeoutSeconds: 1800,
+        providerSessionTimeoutSeconds: 2400,
+        onProviderSessionCreated: vi.fn(async () => undefined),
+        correlation: { trace_id: "trace-1", request_id: "request-1" },
       })
     ).rejects.toThrow("Failed to trigger OpenComputer environment image build");
 

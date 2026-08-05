@@ -368,7 +368,6 @@ class TestImageBuildMode:
             await supervisor.run()
 
         callback.report_success.assert_awaited_once_with(
-            base_sha="abc123def456",
             build_duration_seconds=ANY,
             repository_shas=[
                 {"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}
@@ -395,6 +394,43 @@ class TestImageBuildMode:
         from_env.assert_not_called()
         callback.report_success.assert_awaited_once()
         callback.report_failure.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_partial_callback_configuration_aborts_build(self, build_env, monkeypatch):
+        """Partial callback env aborts the build instead of silently disabling reporting."""
+        from sandbox_runtime.repo_image_callback import (
+            BUILD_ID_ENV,
+            CALLBACK_TOKEN_ENV,
+            CALLBACK_URL_ENV,
+            FAILURE_CALLBACK_URL_ENV,
+            PROVIDER_SESSION_ID_ENV,
+            RepoImageCallbackMisconfigured,
+        )
+
+        supervisor = _make_supervisor(build_env)
+        supervisor.sync_repositories = AsyncMock(return_value=[])
+        supervisor.run_setup_script = AsyncMock(return_value=True)
+        supervisor.shutdown = AsyncMock()
+
+        partial_env = {
+            **build_env,
+            BUILD_ID_ENV: "build-1",
+            CALLBACK_URL_ENV: "https://cp.test/image-builds/build-complete",
+            FAILURE_CALLBACK_URL_ENV: "https://cp.test/image-builds/build-failed",
+            CALLBACK_TOKEN_ENV: "callback-token",
+        }
+        monkeypatch.delenv(PROVIDER_SESSION_ID_ENV, raising=False)
+
+        # The raise propagates out of run() (a nonzero exit for the build
+        # process) — a completed build must never sit waiting on a shutdown
+        # signal with no way to report completion.
+        with (
+            patch.dict(os.environ, partial_env, clear=False),
+            pytest.raises(RepoImageCallbackMisconfigured),
+        ):
+            await supervisor.run()
+
+        supervisor.sync_repositories.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_reports_failure_callback_from_build_mode(self, build_env):
