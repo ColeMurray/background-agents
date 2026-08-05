@@ -52,6 +52,7 @@ describe("sessions API route", () => {
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     await expect(response.json()).resolves.toEqual({ sessions: [], hasMore: false });
   });
 

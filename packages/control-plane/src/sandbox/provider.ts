@@ -5,12 +5,45 @@
  * enabling unit testing and future provider support.
  */
 
+import type { ImageBuildScopeKind } from "@open-inspect/shared/types/image-builds";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { CorrelationContext } from "../logger";
 import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 
 /** Default sandbox lifetime in seconds (2 hours). */
 export const DEFAULT_SANDBOX_TIMEOUT_SECONDS = 7200;
+
+/**
+ * Provider-neutral configuration for triggering an image build inside a
+ * provider session. Every supported provider follows the same
+ * create-bind-launch contract: create the build sandbox, bind its provider
+ * session id via `onProviderSessionCreated`, then launch the build runtime.
+ * Providers that need extra fields extend this type (see
+ * ModalImageBuildTriggerConfig).
+ */
+export interface ImageBuildProviderTriggerConfig {
+  buildId: string;
+  scopeKind: ImageBuildScopeKind;
+  /** Build scope id; used only for sandbox naming/labels. */
+  scopeId: string;
+  /** Repositories in position order ([0] = primary), cloned at their base branches. */
+  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
+  callbackUrl: string;
+  failureCallbackUrl: string;
+  callbackToken: string;
+  userEnvVars?: Record<string, string>;
+  cloneToken?: string;
+  buildExecutionTimeoutSeconds: number;
+  /**
+   * Provider-session lifetime in seconds, including deferred finalization
+   * headroom. Always resolved by the adapter layer
+   * (resolveImageBuildProviderSessionTimeoutSeconds) — providers apply it
+   * verbatim instead of choosing their own default.
+   */
+  providerSessionTimeoutSeconds: number;
+  onProviderSessionCreated: (providerSessionId: string) => Promise<void>;
+  correlation: CorrelationContext;
+}
 
 /**
  * Capabilities supported by a sandbox provider.

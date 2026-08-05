@@ -237,7 +237,8 @@ export async function seedEvents(
   await runInDurableObject(stub, (instance: SessionDO) => {
     for (const e of events) {
       instance.ctx.storage.sql.exec(
-        "INSERT INTO events (id, type, data, message_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+         VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
         e.id,
         e.type,
         e.data,

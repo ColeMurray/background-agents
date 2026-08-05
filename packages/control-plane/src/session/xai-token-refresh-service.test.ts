@@ -217,7 +217,7 @@ describe("XaiTokenRefreshService", () => {
     expect(state.refresh).toHaveBeenCalledTimes(1);
   });
 
-  it("fails when a rotated token cannot be persisted", async () => {
+  it("returns a refreshed token when rotated tokens cannot be persisted", async () => {
     state.repo.set(123, { XAI_OAUTH_REFRESH_TOKEN: "refresh-old" });
     state.refresh.mockResolvedValue({
       access_token: "access-new",
@@ -225,11 +225,22 @@ describe("XaiTokenRefreshService", () => {
       expires_in: 3600,
     });
     state.failWrites = true;
+    const log = logger();
+    const refreshService = new XaiTokenRefreshService(
+      {} as SqlDatabase,
+      "key",
+      async () => 123,
+      log
+    );
 
-    await expect(service().refresh(session())).resolves.toEqual({
-      ok: false,
-      status: 502,
-      error: "xAI token refresh failed",
+    await expect(refreshService.refresh(session())).resolves.toEqual({
+      ok: true,
+      accessToken: "access-new",
+      expiresIn: 3600,
     });
+    expect(log.error).toHaveBeenCalledWith(
+      "xAI token refreshed but failed to persist rotated tokens",
+      { source: "repo", error: "write failed" }
+    );
   });
 });

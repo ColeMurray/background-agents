@@ -11,14 +11,13 @@ import {
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
 import type { ImageBuildProvider, ImageBuildScope } from "./model";
-import { getImageBuildCloneAuthMode } from "./provider-policy";
 import {
   loadScopeBuildSecrets,
   resolveScopeSandboxSettings,
   resolveScopeTarget,
   type ResolvedImageBuildTarget,
 } from "./scope";
-import type { ImageBuildCloneAuth, PlannedImageBuild } from "./types";
+import type { ImageBuildCloneAuth, ImageBuildPlan } from "./types";
 
 const logger = createLogger("image-builds:planner");
 const MS_PER_SECOND = 1000;
@@ -73,10 +72,9 @@ export class ImageBuildPlanner {
     correlation: CorrelationContext;
     target: ResolvedImageBuildTarget;
     callbackAuth: PlannedCallbackAuth;
-  }): Promise<PlannedImageBuild> {
+  }): Promise<ImageBuildPlan> {
     const { repositories, repositoriesFingerprint } = params.target;
     const primary = repositories[0];
-    const callbackAuth = params.callbackAuth;
 
     const [sandboxSettings, userEnvVars, cloneAuth] = await Promise.all([
       resolveScopeSandboxSettings(this.db, params.scope, primary),
@@ -101,24 +99,15 @@ export class ImageBuildPlanner {
       },
     };
 
-    const registration = { tokenHash: callbackAuth.tokenHash, expiresAt: callbackAuth.expiresAt };
-
     return {
-      plan: {
-        ...basePlan,
-        provider: this.provider,
-        callbackToken: callbackAuth.token,
-        cloneAuth,
-      },
-      callbackAuth: registration,
+      ...basePlan,
+      provider: this.provider,
+      callbackToken: params.callbackAuth.token,
+      cloneAuth,
     };
   }
 
   private async resolveCloneAuth(scope: ImageBuildScope): Promise<ImageBuildCloneAuth> {
-    if (getImageBuildCloneAuthMode(this.provider) !== "credential_helper") {
-      return { type: "unavailable" };
-    }
-
     try {
       const provider = createSourceControlProviderFromEnv(this.env);
       const auth = await provider.generateCredentialHelperAuth();
