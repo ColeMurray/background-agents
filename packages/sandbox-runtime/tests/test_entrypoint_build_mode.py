@@ -368,7 +368,6 @@ class TestImageBuildMode:
             await supervisor.run()
 
         callback.report_success.assert_awaited_once_with(
-            base_sha="abc123def456",
             build_duration_seconds=ANY,
             repository_shas=[
                 {"repoOwner": "acme", "repoName": "my-repo", "baseSha": "abc123def456"}

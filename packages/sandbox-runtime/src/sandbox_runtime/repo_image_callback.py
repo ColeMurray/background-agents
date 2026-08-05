@@ -44,6 +44,7 @@ class RepoImageBuildCallback:
         callback_url = os.environ.get(CALLBACK_URL_ENV, "")
         failure_callback_url = os.environ.get(FAILURE_CALLBACK_URL_ENV, "")
         token = os.environ.get(CALLBACK_TOKEN_ENV, "")
+        provider_session_id = os.environ.get(PROVIDER_SESSION_ID_ENV, "")
 
         if not build_id and not callback_url and not token:
             return None
@@ -56,6 +57,7 @@ class RepoImageBuildCallback:
                 (CALLBACK_URL_ENV, callback_url),
                 (FAILURE_CALLBACK_URL_ENV, failure_callback_url),
                 (CALLBACK_TOKEN_ENV, token),
+                (PROVIDER_SESSION_ID_ENV, provider_session_id),
             )
             if not value
         ]
@@ -68,36 +70,31 @@ class RepoImageBuildCallback:
             callback_url=callback_url,
             failure_callback_url=failure_callback_url,
             token=token,
-            provider_session_id=os.environ.get(PROVIDER_SESSION_ID_ENV, ""),
+            provider_session_id=provider_session_id,
             logger=log,
         )
 
     async def report_success(
         self,
         *,
-        base_sha: str,
         build_duration_seconds: float,
-        repository_shas: list[dict[str, str]] | None = None,
-        runtime_version: str = "",
+        repository_shas: list[dict[str, str]],
+        runtime_version: str,
     ) -> bool:
         """Report a successful image build.
 
-        repository_shas ([{repoOwner, repoName, baseSha}]) and runtime_version are
-        required by environment-image registration (design §7.3) and ignored
-        by the repo-image callback route.
+        repository_shas ([{repoOwner, repoName, baseSha}]) and runtime_version
+        are required by image registration (design §7.3) — the control plane
+        rejects a completion missing either. provider_session_id is always
+        sent: every provider sets it unconditionally at spawn.
         """
         payload: dict[str, Any] = {
             "build_id": self.build_id,
-            "base_sha": base_sha,
             "build_duration_seconds": round(build_duration_seconds, 3),
+            "repository_shas": repository_shas,
+            "runtime_version": runtime_version,
+            "provider_session_id": self.provider_session_id,
         }
-        if repository_shas:
-            payload["repository_shas"] = repository_shas
-        if runtime_version:
-            payload["runtime_version"] = runtime_version
-        if self.provider_session_id:
-            payload["provider_session_id"] = self.provider_session_id
-
         return await self._post_with_retry(self.callback_url, payload)
 
     async def report_failure(self, error: str) -> bool:
@@ -105,9 +102,8 @@ class RepoImageBuildCallback:
         payload = {
             "build_id": self.build_id,
             "error": error[-ERROR_MESSAGE_MAX_CHARS:],
+            "provider_session_id": self.provider_session_id,
         }
-        if self.provider_session_id:
-            payload["provider_session_id"] = self.provider_session_id
         return await self._post_with_retry(self.failure_callback_url, payload)
 
     async def _post_with_retry(self, url: str, payload: dict[str, Any]) -> bool:
