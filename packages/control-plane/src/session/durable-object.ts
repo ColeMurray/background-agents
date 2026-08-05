@@ -79,7 +79,7 @@ import {
   parseSecretsCapMode,
 } from "../db/secrets-validation";
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
-import type { SessionRepositoryEntry } from "./repository-target";
+import type { RepoIdentity, SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { XaiTokenRefreshService } from "./xai-token-refresh-service";
 import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
@@ -591,7 +591,7 @@ export class SessionDO extends DurableObject<Env> {
             messenger: this.messenger,
             appName: resolveAppName(this.env),
             sessionPullRequests: this.db ? new SessionPullRequestStore(this.db) : undefined,
-            resolveAlwaysDraftDefault: () => this.resolveAlwaysDraftDefault(),
+            resolveAlwaysDraftDefault: (repo) => this.resolveAlwaysDraftDefault(repo),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -652,25 +652,17 @@ export class SessionDO extends DurableObject<Env> {
 
   /**
    * Resolves the "always use draft mode" SCM setting (global default merged
-   * with the per-repo override) for this session's repository. Returns false
-   * when D1 is unavailable so PR creation never blocks on settings.
+   * with the per-repo override) for the pull request's target repository.
+   * A deployment without D1 cannot have this policy configured, so it retains
+   * the ready-for-review default; storage failures propagate to fail closed.
    */
-  private async resolveAlwaysDraftDefault(): Promise<boolean> {
+  private async resolveAlwaysDraftDefault(repo: RepoIdentity): Promise<boolean> {
     if (!this.db) return false;
-    const session = this.getSession();
-    if (!session) return false;
-    try {
-      const scmSettingsStore = new ScmSettingsStore(this.db);
-      const settings = await scmSettingsStore.getResolvedSettings(
-        `${session.repo_owner}/${session.repo_name}`
-      );
-      return settings.alwaysUseDraftMode === true;
-    } catch (error) {
-      this.log.error("Failed to resolve always-draft setting", {
-        error: error instanceof Error ? error : String(error),
-      });
-      return false;
-    }
+    const scmSettingsStore = new ScmSettingsStore(this.db);
+    const settings = await scmSettingsStore.getResolvedSettings(
+      `${repo.repoOwner}/${repo.repoName}`
+    );
+    return settings.alwaysUseDraftMode === true;
   }
 
   private get alarmHandler(): AlarmHandler {

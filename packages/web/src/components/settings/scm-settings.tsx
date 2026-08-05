@@ -8,6 +8,10 @@ import {
   type ScmSettings,
   type ScmGlobalConfig,
 } from "@open-inspect/shared";
+import {
+  encodeRepositoryPathSegments,
+  parseRepositoryFullName,
+} from "@open-inspect/shared/types/repositories";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
@@ -31,6 +35,11 @@ import {
 
 const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
 const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
+
+export function getScmRepoSettingsPath(fullName: string): `/api/${string}` | null {
+  const repository = parseRepositoryFullName(fullName);
+  return repository ? `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}` : null;
+}
 
 interface GlobalResponse {
   settings: ScmGlobalConfig | null;
@@ -233,10 +242,11 @@ function RepoOverridesSection({
 
   const handleAdd = async () => {
     if (!addingRepo) return;
-    const [owner, name] = addingRepo.split("/");
+    const settingsPath = getScmRepoSettingsPath(addingRepo);
+    if (!settingsPath) return;
 
     try {
-      const res = await browserApiFetch(`/api/scm-settings/repos/${owner}/${name}`, {
+      const res = await browserApiFetch(settingsPath, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         // Seed the new override from the current global default so adding one
@@ -300,13 +310,14 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   const [dirty, setDirty] = useState(false);
 
   const handleSave = async () => {
+    const settingsPath = getScmRepoSettingsPath(entry.repo);
+    if (!settingsPath) return;
     setSaving(true);
 
-    const [owner, name] = entry.repo.split("/");
     const settings: ScmSettings = { alwaysUseDraftMode };
 
     try {
-      const res = await browserApiFetch(`/api/scm-settings/repos/${owner}/${name}`, {
+      const res = await browserApiFetch(settingsPath, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings }),
@@ -328,10 +339,11 @@ function RepoOverrideRow({ entry }: { entry: RepoSettingsEntry }) {
   };
 
   const handleDelete = async () => {
-    const [owner, name] = entry.repo.split("/");
+    const settingsPath = getScmRepoSettingsPath(entry.repo);
+    if (!settingsPath) return;
 
     try {
-      const res = await browserApiFetch(`/api/scm-settings/repos/${owner}/${name}`, {
+      const res = await browserApiFetch(settingsPath, {
         method: "DELETE",
       });
 

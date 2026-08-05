@@ -129,10 +129,10 @@ export interface PullRequestServiceDeps {
    */
   sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
   /**
-   * Resolves the "always use draft mode" default (global default merged with
-   * repo override) for this session's repository.
+   * Resolves the "always use draft mode" policy (global default merged with
+   * repo override) for the pull request's target repository.
    */
-  resolveAlwaysDraftDefault: () => Promise<boolean>;
+  resolveAlwaysDraftDefault: (repo: RepoIdentity) => Promise<boolean>;
 }
 
 /**
@@ -192,6 +192,23 @@ export class SessionPullRequestService {
       if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
         return this.duplicatePrError(targetRepo);
       }
+
+      let alwaysDraft: boolean;
+      try {
+        alwaysDraft = await this.deps.resolveAlwaysDraftDefault(targetRepo);
+      } catch (error) {
+        this.deps.log.error("Failed to resolve pull request draft policy", {
+          repo_owner: targetRepo.repoOwner,
+          repo_name: targetRepo.repoName,
+          error: error instanceof Error ? error : String(error),
+        });
+        return {
+          kind: "error",
+          status: 503,
+          error: "Pull request draft policy is temporarily unavailable",
+        };
+      }
+      const draft = alwaysDraft || (input.draft ?? false);
 
       let pushAuth: GitPushAuthContext;
       try {
@@ -290,13 +307,6 @@ export class SessionPullRequestService {
 
       const fullBody =
         input.body + `\n\n---\n*Created with [${this.deps.appName}](${input.sessionUrl})*`;
-
-      // The "always use draft mode" SCM setting is a hard policy: when enabled
-      // for this repo it forces every session-created PR to be a draft,
-      // regardless of the tool's `draft` argument. When disabled, an explicit
-      // `draft` from the request decides (defaulting to false).
-      const alwaysDraft = await this.deps.resolveAlwaysDraftDefault();
-      const draft = alwaysDraft || (input.draft ?? false);
 
       const prResult = await this.deps.sourceControlProvider.createPullRequest(prAuth, {
         repository: repoInfo,

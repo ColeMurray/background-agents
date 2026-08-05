@@ -477,7 +477,6 @@ describe("GitHubSourceControlProvider", () => {
 
 import { deriveGitHubPullRequestStatus } from "./github-provider";
 
-
 function makeJsonResponse(body: unknown, status = 200): Response {
   return {
     ok: status >= 200 && status < 300,

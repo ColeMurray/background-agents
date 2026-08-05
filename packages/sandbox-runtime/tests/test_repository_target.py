@@ -35,7 +35,10 @@ def _plugin_module(tmp_path: Path) -> Path:
     (zod_package / "package.json").write_text('{"type":"module","exports":"./index.js"}')
     (zod_package / "index.js").write_text(
         "const schema = { describe() { return this; }, optional() { return this; } };"
-        "export const z = { string() { return Object.create(schema); } };"
+        "export const z = {"
+        " string() { return Object.create(schema); },"
+        " boolean() { return Object.create(schema); }"
+        "};"
     )
     return module
 
@@ -84,3 +87,38 @@ def test_parses_nested_owner_without_manifest(tmp_path: Path) -> None:
 @pytest.mark.parametrize("repo", ["web", "/web", "group/", "group//web"])
 def test_rejects_malformed_repository_names(tmp_path: Path, repo: str) -> None:
     assert _resolve(tmp_path, repo, []) is None
+
+
+@pytest.mark.parametrize(
+    ("state", "message"),
+    [
+        ("draft", "The pull request is in draft mode."),
+        ("open", "The pull request is now ready for review."),
+    ],
+)
+def test_formats_pull_request_state(tmp_path: Path, state: str, message: str) -> None:
+    script = """
+      console.log = () => {};
+      const { formatPullRequestSuccess } = await import(process.argv[1]);
+      process.stdout.write(formatPullRequestSuccess({
+        prNumber: 42,
+        prUrl: "https://example.test/pull/42",
+        state: process.argv[2],
+      }));
+    """
+    result = subprocess.run(
+        [
+            NODE_BINARY,
+            "--input-type=module",
+            "-e",
+            script,
+            _plugin_module(tmp_path).as_uri(),
+            state,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=TOOL_SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+    assert message in result.stdout

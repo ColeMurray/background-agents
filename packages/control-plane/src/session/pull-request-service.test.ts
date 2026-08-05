@@ -366,6 +366,22 @@ describe("SessionPullRequestService", () => {
     );
   });
 
+  it("fails before push when the draft policy cannot be resolved", async () => {
+    vi.mocked(harness.deps.resolveAlwaysDraftDefault).mockRejectedValueOnce(
+      new Error("D1 unavailable")
+    );
+
+    const result = await harness.service.createPullRequest(createInput());
+
+    expect(result).toEqual({
+      kind: "error",
+      status: 503,
+      error: "Pull request draft policy is temporarily unavailable",
+    });
+    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+  });
+
   it("creates PR with OAuth token and stores PR artifact", async () => {
     const result = await harness.service.createPullRequest(
       createInput({ promptingAuth: { authType: "oauth", token: "user-token" } })
@@ -524,6 +540,25 @@ describe("SessionPullRequestService", () => {
       });
       expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
         expect.objectContaining({ owner: "acme", name: "backend" })
+      );
+    });
+
+    it("resolves the draft policy for the target member repository", async () => {
+      vi.mocked(harness.deps.resolveAlwaysDraftDefault).mockImplementation(
+        async (repo) => repo.repoName === "backend"
+      );
+
+      await harness.service.createPullRequest(
+        createInput({ repoOwner: "acme", repoName: "backend", draft: false })
+      );
+
+      expect(harness.deps.resolveAlwaysDraftDefault).toHaveBeenCalledWith({
+        repoOwner: "acme",
+        repoName: "backend",
+      });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ draft: true })
       );
     });
 

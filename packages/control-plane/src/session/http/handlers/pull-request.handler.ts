@@ -129,6 +129,7 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
           promptingUserId: promptingParticipant.user_id,
           promptingAuth: authResolution.auth,
           sessionUrl: deps.getSessionUrl(session),
+          draft: body.draft,
         },
         log
       );

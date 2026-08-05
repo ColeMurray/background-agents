@@ -171,6 +171,7 @@ function isWebServiceAuthRoute(method: string, path: string): boolean {
 export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
+    /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
     /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
