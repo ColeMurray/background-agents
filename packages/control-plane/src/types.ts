@@ -10,10 +10,10 @@ import type {
   SessionStatus,
 } from "@open-inspect/shared";
 import { z } from "zod";
+import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 export type {
   ArtifactType,
-  ClientMessage,
   CreateSessionRequest,
   CreateSessionResponse,
   EventResponse,
@@ -24,16 +24,19 @@ export type {
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
-  SessionAttachmentReference,
-  ResolvedSessionAttachment,
   SpawnSource,
   SandboxEvent,
   SandboxStatus,
-  ServerMessage,
-  SessionRepositoryState,
   SessionState,
   SessionStatus,
 } from "@open-inspect/shared";
+export type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
+export type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+export type {
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "@open-inspect/shared/types/session-attachments";
+export type { ClientMessage } from "@open-inspect/shared/types/websocket";
 
 // Environment bindings
 export interface Env {
@@ -52,6 +55,9 @@ export interface Env {
 
   // D1 database
   DB: D1Database;
+
+  // Durable callback-to-finalizer handoff for provider-session image builds.
+  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
 
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;
@@ -79,7 +85,6 @@ export interface Env {
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
-  SERVICE_AUTH_SECRET_MODAL?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)
@@ -194,6 +199,7 @@ export interface ArtifactResponse {
 export interface ParticipantResponse {
   id: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmLogin: string | null;
   scmName: string | null;
   role: ParticipantRole;

@@ -9,8 +9,9 @@
  * can run the steps out of order or skip one.
  */
 
-import type { AutomationEventSource, ServiceName, SpawnSource } from "@open-inspect/shared";
-
+import type { AutomationEventSource } from "@open-inspect/shared/triggers";
+import type { SpawnSource } from "@open-inspect/shared";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { createLogger } from "./../logger";
 import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
 import type { Principal, ResolvedIdentity } from "./principal";
@@ -85,7 +86,7 @@ export interface DerivedIdentity {
    * userless service principals.
    */
   actor: ResolvedIdentity | null;
-  /** Session/automation provenance: "user" for web users, the service name for bots; null when the principal never spawns sessions (modal). */
+  /** Session/automation provenance: "user" for web users or the service name for bots. */
   spawnSource: SpawnSource | null;
 }
 
@@ -118,9 +119,6 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         // Web's userless service credential asserts no one; user-bearing web
         // calls carry a web session token and resolve as user principals.
         return { participantUserId: null, canonicalUserId: null, actor: null, spawnSource: "user" };
-      }
-      if (principal.service === "modal") {
-        return { participantUserId: null, canonicalUserId: null, actor: null, spawnSource: null };
       }
       return {
         participantUserId: principal.actor?.participantUserId ?? null,

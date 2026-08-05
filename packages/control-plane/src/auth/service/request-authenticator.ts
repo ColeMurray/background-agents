@@ -1,14 +1,14 @@
 import {
   ACTOR_HEADER,
   SERVICE_HEADER,
-  TOKEN_VALIDITY_MS,
   isServiceName,
   parseServiceSignatureHeader,
-  readBodyCapped,
   sha256Hex,
   verifyServiceSignature,
   type ServiceName,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/service-auth";
+import { readBodyCapped } from "@open-inspect/shared";
+import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";
 import type { RequestContext } from "../../routes/shared";

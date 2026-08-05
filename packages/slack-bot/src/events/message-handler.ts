@@ -7,10 +7,9 @@ import {
   postMessage,
   resolveUserNames,
   updateMessage,
-  type CallbackContext,
-  type SlackMessageAttachment,
-  type SlackMessageFile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
+import type { CallbackContext } from "@open-inspect/shared";
+import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
   prepareImageAttachments,
@@ -20,7 +19,11 @@ import {
 import { createClassifier } from "../classifier";
 import { loadTargetCatalog } from "../classifier/catalog";
 import { stripMentions } from "../dm-utils";
-import { collectForwardedMessages, FORWARD_ONLY_PROMPT_TEXT } from "../forwarded-messages";
+import {
+  collectForwardedMessages,
+  FORWARD_ONLY_PROMPT_TEXT,
+  type ForwardedMessages,
+} from "../forwarded-messages";
 import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
@@ -97,18 +100,26 @@ async function fetchThreadHistory(
   }
 }
 
-interface IncomingMessageParams {
+interface IncomingMessageContent {
   text: string;
+  /** Images attached to the Slack message, normalized at event ingress. */
+  images: SlackImageAttachment[];
+  /** Quoted bodies, provenance, and files recovered from explicit Slack shares. */
+  forwarded: ForwardedMessages;
+}
+
+function hasRunnableContent(content: IncomingMessageContent): boolean {
+  return Boolean(content.text) || content.images.length > 0 || content.forwarded.hasBody;
+}
+
+interface IncomingMessageParams {
+  content: IncomingMessageContent;
   user: string;
   channel: string;
   ts: string;
   threadTs?: string;
   channelName?: string;
   channelDescription?: string;
-  /** Images attached to the Slack message, normalized at event ingress. */
-  images: SlackImageAttachment[];
-  /** Quoted entries for the messages forwarded with this request. */
-  forwardedMessages: string[];
   env: Env;
   traceId?: string;
   scheduleBackground: BackgroundTaskScheduler;
@@ -122,20 +133,19 @@ interface IncomingMessageParams {
  */
 async function handleIncomingMessage(params: IncomingMessageParams): Promise<void> {
   const {
-    text: messageText,
+    content,
     user,
     channel,
     ts,
     threadTs,
     channelName,
     channelDescription,
-    images,
-    forwardedMessages,
     env,
     traceId,
     scheduleBackground,
   } = params;
-  if (!messageText && images.length === 0 && forwardedMessages.length === 0) {
+  const { text: messageText, images, forwarded } = content;
+  if (!hasRunnableContent(content)) {
     await postMessage(
       env.SLACK_BOT_TOKEN,
       channel,
@@ -146,13 +156,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   }
   // A message with no text of its own still needs prompt content for the agent
   // to act on; what it carried instead decides which stand-in to use.
-  const imageOnly = !messageText && forwardedMessages.length === 0;
+  const imageOnly = !messageText && !forwarded.hasBody;
   const requestText =
     messageText ||
-    (forwardedMessages.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
+    (forwarded.entries.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
   // Forwarded bodies lead: the user's own text ("deal with this") is the
   // instruction and reads as one when it comes last.
-  const promptText = formatForwardedContext(forwardedMessages) + requestText;
+  const promptText = formatForwardedContext(forwarded.entries) + requestText;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -381,8 +391,8 @@ export async function handleAppMention(
   // A forwarded message's own images are Slack-hosted message files, so they
   // join the message's own images on the single attachment path.
   const images = toImageAttachments([...details.files, ...forwarded.files], traceId);
-  const forwardedMessages = forwarded.entries;
-  if (!messageText && (images.length > 0 || forwardedMessages.length > 0)) {
+  const content = { text: messageText, images, forwarded };
+  if (!messageText && hasRunnableContent(content)) {
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   }
   let channelName: string | undefined;
@@ -392,15 +402,13 @@ export async function handleAppMention(
     channelDescription = channelInfo.channel.topic?.value || channelInfo.channel.purpose?.value;
   }
   await handleIncomingMessage({
-    text: messageText,
+    content,
     user: event.user,
     channel: event.channel,
     ts: event.ts,
     threadTs: event.thread_ts,
     channelName,
     channelDescription,
-    images,
-    forwardedMessages,
     env,
     traceId,
     scheduleBackground,
@@ -428,19 +436,16 @@ export async function handleDirectMessage(
   const messageText = stripMentions(event.text);
   const forwarded = collectForwardedMessages(event.attachments);
   const images = toImageAttachments([...(event.files ?? []), ...forwarded.files], traceId);
-  const forwardedMessages = forwarded.entries;
-  const hasContent = Boolean(messageText) || images.length > 0 || forwardedMessages.length > 0;
+  const content = { text: messageText, images, forwarded };
   const threadKey = event.thread_ts || event.ts;
-  if (hasContent)
+  if (hasRunnableContent(content))
     scheduleStartingStatus(scheduleBackground, env, event.channel, threadKey, traceId);
   await handleIncomingMessage({
-    text: messageText,
+    content,
     user: event.user,
     channel: event.channel,
     ts: event.ts,
     threadTs: event.thread_ts,
-    images,
-    forwardedMessages,
     env,
     traceId,
     scheduleBackground,

@@ -1,17 +1,19 @@
 import { generateId } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
+import type {
+  SessionAttachmentReference,
+  ResolvedSessionAttachment,
+} from "@open-inspect/shared/types/session-attachments";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidModel,
-  type SessionAttachmentReference,
-  type ResolvedSessionAttachment,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
 import type { SourceControlProviderName } from "../source-control";
-import type { SandboxLifecycle } from "../sandbox/lifecycle/manager";
+import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand } from "./types";
 import type { SessionRepository } from "./repository";
 import {
@@ -23,11 +25,12 @@ import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionStatusService } from "./session-status-service";
-import type { EnqueuePromptRequest } from "./services/message.service";
+import type { EnqueuePromptRequest } from "./enqueue-prompt-contract";
 import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
+import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -95,7 +98,9 @@ export class SessionMessageQueue {
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
-    private readonly executionTimeoutMs: number
+    private readonly alarmScheduler: AlarmScheduler,
+    private readonly executionTimeoutMs: number,
+    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
   async handlePromptMessage(
@@ -174,7 +179,26 @@ export class SessionMessageQueue {
         reason: "no_sandbox",
       });
       this.messenger.broadcast({ type: "sandbox_spawning" });
-      await this.sandboxLifecycle.spawnSandbox();
+      // Spawn in the background: a snapshot restore can take tens of seconds,
+      // and awaiting it here holds the prompt HTTP response open past bot
+      // callers' request timeouts. The message is already persisted as
+      // pending and dispatches when the sandbox WebSocket connects.
+      this.ctx.waitUntil(
+        this.sandboxLifecycle.spawnSandbox().catch((error) => {
+          // Expected provider failures broadcast sandbox_error inside the
+          // lifecycle manager; this catch only sees throws from before those
+          // handlers. Surface them the same way so clients aren't left
+          // watching a silent "sandbox_spawning" forever.
+          this.log.error("prompt.spawn.background_error", {
+            message_id: message.id,
+            error: error instanceof Error ? error : String(error),
+          });
+          this.messenger.broadcast({
+            type: "sandbox_error",
+            error: error instanceof Error ? error.message : "Failed to spawn sandbox",
+          });
+        })
+      );
       return;
     }
 
@@ -182,22 +206,20 @@ export class SessionMessageQueue {
     this.messenger.broadcast({ type: "processing_status", isProcessing: true });
     this.sandboxLifecycle.updateLastActivity(now);
 
-    // Execution timeout shares the DO's single alarm slot with inactivity
-    // checks — the earlier deadline always wins.
+    // Execution timeout shares the DO's single alarm slot with lifecycle checks.
     const deadline = now + this.executionTimeoutMs;
-    const currentAlarm = await this.ctx.storage.getAlarm();
-    if (!currentAlarm || deadline < currentAlarm) {
-      await this.ctx.storage.setAlarm(deadline);
-    }
+    await this.alarmScheduler.scheduleAlarm(deadline);
 
     const author = this.repository.getParticipantById(message.author_id);
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
-    const resolvedEffort =
+    const requestedEffort =
       message.reasoning_effort ??
       session?.reasoning_effort ??
       getDefaultReasoningEffort(resolvedModel);
+    const resolvedEffort =
+      validateReasoningEffort(resolvedModel, requestedEffort ?? undefined, this.log) ?? undefined;
 
     const command: SandboxCommand = {
       type: "prompt",
@@ -245,7 +267,7 @@ export class SessionMessageQueue {
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
 
     if (processingMessage) {
       this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
@@ -267,6 +289,13 @@ export class SessionMessageQueue {
         processingMessage.id,
         syntheticExecutionComplete,
         now
+      );
+      this.ctx.waitUntil(
+        this.recordTerminalMessage({
+          messageId: processingMessage.id,
+          messageCreatedAt: processingMessage.created_at,
+          terminalMessageCompletedAt: now,
+        })
       );
 
       this.messenger.broadcast({
@@ -300,7 +329,7 @@ export class SessionMessageQueue {
    */
   async failStuckProcessingMessage(): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
     this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
@@ -315,6 +344,13 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
     };
     this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
+    this.ctx.waitUntil(
+      this.recordTerminalMessage({
+        messageId: processingMessage.id,
+        messageCreatedAt: processingMessage.created_at,
+        terminalMessageCompletedAt: now,
+      })
+    );
     this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.ctx.waitUntil(
@@ -339,6 +375,7 @@ export class SessionMessageQueue {
       timestamp: now / 1000,
       author: {
         participantId: participant.id,
+        userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
       },
@@ -359,10 +396,20 @@ export class SessionMessageQueue {
   ): Promise<{ messageId: string; status: "queued" }> {
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
-      participant = this.participantService.create(
-        data.authorId,
-        data.scmEnrichment?.name || data.authorId
-      );
+      const name = data.scmEnrichment?.name || data.authorId;
+      participant = data.canonicalUserId
+        ? this.participantService.create(data.authorId, name, data.canonicalUserId)
+        : this.participantService.create(data.authorId, name);
+    }
+
+    if (data.canonicalUserId) {
+      this.repository.updateParticipantCoalesce(participant.id, {
+        canonicalUserId: data.canonicalUserId,
+      });
+      participant = this.repository.getParticipantById(participant.id) ?? {
+        ...participant,
+        canonical_user_id: data.canonicalUserId,
+      };
     }
 
     if (data.scmEnrichment !== undefined) {
@@ -383,7 +430,7 @@ export class SessionMessageQueue {
       participant,
       userId: data.authorId,
       content: data.content,
-      source: data.source as MessageSource,
+      source: data.source,
       model: data.model,
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,

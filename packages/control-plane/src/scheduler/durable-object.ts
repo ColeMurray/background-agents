@@ -11,16 +11,15 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   automationEventSchema,
-  nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
-  computeHmacHex,
-  type AutomationCallbackContext,
-  type AutomationInvocationSource,
   type SlackAutomationEvent,
-  type SlackCallbackContext,
   type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import { nextCronOccurrence } from "@open-inspect/shared/cron";
+import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import type { AutomationCallbackContext, SlackCallbackContext } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
@@ -35,6 +34,7 @@ import {
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
@@ -51,6 +51,7 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import type { RequestContext } from "../routes/shared";
@@ -111,6 +112,20 @@ function formatRunRepositoryLabel(
   return run?.repo_owner && run?.repo_name ? `${run.repo_owner}/${run.repo_name}` : "No repository";
 }
 
+async function getSlackSessionInstructions(db: SqlDatabase): Promise<string | undefined> {
+  try {
+    const instructions = (await new IntegrationSettingsStore(db).getGlobal("slack"))?.defaults
+      ?.sessionInstructions;
+    return typeof instructions === "string" && instructions.trim() ? instructions : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendSlackSessionInstructions(prompt: string, instructions: string | undefined): string {
+  return instructions ? `${prompt}\n\n## Additional Instructions\n\n${instructions}` : prompt;
+}
+
 const manualTriggerBodySchema = z.object({
   automationId: z.string().min(1),
 });
@@ -158,6 +173,13 @@ type StartInvocationResult =
   | { outcome: "blocked" }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
   | { outcome: "deduplicated" };
+
+type SchedulerPromptRequest = Pick<
+  EnqueuePromptRequest,
+  "content" | "authorId" | "canonicalUserId" | "source"
+> & {
+  callbackContext: AutomationCallbackContext | SlackCallbackContext;
+};
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -845,6 +867,8 @@ export class SchedulerDO extends DurableObject<Env> {
     // Surface at most one concurrency-skip ephemeral per event, even when
     // several automations watch the same thread and all skip.
     let concurrencySkipped = false;
+    let slackSessionInstructions: string | undefined;
+    let slackSettingsLoaded = false;
 
     for (const automation of candidates) {
       const now = Date.now();
@@ -880,6 +904,11 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
+      if (event.source === "slack" && !slackSettingsLoaded) {
+        slackSessionInstructions = await getSlackSessionInstructions(this.db);
+        slackSettingsLoaded = true;
+      }
+
       // Event firings are invocations of 1 (or 0 children when skipped): same
       // per-key concurrency, same trigger_key dedup — both now enforced on the
       // invocation, atomically. The overlap skip also covers the brief slack
@@ -892,7 +921,10 @@ export class SchedulerDO extends DurableObject<Env> {
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
-        instructionsOverride: `${event.contextBlock}\n---\n\n${automation.instructions}`,
+        instructionsOverride: appendSlackSessionInstructions(
+          `${event.contextBlock}\n---\n\n${automation.instructions}`,
+          slackSessionInstructions
+        ),
       });
 
       switch (result.outcome) {
@@ -1297,6 +1329,7 @@ export class SchedulerDO extends DurableObject<Env> {
     await this.enqueueSessionPrompt(sessionId, {
       content: instructionsOverride ?? automation.instructions,
       authorId: automation.created_by,
+      canonicalUserId: automation.user_id,
       source: "automation",
       callbackContext,
     });
@@ -1328,12 +1361,17 @@ export class SchedulerDO extends DurableObject<Env> {
       repoFullName: formatRunRepositoryLabel(run),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
+      // Marks the turn as automation-owned: a follow-up completes through the
+      // interactive callback, which would otherwise treat it as a user request.
+      automationId: automation.id,
     };
 
     try {
+      const identity = await new UserStore(this.db).getIdentity("slack", event.actorUserId);
       await this.enqueueSessionPrompt(sessionId, {
         content: event.text,
         authorId: `slack:${event.actorUserId}`,
+        canonicalUserId: identity?.userId,
         source: "slack",
         callbackContext,
       });
@@ -1358,12 +1396,7 @@ export class SchedulerDO extends DurableObject<Env> {
   /** Enqueue a prompt onto a session's queue via its DO `/internal/prompt` route. */
   private async enqueueSessionPrompt(
     sessionId: string,
-    body: {
-      content: string;
-      authorId: string;
-      source: string;
-      callbackContext: AutomationCallbackContext | SlackCallbackContext;
-    }
+    body: SchedulerPromptRequest
   ): Promise<void> {
     const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {

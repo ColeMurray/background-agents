@@ -15,5 +15,6 @@ describe("browser auth proxy route contract", () => {
     expect(isBrowserAuthProxyRoute("get", "/api/auth/get-session")).toBe(true);
     expect(isBrowserAuthProxyRoute("POST", "/api/auth/get-session")).toBe(false);
     expect(isBrowserAuthProxyRoute("GET", "/api/auth/get-session/extra")).toBe(false);
+    expect(isBrowserAuthProxyRoute("GET", "/internal/auth/sign-in-providers")).toBe(false);
   });
 });

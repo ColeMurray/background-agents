@@ -9,7 +9,7 @@ import type {
   ImageBuildRecordView,
   ImageBuildScopeKind,
   ImageBuildStatus,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/image-builds";
 
 /** SWR key for the unified image-build feed. */
 export const IMAGE_BUILDS_KEY = "/api/image-builds";

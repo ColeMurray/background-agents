@@ -10,8 +10,10 @@ import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
   sandboxEventSchema,
+  toolCallIdentityKey,
   sendPromptRequestSchema,
   serverMessageSchema,
+  sessionParticipantProfilesResponseSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
   cancelChildSessionRequestSchema,
@@ -154,6 +156,9 @@ describe("boundary schemas", () => {
       expect(sendPromptRequestSchema.safeParse({ content: 123 }).success).toBe(false);
       expect(sendPromptRequestSchema.safeParse({ source: "web" }).success).toBe(false);
       expect(sendPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+      expect(
+        sendPromptRequestSchema.safeParse({ content: "hello", source: "unknown" }).success
+      ).toBe(false);
     });
   });
 
@@ -220,6 +225,70 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("preserves task activity correlation fields", () => {
+      const taskResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "task",
+        args: { description: "Review code" },
+        callId: "task-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+        childSessionId: "child-session-1",
+      });
+      const childResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "child-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 124,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      const errorResult = sandboxEventSchema.safeParse({
+        type: "error",
+        error: "Child failed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 125,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+
+      expect(taskResult.success && taskResult.data.childSessionId).toBe("child-session-1");
+      expect(childResult.success && childResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      expect(errorResult.success && errorResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+    });
+
+    it("uses task ownership when a child session ID is unavailable", () => {
+      const base = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "shared-call",
+        messageId: "message-1",
+        isSubtask: true,
+      };
+
+      expect(toolCallIdentityKey({ ...base, taskCallId: "task-1" })).not.toBe(
+        toolCallIdentityKey({ ...base, taskCallId: "task-2" })
+      );
     });
 
     it("rejects a malformed partial sandbox event", () => {
@@ -505,6 +574,51 @@ describe("boundary schemas", () => {
     });
   });
 
+  describe("participant profile boundaries", () => {
+    it("parses only safe profile fields keyed by canonical user ID", () => {
+      const result = sessionParticipantProfilesResponseSchema.parse({
+        profiles: {
+          "user-1": {
+            userId: "user-1",
+            displayName: "Ada Lovelace",
+            avatarUrl: "https://avatars.example/ada",
+            email: "private@example.com",
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        profiles: {
+          "user-1": {
+            userId: "user-1",
+            displayName: "Ada Lovelace",
+            avatarUrl: "https://avatars.example/ada",
+          },
+        },
+      });
+    });
+
+    it("accepts historical user messages without an author userId", () => {
+      const legacy = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "hello",
+        messageId: "message-1",
+        timestamp: 1,
+        author: { participantId: "participant-1", name: "Legacy User" },
+      });
+      const current = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "hello",
+        messageId: "message-2",
+        timestamp: 1,
+        author: { participantId: "participant-1", userId: "user-1", name: "Ada" },
+      });
+
+      expect(legacy.success).toBe(true);
+      expect(current.success).toBe(true);
+    });
+  });
+
   describe("spawnChildSessionRequestSchema", () => {
     it("parses a valid child session request", () => {
       const result = spawnChildSessionRequestSchema.safeParse({
@@ -557,6 +671,7 @@ describe("boundary schemas", () => {
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: null,
         baseBranch: null,
+        sandboxTimeoutMs: 14_400_000,
         owner: {
           userId: "user-1",
           scmUserId: null,
@@ -570,6 +685,9 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.sandboxTimeoutMs).toBe(14_400_000);
+      }
     });
 
     it("parses a repo-less spawn context", () => {
@@ -594,6 +712,33 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
     });
+
+    it.each([-1_000, 1_500, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects invalid snapshotted sandbox timeout %s",
+      (sandboxTimeoutMs) => {
+        const result = spawnContextSchema.safeParse({
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          model: "anthropic/claude-sonnet-4-6",
+          reasoningEffort: null,
+          baseBranch: null,
+          sandboxTimeoutMs,
+          owner: {
+            userId: "user-1",
+            scmUserId: null,
+            scmLogin: null,
+            scmName: null,
+            scmEmail: null,
+            scmAccessTokenEncrypted: null,
+            scmRefreshTokenEncrypted: null,
+            scmTokenExpiresAt: null,
+          },
+        });
+
+        expect(result.success).toBe(false);
+      }
+    );
 
     it("rejects a malformed partial spawn context", () => {
       const result = spawnContextSchema.safeParse({

@@ -12,9 +12,9 @@ import type {
   ToolCallSummary,
   ArtifactInfo,
   MediaArtifactInfo,
+  ArtifactType,
 } from "../types/artifacts";
 import type { EventResponse, ListEventsResponse } from "../types/sandbox-events";
-import type { ArtifactType } from "../types/statuses";
 import type { Logger } from "../logger";
 import {
   buildOutboundAuthHeaders,

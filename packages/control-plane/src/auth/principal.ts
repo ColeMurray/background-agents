@@ -7,7 +7,7 @@
  * resolved identity.
  */
 
-import type { ServiceName } from "@open-inspect/shared";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 
 /** Actor namespaces bots may assert (`slack:U123` etc.). */
 export const ACTOR_NAMESPACES = ["slack", "github", "linear"] as const;
@@ -42,14 +42,12 @@ export type Principal =
   | { kind: "sandbox"; sessionId: string };
 
 /**
- * The actor namespace each service may assert. Web and Modal assert none —
- * web identity arrives by token exchange, never assertion, and the Modal
- * scheduler acts for no one.
+ * The actor namespace each service may assert. Web asserts none because its
+ * identity arrives by token exchange, never assertion.
  */
 export const ASSERTION_RIGHTS: Record<ServiceName, ActorNamespace | null> = {
   web: null,
   "slack-bot": "slack",
   "github-bot": "github",
   "linear-bot": "linear",
-  modal: null,
 };

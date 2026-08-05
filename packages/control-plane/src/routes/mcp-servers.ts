@@ -1,4 +1,4 @@
-import type { McpServerConfig } from "@open-inspect/shared";
+import type { McpServerConfig } from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "../db/mcp-servers";
 import type { Env } from "../types";
 import { createLogger } from "../logger";

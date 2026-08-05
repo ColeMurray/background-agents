@@ -1,5 +1,5 @@
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-import type { ServerMessage } from "@open-inspect/shared";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 
 /** An SWR cache key or key matcher to pass to `mutate`. */
 export type SwrRevalidationKey = string | ((key: unknown) => boolean);

@@ -1,12 +1,51 @@
-import { postMessage, removeReaction } from "@open-inspect/shared";
-import type { Env } from "../types";
+import { postBlocks, postMessage, removeReaction } from "@open-inspect/shared/slack";
+import type { AgentResponse, Env } from "../types";
 import { createLogger } from "../logger";
 import { extractAgentResponse } from "./extractor";
-import { buildCompletionBlocks, getFallbackText, truncateError } from "./blocks";
+import { buildCompletionBlocks, truncateError } from "./blocks";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
 
 const log = createLogger("completion-delivery");
+
+/**
+ * Sentinel an agent emits as its entire final message to decline replying in
+ * Slack. Recognized only for automation-sourced completions — see
+ * {@link shouldDeclineReply}.
+ */
+export const NO_REPLY_SENTINEL = "NO_REPLY";
+
+/** Tolerates the trailing period a model tends to add to a bare sentinel. */
+const NO_REPLY_PATTERN = new RegExp(`^${NO_REPLY_SENTINEL}\\.?$`, "i");
+
+/**
+ * Whether a finished run has declined to say anything in Slack.
+ *
+ * Channel-trigger automations fire on ambient messages, so "this needed nothing
+ * from me" is a legitimate outcome — the message turned out to be chatter
+ * between humans, or a follow-up addressed to someone else. With no way to
+ * express that, the run's reasoning about why it should stay quiet gets posted
+ * as a reply, and a triage automation becomes the noise it was meant to triage.
+ *
+ * Only automation-sourced completions may decline. An interactive session has a
+ * user waiting on a visible answer, so it always posts, falling back to
+ * "_Agent completed._" when the agent produced no text.
+ *
+ * A run that produced artifacts always posts too: work that landed outside
+ * Slack needs a pointer to it regardless of what the agent wrote.
+ */
+export function shouldDeclineReply(
+  job: Pick<SlackCompletionJob, "source" | "success">,
+  response: AgentResponse
+): boolean {
+  if (job.source !== "automation") return false;
+  if (!job.success || !response.success) return false;
+  if (response.artifacts.length > 0) return false;
+  if ((response.mediaArtifacts ?? []).length > 0) return false;
+
+  const text = response.textContent.trim();
+  return text === "" || NO_REPLY_PATTERN.test(text);
+}
 
 export async function processSlackCompletion(job: SlackCompletionJob, env: Env): Promise<void> {
   const startTime = Date.now();
@@ -60,6 +99,18 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       return;
     }
 
+    if (shouldDeclineReply(job, agentResponse)) {
+      log.info("callback.complete", {
+        ...base,
+        outcome: "success",
+        declined: true,
+        agent_success: job.success,
+        tool_call_count: agentResponse.toolCalls.length,
+        duration_ms: Date.now() - startTime,
+      });
+      return;
+    }
+
     const blocks = buildCompletionBlocks(
       job.sessionId,
       agentResponse,
@@ -72,12 +123,10 @@ export async function processSlackCompletion(job: SlackCompletionJob, env: Env):
       },
       env.WEB_APP_URL
     );
-    const postResult = await postMessage(
-      env.SLACK_BOT_TOKEN,
-      job.channel,
-      getFallbackText(agentResponse),
-      { thread_ts: job.threadTs, blocks }
-    );
+    // Without top-level text, Slack derives screen-reader text from the blocks.
+    const postResult = await postBlocks(env.SLACK_BOT_TOKEN, job.channel, blocks, {
+      thread_ts: job.threadTs,
+    });
     if (!postResult.ok) {
       log.warn("slack.completion.post", {
         ...base,

@@ -1,6 +1,11 @@
 import { applyIdentityEnforcement } from "../auth/identity-enforcement";
+import type {
+  SessionParticipantProfilesResponse,
+  SessionParticipantProfile,
+} from "@open-inspect/shared";
+import { UserStore } from "../db/user-store";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
-import type { Env } from "../types";
+import type { Env, ParticipantResponse } from "../types";
 import { error, parseJsonBody, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
@@ -63,6 +68,46 @@ async function handleAddParticipant(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+async function handleParticipantProfiles(
+  _request: Request,
+  _env: Env,
+  match: RegExpMatchArray,
+  ctx: SessionRouteContext
+): Promise<Response> {
+  const sessionId = getSessionId(match);
+  if (sessionId instanceof Response) return sessionId;
+
+  const participantsResponse = await ctx.sessionRuntime.fetch(
+    sessionId,
+    SessionInternalPaths.participants
+  );
+  if (!participantsResponse.ok) return participantsResponse;
+
+  let participants: ParticipantResponse[];
+  try {
+    const body = (await participantsResponse.json()) as { participants?: ParticipantResponse[] };
+    if (!Array.isArray(body.participants)) throw new Error("Missing participants");
+    participants = body.participants;
+  } catch {
+    return error("Invalid participant response", 502);
+  }
+
+  const users = await new UserStore(ctx.db).getUsersByIds(
+    participants.map((participant) => participant.canonicalUserId ?? participant.userId)
+  );
+  const profiles = Object.fromEntries(
+    users.map((user): [string, SessionParticipantProfile] => [
+      user.id,
+      {
+        userId: user.id,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+      },
+    ])
+  );
+  return Response.json({ profiles } satisfies SessionParticipantProfilesResponse);
 }
 
 async function handleCreatePR(
@@ -197,6 +242,11 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     internalPath: SessionInternalPaths.participants,
   }),
   sessionRoute({
+    method: "GET",
+    pattern: parsePattern("/sessions/:id/participant-profiles"),
+    handler: handleParticipantProfiles,
+  }),
+  sessionRoute({
     method: "POST",
     pattern: parsePattern("/sessions/:id/participants"),
     handler: handleAddParticipant,
@@ -216,6 +266,12 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "POST",
     routePath: "/sessions/:id/openai-token-refresh",
     internalPath: SessionInternalPaths.openaiTokenRefresh,
+    runtimeMethod: "POST",
+  }),
+  simpleProxyRoute({
+    method: "POST",
+    routePath: "/sessions/:id/xai-token-refresh",
+    internalPath: SessionInternalPaths.xaiTokenRefresh,
     runtimeMethod: "POST",
   }),
   simpleProxyRoute({

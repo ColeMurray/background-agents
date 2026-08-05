@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
-import type { ServerMessage, SessionState } from "@open-inspect/shared";
+import type { SessionState } from "@open-inspect/shared";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import {
   initialSessionSocketState,
   sessionSocketReducer,
@@ -186,12 +187,13 @@ describe("sessionSocketReducer", () => {
           replay: {
             events: [{ type: "git_sync", status: "completed", sandboxId: "sb-1", timestamp: 10 }],
             hasMore: true,
-            cursor: { timestamp: 10, id: "evt-10" },
+            cursor: { timestamp: 10, id: "evt-10", sequence: 10 },
           },
         }),
         { type: "history_requested" }
       );
       expect(base.loadingHistory).toBe(true);
+      expect(base.cursor).toEqual({ timestamp: 10, id: "evt-10", sequence: 10 });
 
       const state = reduce(
         base,

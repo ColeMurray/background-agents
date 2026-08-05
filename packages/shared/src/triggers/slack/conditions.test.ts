@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { matchesConditions, validateConditions } from "../conditions";
-import type { TriggerCondition } from "../conditions";
+import type { TriggerCondition } from "../types";
 import { conditionRegistry } from "../registry";
 import { buildMockEvent } from "../testing";
 import { SLACK_TEXT_MAX_LENGTH } from "./normalizer";

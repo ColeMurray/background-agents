@@ -389,6 +389,45 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     tab1.ws.close();
   });
 
+  it("uses canonical profile IDs for bot participant subscription and presence", async () => {
+    const name = `ws-client-canonical-presence-${Date.now()}`;
+    await initNamedSession(name);
+    const watcher = await openClientWs(name, { subscribe: true, userId: "user-1" });
+    const collector = collectMessages(watcher.ws, {
+      until: (msg) =>
+        msg.type === "presence_update" &&
+        (msg.participants as Array<{ userId: string }>).some(
+          (participant) => participant.userId === "canonical-bot"
+        ),
+      timeoutMs: 2000,
+    });
+
+    const bot = await openClientWs(name, {
+      subscribe: true,
+      userId: "slack:U123",
+      canonicalUserId: "canonical-bot",
+    });
+    const subscribed = bot.messages.find((message) => message.type === "subscribed") as {
+      participant: { userId: string };
+    };
+    expect(subscribed.participant.userId).toBe("canonical-bot");
+
+    const messages = await collector;
+    const presence = messages.find(
+      (message) =>
+        message.type === "presence_update" &&
+        (message.participants as Array<{ userId: string }>).some(
+          (participant) => participant.userId === "canonical-bot"
+        )
+    ) as { participants: Array<{ userId: string }> };
+    expect(presence.participants).toEqual(
+      expect.arrayContaining([expect.objectContaining({ userId: "canonical-bot" })])
+    );
+
+    bot.ws.close();
+    watcher.ws.close();
+  });
+
   it("closing the only socket for a participant broadcasts presence_leave", async () => {
     const name = `ws-client-presence-leave-${Date.now()}`;
     await initNamedSession(name);

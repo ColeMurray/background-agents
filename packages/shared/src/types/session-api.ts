@@ -1,9 +1,15 @@
 import { z } from "zod";
 import { recordSchema, type AgentResponse } from "./artifacts";
+import { isValidSandboxTimeoutMs } from "./integrations";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
-import type { Session } from "./sessions";
-import { sessionStatusSchema, type SandboxStatus, type SessionStatus } from "./statuses";
+import {
+  messageSourceSchema,
+  sessionStatusSchema,
+  type SandboxStatus,
+  type Session,
+  type SessionStatus,
+} from "./sessions";
 
 export interface UserPreferences {
   userId: string;
@@ -14,6 +20,7 @@ export interface UserPreferences {
 }
 
 const nonEmptyStringSchema = z.string().trim().min(1);
+const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
 
 export const slackCallbackContextSchema = z.object({
   source: z.literal("slack"),
@@ -23,6 +30,13 @@ export const slackCallbackContextSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().optional(),
   reactionMessageTs: z.string().optional(),
+  /**
+   * Set when the session belongs to an automation rather than an interactive
+   * request. A thread follow-up completes through the same callback as an
+   * `@mention` turn, so the route alone cannot tell the two apart, and only the
+   * control plane knows which automation (if any) owns the thread.
+   */
+  automationId: z.string().optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
@@ -85,7 +99,7 @@ export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
 export const sendPromptRequestSchema = z.object({
   content: z.string().min(1),
-  source: z.string().optional(),
+  source: messageSourceSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   attachments: z.unknown().optional(),
@@ -268,8 +282,10 @@ export const spawnContextSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().nullable(),
   baseBranch: z.string().nullable(),
+  sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
   owner: z.object({
     userId: z.string(),
+    canonicalUserId: z.string().nullable().optional(),
     scmUserId: z.string().nullable(),
     scmLogin: z.string().nullable(),
     scmName: z.string().nullable(),

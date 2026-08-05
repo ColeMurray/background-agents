@@ -49,7 +49,7 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repository-catalog";
 
 /**
  * Thread context for classification.
@@ -62,7 +62,7 @@ export interface ThreadContext {
   previousMessages?: string[];
 }
 
-import type { ConfidenceLevel } from "@open-inspect/shared";
+import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
 // targets.ts is a pure leaf (types + policy functions, no I/O), so the types
 // barrel can depend on it without a cycle.
 import type { SlackSessionTarget } from "../targets";
@@ -81,7 +81,8 @@ export interface ClassificationResult {
   needsClarification: boolean;
 }
 
-export type { ConfidenceLevel, Environment } from "@open-inspect/shared";
+export type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
+export type { Environment } from "@open-inspect/shared/types/environments";
 export type { SlackSessionTarget } from "../targets";
 
 /**

@@ -40,7 +40,7 @@ describe("ws-token API route", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("sends only provider-independent display data", async () => {
+  it("does not copy profile data into the websocket token request", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "0123456789abcdef0123456789abcdef",
@@ -60,12 +60,10 @@ describe("ws-token API route", () => {
       "/sessions/sess1/ws-token",
       expect.objectContaining({ method: "POST" })
     );
-    expect(sentBody()).toEqual({
-      authName: "Ada Lovelace",
-    });
+    expect(sentBody()).toEqual({});
   });
 
-  it("uses the same body shape regardless of sign-in provider", async () => {
+  it("uses the same empty body regardless of sign-in provider", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
         id: "fedcba9876543210fedcba9876543210",
@@ -81,6 +79,6 @@ describe("ws-token API route", () => {
     const response = await POST(request(), params("sess2"));
 
     expect(response.status).toBe(200);
-    expect(sentBody()).toEqual({ authName: "Pat PM" });
+    expect(sentBody()).toEqual({});
   });
 });

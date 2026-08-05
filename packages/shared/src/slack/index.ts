@@ -10,6 +10,7 @@ export {
   getUserInfo,
   listChannels,
   openView,
+  postBlocks,
   postEphemeral,
   postMessage,
   publishView,

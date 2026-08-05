@@ -10,7 +10,7 @@
  * KV-first, no memory tier).
  */
 
-import { createKvCacheStore } from "@open-inspect/shared";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import type { Env } from "../types";
 import {
   ControlPlaneRequestError,

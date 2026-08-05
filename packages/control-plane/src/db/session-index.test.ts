@@ -380,6 +380,12 @@ class FakeD1Database {
         rows = rows.filter((r) => r.status !== statusVal);
       }
 
+      if (conditions.includes("automation_id IS NULL")) {
+        rows = rows.filter(
+          (row) => row.automation_id === null && row.spawn_source !== "automation"
+        );
+      }
+
       if (conditions.includes("EXISTS (SELECT 1 FROM session_repositories")) {
         // Combined member/scalar repo filter: params are the member arm's
         // owner/name followed by the scalar arm's identical owner/name.
@@ -612,6 +618,36 @@ describe("SessionIndexStore", () => {
       const result = await store.list({ createdByUserIds: ["alice"] });
 
       expect(result.sessions.map((s) => s.id)).toEqual(["alice-new", "alice-old"]);
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("filters automation lineage before pagination", async () => {
+      await store.create(makeSession({ id: "manual-new", spawnSource: "user", updatedAt: 4000 }));
+      await store.create(
+        makeSession({
+          id: "automation",
+          spawnSource: "automation",
+          automationId: "automation-1",
+          automationRunId: "run-1",
+          updatedAt: 3000,
+        })
+      );
+      await store.create(
+        makeSession({
+          id: "automation-child",
+          parentSessionId: "automation",
+          spawnSource: "agent",
+          automationId: "automation-1",
+          automationRunId: "run-1",
+          updatedAt: 3500,
+        })
+      );
+      await store.create(makeSession({ id: "manual-old", spawnSource: "user", updatedAt: 2000 }));
+      await store.delete("automation");
+
+      const result = await store.list({ excludeAutomationLineage: true, limit: 2 });
+
+      expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);
     });
 

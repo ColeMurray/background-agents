@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sandbox_runtime.types import SandboxStatus
 from src import web_api
 from src.sandbox import manager as manager_module
+from src.sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS
 
 
 def _patch_auth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,7 +95,62 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_fresh_boot(monkey
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].fallback_clone_token is None
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_forwards_timeout(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "timeout_seconds": 14_400,
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["config"].timeout_seconds == 14_400
+
+
+@pytest.mark.asyncio
+async def test_create_sandbox_uses_default_timeout_when_omitted(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_manager(monkeypatch, captured)
+
+    result = await _call_create_sandbox(
+        {
+            "session_id": "sess-1",
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["config"].timeout_seconds == DEFAULT_SANDBOX_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout_seconds", [0, -1, 1.5, float("inf"), True, "not-a-timeout"])
+async def test_create_sandbox_rejects_invalid_timeout(monkeypatch, timeout_seconds):
+    _patch_auth(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call_create_sandbox(
+            {
+                "session_id": "sess-1",
+                "control_plane_url": "https://control-plane.example",
+                "sandbox_auth_token": "sandbox-token",
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "timeout_seconds must be a positive integer"
 
 
 @pytest.mark.asyncio
@@ -125,38 +181,6 @@ async def test_create_sandbox_does_not_resolve_clone_token_for_repo_image_boot(m
 
     assert result["success"] is True
     assert calls == []
-    assert captured["config"].fallback_clone_token is None
-
-
-@pytest.mark.asyncio
-async def test_create_sandbox_resolves_clone_token_for_snapshot_boot(monkeypatch):
-    """Session snapshot boots still receive a legacy fallback token."""
-    captured = {}
-    calls = []
-
-    _patch_auth(monkeypatch)
-    _patch_manager(monkeypatch, captured)
-
-    def resolve_clone_token() -> str:
-        calls.append(True)
-        return "ghs_snapshot"
-
-    monkeypatch.setattr(web_api, "resolve_clone_token", resolve_clone_token)
-
-    result = await _call_create_sandbox(
-        {
-            "session_id": "sess-1",
-            "repo_owner": "acme",
-            "repo_name": "repo",
-            "control_plane_url": "https://control-plane.example",
-            "sandbox_auth_token": "sandbox-token",
-            "snapshot_id": "snap-1",
-        }
-    )
-
-    assert result["success"] is True
-    assert calls == [True]
-    assert captured["config"].fallback_clone_token == "ghs_snapshot"
 
 
 @pytest.mark.asyncio
@@ -166,7 +190,6 @@ async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
 
     _patch_auth(monkeypatch)
     _patch_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: "unused")
 
     result = await _call_create_sandbox(
         {
@@ -183,31 +206,6 @@ async def test_create_sandbox_threads_missing_repo_fields(monkeypatch):
     assert config.repo_name is None
     assert config.session_config.repo_owner is None
     assert config.session_config.repo_name is None
-    assert config.fallback_clone_token is None
-
-
-@pytest.mark.asyncio
-async def test_create_sandbox_snapshot_without_repo_does_not_resolve_clone_token(monkeypatch):
-    """No-repository snapshot boots must not mint a repository clone token."""
-    captured = {}
-    calls = []
-
-    _patch_auth(monkeypatch)
-    _patch_manager(monkeypatch, captured)
-    monkeypatch.setattr(web_api, "resolve_clone_token", lambda: calls.append(True) or "ghs_token")
-
-    result = await _call_create_sandbox(
-        {
-            "session_id": "sess-1",
-            "control_plane_url": "https://control-plane.example",
-            "sandbox_auth_token": "sandbox-token",
-            "snapshot_id": "snap-1",
-        }
-    )
-
-    assert result["success"] is True
-    assert calls == []
-    assert captured["config"].fallback_clone_token is None
 
 
 @pytest.mark.asyncio
@@ -262,6 +260,26 @@ async def test_restore_sandbox_without_repo_does_not_resolve_clone_token(monkeyp
     assert result["success"] is True
     assert calls == []
     assert captured["restore"]["clone_token"] is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sandbox_forwards_timeout(monkeypatch):
+    captured = {}
+    _patch_auth(monkeypatch)
+    _patch_restore_manager(monkeypatch, captured)
+
+    result = await _call_restore_sandbox(
+        {
+            "snapshot_image_id": "img-abc",
+            "session_config": {"session_id": "sess-1"},
+            "control_plane_url": "https://control-plane.example",
+            "sandbox_auth_token": "sandbox-token",
+            "timeout_seconds": 14_400,
+        }
+    )
+
+    assert result["success"] is True
+    assert captured["restore"]["timeout_seconds"] == 14_400
 
 
 @pytest.mark.asyncio

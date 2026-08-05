@@ -11,6 +11,7 @@ import {
   getUserInfo,
   listChannels,
   openView,
+  postBlocks,
   postMessage,
   publishView,
   removeReaction,
@@ -238,6 +239,30 @@ describe("postMessage", () => {
     const result = await postMessage("xoxb-token", "C123", "hi");
     expect(result.ok).toBe(false);
     expect(result.error).toBe("network_error");
+  });
+});
+
+describe("postBlocks", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts blocks without a top-level text field", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ok: true, ts: "1700000000.000300" }));
+    const blocks = [{ type: "section", text: { type: "mrkdwn", text: "hello" } }];
+
+    const result = await postBlocks("xoxb-token", "C123", blocks, {
+      thread_ts: "1699999999.000100",
+    });
+
+    expect(result.ok).toBe(true);
+    const init = fetchSpy.mock.calls[0]![1];
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("text");
+    expect(body.blocks).toEqual(blocks);
+    expect(body.thread_ts).toBe("1699999999.000100");
   });
 });
 

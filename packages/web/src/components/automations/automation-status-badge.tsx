@@ -1,4 +1,4 @@
-import type { Automation } from "@open-inspect/shared";
+import type { Automation } from "@open-inspect/shared/types/automations";
 import { Badge } from "@/components/ui/badge";
 
 export function AutomationStatusBadge({ automation }: { automation: Automation }) {

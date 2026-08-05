@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
 import { SandboxProviderError } from "../provider";
 import type { CreateSandboxConfig, ResumeConfig, StopConfig } from "../provider";
@@ -111,6 +111,7 @@ describe("DaytonaSandboxProvider", () => {
       const provider = new DaytonaSandboxProvider(createMockClient(), defaultProviderConfig);
       expect(provider.name).toBe("daytona");
       expect(provider.capabilities).toEqual({
+        supportsSandboxTimeout: false,
         supportsSnapshots: false,
         supportsRestore: false,
         supportsPersistentResume: true,

@@ -9,7 +9,7 @@ import { getSafeExternalUrl } from "@/lib/urls";
 import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { SessionRepositoryState } from "@open-inspect/shared";
+import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
@@ -25,7 +25,8 @@ import {
   ErrorIcon,
   RefreshIcon,
 } from "@/components/ui/icons";
-import { Badge, prBadgeVariant } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
+import { prBadgeVariant } from "@/components/ui/badge-variants";
 
 type WarningEvent = Extract<SandboxEvent, { type: "warning" }>;
 

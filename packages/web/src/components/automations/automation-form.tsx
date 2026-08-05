@@ -1,20 +1,22 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { isValidCron } from "@open-inspect/shared/cron";
 import {
-  DEFAULT_MODEL,
-  getReasoningConfig,
-  isValidCron,
-  isValidReasoningEffort,
   triggerSources,
-  MAX_AUTOMATION_REPOSITORIES,
   TRIGGER_TYPE_TO_SOURCE,
-  type AutomationRepositoryInput,
   type AutomationTriggerType,
   type AutomationEventSource,
   type TriggerCondition,
   type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
+import type { AutomationRepositoryInput } from "@open-inspect/shared/types/automations";
+import {
+  DEFAULT_MODEL,
+  getReasoningConfig,
+  isValidReasoningEffort,
+} from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";
@@ -625,8 +627,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Branch (single-repository selections only; multi-repo runs use each repo's default) */}
       {usesSingleRepository && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Branch</label>
+          <label
+            htmlFor="automation-branch"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Branch
+          </label>
           <Combobox
+            id="automation-branch"
             value={baseBranch}
             onChange={setBaseBranch}
             items={branches.map((b) => ({
@@ -656,8 +664,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Model */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Model</label>
+        <label
+          htmlFor="automation-model"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Model
+        </label>
         <Combobox
+          id="automation-model"
           value={resolvedModel}
           onChange={(nextModel) => {
             setModel(nextModel);
