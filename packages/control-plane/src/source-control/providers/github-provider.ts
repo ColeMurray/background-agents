@@ -167,14 +167,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const parsed = githubRepositoryInfoSchema.safeParse(await response.json());
-    if (!parsed.success) {
-      throw new SourceControlProviderError(
-        "Failed to get repository: malformed response",
-        "transient"
-      );
-    }
-    const data = parsed.data;
+    const data = await parseProviderResponse(
+      response,
+      githubRepositoryInfoSchema,
+      "Failed to get repository"
+    );
 
     return {
       owner: data.owner.login,
@@ -526,14 +523,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
           response.status
         );
       }
-      const parsed = githubBranchRefSchema.safeParse(await response.json());
-      if (!parsed.success) {
-        throw new SourceControlProviderError(
-          "Failed to resolve branch head: malformed response",
-          "transient"
-        );
-      }
-      return parsed.data.object.sha;
+      const data = await parseProviderResponse(
+        response,
+        githubBranchRefSchema,
+        "Failed to resolve branch head"
+      );
+      return data.object.sha;
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;
       throw SourceControlProviderError.fromFetchError(

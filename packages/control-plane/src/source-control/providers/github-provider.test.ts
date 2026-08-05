@@ -74,9 +74,9 @@ describe("GitHubSourceControlProvider", () => {
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).message).toBe(
-        "Failed to resolve branch head: malformed response"
+        "Failed to resolve branch head: unexpected response shape (object.sha)"
       );
-      expect((err as SourceControlProviderError).errorType).toBe("transient");
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
     });
   });
 
@@ -131,9 +131,32 @@ describe("GitHubSourceControlProvider", () => {
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).message).toBe(
-        "Failed to get repository: malformed response"
+        "Failed to get repository: unexpected response shape (default_branch)"
       );
-      expect((err as SourceControlProviderError).errorType).toBe("transient");
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
+
+    it("rejects non-JSON repository responses", async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        new Response("<html>gateway</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        })
+      );
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      const err = await provider
+        .getRepository(
+          { authType: "app", token: "installation-token" },
+          { owner: "acme", name: "web" }
+        )
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to get repository: response body is not JSON"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
     });
   });
 

@@ -61,9 +61,9 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(err).toBeInstanceOf(SourceControlProviderError);
       expect((err as SourceControlProviderError).message).toBe(
-        "Failed to resolve branch head: malformed response"
+        "Failed to resolve branch head: unexpected response shape (commit.id)"
       );
-      expect((err as SourceControlProviderError).errorType).toBe("transient");
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
     });
   });
 

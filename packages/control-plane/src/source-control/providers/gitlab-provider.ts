@@ -549,14 +549,12 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
           response.status
         );
       }
-      const parsed = gitlabBranchHeadSchema.safeParse(await response.json());
-      if (!parsed.success) {
-        throw new SourceControlProviderError(
-          "Failed to resolve branch head: malformed response",
-          "transient"
-        );
-      }
-      return parsed.data.commit.id;
+      const data = await parseProviderResponse(
+        response,
+        gitlabBranchHeadSchema,
+        "Failed to resolve branch head"
+      );
+      return data.commit.id;
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;
       throw SourceControlProviderError.fromFetchError(
