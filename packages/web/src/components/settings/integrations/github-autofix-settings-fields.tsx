@@ -64,8 +64,9 @@ export function GitHubAutofixSettingsFields({
         },
         {
           key: "openInspectReviewsEnabled" as const,
-          label: "Open Inspect Review",
-          description: "Allow trusted findings from a different review session.",
+          label: "Open Inspect reviews",
+          description:
+            "Allow reviews from the configured Open Inspect App, regardless of workflow.",
         },
       ].map((field) => (
         <label key={field.key} className={rowClass}>

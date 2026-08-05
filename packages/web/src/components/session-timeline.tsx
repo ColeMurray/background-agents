@@ -467,9 +467,7 @@ function UserMessageEvent({
           <span className="font-medium text-accent">Resumed by PR feedback</span>
           <span className="text-muted-foreground">
             {event.origin.kind === "pr_comment" ? "PR comment" : "Review"} ·{" "}
-            {event.origin.kind === "open_inspect_review" || event.origin.authorType === "bot"
-              ? "Bot"
-              : "Human"}
+            {event.origin.authorType === "bot" ? "Bot" : "Human"}
           </span>
           <a
             href={event.origin.feedbackUrl}

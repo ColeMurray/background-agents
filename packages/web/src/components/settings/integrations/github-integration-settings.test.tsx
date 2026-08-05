@@ -154,6 +154,9 @@ describe("GitHubIntegrationSettings", () => {
       "aria-checked",
       "true"
     );
+    expect(
+      screen.getByText(/reviews from the configured Open Inspect App, regardless of workflow/i)
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("switch", { name: "Enable Autofix" }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));

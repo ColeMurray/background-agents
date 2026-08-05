@@ -1,143 +1,127 @@
 # PR Feedback Autofix Runbook
 
-PR Feedback Autofix resumes the Open Inspect session associated with a pull request when eligible
-feedback arrives. It is disabled by default and can be enabled globally or for selected repository
-overrides.
+PR Feedback Autofix resumes the Open Inspect session that owns a pull request when eligible GitHub
+feedback arrives. It is disabled by default and can be enabled globally or for individual
+repositories.
+
+## Dispatch model
+
+- Each eligible top-level human PR comment creates one Autofix attempt.
+- Each eligible submitted review creates one Autofix attempt containing its summary and inline
+  comments.
+- Explicit `@open-inspect` mentions continue using the existing fresh-session flow.
+- A review from the exact configured Open Inspect App identity can be eligible regardless of which
+  Open Inspect workflow published it. Review producers do not need a special tool or protocol.
+- Other review bots must be listed by exact normalized login.
+
+GitHub is authoritative for feedback identity and content. The webhook queues only stable routing
+metadata; the control plane re-reads the pull request and feedback before admission. Duplicate
+deliveries of the same immutable GitHub object do not create duplicate session messages.
 
 ## Rollout
 
-1. Deploy the control plane and GitHub bot together so the queue producer, consumer, database
-   migrations, and settings schema agree.
-2. In **Settings → Integrations → GitHub**, leave the global Autofix switch off.
-3. Choose one internal repository, select its **Override** mode, and enable submitted human reviews.
-   Enable plain human PR comments only if the team wants every comment to start an attempt in the
-   owning session.
-4. Exercise the human-only inputs and confirm the acceptance checks below.
-5. Enable Open Inspect reviews only after human inputs are healthy, then verify self-echo,
-   cross-session provenance, no-findings suppression, and single-review publication.
-6. Add CodeRabbit's exact bot login only after Open Inspect reviews are healthy. Add no other bot
-   identity until it has been evaluated independently.
-7. Leave the attempt cap at its default until the dogfood repository shows a need to change it.
-8. For each enabled input, confirm:
-   - one owning-session request is created for each individual PR comment;
-   - one owning-session request is created for a submitted review;
-   - Open Inspect publishes at most one GitHub review for a reviewer run;
-   - the session timeline links back to the originating feedback;
-   - disabled repositories remain unaffected.
-9. Expand by repository only after the acceptance checks and operational signals below remain
-   healthy.
+1. Deploy the shared contract, GitHub bot, control plane, web settings, and database migrations from
+   the same stack.
+2. In **Settings -> Integrations -> GitHub**, leave global Autofix disabled.
+3. Select one internal repository, choose **Override**, and enable human submitted reviews.
+4. Enable plain human PR comments only if the team wants every such comment to start an attempt.
+5. Verify the human-input acceptance checks below.
+6. Enable Open Inspect reviews. Exercise both the built-in reviewer and an existing custom
+   automation that publishes a GitHub review through its normal mechanism.
+7. Add third-party bots only after evaluating each bot independently. Enter its exact GitHub login.
+8. Keep the default attempt cap until observed volume justifies changing it.
+9. Expand repository by repository after the operational signals remain healthy.
 
-Explicit `@open-inspect` mentions remain supported even when automatic dispatch is disabled.
-Settings changes affect future webhook deliveries; they do not cancel sessions already admitted.
+Settings changes affect future webhook deliveries. They do not cancel work already admitted.
 
 ### Budget prerequisite
 
-The current platform has no authoritative per-session spend-budget setting for Autofix to inspect at
-admission. Existing execution timeouts, cancellation controls, and the rolling attempt cap still
-apply, but they are not a spend budget. Keep Autofix default-off for any deployment that requires an
-enforced spend ceiling; dogfood enablement requires either accepting this limitation explicitly or
-first adding an authoritative budget facility outside this feature.
+Autofix has no authoritative spend budget at admission time. Existing execution timeouts,
+cancellation controls, and the rolling attempt cap still apply, but they are not a spend budget.
+Keep Autofix disabled for deployments that require a hard spend ceiling unless that limitation is
+explicitly accepted.
+
+## Acceptance checks
+
+For every enabled input, verify:
+
+- one owning-session message is created for an individual eligible PR comment;
+- one owning-session message is created for a submitted eligible review;
+- redelivery of the same GitHub object does not create another message;
+- the session timeline identifies the author type and links to the feedback;
+- Open Inspect App reviews work without producer-session metadata or a publication receipt;
+- a custom automation review and built-in reviewer review follow the same admission path;
+- disabled repositories and unlisted bots remain unaffected; and
+- repeated distinct reviews stop at the configured rolling attempt cap.
+
+An empty review, an approved review, or a dismissed review is non-actionable. A non-empty
+`COMMENTED` review that says there are no findings may consume one no-op attempt; Autofix does not
+classify arbitrary prose.
 
 ## Operational signals
 
-The control-plane cron checks queue health once per minute and emits structured error logs:
+The control-plane scheduled handler checks queue health once per minute and emits structured error
+logs:
 
-| Event                          | Meaning                             | Alert condition                                                                                       |
-| ------------------------------ | ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `autofix.queue_health`         | Queue work is not draining normally | Primary backlog exceeds 25, oldest primary message exceeds 5 minutes, or the DLQ contains any message |
-| `autofix.queue_metrics_failed` | Queue health could not be inspected | Any metrics read failure                                                                              |
+| Event                          | Alert condition                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `autofix.queue_health`         | Primary backlog exceeds 25, its oldest message exceeds 5 minutes, or the DLQ contains any message |
+| `autofix.queue_metrics_failed` | A queue metrics read failed                                                                       |
 
-Configuring the alert destination is a required dogfood gate owned by the deployment, because this
-repository does not manage the external notification sink. Route these error-level events through
-the deployment's Worker log alerting. Alert on every DLQ event and when either primary-queue
-threshold is reported in two consecutive checks.
+Configure the deployment's Worker log alerting to notify on every DLQ event and when either primary
+threshold is reported in two consecutive checks. This repository does not configure the external
+notification destination.
 
-The durable activity ledger is available to authenticated operators at:
+Authenticated operators can inspect the durable activity ledger at:
 
 ```text
 GET /autofix/activity?limit=50
 ```
 
-Each record includes the repository, PR, source object, delivery count, decision, reason,
-session/message IDs, timestamps, and the last error. Follow `nextCursor` to inspect older records.
+Records include repository, pull request, source object, delivery count, decision, reason,
+session/message IDs, timestamps, and the last error. Follow `nextCursor` for older records.
 
-Useful decision reasons include:
+Common reasons:
 
-- `disabled` or a source-specific policy reason: expected settings decision;
-- `duplicate`: the same immutable provider object was already handled;
-- `attempt_cap`: the PR reached its configured automatic-session cap;
-- `no_findings`: an Open Inspect review intentionally had no findings;
-- `own_app_unattributed`: the review receipt was not available after bounded retries and needs
-  reconciliation;
-- `permanent_provider_error`: GitHub rejected the provider read permanently;
-- `delivery_attempts_exhausted`: transient processing repeatedly failed.
+- `disabled`, `reviews_disabled`, or `pr_comments_disabled`: expected settings decision;
+- `own_reviews_disabled`: the exact Open Inspect App review setting is off;
+- `bot_not_allowed`: another bot is not in the repository's exact allowlist;
+- `review_state_not_actionable` or `empty_feedback`: no actionable review content;
+- `duplicate`: the immutable provider object was already handled;
+- `attempt_limit`: the owning session reached the configured rolling cap;
+- `permanent_provider_error`: GitHub rejected an authoritative read permanently; and
+- `delivery_attempts_exhausted`: transient processing failed through the queue retry limit.
 
 ## Triage
 
 1. Inspect `autofix.queue_health` and `autofix.queue_metrics_failed` logs.
-2. Inspect `/autofix/activity` for the affected repository and PR.
+2. Inspect `/autofix/activity` for the repository and pull request.
 3. Check the GitHub webhook delivery and redelivery history for the source object.
-4. Confirm the repository's resolved Autofix settings, bot allowlist, source session, PR head, and
-   attempt count before retrying work.
-5. For a primary backlog, correct the downstream dependency first. Queue retries are automatic.
+4. Confirm the resolved repository settings, exact bot identity or allowlist entry, owning session,
+   pull-request state, and attempt count.
+5. For a primary backlog, correct the downstream dependency; queue retries are automatic.
 6. For a DLQ message, confirm whether its feedback key already has a terminal ledger decision before
-   redelivering its GitHub webhook. Immutable provider IDs and session admission keys make safe
-   redeliveries idempotent.
+   redelivering the GitHub webhook.
 
-Do not edit Autofix ledger rows or Session Durable Object storage to force a retry.
-
-## Review publication reconciliation
-
-A timed-out GitHub review publication is marked `uncertain` and is never automatically reposted.
-Reconcile it explicitly:
-
-1. Find its `publicationKey` and marker in `github_review_publications`.
-2. Ask the authenticated endpoint to search the exact PR:
-
-   ```json
-   POST /autofix/review-publications/{publicationKey}/reconcile
-   { "action": "search" }
-   ```
-
-3. Inspect the returned candidates on GitHub.
-4. If no candidate exists, explicitly abandon the stale `pending` or `uncertain` publication:
-
-   ```json
-   POST /autofix/review-publications/{publicationKey}/reconcile
-   { "action": "abandon" }
-   ```
-
-   The server repeats the marker search and refuses abandonment when a candidate exists. A failed
-   receipt is never reposted; producing another review requires a new reviewer message.
-
-5. Otherwise, confirm only the review authored by the configured Open Inspect bot whose body
-   contains the stored marker:
-
-   ```json
-   POST /autofix/review-publications/{publicationKey}/reconcile
-   { "action": "confirm", "providerReviewId": "123456789" }
-   ```
-
-Confirmation re-reads the exact provider review and fails closed unless both bot identity and marker
-match. It also reopens only the corresponding `own_app_unattributed` feedback receipt for safe
-webhook redelivery.
+Do not edit Autofix ledger rows or Durable Object storage to force a retry. Provider IDs and
+SessionDO admission keys make normal webhook redelivery idempotent.
 
 ## Kill switch
 
-Disable Autofix for the affected repository override. For a deployment-wide stop, disable the global
-Autofix setting and every repository override that enables it. Explicit mentions remain available
-for deliberate operator use.
+Disable Autofix in the affected repository override. For a deployment-wide stop, disable the global
+setting and every repository override that explicitly enables it. Explicit mentions remain available
+for deliberate use.
 
-After disabling, allow in-flight sessions to finish or stop them through the normal session
-controls. Preserve queue and ledger data for diagnosis.
+Allow admitted sessions to finish or stop them through normal session controls. Preserve queue and
+ledger data for diagnosis.
 
 ## Rollout gate
 
-Before broadening beyond the dogfood repository, verify:
+Before broadening beyond dogfood, verify:
 
-- no unexpected repositories or actor types were admitted;
-- duplicate deliveries did not create duplicate session messages;
+- no unexpected repository or actor type was admitted;
+- duplicates did not create duplicate session messages;
 - attempt caps behaved as configured;
-- no unexplained DLQ messages or uncertain publications remain;
-- review feedback was published as a single GitHub review;
-- operators can trace every tested feedback object from GitHub to its session.
+- both built-in and custom-automation Open Inspect reviews were admitted without producer changes;
+- no unexplained DLQ messages remain; and
+- every tested feedback object can be traced from GitHub to its owning session.

@@ -55,8 +55,8 @@ module "control_plane_worker" {
     }
   ]
 
-  # The DLQ binding provides the operator health endpoint with queue-level
-  # failure visibility. Autofix production remains owned by the GitHub bot.
+  # These bindings provide read-only queue metrics to the operator health
+  # check. Autofix production remains owned by the GitHub bot.
   queue_bindings = concat(
     [
       {
@@ -65,6 +65,10 @@ module "control_plane_worker" {
       }
     ],
     var.enable_github_bot ? [
+      {
+        binding_name = "AUTOFIX_QUEUE"
+        queue_name   = cloudflare_queue.github_autofix[0].queue_name
+      },
       {
         binding_name = "AUTOFIX_DLQ"
         queue_name   = cloudflare_queue.github_autofix_dlq[0].queue_name

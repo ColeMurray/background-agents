@@ -147,9 +147,6 @@ describe("AutofixService", () => {
     );
     const dispatch = h.sessions.fetch.mock.calls[0] as unknown as [string, string, RequestInit];
     expect(dispatch[2].body).toContain(
-      "Trusted target: acme/widgets pull request #42, branch feature/widgets, head abc123."
-    );
-    expect(dispatch[2].body).toContain(
       "Reply concisely on the originating pull request when an outcome response is warranted"
     );
     expect(dispatch[2].body).toContain("validation results, no-change explanation, or question");

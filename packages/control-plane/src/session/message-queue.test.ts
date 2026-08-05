@@ -201,7 +201,7 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     const command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }> = {
       type: "enqueue_feedback",
-      feedbackKey: "github:99:review:1234",
+      feedbackKey: "github:review:1234",
       pullRequest: {
         repositoryId: "99",
         number: 42,
@@ -252,44 +252,6 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("preserves Open Inspect review provenance without projecting it", async () => {
-    const h = buildQueue();
-    const origin = {
-      kind: "open_inspect_review" as const,
-      sourceSessionId: "review-session",
-      sourceMessageId: "review-message",
-      publicationKey: "github-review:opaque",
-      feedbackUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1234",
-    };
-
-    await h.queue.enqueueAutofix({
-      type: "enqueue_feedback",
-      feedbackKey: "github:99:review:1234",
-      pullRequest: {
-        repositoryId: "99",
-        number: 42,
-        artifactId: "artifact-1",
-      },
-      prompt: "Address the submitted review feedback.",
-      author: { id: "7", login: "open-inspect[bot]" },
-      origin,
-      attemptLimit: 10,
-    });
-
-    const [admission] = h.repository.admitAutofixMessage.mock.calls[0] as unknown as [
-      Parameters<SessionRepository["admitAutofixMessage"]>[0],
-    ];
-    const event = JSON.parse(String(admission.event.data)) as {
-      origin?: unknown;
-    };
-    expect(event.origin).toEqual(origin);
-    expect(h.broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: expect.objectContaining({ origin }),
-      })
-    );
-  });
-
   it("re-drives a duplicate pending Autofix message", async () => {
     const h = buildQueue();
     h.repository.admitAutofixMessage.mockReturnValue({
@@ -300,7 +262,7 @@ describe("SessionMessageQueue", () => {
 
     const result = await h.queue.enqueueAutofix({
       type: "enqueue_feedback",
-      feedbackKey: "github:99:review:1234",
+      feedbackKey: "github:review:1234",
       pullRequest: { repositoryId: "99", number: 42, artifactId: "artifact-1" },
       prompt: "Address the submitted review feedback.",
       author: { id: "7", login: "alice" },
