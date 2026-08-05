@@ -9,7 +9,7 @@
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
-import { z } from "zod";
+import { issueSessionSchema } from "./types";
 import type {
   Env,
   TeamRepoMapping,
@@ -20,18 +20,6 @@ import type {
 import { createLogger } from "./logger";
 
 const log = createLogger("kv-store");
-
-const issueSessionSchema = z.object({
-  sessionId: z.string(),
-  issueId: z.string(),
-  issueIdentifier: z.string(),
-  repoOwner: z.string().optional(),
-  repoName: z.string().optional(),
-  environmentId: z.string().optional(),
-  model: z.string(),
-  agentSessionId: z.string().optional(),
-  createdAt: z.number(),
-});
 
 export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
   try {

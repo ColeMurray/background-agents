@@ -62,19 +62,14 @@ export type UpdateEnvironmentInput = z.input<typeof updateEnvironmentInputSchema
  * NOT NULL — resolution fills the repo's default branch when the request omits
  * it); repoId is nullable to tolerate rows written before a repo resolved.
  */
-export interface EnvironmentRepository {
-  repoOwner: string;
-  repoName: string;
-  repoId: number | null;
-  baseBranch: string;
-}
-
 export const environmentRepositorySchema = z.object({
   repoOwner: z.string(),
   repoName: z.string(),
   repoId: z.number().nullable(),
   baseBranch: z.string(),
 });
+
+export type EnvironmentRepository = z.infer<typeof environmentRepositorySchema>;
 
 /** An environment: a named, prebuildable repository set (design §7.1). */
 export const environmentSchema = z.object({

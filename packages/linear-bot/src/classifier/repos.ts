@@ -5,7 +5,8 @@
  * repository name.
  */
 
-import { controlPlaneReposResponseSchema } from "@open-inspect/shared";
+import { z } from "zod";
+import { controlPlaneReposResponseSchema, repoConfigSchema } from "@open-inspect/shared";
 import type { Env, RepoConfig, ControlPlaneRepo } from "../types";
 import { createCachedResource } from "../cached-resource";
 import { fetchControlPlaneJson } from "../control-plane";
@@ -29,16 +30,22 @@ function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
   };
 }
 
+const repoConfigsSchema = z.array(repoConfigSchema);
+
 const reposResource = createCachedResource<RepoConfig[]>({
   name: "repos",
   kvKey: "repos:cache",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/repos", traceId);
-    const result = controlPlaneReposResponseSchema.safeParse(body);
-    if (!result.success) return [];
-    return result.data.repos.map(toRepoConfig);
+    // Throws on a malformed body so the resource falls back to the KV
+    // last-known-good copy. Returning [] here would instead publish "no
+    // repositories" as a successful load and overwrite that copy.
+    return controlPlaneReposResponseSchema.parse(body).repos.map(toRepoConfig);
   },
-  deserialize: (cached) => (Array.isArray(cached) ? (cached as RepoConfig[]) : null),
+  deserialize: (cached) => {
+    const result = repoConfigsSchema.safeParse(cached);
+    return result.success ? result.data : null;
+  },
   fallback: [],
 });
 
