@@ -260,16 +260,13 @@ export class VercelSandboxProvider implements SandboxProvider {
 
       const identity = imageBuildSandboxIdentity(config, Date.now());
       const env = this.buildBuildEnvVars(config, identity.sandboxId);
-      const tags = { ...identity.labels };
-      // Vercel permits at most five tags; the canonical scope id supersedes this legacy alias.
-      delete tags.openinspect_environment;
       const created = await this.client.createSandbox(
         {
           name: identity.sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
           timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
-          tags,
+          tags: identity.labels,
           sourceSnapshotId: baseSnapshotId,
         },
         config.correlation

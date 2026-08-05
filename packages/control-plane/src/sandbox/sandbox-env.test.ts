@@ -366,8 +366,6 @@ describe("imageBuildSandboxIdentity", () => {
         openinspect_build_id: "build-1",
         openinspect_scope_kind: "repo",
         openinspect_scope_id: "acme/web",
-        // Legacy label preserved for existing operator queries.
-        openinspect_environment: "acme/web",
       },
     });
   });
