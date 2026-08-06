@@ -596,6 +596,59 @@ describe("handleReviewRequested", () => {
     );
   });
 
+  it("posts pending and error statuses when prompt delivery fails", async () => {
+    const env = createMockEnv();
+    const cpFetch = getControlPlaneFetch(env);
+    cpFetch.mockImplementation((url: string) => {
+      if (/\/repos\/[^/]+\/[^/]+\/metadata$/.test(url)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ repo: "acme/widgets", metadata: null }), { status: 200 })
+        );
+      }
+      if (url === "https://internal/sessions") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ sessionId: "session-123", status: "created" }), {
+            status: 200,
+          })
+        );
+      }
+      if (/\/sessions\/.+\/prompt$/.test(url)) {
+        return Promise.resolve(new Response("Unavailable", { status: 503 }));
+      }
+      return Promise.resolve(new Response("Not found", { status: 404 }));
+    });
+
+    await expect(
+      handleReviewRequested(env, createMockLogger(), reviewRequestedPayload, "trace-review-failed")
+    ).rejects.toThrow("Prompt delivery failed: 503 Unavailable");
+
+    expect(postCommitStatus).toHaveBeenNthCalledWith(
+      1,
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "pending",
+        context: "open-inspect",
+        description: "Review in progress",
+      },
+      "Open-Inspect"
+    );
+    expect(postCommitStatus).toHaveBeenLastCalledWith(
+      "test-installation-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "error",
+        context: "open-inspect",
+        description: "Review failed to start",
+      },
+      "Open-Inspect"
+    );
+  });
+
   it("returns early if reviewer is not the bot", async () => {
     const env = createMockEnv();
     const log = createMockLogger();
