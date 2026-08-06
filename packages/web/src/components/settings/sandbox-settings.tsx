@@ -639,7 +639,9 @@ export function SandboxSettingsEditor({
       <fieldset className="min-w-0">
         <legend className="sr-only">Tunnel Ports</legend>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
-          <span className="block text-sm font-medium text-foreground">Tunnel Ports</span>
+          <span aria-hidden="true" className="block text-sm font-medium text-foreground">
+            Tunnel Ports
+          </span>
           <Button
             type="button"
             variant="subtle"
