@@ -359,6 +359,8 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         labels: {
           openinspect_provider: "opencomputer",
           ...identity.labels,
+          // Legacy alias preserved for existing OpenComputer operator queries.
+          openinspect_environment: config.scopeId,
         },
         timeoutSeconds: config.providerSessionTimeoutSeconds,
         secretStore: secretStore?.name,
