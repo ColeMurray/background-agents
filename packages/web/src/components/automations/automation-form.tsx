@@ -371,12 +371,21 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Trigger Type */}
       {mode === "create" ? (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div
+            id="automation-trigger-type-label"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Trigger Type
+          </div>
           <FieldDescription className="my-1">
             Scheduled automations run on a repeating timer. Other types run when the connected
             service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
-          <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
+          <TriggerTypeSelector
+            value={triggerType}
+            onChange={setTriggerType}
+            labelledBy="automation-trigger-type-label"
+          />
         </div>
       ) : (
         <div>
@@ -420,15 +429,20 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Repository Configuration */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">
+        <label
+          id="automation-repository-configuration-label"
+          htmlFor="automation-repository-configuration"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
           Repository Configuration
         </label>
         <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
           <PopoverTrigger asChild>
             <button
+              id="automation-repository-configuration"
               type="button"
               className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              aria-label="Repository selection"
+              aria-labelledby="automation-repository-configuration-label"
             >
               {selectedEnvironmentIds.length > 0 && selectedRepoNames.length === 0 ? (
                 <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />

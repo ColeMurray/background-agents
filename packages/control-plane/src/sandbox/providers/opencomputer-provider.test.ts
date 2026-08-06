@@ -776,8 +776,13 @@ describe("OpenComputerSandboxProvider", () => {
         { repo_owner: "acme", repo_name: "api", branch: "develop" },
       ],
     });
-    expect(createCall.labels).toMatchObject({
+    expect(createCall.labels).toEqual({
+      openinspect_provider: "opencomputer",
+      openinspect_framework: "open-inspect",
       openinspect_kind: "environment-image-build",
+      openinspect_build_id: "envimg-1",
+      openinspect_scope_kind: "environment",
+      openinspect_scope_id: "env_flagship",
       openinspect_environment: "env_flagship",
     });
     expect(onProviderSessionCreated).toHaveBeenCalledWith("oc-sandbox-1");

@@ -346,17 +346,28 @@ requests so the React `/login` route can render them server-side.
 
 ## Token Encryption
 
-GitHub OAuth tokens are encrypted at rest using AES-256-GCM:
+Two independent key domains protect stored credentials. Rotation guidance differs — never treat them
+as interchangeable during an incident:
 
-```typescript
-import { encryptToken, decryptToken } from "./auth/crypto";
+- **`TOKEN_ENCRYPTION_KEY`** — AES-256-GCM for the SCM enrichment tokens in `user_scm_tokens`:
 
-// Encrypt before storing
-const encrypted = await encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY);
+  ```typescript
+  import { encryptToken, decryptToken } from "./auth/crypto";
 
-// Decrypt when needed
-const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
-```
+  // Encrypt before storing
+  const encrypted = await encryptToken(accessToken, env.TOKEN_ENCRYPTION_KEY);
+
+  // Decrypt when needed
+  const token = await decryptToken(encrypted, env.TOKEN_ENCRYPTION_KEY);
+  ```
+
+  Rotating it invalidates stored SCM tokens; affected users re-link their SCM connection.
+
+- **`BROWSER_AUTH_SECRET`** — Better Auth's secret. It signs browser session cookies **and**
+  encrypts the sign-in OAuth credential columns on `user_identities` (`access_token`,
+  `refresh_token`, `id_token`, written at web sign-in and read via `auth.api.getAccessToken`).
+  Rotating it signs every browser session out and orphans those stored credentials — they
+  re-populate at each user's next sign-in. It does not affect `user_scm_tokens`.
 
 ## Security Model
 

@@ -593,8 +593,8 @@ export function SandboxSettingsEditor({
         </div>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Service Ports</label>
+      <fieldset className="min-w-0">
+        <legend className="block text-sm font-medium text-foreground mb-1.5">Service Ports</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Ports code-server and the web terminal bind to. Leave blank for the defaults (
           {DEFAULT_CODE_SERVER_PORT} and {DEFAULT_TERMINAL_PORT}). Change a port to free the default
@@ -634,11 +634,12 @@ export function SandboxSettingsEditor({
             />
           </div>
         </div>
-      </div>
+      </fieldset>
 
-      <div>
+      <fieldset className="min-w-0">
+        <legend className="sr-only">Tunnel Ports</legend>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
-          <label className="block text-sm font-medium text-foreground">Tunnel Ports</label>
+          <span className="block text-sm font-medium text-foreground">Tunnel Ports</span>
           <Button
             type="button"
             variant="subtle"
@@ -680,10 +681,10 @@ export function SandboxSettingsEditor({
             ))
           )}
         </div>
-      </div>
+      </fieldset>
 
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</label>
+      <fieldset className="min-w-0">
+        <legend className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Limit agent-spawned child sessions to prevent runaway sandbox usage.
         </p>
@@ -721,10 +722,10 @@ export function SandboxSettingsEditor({
             />
           </div>
         </div>
-      </div>
+      </fieldset>
 
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Resources</label>
+      <fieldset className="min-w-0">
+        <legend className="block text-sm font-medium text-foreground mb-1.5">Resources</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
           reservation.
@@ -764,7 +765,7 @@ export function SandboxSettingsEditor({
             />
           </div>
         </div>
-      </div>
+      </fieldset>
 
       <div>
         <label
