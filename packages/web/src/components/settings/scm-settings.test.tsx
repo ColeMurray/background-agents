@@ -6,7 +6,8 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
-import { getScmRepoSettingsPath, ScmSettingsPage } from "./scm-settings";
+import { getScmRepoSettingsPath } from "@/lib/scm";
+import { ScmSettingsPage } from "./scm-settings";
 
 expect.extend(matchers);
 
