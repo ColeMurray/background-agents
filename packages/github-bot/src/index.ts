@@ -14,7 +14,8 @@ import { normalizeGitHubEvent } from "@open-inspect/shared/triggers";
 import { signedControlPlaneFetch } from "./internal-auth";
 import {
   issueCommentPayloadSchema,
-  pullRequestOpenedPayloadSchema,
+  pullRequestReviewTriggerPayloadSchema,
+  pullRequestReviewTriggerActionSchema,
   reviewCommentPayloadSchema,
   reviewRequestedPayloadSchema,
   webhookActionPayloadSchema,
@@ -22,7 +23,7 @@ import {
   type WebhookSummaryPayload,
 } from "./payload-schemas";
 import {
-  handlePullRequestOpened,
+  handlePullRequestReviewTrigger,
   handleReviewRequested,
   handleIssueComment,
   handleReviewComment,
@@ -237,10 +238,10 @@ function dispatchHandler(
 ): Promise<HandlerResult> {
   switch (event) {
     case "pull_request":
-      if (p.action === "opened") {
-        const parsed = pullRequestOpenedPayloadSchema.safeParse(payload);
-        if (!parsed.success) throw new Error("Malformed pull_request opened payload");
-        return handlePullRequestOpened(env, log, parsed.data, traceId);
+      if (pullRequestReviewTriggerActionSchema.safeParse(p.action).success) {
+        const parsed = pullRequestReviewTriggerPayloadSchema.safeParse(payload);
+        if (!parsed.success) throw new Error("Malformed pull_request review trigger payload");
+        return handlePullRequestReviewTrigger(env, log, parsed.data, traceId);
       }
       if (p.action === "review_requested") {
         if (!isReviewRequestedForBot(payload, env.GITHUB_BOT_USERNAME)) {
