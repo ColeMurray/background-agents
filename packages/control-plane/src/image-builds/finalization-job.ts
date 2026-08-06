@@ -46,7 +46,12 @@ export async function createImageBuildFinalizationJob(
                 left.baseSha.localeCompare(right.baseSha)
             ),
           runtimeVersion: result.completion.runtimeVersion,
-          buildDurationMs: result.completion.buildDurationMs,
+          // Frozen hash canonicalization: this document is a persisted
+          // idempotency contract, not a mirror of the domain types. The
+          // member keeps its original name and millisecond value so the same
+          // wire callback hashes identically across deploys and refactors —
+          // change it only with an explicit hash-schema version bump.
+          buildDurationMs: result.completion.buildDurationSeconds * 1000,
         }
       : {
           buildId,

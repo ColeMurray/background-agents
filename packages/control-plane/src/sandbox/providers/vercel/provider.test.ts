@@ -697,12 +697,13 @@ describe("VercelSandboxProvider", () => {
         { repo_owner: "acme", repo_name: "api", branch: "develop" },
       ],
     });
-    expect(createCall.tags).toEqual(
-      expect.objectContaining({
-        openinspect_kind: "environment-image-build",
-        openinspect_environment: "env_flagship",
-      })
-    );
+    expect(createCall.tags).toEqual({
+      openinspect_framework: "open-inspect",
+      openinspect_kind: "environment-image-build",
+      openinspect_build_id: "envimg-1",
+      openinspect_scope_kind: "environment",
+      openinspect_scope_id: "env_flagship",
+    });
     expect(onProviderSessionCreated).toHaveBeenCalledWith("vercel-session-1");
     expect(vi.mocked(client.startCommand)).toHaveBeenCalledWith(
       expect.objectContaining({

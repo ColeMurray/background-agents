@@ -50,6 +50,21 @@ describe("GitLabSourceControlProvider", () => {
         provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
       ).resolves.toBeNull();
     });
+
+    it("rejects malformed branch responses", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: {} }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      const err = await provider
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to resolve branch head: unexpected response shape (commit.id)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
   });
 
   it("throws a permanent provider error when the access token is blank", () => {

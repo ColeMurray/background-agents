@@ -8,6 +8,7 @@
  * mapped into the same envelope shape so callers never need to catch.
  */
 
+import { z } from "zod";
 import { computeHmacHex, timingSafeEqual } from "../auth";
 
 const SLACK_API_BASE = "https://slack.com/api";
@@ -412,18 +413,26 @@ export async function getThreadMessages(
   return { ok: true, messages };
 }
 
-/** A file object as it appears on a Slack message (subset of fields we use). */
-export interface SlackMessageFile {
-  id?: string;
-  name?: string;
-  title?: string;
-  mimetype?: string;
-  url_private?: string;
-  url_private_download?: string;
-  size?: number;
+/**
+ * A file object as it appears on a Slack message (subset of fields we use).
+ *
+ * The schema is the source of truth: `SlackMessageFile` is inferred from it and
+ * inbound-event validation reuses it, so adding a field here reaches both the
+ * type and the trust boundary at once.
+ */
+export const slackMessageFileSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  mimetype: z.string().optional(),
+  url_private: z.string().optional(),
+  url_private_download: z.string().optional(),
+  size: z.number().optional(),
   /** "external" marks remote files whose url_private is third-party-hosted. */
-  mode?: string;
-}
+  mode: z.string().optional(),
+});
+
+export type SlackMessageFile = z.infer<typeof slackMessageFileSchema>;
 
 /**
  * A secondary attachment on a Slack message (subset of fields we use).
@@ -435,28 +444,30 @@ export interface SlackMessageFile {
  * produces an attachment with `is_msg_unfurl` but not `is_share`. Callers that
  * read message bodies must use `is_share` as the positive discriminator.
  */
-export interface SlackMessageAttachment {
+export const slackMessageAttachmentSchema = z.object({
   /** Set when the attachment is a shared/forwarded Slack message. */
-  is_share?: boolean;
+  is_share: z.boolean().optional(),
   /** Set when the attachment unfurls a Slack message permalink. */
-  is_msg_unfurl?: boolean;
+  is_msg_unfurl: z.boolean().optional(),
   /** Body of the shared message, in mrkdwn. */
-  text?: string;
+  text: z.string().optional(),
   /** Plain-text rendering Slack always provides, e.g. "[date] user: body". */
-  fallback?: string;
+  fallback: z.string().optional(),
   /** Display name of the shared message's author. */
-  author_name?: string;
+  author_name: z.string().optional(),
   /** Channel the shared message came from; absent when Slack omits it. */
-  channel_name?: string;
+  channel_name: z.string().optional(),
   /** Id of the channel the shared message came from. */
-  channel_id?: string;
+  channel_id: z.string().optional(),
   /** Slack ts of the shared message, i.e. its identity within the channel. */
-  ts?: string;
+  ts: z.string().optional(),
   /** Permalink of the shared message. */
-  from_url?: string;
+  from_url: z.string().optional(),
   /** Files the shared message carried, Slack-hosted like any message file. */
-  files?: SlackMessageFile[];
-}
+  files: z.array(slackMessageFileSchema).optional(),
+});
+
+export type SlackMessageAttachment = z.infer<typeof slackMessageAttachmentSchema>;
 
 /**
  * Fetch the files and attachments on a single message.

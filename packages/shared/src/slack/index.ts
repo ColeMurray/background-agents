@@ -15,6 +15,8 @@ export {
   postMessage,
   publishView,
   removeReaction,
+  slackMessageAttachmentSchema,
+  slackMessageFileSchema,
   updateMessage,
   uploadToExternalUrl,
   verifySlackSignature,

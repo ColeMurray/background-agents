@@ -45,6 +45,11 @@ export interface CreatePullRequestInput {
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
+  /**
+   * Whether to open the PR in draft mode. When configured, the SCM setting
+   * "always use draft mode" overrides.
+   */
+  draft?: boolean;
 }
 
 export type CreatePullRequestResult =
@@ -123,6 +128,11 @@ export interface PullRequestServiceDeps {
    * deployment has no D1 binding; the write is best-effort either way.
    */
   sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+  /**
+   * Resolves the "always use draft mode" policy (global default merged with
+   * repo override) for the pull request's target repository.
+   */
+  resolveAlwaysDraftDefault: (repo: RepoIdentity) => Promise<boolean>;
 }
 
 /**
@@ -182,6 +192,23 @@ export class SessionPullRequestService {
       if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
         return this.duplicatePrError(targetRepo);
       }
+
+      let alwaysDraft: boolean;
+      try {
+        alwaysDraft = await this.deps.resolveAlwaysDraftDefault(targetRepo);
+      } catch (error) {
+        this.deps.log.error("Failed to resolve pull request draft policy", {
+          repo_owner: targetRepo.repoOwner,
+          repo_name: targetRepo.repoName,
+          error: error instanceof Error ? error : String(error),
+        });
+        return {
+          kind: "error",
+          status: 503,
+          error: "Pull request draft policy is temporarily unavailable",
+        };
+      }
+      const draft = alwaysDraft || (input.draft ?? false);
 
       let pushAuth: GitPushAuthContext;
       try {
@@ -287,6 +314,7 @@ export class SessionPullRequestService {
         body: fullBody,
         sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
+        draft,
       });
 
       const artifactId = this.deps.generateId();

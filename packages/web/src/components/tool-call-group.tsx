@@ -40,7 +40,6 @@ export const ToolCallGroup = memo(
     onToggleTool,
   }: {
     events: Array<Extract<SandboxEvent, { type: "tool_call" }>>;
-    groupId: string;
     isExpanded: boolean;
     expandedToolCallIds: ReadonlySet<string>;
     onToggleGroup: () => void;
@@ -96,7 +95,6 @@ export const ToolCallGroup = memo(
     );
   },
   (prev, next) =>
-    prev.groupId === next.groupId &&
     prev.isExpanded === next.isExpanded &&
     prev.expandedToolCallIds === next.expandedToolCallIds &&
     prev.events.length === next.events.length &&

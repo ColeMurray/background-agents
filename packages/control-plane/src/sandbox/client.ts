@@ -75,6 +75,39 @@ const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
   modalErrorResponseSchema,
 ]);
 
+const createImageBuildSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      // Non-empty: the previous hand-rolled check rejected a blank id.
+      provider_session_id: z.string().min(1),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+/**
+ * Image-build operations (start/terminate) only signal success or failure; their
+ * `data` payload is never read, so it is deliberately left unvalidated.
+ */
+const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const deleteProviderImageModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      provider_image_id: z.string(),
+      deleted: z.boolean(),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
 function parseModalApiResponse<T>(schema: z.ZodType<T>, body: unknown): T {
   const result = schema.safeParse(body);
   if (!result.success) {
@@ -241,12 +274,6 @@ export interface DeleteProviderImageRequest {
 export interface DeleteProviderImageResponse {
   providerImageId: string;
   deleted: boolean;
-}
-
-interface ModalApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
 }
 
 /**
@@ -615,6 +642,11 @@ export class ModalClient {
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
+          provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
+          // Transitional duplicate under the pre-rename key: the control plane
+          // and Modal deploy the same commit via independent pipelines, so an
+          // older Modal may still read only build_timeout_seconds during the
+          // skew window. Drop once both planes are known to be past the rename.
           build_timeout_seconds: request.providerSessionTimeoutSeconds,
         }),
       });
@@ -626,11 +658,12 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        provider_session_id: string;
-      }>;
+      const result = parseModalApiResponse(
+        createImageBuildSandboxModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data?.provider_session_id) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
@@ -712,8 +745,11 @@ export class ModalClient {
           response.status
         );
       }
-      const result = (await response.json()) as ModalApiResponse<Record<string, unknown>>;
-      if (!result.success) {
+      const result = parseModalApiResponse(
+        imageBuildOperationModalResponseSchema,
+        await response.json()
+      );
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
       outcome = "success";
@@ -762,12 +798,12 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        provider_image_id: string;
-        deleted: boolean;
-      }>;
+      const result = parseModalApiResponse(
+        deleteProviderImageModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 

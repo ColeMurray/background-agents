@@ -6,10 +6,11 @@ import { RepoMetadataStore } from "../db/repo-metadata";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
-import type {
-  EnrichedRepository,
-  InstallationRepository,
-  RepoMetadata,
+import {
+  repoMetadataSchema,
+  type EnrichedRepository,
+  type InstallationRepository,
+  type RepoMetadata,
 } from "@open-inspect/shared/types/repository-catalog";
 import { SourceControlProviderError } from "../source-control";
 import { createLogger } from "../logger";
@@ -211,21 +212,18 @@ async function handleUpdateRepoMetadata(
   if (params instanceof Response) return params;
   const { owner, name } = params;
 
-  const body = (await request.json()) as RepoMetadata;
-
-  // Validate and clean the metadata structure (remove undefined fields)
-  const metadata = Object.fromEntries(
-    Object.entries({
-      description: body.description,
-      aliases: Array.isArray(body.aliases) ? body.aliases : undefined,
-      channelAssociations: Array.isArray(body.channelAssociations)
-        ? body.channelAssociations
-        : undefined,
-      keywords: Array.isArray(body.keywords) ? body.keywords : undefined,
-      defaultEnvironmentId:
-        typeof body.defaultEnvironmentId === "string" ? body.defaultEnvironmentId : undefined,
-    }).filter(([, v]) => v !== undefined)
-  ) as RepoMetadata;
+  // Parse and validate at the trust boundary: malformed JSON and structurally
+  // invalid metadata both take the same 400 path, before any persistence.
+  let rawBody: unknown;
+  try {
+    rawBody = await request.json();
+  } catch {
+    return error("Invalid repository metadata", 400);
+  }
+  const parsedBody = repoMetadataSchema.safeParse(rawBody);
+  if (!parsedBody.success) return error("Invalid repository metadata", 400);
+  // Zod has already validated every field and stripped unknown keys.
+  const metadata = parsedBody.data;
 
   const metadataStore = new RepoMetadataStore(ctx.db);
 

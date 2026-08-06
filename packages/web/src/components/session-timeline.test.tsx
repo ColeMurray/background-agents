@@ -54,6 +54,18 @@ function event(userId?: string): SandboxEvent {
   };
 }
 
+function toolCall(callId: string, tool: string, filePath: string): SandboxEvent {
+  return {
+    type: "tool_call",
+    sandboxId: "sandbox-1",
+    messageId: `message-${callId}`,
+    callId,
+    tool,
+    args: { filePath },
+    timestamp: Number(callId.replace(/\D/g, "")) || 1,
+  };
+}
+
 describe("user message authors", () => {
   it("uses the canonical profile name and avatar when available", () => {
     render(
@@ -115,6 +127,41 @@ describe("user message authors", () => {
       "src",
       "https://historical.example/avatar"
     );
+  });
+});
+
+const baseTimelineProps = {
+  sessionId: "session-1",
+  currentParticipantId: null,
+  participantProfiles: {},
+  isProcessing: false,
+  loadingHistory: false,
+  showSkeleton: false,
+  onLoadOlder: () => {},
+  onOpenMedia: () => {},
+} as const;
+
+describe("tool call groups", () => {
+  it("preserves expanded group and row state when history is prepended", async () => {
+    const readEvents = [
+      toolCall("call-1", "Read", "/workspace/one.ts"),
+      toolCall("call-2", "Read", "/workspace/two.ts"),
+    ];
+    const { rerender } = render(<SessionTimeline {...baseTimelineProps} events={readEvents} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Read2 files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Read one\.ts/i }));
+    expect(screen.getByText("Arguments:")).toBeInTheDocument();
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[toolCall("call-0", "Bash", "older command"), ...readEvents]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /Read one\.ts/i })).toBeInTheDocument();
+    expect(screen.getByText("Arguments:")).toBeInTheDocument();
   });
 });
 
@@ -746,5 +793,41 @@ describe("task activity grouping", () => {
 
     expect(screen.getByText(/Bash zeroth/)).toBeInTheDocument();
     expect(screen.getByText(/Bash third/)).toBeInTheDocument();
+  });
+
+  it("keeps rows distinct when the same callId repeats across messages", async () => {
+    const user = userEvent.setup();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(
+      <SessionTimeline
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        isProcessing={false}
+        loadingHistory={false}
+        showSkeleton={false}
+        onLoadOlder={() => {}}
+        onOpenMedia={() => {}}
+        events={[
+          toolEvent("Bash", "call-1", 1, {
+            messageId: "message-1",
+            args: { command: "first" },
+          }),
+          toolEvent("Bash", "call-1", 2, {
+            messageId: "message-2",
+            args: { command: "second" },
+          }),
+        ]}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Bash2 commands/ }));
+    expect(screen.getByText(/Bash first/)).toBeInTheDocument();
+    expect(screen.getByText(/Bash second/)).toBeInTheDocument();
+    expect(consoleError.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(
+      false
+    );
+    consoleError.mockRestore();
   });
 });

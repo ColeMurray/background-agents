@@ -101,6 +101,11 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
   });
 
+  it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
+    expect(isScmAgnosticRoute("GET", "/scm-settings")).toBe(true);
+    expect(isScmAgnosticRoute("GET", "/scm-settings/repos")).toBe(true);
+  });
+
   it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
     const { env, fetch } = createEnv();
 

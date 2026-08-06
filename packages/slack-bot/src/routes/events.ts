@@ -1,7 +1,8 @@
 import { verifySlackSignature } from "@open-inspect/shared/slack";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { Hono } from "hono";
-import { handleSlackEvent, type SlackEventPayload } from "../events/dispatcher";
+import { handleSlackEvent } from "../events/dispatcher";
+import { slackEventPayloadSchema } from "../events/payload";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
 
@@ -31,10 +32,15 @@ eventRoutes.post("/events", async (c) => {
     });
     return c.json({ error: "Invalid signature" }, 401);
   }
-  const payload = JSON.parse(body) as SlackEventPayload & {
-    challenge?: string;
-    event_id?: string;
-  };
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(body);
+  } catch {
+    return c.json({ error: "Invalid payload" }, 400);
+  }
+  const parsedPayload = slackEventPayloadSchema.safeParse(parsedJson);
+  if (!parsedPayload.success) return c.json({ error: "Invalid payload" }, 400);
+  const payload = parsedPayload.data;
   if (payload.type === "url_verification") return c.json({ challenge: payload.challenge });
 
   const eventId = payload.event_id;
