@@ -17,48 +17,56 @@ const UNUSED_PROFILE_RESOLVER = async () => null;
 /**
  * Post-consolidation shapes the adapter's field maps depend on: Better Auth's
  * user/account models live in the canonical tables, sessions/verifications in
- * their own epoch-ms tables.
+ * their own epoch-ms tables. Tuples are [name, type, notnull, pk] from
+ * PRAGMA table_info — the full column contract, not just names.
  */
-const EXPECTED_COLUMNS: Record<string, [string, string][]> = {
+const EXPECTED_COLUMNS: Record<string, [string, string, number, number][]> = {
   users: [
-    ["id", "TEXT"],
-    ["display_name", "TEXT"],
-    ["email", "TEXT"],
-    ["avatar_url", "TEXT"],
-    ["created_at", "INTEGER"],
-    ["updated_at", "INTEGER"],
-    ["email_verified", "INTEGER"],
+    ["id", "TEXT", 0, 1],
+    ["display_name", "TEXT", 0, 0],
+    ["email", "TEXT", 0, 0],
+    ["avatar_url", "TEXT", 0, 0],
+    ["created_at", "INTEGER", 1, 0],
+    ["updated_at", "INTEGER", 1, 0],
+    ["email_verified", "INTEGER", 1, 0],
+  ],
+  user_identities: [
+    ["id", "TEXT", 0, 1],
+    ["user_id", "TEXT", 1, 0],
+    ["provider", "TEXT", 1, 0],
+    ["provider_user_id", "TEXT", 1, 0],
+    ["provider_login", "TEXT", 0, 0],
+    ["provider_email", "TEXT", 0, 0],
+    ["created_at", "INTEGER", 1, 0],
+    ["provider_issuer", "TEXT", 0, 0],
+    ["access_token", "TEXT", 0, 0],
+    ["refresh_token", "TEXT", 0, 0],
+    ["id_token", "TEXT", 0, 0],
+    ["access_token_expires_at", "INTEGER", 0, 0],
+    ["refresh_token_expires_at", "INTEGER", 0, 0],
+    ["scope", "TEXT", 0, 0],
+    ["password", "TEXT", 0, 0],
+    ["updated_at", "INTEGER", 0, 0],
   ],
   auth_sessions: [
-    ["id", "TEXT"],
-    ["expiresAt", "INTEGER"],
-    ["token", "TEXT"],
-    ["createdAt", "INTEGER"],
-    ["updatedAt", "INTEGER"],
-    ["ipAddress", "TEXT"],
-    ["userAgent", "TEXT"],
-    ["userId", "TEXT"],
+    ["id", "TEXT", 1, 1],
+    ["expiresAt", "INTEGER", 1, 0],
+    ["token", "TEXT", 1, 0],
+    ["createdAt", "INTEGER", 1, 0],
+    ["updatedAt", "INTEGER", 1, 0],
+    ["ipAddress", "TEXT", 0, 0],
+    ["userAgent", "TEXT", 0, 0],
+    ["userId", "TEXT", 1, 0],
   ],
   auth_verifications: [
-    ["id", "TEXT"],
-    ["identifier", "TEXT"],
-    ["value", "TEXT"],
-    ["expiresAt", "INTEGER"],
-    ["createdAt", "INTEGER"],
-    ["updatedAt", "INTEGER"],
+    ["id", "TEXT", 1, 1],
+    ["identifier", "TEXT", 1, 0],
+    ["value", "TEXT", 1, 0],
+    ["expiresAt", "INTEGER", 1, 0],
+    ["createdAt", "INTEGER", 1, 0],
+    ["updatedAt", "INTEGER", 1, 0],
   ],
 };
-
-const EXPECTED_IDENTITY_CREDENTIAL_COLUMNS = [
-  "access_token",
-  "refresh_token",
-  "id_token",
-  "access_token_expires_at",
-  "refresh_token_expires_at",
-  "scope",
-  "password",
-  "updated_at",
-];
 
 function createTestAuth() {
   return createUserAuth({
@@ -74,15 +82,12 @@ describe("browser authentication", () => {
       const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{
         name: string;
         type: string;
+        notnull: number;
+        pk: number;
       }>();
-      expect(columns.results.map(({ name, type }) => [name, type])).toEqual(expectedColumns);
-    }
-    const identityColumns = await env.DB.prepare(`PRAGMA table_info(user_identities)`).all<{
-      name: string;
-    }>();
-    const names = identityColumns.results.map((column) => column.name);
-    for (const column of EXPECTED_IDENTITY_CREDENTIAL_COLUMNS) {
-      expect(names).toContain(column);
+      expect(
+        columns.results.map(({ name, type, notnull, pk }) => [name, type, notnull, pk])
+      ).toEqual(expectedColumns);
     }
 
     // The account model's unique subject key — what lets identities serve as
@@ -93,6 +98,37 @@ describe("browser authentication", () => {
        WHERE name = 'idx_user_identities_provider'`
     ).first<{ unique: number }>();
     expect(providerIdentityIndex?.unique).toBe(1);
+    // The email-linking key: unique over non-NULL emails only.
+    const emailIndex = await env.DB.prepare(
+      `SELECT "unique", partial
+       FROM pragma_index_list('users')
+       WHERE name = 'idx_users_email'`
+    ).first<{ unique: number; partial: number }>();
+    expect(emailIndex).toEqual({ unique: 1, partial: 1 });
+    // Session tokens are the bearer credential — must be unique.
+    const tokenUnique = await env.DB.prepare(
+      `SELECT COUNT(*) AS count
+       FROM pragma_index_list('auth_sessions') AS il
+       JOIN pragma_index_info(il.name) AS ii
+       WHERE il."unique" = 1 AND ii.name = 'token'`
+    ).first<{ count: number }>();
+    expect(tokenUnique?.count).toBe(1);
+    // Foreign keys target canonical users; deleting a user cascades their
+    // browser sessions but never silently drops identities.
+    const sessionForeignKeys = await env.DB.prepare(
+      `SELECT "table" AS target, "from" AS source_column, "to" AS target_column, on_delete
+       FROM pragma_foreign_key_list('auth_sessions')`
+    ).all();
+    expect(sessionForeignKeys.results).toEqual([
+      { target: "users", source_column: "userId", target_column: "id", on_delete: "CASCADE" },
+    ]);
+    const identityForeignKeys = await env.DB.prepare(
+      `SELECT "table" AS target, "from" AS source_column, "to" AS target_column, on_delete
+       FROM pragma_foreign_key_list('user_identities')`
+    ).all();
+    expect(identityForeignKeys.results).toEqual([
+      { target: "users", source_column: "user_id", target_column: "id", on_delete: "NO ACTION" },
+    ]);
     // The parallel registry is gone.
     const legacyTables = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('auth_users', 'auth_accounts')`

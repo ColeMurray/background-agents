@@ -164,14 +164,15 @@ export class SignInClaim {
     const verified = await this.db
       .prepare(
         `UPDATE users SET email_verified = 1, updated_at = ?
-         WHERE email = ? AND email_verified = 0`
+         WHERE email = ? AND email_verified = 0
+         RETURNING id`
       )
       .bind(Date.now(), email)
-      .run();
-    if (verified.meta.changes > 0) {
+      .first<{ id: string }>();
+    if (verified) {
       logger.info("Verified canonical email owner ahead of implicit link", {
         event: "auth.email_claim_verified",
-        user_id: null,
+        user_id: verified.id,
         mode: "pre-link",
       });
     }

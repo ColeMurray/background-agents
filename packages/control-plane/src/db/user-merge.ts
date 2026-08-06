@@ -20,9 +20,12 @@ import type { SqlDatabase, SqlStatement } from "./sql-database";
  *   `idx_user_identities_provider`).
  * - `automations.created_by` is re-pointed value-conditionally: legacy rows
  *   store GitHub numeric ids, which must never be rewritten.
- * - Idempotent: re-running a completed merge is a zero-count no-op, so a
- *   partially-applied run under the sequential wrangler CLI transport is
- *   repaired by running the script again.
+ * - Idempotent: re-running a completed merge is a zero-count no-op, and a
+ *   partially-applied run is repaired by running the script again — with one
+ *   exception: the final email backfill's input (the loser row) is deleted by
+ *   the preceding statement, so a stop exactly between those two statements
+ *   is not re-derivable from the database. The CLI prints a recovery record
+ *   before executing to cover that residual case.
  * - Browser sessions (`auth_sessions`) are re-pointed, not deleted — the
  *   merged person stays signed in as the survivor.
  * - Verification never transfers to an unproven address: the loser's email
