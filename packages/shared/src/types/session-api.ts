@@ -102,6 +102,7 @@ export const sendPromptRequestSchema = z.object({
   source: messageSourceSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
   attachments: z.unknown().optional(),
   callbackContext: z.unknown().optional(),
 });
@@ -160,6 +161,7 @@ const createSessionRequestBaseSchema = z.object({
   title: z.string().optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
   branch: z.string().optional(),
   /**
    * Ordered repository list ([0] = primary). Mutually exclusive with the

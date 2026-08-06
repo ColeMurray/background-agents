@@ -32,9 +32,132 @@ export function createFakeKV(initial: Record<string, string> = {}) {
   return { kv: kv as unknown as KVNamespace, store, putCalls };
 }
 
+export function createFakeDeliveryDb(
+  initial: Record<string, "processing" | "processed" | "failed"> = {}
+) {
+  const store = new Map(
+    Object.entries(initial).map(([deliveryId, status]) => [
+      deliveryId,
+      {
+        status,
+        leaseOwner: "initial",
+        leaseExpiresAt: Date.now() + 60_000,
+        progress: {} as Record<string, boolean>,
+        updatedAt: Date.now(),
+      },
+    ])
+  );
+  const prepare = vi.fn((query: string) => ({
+    bind: (...args: unknown[]) => ({
+      run: async () => {
+        if (query.includes("INSERT INTO linear_webhook_deliveries")) {
+          const [deliveryId, leaseOwner, leaseExpiresAt, now] = args as [
+            string,
+            string,
+            number,
+            number,
+          ];
+          const existing = store.get(deliveryId);
+          if (
+            !existing ||
+            (existing.status === "processing" &&
+              (existing.leaseOwner === leaseOwner || existing.leaseExpiresAt <= now))
+          ) {
+            store.set(deliveryId, {
+              status: "processing",
+              leaseOwner,
+              leaseExpiresAt,
+              progress: existing?.progress ?? {},
+              updatedAt: now,
+            });
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+        if (query.includes("SET status = 'processed'")) {
+          const [now, deliveryId, leaseOwner] = args as [number, string, string];
+          const existing = store.get(deliveryId);
+          if (existing?.leaseOwner === leaseOwner) {
+            store.set(deliveryId, {
+              status: "processed",
+              leaseOwner,
+              leaseExpiresAt: now,
+              progress: existing.progress,
+              updatedAt: now,
+            });
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+        if (query.includes("SET status = 'failed'")) {
+          const [now, deliveryId, leaseOwner] = args as [number, string, string];
+          const existing = store.get(deliveryId);
+          if (existing?.leaseOwner === leaseOwner) {
+            store.set(deliveryId, {
+              status: "failed",
+              leaseOwner,
+              leaseExpiresAt: now,
+              progress: existing.progress,
+              updatedAt: now,
+            });
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+        if (query.includes("DELETE FROM linear_webhook_deliveries")) {
+          if (query.includes("updated_at <")) {
+            const [cutoff] = args as [number];
+            let changes = 0;
+            for (const [deliveryId, delivery] of store) {
+              if (delivery.status !== "processing" && delivery.updatedAt < cutoff) {
+                store.delete(deliveryId);
+                changes += 1;
+              }
+            }
+            return { meta: { changes } };
+          }
+          const [deliveryId, leaseOwner] = args as [string, string];
+          const existing = store.get(deliveryId);
+          const changes =
+            existing?.leaseOwner === leaseOwner ? Number(store.delete(deliveryId)) : 0;
+          return { meta: { changes } };
+        }
+        if (query.includes("SET progress = ?")) {
+          const [progress, updatedAt, deliveryId, leaseOwner] = args as [
+            string,
+            number,
+            string,
+            string,
+          ];
+          const existing = store.get(deliveryId);
+          if (existing?.status === "processing" && existing.leaseOwner === leaseOwner) {
+            existing.progress = JSON.parse(progress) as Record<string, boolean>;
+            existing.updatedAt = updatedAt;
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        }
+        throw new Error(`Unexpected D1 query: ${query}`);
+      },
+      first: async () => {
+        const [deliveryId] = args as [string];
+        const existing = store.get(deliveryId);
+        if (query.includes("SELECT progress")) {
+          return existing ? { progress: JSON.stringify(existing.progress) } : null;
+        }
+        return existing ? { status: existing.status } : null;
+      },
+    }),
+  }));
+  return { db: { prepare } as unknown as D1Database, store, prepare };
+}
+
 export function makeLinearBotEnv(kv: KVNamespace, overrides: Partial<Env> = {}): Env {
+  const { db } = createFakeDeliveryDb();
   return {
     LINEAR_KV: kv,
+    DB: db,
+    LINEAR_WEBHOOK_QUEUE: { send: vi.fn(async () => undefined) } as unknown as Queue,
     LINEAR_WEBHOOK_SECRET: LINEAR_WEBHOOK_TEST_SECRET,
     DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
     DEPLOYMENT_NAME: "test",

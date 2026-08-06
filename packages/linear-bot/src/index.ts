@@ -15,8 +15,8 @@ import {
 import { callbacksRouter } from "./callbacks";
 import { createLogger } from "./logger";
 import { resolveAppName } from "@open-inspect/shared/app-name";
-import { handleAgentSessionEvent, escapeHtml } from "./webhook-handler";
-import { isDuplicateEvent } from "./kv-store";
+import { escapeHtml } from "./webhook-handler";
+import { consumeLinearWebhooks } from "./webhook-consumer";
 
 // Re-export pure functions for existing test imports
 export {
@@ -126,7 +126,13 @@ app.post("/webhook", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  const payload: unknown = JSON.parse(body);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "invalid_json" });
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
   if (!isObjectRecord(payload)) {
     log.warn("webhook.invalid_payload", { trace_id: traceId, reason: "payload_not_object" });
     return c.json({ error: "Invalid payload" }, 400);
@@ -157,13 +163,20 @@ app.post("/webhook", async (c) => {
       return c.json({ error: "Missing Linear-Delivery header" }, 400);
     }
 
-    const isDuplicate = await isDuplicateEvent(c.env, deliveryId);
-    if (isDuplicate) {
-      log.info("webhook.deduplicated", { trace_id: traceId, event_key: deliveryId });
-      return c.json({ ok: true, skipped: true, reason: "duplicate" });
+    try {
+      await c.env.LINEAR_WEBHOOK_QUEUE.send(
+        { version: 1, deliveryId, traceId, payload },
+        { contentType: "json" }
+      );
+    } catch (error) {
+      log.error("webhook.enqueue_failed", {
+        trace_id: traceId,
+        event_key: deliveryId,
+        outcome: "retryable",
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return c.json({ error: "Webhook enqueue failed" }, 503);
     }
-
-    c.executionCtx.waitUntil(handleAgentSessionEvent(payload, c.env, traceId));
 
     log.info("http.request", {
       trace_id: traceId,
@@ -183,4 +196,7 @@ app.post("/webhook", async (c) => {
 // Mount callbacks router
 app.route("/callbacks", callbacksRouter);
 
-export default app;
+export default {
+  fetch: app.fetch,
+  queue: consumeLinearWebhooks,
+};

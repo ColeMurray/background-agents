@@ -38,6 +38,16 @@ import { getUserPreferences, lookupIssueSession, storeIssueSession } from "./kv-
 
 const log = createLogger("handler");
 
+// Successful 2xx responses with malformed bodies retain their HTTP status and must be retried.
+function isRetryableControlPlaneStatus(status: number): boolean {
+  return status === 429 || status >= 500 || status < 400;
+}
+
+export interface WebhookProcessingContext {
+  deliveryId: string;
+  runLinearStep(step: string, operation: () => Promise<void>): Promise<void>;
+}
+
 const sessionEventsSummaryResponseSchema = z.object({
   events: z.array(
     z.object({
@@ -145,6 +155,7 @@ async function createSession(
     actorUserId?: string;
     actorDisplayName?: string;
     actorEmail?: string;
+    idempotencyKey: string;
   },
   traceId?: string
 ): Promise<{ ok: true; sessionId: string } | { ok: false; status: number; body: string }> {
@@ -154,6 +165,7 @@ async function createSession(
     title: params.title,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
+    idempotencyKey: params.idempotencyKey,
     actorDisplayName: params.actorDisplayName,
     actorEmail: params.actorEmail,
   });
@@ -338,7 +350,8 @@ async function handleFollowUp(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
   env: Env,
-  traceId: string
+  traceId: string,
+  processing: WebhookProcessingContext
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
@@ -370,15 +383,17 @@ async function handleFollowUp(
     emitToolProgressActivities: currentIntegration?.config.emitToolProgressActivities,
   });
 
-  await emitAgentActivity(
-    client,
-    agentSessionId,
-    {
-      type: "thought",
-      body: "Processing follow-up message...",
-    },
-    true
-  );
+  await processing.runLinearStep("followup.processing_activity", async () => {
+    await emitAgentActivity(
+      client,
+      agentSessionId,
+      {
+        type: "thought",
+        body: "Processing follow-up message...",
+      },
+      true
+    );
+  });
 
   let sessionContextSummary = "";
   try {
@@ -412,6 +427,7 @@ async function handleFollowUp(
     }),
     source: "linear",
     callbackContext,
+    idempotencyKey: `linear-webhook:${processing.deliveryId}`,
   });
   const promptRes = await signedControlPlaneFetch(env, {
     method: "POST",
@@ -422,15 +438,22 @@ async function handleFollowUp(
   });
 
   if (promptRes.ok) {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "thought",
-      body: `Follow-up sent to existing session.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`,
+    await processing.runLinearStep("followup.success_activity", async () => {
+      await emitAgentActivity(client, agentSessionId, {
+        type: "thought",
+        body: `Follow-up sent to existing session.\n\n[View session](${env.WEB_APP_URL}/session/${existingSession.sessionId})`,
+      });
     });
   } else {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "error",
-      body: "Failed to send follow-up to the existing session.",
+    await processing.runLinearStep("followup.error_activity", async () => {
+      await emitAgentActivity(client, agentSessionId, {
+        type: "error",
+        body: "Failed to send follow-up to the existing session.",
+      });
     });
+    if (isRetryableControlPlaneStatus(promptRes.status)) {
+      throw new Error(`Retryable control-plane follow-up failure: ${promptRes.status}`);
+    }
   }
 
   log.info("agent_session.followup", {
@@ -446,7 +469,8 @@ async function handleNewSession(
   webhook: AgentSessionWebhook,
   issue: AgentSessionWebhookIssue,
   env: Env,
-  traceId: string
+  traceId: string,
+  processing: WebhookProcessingContext
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
@@ -464,16 +488,20 @@ async function handleNewSession(
   });
   if (!client) return;
 
-  await updateAgentSession(client, agentSessionId, { plan: makePlan("start") });
-  await emitAgentActivity(
-    client,
-    agentSessionId,
-    {
-      type: "thought",
-      body: "Analyzing issue and resolving repository...",
-    },
-    true
+  await processing.runLinearStep("new.start_plan", () =>
+    updateAgentSession(client, agentSessionId, { plan: makePlan("start") })
   );
+  await processing.runLinearStep("new.analyzing_activity", async () => {
+    await emitAgentActivity(
+      client,
+      agentSessionId,
+      {
+        type: "thought",
+        body: "Analyzing issue and resolving repository...",
+      },
+      true
+    );
+  });
 
   // Fetch full issue details for context
   const issueDetails = await fetchIssueDetails(client, issue.id);
@@ -547,16 +575,20 @@ async function handleNewSession(
 
   // ─── Create session ───────────────────────────────────────────────────
 
-  await updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") });
-  await emitAgentActivity(
-    client,
-    agentSessionId,
-    {
-      type: "thought",
-      body: `Creating coding session on ${label} (model: ${model})...`,
-    },
-    true
+  await processing.runLinearStep("new.repo_resolved_plan", () =>
+    updateAgentSession(client, agentSessionId, { plan: makePlan("repo_resolved") })
   );
+  await processing.runLinearStep("new.creating_activity", async () => {
+    await emitAgentActivity(
+      client,
+      agentSessionId,
+      {
+        type: "thought",
+        body: `Creating coding session on ${label} (model: ${model})...`,
+      },
+      true
+    );
+  });
 
   const sessionResult = await createSession(
     env,
@@ -568,14 +600,17 @@ async function handleNewSession(
       actorUserId: sessionActorUserId,
       actorDisplayName,
       actorEmail,
+      idempotencyKey: `linear:${webhook.organizationId}:${agentSessionId}`,
     },
     traceId
   );
 
   if (!sessionResult.ok) {
-    await emitAgentActivity(client, agentSessionId, {
-      type: "error",
-      body: `Failed to create a coding session.\n\n\`HTTP ${sessionResult.status}: ${sessionResult.body.slice(0, 200)}\``,
+    await processing.runLinearStep("new.create_error_activity", async () => {
+      await emitAgentActivity(client, agentSessionId, {
+        type: "error",
+        body: `Failed to create a coding session.\n\n\`HTTP ${sessionResult.status}: ${sessionResult.body.slice(0, 200)}\``,
+      });
     });
     log.error("control_plane.create_session", {
       trace_id: traceId,
@@ -585,6 +620,9 @@ async function handleNewSession(
       response_body: sessionResult.body.slice(0, 500),
       duration_ms: Date.now() - startTime,
     });
+    if (isRetryableControlPlaneStatus(sessionResult.status)) {
+      throw new Error(`Retryable control-plane session creation failure: ${sessionResult.status}`);
+    }
     return;
   }
 
@@ -609,12 +647,14 @@ async function handleNewSession(
   });
 
   // Set externalUrls and update plan
-  await updateAgentSession(client, agentSessionId, {
-    externalUrls: [
-      { label: "View Session", url: `${env.WEB_APP_URL}/session/${session.sessionId}` },
-    ],
-    plan: makePlan("session_created"),
-  });
+  await processing.runLinearStep("new.session_created_update", () =>
+    updateAgentSession(client, agentSessionId, {
+      externalUrls: [
+        { label: "View Session", url: `${env.WEB_APP_URL}/session/${session.sessionId}` },
+      ],
+      plan: makePlan("session_created"),
+    })
+  );
 
   // ─── Build and send prompt ────────────────────────────────────────────
 
@@ -632,6 +672,7 @@ async function handleNewSession(
     content: prompt,
     source: "linear",
     callbackContext,
+    idempotencyKey: `linear-webhook:${processing.deliveryId}`,
   });
   const promptRes = await signedControlPlaneFetch(env, {
     method: "POST",
@@ -648,9 +689,11 @@ async function handleNewSession(
     } catch {
       /* ignore */
     }
-    await emitAgentActivity(client, agentSessionId, {
-      type: "error",
-      body: `Failed to send the prompt to the coding session.\n\n\`HTTP ${promptRes.status}: ${promptErrBody.slice(0, 200)}\``,
+    await processing.runLinearStep("new.prompt_error_activity", async () => {
+      await emitAgentActivity(client, agentSessionId, {
+        type: "error",
+        body: `Failed to send the prompt to the coding session.\n\n\`HTTP ${promptRes.status}: ${promptErrBody.slice(0, 200)}\``,
+      });
     });
     log.error("control_plane.send_prompt", {
       trace_id: traceId,
@@ -660,12 +703,17 @@ async function handleNewSession(
       response_body: promptErrBody.slice(0, 500),
       duration_ms: Date.now() - startTime,
     });
+    if (isRetryableControlPlaneStatus(promptRes.status)) {
+      throw new Error(`Retryable control-plane prompt failure: ${promptRes.status}`);
+    }
     return;
   }
 
-  await emitAgentActivity(client, agentSessionId, {
-    type: "thought",
-    body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+  await processing.runLinearStep("new.working_activity", async () => {
+    await emitAgentActivity(client, agentSessionId, {
+      type: "thought",
+      body: `Working on \`${label}\` with **${model}**.\n\n${classificationReasoning ? `*${classificationReasoning}*\n\n` : ""}[View session](${env.WEB_APP_URL}/session/${session.sessionId})`,
+    });
   });
 
   log.info("agent_session.session_created", {
@@ -685,7 +733,8 @@ async function handleNewSession(
 export async function handleAgentSessionEvent(
   webhook: AgentSessionWebhook,
   env: Env,
-  traceId: string
+  traceId: string,
+  processing: WebhookProcessingContext
 ): Promise<void> {
   const agentSessionId = webhook.agentSession.id;
   const issue = webhook.agentSession.issue;
@@ -717,11 +766,11 @@ export async function handleAgentSessionEvent(
   // Follow-up handling (action: "prompted" with existing session)
   const existingSession = await lookupIssueSession(env, issue.id);
   if (existingSession && webhook.action === "prompted") {
-    return handleFollowUp(webhook, issue, env, traceId);
+    return handleFollowUp(webhook, issue, env, traceId, processing);
   }
 
   // New session
-  return handleNewSession(webhook, issue, env, traceId);
+  return handleNewSession(webhook, issue, env, traceId, processing);
 }
 
 // ─── Prompt Builder ──────────────────────────────────────────────────────────

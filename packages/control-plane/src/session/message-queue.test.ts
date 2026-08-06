@@ -110,6 +110,7 @@ function buildQueue() {
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
+    hasMessage: vi.fn(() => false),
   };
 
   const attachmentRepository = {
@@ -676,6 +677,24 @@ describe("SessionMessageQueue", () => {
   });
 
   describe("enqueuePromptFromApi", () => {
+    it("returns the existing message for a repeated idempotency key", async () => {
+      const h = buildQueue();
+      h.repository.hasMessage.mockReturnValue(true);
+
+      const result = await h.queue.enqueuePromptFromApi({
+        content: "Fix bug",
+        authorId: "linear:user-1",
+        source: "linear",
+        idempotencyKey: "linear-webhook:delivery-1",
+      });
+
+      expect(result).toEqual({
+        messageId: expect.stringMatching(/^idempotent:[0-9a-f]{32}$/),
+        status: "queued",
+      });
+      expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    });
+
     it("creates participant with the enriched identity name when new", async () => {
       const h = buildQueue();
       h.participantService.getByUserId.mockReturnValue(null as unknown as ParticipantRow);

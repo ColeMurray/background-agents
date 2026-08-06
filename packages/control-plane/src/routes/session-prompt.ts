@@ -130,6 +130,7 @@ async function handleSessionPrompt(
     source: body.source || "web",
     model: body.model,
     reasoningEffort: body.reasoningEffort,
+    idempotencyKey: body.idempotencyKey,
     attachments,
     callbackContext,
     scmEnrichment: enrichment

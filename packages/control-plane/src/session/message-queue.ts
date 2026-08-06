@@ -57,11 +57,22 @@ interface EnqueuePromptCoreData {
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
+  messageId?: string;
 }
 
 interface EnqueuedPrompt {
   messageId: string;
   position: number;
+}
+
+async function idempotentMessageId(idempotencyKey: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`prompt:${idempotencyKey}`))
+  );
+  const value = Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join(
+    ""
+  );
+  return `idempotent:${value}`;
 }
 
 function resolveParticipantGitIdentity(
@@ -394,6 +405,13 @@ export class SessionMessageQueue {
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
+    const existingMessageId = data.idempotencyKey
+      ? await idempotentMessageId(data.idempotencyKey)
+      : undefined;
+    if (existingMessageId && this.repository.hasMessage(existingMessageId)) {
+      return { messageId: existingMessageId, status: "queued" };
+    }
+
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;
@@ -435,6 +453,7 @@ export class SessionMessageQueue {
       reasoningEffort: data.reasoningEffort,
       attachments: data.attachments,
       callbackContext: data.callbackContext,
+      messageId: existingMessageId,
     });
 
     await this.processMessageQueue();
@@ -448,7 +467,7 @@ export class SessionMessageQueue {
       this.attachmentRepository
     );
     const attachments = resolvedAttachments?.attachments;
-    const messageId = generateId();
+    const messageId = data.messageId ?? generateId();
     const now = Date.now();
 
     let messageModel: string | null = null;

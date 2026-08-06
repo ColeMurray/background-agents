@@ -5,7 +5,6 @@ import {
   getUserPreferences,
   lookupIssueSession,
   storeIssueSession,
-  isDuplicateEvent,
 } from "./kv-store";
 import { createFakeKV, makeLinearBotEnv } from "./test-helpers";
 
@@ -132,36 +131,5 @@ describe("storeIssueSession", () => {
     const { kv, putCalls } = createFakeKV();
     await storeIssueSession(makeLinearBotEnv(kv), "issue-1", session);
     expect(putCalls[0].options).toEqual({ expirationTtl: 86400 * 7 });
-  });
-});
-
-// ─── isDuplicateEvent ────────────────────────────────────────────────────────
-
-describe("isDuplicateEvent", () => {
-  it("returns false on first call for a key", async () => {
-    const { kv } = createFakeKV();
-    expect(await isDuplicateEvent(makeLinearBotEnv(kv), "evt-1")).toBe(false);
-  });
-
-  it("returns true on second call for the same key", async () => {
-    const { kv } = createFakeKV();
-    const env = makeLinearBotEnv(kv);
-    await isDuplicateEvent(env, "evt-1");
-    expect(await isDuplicateEvent(env, "evt-1")).toBe(true);
-  });
-
-  it("returns false for a different key", async () => {
-    const { kv } = createFakeKV();
-    const env = makeLinearBotEnv(kv);
-    await isDuplicateEvent(env, "evt-1");
-    expect(await isDuplicateEvent(env, "evt-2")).toBe(false);
-  });
-
-  it("stores with 1-hour TTL at event:{key}", async () => {
-    const { kv, putCalls } = createFakeKV();
-    await isDuplicateEvent(makeLinearBotEnv(kv), "evt-1");
-    expect(putCalls).toHaveLength(1);
-    expect(putCalls[0].key).toBe("event:evt-1");
-    expect(putCalls[0].options).toEqual({ expirationTtl: 3600 });
   });
 });

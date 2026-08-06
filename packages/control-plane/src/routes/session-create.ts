@@ -7,12 +7,14 @@ import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/r
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
+import { SessionCreationIdempotencyStore } from "../db/session-creation-idempotency";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { CreateSessionResponse, Env } from "../types";
+import type { Principal } from "../auth/principal";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -32,6 +34,23 @@ const INVALID_SESSION_REQUEST_BODY_ERROR = "Invalid session request body";
 // Defense in depth on top of schema validation — matches git ref charsets.
 const BRANCH_NAME_PATTERN = /^[\w.\-/]+$/;
 
+function principalIdempotencyNamespace(principal: Principal): string {
+  if (principal.kind === "user") return `user:${principal.userId}`;
+  if (principal.kind === "sandbox") return `sandbox:${principal.sessionId}`;
+  return `service:${principal.service}:${principal.actor?.participantUserId ?? "service"}`;
+}
+
+async function deriveIdempotencyRecordId(
+  principal: Principal,
+  idempotencyKey: string
+): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    `${principalIdempotencyNamespace(principal)}:${idempotencyKey}`
+  );
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 async function handleCreateSession(
   request: Request,
   env: Env,
@@ -48,6 +67,10 @@ async function handleCreateSession(
   const enforcement = applyIdentityEnforcement(ctx, "session-create", parsed.raw);
   if (enforcement.rejection) return enforcement.rejection;
   const enforced = enforcement.enforced;
+
+  let sessionId = generateId();
+  let idempotencyRecordId: string | undefined;
+  let idempotencyStore: SessionCreationIdempotencyStore | undefined;
 
   let repositoryContext: RepositoryPair | null;
   try {
@@ -180,7 +203,19 @@ async function handleCreateSession(
     environmentId
   );
 
-  const sessionId = generateId();
+  if (body.idempotencyKey && ctx.principal) {
+    idempotencyRecordId = await deriveIdempotencyRecordId(ctx.principal, body.idempotencyKey);
+    idempotencyStore = new SessionCreationIdempotencyStore(ctx.db);
+    const claim = await idempotencyStore.claim(idempotencyRecordId, sessionId);
+    if (claim.outcome === "succeeded") {
+      const result: CreateSessionResponse = { sessionId: claim.sessionId, status: "created" };
+      return json(result, 200);
+    }
+    if (claim.outcome === "in_progress") {
+      return error("Session creation is already in progress", 503);
+    }
+    sessionId = claim.sessionId;
+  }
 
   const input: SessionInitInput = {
     sessionId,
@@ -211,12 +246,25 @@ async function handleCreateSession(
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (idempotencyStore && idempotencyRecordId) {
+      await idempotencyStore.markFailed(idempotencyRecordId, sessionId).catch((error) => {
+        logger.error("Failed to mark session creation idempotency record failed", {
+          error: error instanceof Error ? error.message : String(error),
+          session_id: sessionId,
+          trace_id: ctx.trace_id,
+        });
+      });
+    }
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,
       trace_id: ctx.trace_id,
     });
     return error("Failed to create session", 500);
+  }
+
+  if (idempotencyStore && idempotencyRecordId) {
+    await idempotencyStore.markSucceeded(idempotencyRecordId, sessionId);
   }
 
   const result: CreateSessionResponse = {

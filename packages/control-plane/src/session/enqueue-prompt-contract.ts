@@ -9,6 +9,7 @@ export const enqueuePromptRequestSchema = z.object({
   source: messageSourceSchema,
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
+  idempotencyKey: z.string().trim().min(1).max(200).optional(),
   attachments: sessionAttachmentReferencesSchema.optional(),
   callbackContext: z.record(z.string(), z.unknown()).optional(),
   // Trusted SCM enrichment resolved by the router at prompt time.
