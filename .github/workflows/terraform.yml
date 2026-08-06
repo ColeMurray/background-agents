@@ -1,23 +1,11 @@
 name: Terraform
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "terraform/**"
-      - "scripts/**"
-      - "packages/control-plane/**"
-      - "packages/slack-bot/**"
-      - "packages/github-bot/**"
-      - "packages/linear-bot/**"
-      - "packages/modal-infra/**"
-      - "packages/daytona-infra/**"
-      - "packages/opencomputer-infra/**"
-      - "packages/e2b-infra/**"
-      - "packages/sandbox-runtime/**"
-      - "packages/shared/**"
-      - "packages/web/**" # Web app deployed via Terraform when web_platform = "cloudflare"
-      - ".github/workflows/terraform.yml"
+  # NOTE (fork): the push:[main] auto-deploy trigger is intentionally removed.
+  # Upstream CI applies to terraform/environments/production, but this fork runs
+  # the `dreamplan` environment and deploys it manually (terraform apply +
+  # vercel deploy). PR `plan` and manual `workflow_dispatch` are kept; merging
+  # to main no longer triggers an apply. See docs / MEMORY for the deploy flow.
   pull_request:
     branches: [main]
     paths:

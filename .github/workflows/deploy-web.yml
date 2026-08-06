@@ -1,12 +1,9 @@
 name: Deploy Web
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "packages/web/**"
-      - "packages/shared/**"
-      - ".github/workflows/deploy-web.yml"
+  # NOTE (fork): push:[main] auto-deploy removed. This fork deploys the
+  # dreamplan Vercel project manually (`vercel deploy --prod`); upstream CI
+  # targets a different project via secrets. Manual trigger kept.
   workflow_dispatch: # Allow manual trigger
 
 permissions:
