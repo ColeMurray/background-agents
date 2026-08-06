@@ -6,18 +6,20 @@ import pytest
 
 from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
 
+manager = SandboxManager()
+
 
 class TestGenerateCodeServerPassword:
     """SandboxManager._generate_code_server_password tests."""
 
     def test_returns_nonempty_password(self):
-        password = SandboxManager._generate_code_server_password()
+        password = manager._generate_code_server_password()
         assert len(password) > 0
 
     def test_generates_unique_passwords(self):
         passwords = set()
         for _ in range(20):
-            passwords.add(SandboxManager._generate_code_server_password())
+            passwords.add(manager._generate_code_server_password())
         assert len(passwords) == 20
 
 
@@ -32,7 +34,7 @@ class TestResolveCodeServerTunnel:
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {CODE_SERVER_PORT: tunnel}
 
-        resolved = await SandboxManager._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
+        resolved = await manager._resolve_tunnels(sandbox, "sb-123", [CODE_SERVER_PORT])
         assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"
 
     @pytest.mark.asyncio
@@ -41,7 +43,7 @@ class TestResolveCodeServerTunnel:
         sandbox.tunnels.side_effect = Exception("tunnel unavailable")
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
+            resolved = await manager._resolve_tunnels(
                 sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
             )
         assert resolved == {}
@@ -53,7 +55,7 @@ class TestResolveCodeServerTunnel:
         sandbox.tunnels.return_value = {}  # no entry for CODE_SERVER_PORT
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
+            resolved = await manager._resolve_tunnels(
                 sandbox, "sb-123", [CODE_SERVER_PORT], retries=2, backoff=0.0
             )
         assert resolved == {}
@@ -70,7 +72,7 @@ class TestResolveCodeServerTunnel:
         ]
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            resolved = await SandboxManager._resolve_tunnels(
+            resolved = await manager._resolve_tunnels(
                 sandbox, "sb-123", [CODE_SERVER_PORT], retries=3, backoff=0.0
             )
         assert resolved.get(CODE_SERVER_PORT) == "https://tunnel.example.com"

@@ -12,12 +12,14 @@ from src.sandbox.manager import (
     SandboxManager,
 )
 
+manager = SandboxManager()
+
 
 class TestCollectExposedPortsTerminal:
     """_collect_exposed_ports with terminal_enabled flag."""
 
     def test_terminal_enabled_includes_proxy_port(self):
-        exposed, _extra = SandboxManager._collect_exposed_ports(
+        exposed, _extra = manager._collect_exposed_ports(
             code_server_enabled=False,
             terminal_enabled=True,
             settings=None,
@@ -29,7 +31,7 @@ class TestCollectExposedPortsTerminal:
         assert TTYD_PORT not in exposed
 
     def test_terminal_disabled_excludes_proxy_port(self):
-        exposed, _extra = SandboxManager._collect_exposed_ports(
+        exposed, _extra = manager._collect_exposed_ports(
             code_server_enabled=False,
             terminal_enabled=False,
             settings=None,
@@ -39,7 +41,7 @@ class TestCollectExposedPortsTerminal:
         assert TTYD_PROXY_PORT not in exposed
 
     def test_terminal_and_code_server_both_enabled(self):
-        exposed, _extra = SandboxManager._collect_exposed_ports(
+        exposed, _extra = manager._collect_exposed_ports(
             code_server_enabled=True,
             terminal_enabled=True,
             settings=None,
@@ -52,7 +54,7 @@ class TestCollectExposedPortsTerminal:
     def test_terminal_port_deduped_from_tunnel_ports(self):
         """If user explicitly lists TTYD_PROXY_PORT in tunnelPorts, it should not duplicate."""
         settings = {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}
-        exposed, extra = SandboxManager._collect_exposed_ports(
+        exposed, extra = manager._collect_exposed_ports(
             code_server_enabled=False,
             terminal_enabled=True,
             settings=settings,
@@ -77,7 +79,7 @@ class TestResolveTunnelsTerminal:
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {TTYD_PROXY_PORT: tunnel}
 
-        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+        cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
             sandbox,
             "sb-123",
             code_server_enabled=False,
@@ -93,7 +95,7 @@ class TestResolveTunnelsTerminal:
     @pytest.mark.asyncio
     async def test_returns_none_when_terminal_disabled(self):
         sandbox = MagicMock()
-        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+        cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
             sandbox,
             "sb-123",
             code_server_enabled=False,
@@ -119,7 +121,7 @@ class TestResolveTunnelsTerminal:
             TTYD_PROXY_PORT: ttyd_tunnel,
         }
 
-        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+        cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
             sandbox,
             "sb-123",
             code_server_enabled=True,

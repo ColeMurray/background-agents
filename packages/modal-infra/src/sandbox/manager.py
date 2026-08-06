@@ -128,13 +128,12 @@ class SandboxManager:
     - Take snapshots for session persistence
     """
 
-    @staticmethod
-    def _generate_code_server_password() -> str:
+    def _generate_code_server_password(self) -> str:
         """Generate a random code-server password."""
         return secrets.token_urlsafe(16)
 
-    @staticmethod
     async def _resolve_tunnels(
+        self,
         sandbox: modal.Sandbox,
         sandbox_id: str,
         ports: list[int],
@@ -171,8 +170,7 @@ class SandboxManager:
                 await asyncio.sleep(backoff * (attempt + 1))
         return resolved
 
-    @staticmethod
-    def _validate_ports(raw: list) -> list[int]:
+    def _validate_ports(self, raw: list) -> list[int]:
         """Validate and sanitize tunnel ports: must be int, 1-65535, max MAX_TUNNEL_PORTS."""
         ports: list[int] = []
         for p in raw:
@@ -182,8 +180,7 @@ class SandboxManager:
                 break
         return ports
 
-    @staticmethod
-    def _resolve_service_ports(settings: dict[str, Any] | None) -> tuple[int, int]:
+    def _resolve_service_ports(self, settings: dict[str, Any] | None) -> tuple[int, int]:
         """Return effective (code_server_port, ttyd_proxy_port) from settings.
 
         Falls back to the CODE_SERVER_PORT / TTYD_PROXY_PORT defaults when unset
@@ -201,8 +198,8 @@ class SandboxManager:
             coerce(s.get("terminalPort"), TTYD_PROXY_PORT),
         )
 
-    @staticmethod
     def _collect_exposed_ports(
+        self,
         code_server_enabled: bool,
         terminal_enabled: bool,
         settings: dict[str, Any] | None,
@@ -220,14 +217,14 @@ class SandboxManager:
             reserved.add(ttyd_proxy_port)
 
         raw_ports = (settings or {}).get("tunnelPorts", [])
-        tunnel_ports = SandboxManager._validate_ports(raw_ports) if raw_ports else []
+        tunnel_ports = self._validate_ports(raw_ports) if raw_ports else []
         # Remove reserved ports from tunnel_ports to avoid duplicates
         tunnel_ports = [p for p in tunnel_ports if p not in reserved]
         exposed.extend(tunnel_ports)
         return exposed, tunnel_ports
 
-    @staticmethod
     async def _resolve_and_setup_tunnels(
+        self,
         sandbox: modal.Sandbox,
         sandbox_id: str,
         code_server_enabled: bool,
@@ -247,7 +244,7 @@ class SandboxManager:
         if not all_ports:
             return None, None, None
 
-        resolved = await SandboxManager._resolve_tunnels(sandbox, sandbox_id, all_ports)
+        resolved = await self._resolve_tunnels(sandbox, sandbox_id, all_ports)
 
         # Only pull a service port out of the resolved map when that service owns
         # it. Otherwise a user's own port (e.g. 8080 with code-server disabled)
@@ -257,12 +254,12 @@ class SandboxManager:
         extra_urls = resolved if resolved else None
 
         if extra_urls:
-            await SandboxManager._write_tunnel_env_file(sandbox, sandbox_id, extra_urls)
+            await self._write_tunnel_env_file(sandbox, sandbox_id, extra_urls)
 
         return code_server_url, ttyd_url, extra_urls
 
-    @staticmethod
     async def _write_tunnel_env_file(
+        self,
         sandbox: modal.Sandbox,
         sandbox_id: str,
         tunnel_urls: dict[int, str],

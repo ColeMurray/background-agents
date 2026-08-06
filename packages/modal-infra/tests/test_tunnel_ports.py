@@ -14,6 +14,8 @@ from sandbox_runtime.constants import (
 )
 from src.sandbox.manager import CODE_SERVER_PORT, SandboxConfig, SandboxManager
 
+manager = SandboxManager()
+
 
 def _mock_sandbox_with_filesystem() -> tuple[MagicMock, AsyncMock]:
     """Return (sandbox, write_text) with sandbox.filesystem.write_text.aio mocked."""
@@ -38,7 +40,7 @@ class TestResolveTunnels:
         sandbox = MagicMock()
         sandbox.tunnels.return_value = {3000: tunnel_3000, 3001: tunnel_3001}
 
-        result = await SandboxManager._resolve_tunnels(sandbox, "sb-1", [3000, 3001])
+        result = await manager._resolve_tunnels(sandbox, "sb-1", [3000, 3001])
         assert result == {
             3000: "https://tunnel-3000.example.com",
             3001: "https://tunnel-3001.example.com",
@@ -53,7 +55,7 @@ class TestResolveTunnels:
         sandbox.tunnels.return_value = {3000: tunnel_3000}
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            result = await SandboxManager._resolve_tunnels(
+            result = await manager._resolve_tunnels(
                 sandbox, "sb-1", [3000, 3001], retries=2, backoff=0.0
             )
         assert result == {3000: "https://tunnel-3000.example.com"}
@@ -64,9 +66,7 @@ class TestResolveTunnels:
         sandbox.tunnels.side_effect = Exception("tunnel unavailable")
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            result = await SandboxManager._resolve_tunnels(
-                sandbox, "sb-1", [3000], retries=3, backoff=0.0
-            )
+            result = await manager._resolve_tunnels(sandbox, "sb-1", [3000], retries=3, backoff=0.0)
         assert result == {}
 
     @pytest.mark.asyncio
@@ -83,7 +83,7 @@ class TestResolveTunnels:
         ]
 
         with patch("src.sandbox.manager.asyncio.sleep", new_callable=AsyncMock):
-            result = await SandboxManager._resolve_tunnels(
+            result = await manager._resolve_tunnels(
                 sandbox, "sb-1", [3000, 3001], retries=3, backoff=0.0
             )
         assert result == {
@@ -99,7 +99,7 @@ class TestResolveAndSetupTunnels:
     @pytest.mark.asyncio
     async def test_returns_none_none_none_for_no_ports(self):
         sandbox = MagicMock()
-        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+        cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
             sandbox,
             "sb-1",
             False,
@@ -123,7 +123,7 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=tunnel_urls,
         ):
-            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
@@ -152,7 +152,7 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 True,
@@ -178,7 +178,7 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, ttyd_url, extra = await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
@@ -207,7 +207,7 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, _ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, _ttyd_url, extra = await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 True,
@@ -228,7 +228,7 @@ class TestWriteTunnelEnvFile:
     async def test_writes_dotenv_format_to_expected_path(self):
         sandbox, write_text = _mock_sandbox_with_filesystem()
 
-        await SandboxManager._write_tunnel_env_file(
+        await manager._write_tunnel_env_file(
             sandbox,
             "sb-1",
             {
@@ -253,7 +253,7 @@ class TestWriteTunnelEnvFile:
         write_text.side_effect = Exception("write failed")
 
         with patch("src.sandbox.manager.log") as mock_log:
-            await SandboxManager._write_tunnel_env_file(
+            await manager._write_tunnel_env_file(
                 sandbox, "sb-1", {3000: "https://tunnel-3000.example.com"}
             )
 
@@ -275,7 +275,7 @@ class TestResolveAndSetupTunnelsWritesFile:
             new_callable=AsyncMock,
             return_value=tunnel_urls,
         ):
-            await SandboxManager._resolve_and_setup_tunnels(
+            await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
@@ -300,7 +300,7 @@ class TestResolveAndSetupTunnelsWritesFile:
             new_callable=AsyncMock,
             return_value={},
         ):
-            _cs, _ttyd, extra = await SandboxManager._resolve_and_setup_tunnels(
+            _cs, _ttyd, extra = await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
@@ -324,7 +324,7 @@ class TestResolveAndSetupTunnelsWritesFile:
             new_callable=AsyncMock,
             return_value={CODE_SERVER_PORT: "https://cs.example.com"},
         ):
-            await SandboxManager._resolve_and_setup_tunnels(
+            await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 True,
@@ -350,7 +350,7 @@ class TestResolveAndSetupTunnelsWritesFile:
             ),
             patch("src.sandbox.manager.log"),
         ):
-            _cs, _ttyd, extra = await SandboxManager._resolve_and_setup_tunnels(
+            _cs, _ttyd, extra = await manager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
@@ -467,49 +467,49 @@ class TestCollectExposedPorts:
     """SandboxManager._collect_exposed_ports tests."""
 
     def test_no_ports_when_no_settings(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             False, False, None, CODE_SERVER_PORT, TTYD_PROXY_PORT
         )
         assert exposed == []
         assert tunnel == []
 
     def test_code_server_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             True, False, None, CODE_SERVER_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [CODE_SERVER_PORT]
         assert tunnel == []
 
     def test_tunnel_ports_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             False, False, {"tunnelPorts": [3000, 5173]}, CODE_SERVER_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [3000, 5173]
         assert tunnel == [3000, 5173]
 
     def test_combined_code_server_and_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             True, False, {"tunnelPorts": [3000]}, CODE_SERVER_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [CODE_SERVER_PORT, 3000]
         assert tunnel == [3000]
 
     def test_terminal_only(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             False, True, None, CODE_SERVER_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [TTYD_PROXY_PORT]
         assert tunnel == []
 
     def test_deduplicates_ttyd_port_from_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             False, True, {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}, CODE_SERVER_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [TTYD_PROXY_PORT, 3000]
         assert tunnel == [3000]
 
     def test_deduplicates_code_server_port_from_tunnels(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             True,
             False,
             {"tunnelPorts": [CODE_SERVER_PORT, 3000]},
@@ -521,14 +521,14 @@ class TestCollectExposedPorts:
 
     def test_custom_code_server_port_frees_default_for_tunnel(self):
         # code-server moved to 8081 → the default 8080 is free as a user tunnel.
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             True, False, {"tunnelPorts": [CODE_SERVER_PORT]}, 8081, TTYD_PROXY_PORT
         )
         assert exposed == [8081, CODE_SERVER_PORT]
         assert tunnel == [CODE_SERVER_PORT]
 
     def test_custom_terminal_port_frees_default_for_tunnel(self):
-        exposed, tunnel = SandboxManager._collect_exposed_ports(
+        exposed, tunnel = manager._collect_exposed_ports(
             False, True, {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}, CODE_SERVER_PORT, 7000
         )
         assert exposed == [7000, TTYD_PROXY_PORT, 3000]
@@ -539,20 +539,20 @@ class TestValidatePorts:
     """SandboxManager._validate_ports tests."""
 
     def test_accepts_valid_ports(self):
-        assert SandboxManager._validate_ports([80, 3000, 65535]) == [80, 3000, 65535]
+        assert manager._validate_ports([80, 3000, 65535]) == [80, 3000, 65535]
 
     def test_rejects_out_of_range(self):
-        assert SandboxManager._validate_ports([0, -1, 65536, 3000]) == [3000]
+        assert manager._validate_ports([0, -1, 65536, 3000]) == [3000]
 
     def test_rejects_non_integers(self):
-        assert SandboxManager._validate_ports(["3000", 3.5, None, 8080]) == [8080]
+        assert manager._validate_ports(["3000", 3.5, None, 8080]) == [8080]
 
     def test_caps_at_ten(self):
         ports = list(range(1, 20))
-        assert len(SandboxManager._validate_ports(ports)) == 10
+        assert len(manager._validate_ports(ports)) == 10
 
     def test_empty_list(self):
-        assert SandboxManager._validate_ports([]) == []
+        assert manager._validate_ports([]) == []
 
 
 def _patch_sandbox_create(monkeypatch, captured: dict) -> None:
@@ -580,22 +580,25 @@ class TestResolveServicePorts:
     """SandboxManager._resolve_service_ports tests."""
 
     def test_defaults_when_unset(self):
-        assert SandboxManager._resolve_service_ports(None) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
-        assert SandboxManager._resolve_service_ports({}) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+        assert manager._resolve_service_ports(None) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+        assert manager._resolve_service_ports({}) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
 
     def test_uses_configured_ports(self):
-        assert SandboxManager._resolve_service_ports(
-            {"codeServerPort": 9000, "terminalPort": 9001}
-        ) == (9000, 9001)
+        assert manager._resolve_service_ports({"codeServerPort": 9000, "terminalPort": 9001}) == (
+            9000,
+            9001,
+        )
 
     def test_falls_back_on_invalid(self):
-        assert SandboxManager._resolve_service_ports(
-            {"codeServerPort": 0, "terminalPort": 99999}
-        ) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+        assert manager._resolve_service_ports({"codeServerPort": 0, "terminalPort": 99999}) == (
+            CODE_SERVER_PORT,
+            TTYD_PROXY_PORT,
+        )
         # strings and bools are not valid in-range ints
-        assert SandboxManager._resolve_service_ports(
-            {"codeServerPort": "8081", "terminalPort": True}
-        ) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+        assert manager._resolve_service_ports({"codeServerPort": "8081", "terminalPort": True}) == (
+            CODE_SERVER_PORT,
+            TTYD_PROXY_PORT,
+        )
 
 
 class TestServicePortEnvVars:
