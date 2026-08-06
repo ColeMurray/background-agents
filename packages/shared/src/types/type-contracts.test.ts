@@ -8,6 +8,9 @@ import type {
   TextMatchValue,
   TriggerCondition,
   TriggerConfig,
+  automationTriggerTypeSchema,
+  triggerConditionSchema,
+  triggerConfigSchema,
 } from "..";
 import type {
   Automation,
@@ -18,6 +21,7 @@ import type {
   CreateSessionInput,
   CreateSessionRequest,
   ListAutomationsResponse,
+  ListAutomationsPageResponse,
   RepositoryInput,
   SandboxEvent,
   ServerMessage,
@@ -29,6 +33,9 @@ import type {
   sandboxEventSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
+  automationSchema,
+  listAutomationsPageResponseSchema,
+  listAutomationsResponseSchema,
 } from ".";
 
 it("preserves public Zod input and output relationships", () => {
@@ -44,6 +51,18 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<SandboxEvent>().toEqualTypeOf<z.output<typeof sandboxEventSchema>>();
   expectTypeOf<ServerMessage>().toEqualTypeOf<z.output<typeof serverMessageSchema>>();
   expectTypeOf<AutomationRepositoryInput>().toEqualTypeOf<RepositoryInput>();
+  expectTypeOf<AutomationTriggerType>().toEqualTypeOf<
+    z.output<typeof automationTriggerTypeSchema>
+  >();
+  expectTypeOf<TriggerCondition>().toEqualTypeOf<z.output<typeof triggerConditionSchema>>();
+  expectTypeOf<TriggerConfig>().toEqualTypeOf<z.output<typeof triggerConfigSchema>>();
+  expectTypeOf<Automation>().toEqualTypeOf<z.output<typeof automationSchema>>();
+  expectTypeOf<ListAutomationsResponse>().toEqualTypeOf<
+    z.output<typeof listAutomationsResponseSchema>
+  >();
+  expectTypeOf<ListAutomationsPageResponse>().toEqualTypeOf<
+    z.output<typeof listAutomationsPageResponseSchema>
+  >();
 });
 
 it("preserves the repository transform boundary", () => {
@@ -105,6 +124,10 @@ it("preserves representative automation contracts", () => {
 
   expectTypeOf<Automation["repositories"]>().toEqualTypeOf<AutomationRepository[]>();
   expectTypeOf<ListAutomationsResponse["automations"]>().toEqualTypeOf<Automation[]>();
+  expectTypeOf<ListAutomationsResponse["total"]>().toEqualTypeOf<number>();
+  expectTypeOf<ListAutomationsPageResponse["automations"]>().toEqualTypeOf<Automation[]>();
+  expectTypeOf<ListAutomationsPageResponse["hasMore"]>().toEqualTypeOf<boolean>();
+  expectTypeOf<ListAutomationsPageResponse["nextCursor"]>().toEqualTypeOf<string | null>();
 
   void request;
 });

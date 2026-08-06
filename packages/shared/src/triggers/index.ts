@@ -21,7 +21,15 @@ export type {
   TextMatchValue,
   TriggerConfig,
 } from "./types";
-export { TRIGGER_TYPE_TO_SOURCE, automationEventSchema } from "./types";
+export {
+  TRIGGER_TYPE_TO_SOURCE,
+  automationEventSchema,
+  automationTriggerTypeSchema,
+  jsonPathFilterSchema,
+  textMatchValueSchema,
+  triggerConditionSchema,
+  triggerConfigSchema,
+} from "./types";
 
 // Condition system
 export type { ConditionHandler, ConditionRegistry } from "./conditions";
