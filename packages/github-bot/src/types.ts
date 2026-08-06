@@ -43,7 +43,7 @@ export interface Env {
 
 export type {
   IssueCommentPayload,
-  PullRequestOpenedPayload,
+  PullRequestReviewTriggerPayload,
   ReviewCommentPayload,
   ReviewRequestedPayload,
 } from "./payload-schemas";
