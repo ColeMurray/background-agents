@@ -263,8 +263,29 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
   });
 }
 
-function getNewSessionActorUserId(webhook: AgentSessionWebhook): string | undefined {
-  return webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId ?? undefined;
+/**
+ * The comment and actor driving a new session. A "prompted" event that
+ * reaches new-session handling is a reply to an elicitation — no
+ * issue→session mapping existed, so no session was ever created. The reply
+ * text lives on the agent activity, not on the session's original trigger
+ * comment, and its author is the replier — not necessarily the user whose
+ * comment created the elicitation — so both must come from the activity.
+ */
+function getNewSessionInput(webhook: AgentSessionWebhook): {
+  comment: { body: string } | undefined;
+  actorUserId: string | undefined;
+} {
+  const sessionActor =
+    webhook.agentSession.comment?.userId ?? webhook.agentSession.creatorId ?? undefined;
+  const replyBody =
+    webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;
+  if (replyBody) {
+    return {
+      comment: { body: replyBody },
+      actorUserId: webhook.agentActivity?.userId ?? sessionActor,
+    };
+  }
+  return { comment: webhook.agentSession.comment, actorUserId: sessionActor };
 }
 
 function shouldTransitionIssueOnStart(webhook: AgentSessionWebhook): boolean {
@@ -450,14 +471,7 @@ async function handleNewSession(
 ): Promise<void> {
   const startTime = Date.now();
   const agentSessionId = webhook.agentSession.id;
-  // A "prompted" event that reaches new-session handling is a reply to an
-  // elicitation — no issue→session mapping existed, so no session was ever
-  // created. The reply text lives on the agent activity, not on the session's
-  // original trigger comment, and it is the clarification the resolver asked
-  // for — so it must win.
-  const replyBody =
-    webhook.action === "prompted" ? webhook.agentActivity?.content?.body?.trim() : undefined;
-  const comment = replyBody ? { body: replyBody } : webhook.agentSession.comment;
+  const { comment, actorUserId: sessionActorUserId } = getNewSessionInput(webhook);
   const orgId = webhook.organizationId;
 
   const client = await getAgentSessionLinearClient({
@@ -527,7 +541,6 @@ async function handleNewSession(
   let userReasoningEffort: string | undefined;
   let actorDisplayName: string | undefined;
   let actorEmail: string | undefined;
-  const sessionActorUserId = getNewSessionActorUserId(webhook);
   if (sessionActorUserId) {
     const prefs = await getUserPreferences(env, sessionActorUserId);
     if (prefs?.model) {

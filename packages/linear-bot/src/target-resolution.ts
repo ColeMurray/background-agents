@@ -35,19 +35,28 @@ const log = createLogger("target-resolution");
  * Find the single available repository a comment names explicitly.
  *
  * Case-insensitive, boundary-guarded so `acme/api` does not match inside
- * `acme/api-legacy` or `notacme/api`, and null when the comment names zero
- * or several repositories — several is still an ambiguity the classifier
- * should see.
+ * `acme/api-legacy`, `notacme/api`, `not.acme/api`, or `acme/api.docs`, and
+ * null when the comment names zero or several repositories — several is
+ * still an ambiguity the classifier should see.
  */
 export function matchExplicitRepo(text: string, repos: RepoConfig[]): RepoConfig | null {
   const haystack = text.toLowerCase();
-  const boundary = /[\w/-]/;
+  const pathChar = /[\w/-]/;
   const named = repos.filter((repo) => {
     const needle = repo.fullName.toLowerCase();
     for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
-      const before = at === 0 ? "" : haystack[at - 1];
-      const after = haystack[at + needle.length] ?? "";
-      if (!boundary.test(before) && !boundary.test(after)) return true;
+      const end = at + needle.length;
+      const before = haystack[at - 1] ?? "";
+      const after = haystack[end] ?? "";
+      // A neighbor extends the repository path when it is a path character,
+      // or a period connecting to one (`not.acme/api`, `acme/api.docs`). A
+      // period followed by nothing path-like is ordinary terminal
+      // punctuation (`use acme/api.`).
+      const beforeExtends =
+        pathChar.test(before) || (before === "." && pathChar.test(haystack[at - 2] ?? ""));
+      const afterExtends =
+        pathChar.test(after) || (after === "." && pathChar.test(haystack[end + 1] ?? ""));
+      if (!beforeExtends && !afterExtends) return true;
     }
     return false;
   });

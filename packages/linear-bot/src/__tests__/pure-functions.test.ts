@@ -64,6 +64,16 @@ describe("matchExplicitRepo", () => {
     expect(matchExplicitRepo("see acme/backend-legacy for context", repos)).toBeNull();
     expect(matchExplicitRepo("see notacme/backend for context", repos)).toBeNull();
   });
+
+  it("does not match inside a period-delimited repository path", () => {
+    expect(matchExplicitRepo("see acme/backend.docs for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see not.acme/backend for context", repos)).toBeNull();
+  });
+
+  it("accepts ordinary terminal punctuation", () => {
+    expect(matchExplicitRepo("use acme/backend.", repos)?.fullName).toBe("acme/backend");
+    expect(matchExplicitRepo("acme/backend, please", repos)?.fullName).toBe("acme/backend");
+  });
 });
 
 // ─── extractModelFromLabels ──────────────────────────────────────────────────
