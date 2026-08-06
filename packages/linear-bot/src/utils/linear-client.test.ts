@@ -99,6 +99,13 @@ describe("fetchUser", () => {
     const result = await fetchUser(client, "user-1");
     expect(result).toBeNull();
   });
+
+  it("returns null when the GraphQL response is not an object", async () => {
+    mockFetchResponse([]);
+
+    const result = await fetchUser(client, "user-1");
+    expect(result).toBeNull();
+  });
 });
 
 describe("fetchIssueDetails", () => {

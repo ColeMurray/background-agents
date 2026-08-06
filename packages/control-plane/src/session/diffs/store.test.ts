@@ -166,6 +166,27 @@ describe("SessionDiffStore", () => {
     ]);
   });
 
+  it("ignores persisted rows with malformed metadata", () => {
+    const sql = new MemoryDiffSql();
+    sql.row = {
+      revision_id: "revision-1",
+      trigger_message_id: "message-1",
+      bundle_json: JSON.stringify(upload),
+      captured_at: 100,
+      last_error: 123,
+      error_at: null,
+      updated_at: 200,
+    };
+    const store = new SessionDiffStore(sql);
+
+    expect(store.getPublicState("diff unavailable")).toEqual({
+      version: 1,
+      current: null,
+      lastError: null,
+      unavailableReason: "diff unavailable",
+    });
+  });
+
   it("rejects an encoded bundle above the storage limit", () => {
     const store = new SessionDiffStore(new MemoryDiffSql());
     const files = Array.from({ length: 400 }, (_, index) => ({
