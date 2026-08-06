@@ -1,13 +1,13 @@
 /**
- * Merge a split canonical user pair (issue #1290 reconciliation design,
- * Appendix A). Converges the loser user's identities, sessions, automations,
- * SCM tokens, and auth graph onto the survivor, then runs the identity
- * consistency report as a closing check.
+ * Merge a split canonical user pair (issue #1290). Converges the loser user's
+ * identities (which are also the Better Auth accounts post-consolidation),
+ * coding and browser sessions, automations, SCM tokens, and read states onto
+ * the survivor, then deletes the emptied loser row.
  *
- * Survivor selection: normally the bot-era row that owns history and
- * attribution; for a subject/email collision split, normally the email-owning
- * row the person already signs into. The R4 section of the consistency report
- * (`auth.reconciliation_conflicts` in worker logs) enumerates candidate pairs.
+ * Survivor selection: normally the row that owns history and attribution;
+ * for a subject/email collision split (`auth.subject_email_collision` in
+ * worker logs enumerates the live cases), normally the row the person
+ * already signs into.
  *
  * Dry-run is the default — it prints exact per-table counts and writes
  * nothing. Pass --execute to apply. The merge is idempotent: re-running a
@@ -18,11 +18,7 @@
  * Usage:
  *   node --experimental-transform-types scripts/merge-split-users.ts \
  *     --database <d1-database-name> --survivor <user-id> --loser <user-id>
- *
- *   # apply, optionally choosing the surviving auth email:
- *   node --experimental-transform-types scripts/merge-split-users.ts \
- *     --database <d1-database-name> --survivor <id> --loser <id> \
- *     [--surviving-email <email>] --execute
+ *     [--execute]
  *
  * Flags: --local (target the local wrangler simulator), --verbose (print SQL).
  * Requires wrangler auth (CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID or
@@ -30,7 +26,6 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { IdentityReconciliationStore } from "../packages/control-plane/src/db/identity-reconciliation.ts";
 import type {
   SqlDatabase,
   SqlResult,
@@ -168,13 +163,12 @@ interface CliOptions {
   database: string;
   survivorId: string;
   loserId: string;
-  survivingEmail?: string;
   execute: boolean;
   local: boolean;
   verbose: boolean;
 }
 
-const VALUE_OPTIONS = new Set(["database", "survivor", "loser", "surviving-email"]);
+const VALUE_OPTIONS = new Set(["database", "survivor", "loser"]);
 const FLAG_OPTIONS = new Set(["execute", "local", "verbose"]);
 
 function parseArgs(argv: string[]): CliOptions {
@@ -205,7 +199,6 @@ function parseArgs(argv: string[]): CliOptions {
     database: require("database"),
     survivorId: require("survivor"),
     loserId: require("loser"),
-    survivingEmail: values.get("surviving-email"),
     execute: flags.has("execute"),
     local: flags.has("local"),
     verbose: flags.has("verbose"),
@@ -219,29 +212,14 @@ async function main(): Promise<void> {
   if (options.execute) {
     console.error(
       "Note: the wrangler transport executes statements sequentially (not atomically). " +
-        "The merge is ordered loss-free and idempotent — if a run fails partway, re-run it."
+        "The merge is idempotent — if a run fails partway, re-run it."
     );
-  }
-  // Emitted in dry-run too: the preview is where an operator inspects the
-  // plan, so an ineffective flag must be visible before --execute.
-  if (options.survivingEmail) {
-    const survivorAuthRow = await db
-      .prepare(`SELECT id FROM auth_users WHERE id = ?`)
-      .bind(options.survivorId)
-      .first();
-    if (survivorAuthRow) {
-      console.error(
-        "WARNING: --surviving-email has no effect because the survivor already has an auth " +
-          "row — its existing email is kept and drives any canonical email backfill."
-      );
-    }
   }
 
   const result = await mergeUsers(db, {
     survivorId: options.survivorId,
     loserId: options.loserId,
     dryRun: !options.execute,
-    ...(options.survivingEmail ? { survivingEmail: options.survivingEmail } : {}),
   });
   console.log(JSON.stringify(result, null, 2));
   if (result.dryRun) {
@@ -249,19 +227,19 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Closing check: the consistency report should no longer list the pair.
-  const report = await new IdentityReconciliationStore(db).report();
-  console.error("\nPost-merge consistency report:");
-  console.log(JSON.stringify(report, null, 2));
-  const stillConflicting = report.sharedSubjectConflicts.filter(
-    (conflict) =>
-      conflict.botUserId === options.loserId ||
-      conflict.webUserId === options.loserId ||
-      conflict.botUserId === options.survivorId ||
-      conflict.webUserId === options.survivorId
-  );
-  if (stillConflicting.length > 0) {
-    console.error("WARNING: merged pair still appears in shared-subject conflicts.");
+  // Closing check: the loser row and its graph must be gone.
+  const residual = await db
+    .prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM users WHERE id = ?) +
+         (SELECT COUNT(*) FROM user_identities WHERE user_id = ?) +
+         (SELECT COUNT(*) FROM sessions WHERE user_id = ?) +
+         (SELECT COUNT(*) FROM auth_sessions WHERE userId = ?) AS count`
+    )
+    .bind(options.loserId, options.loserId, options.loserId, options.loserId)
+    .first<{ count: number }>();
+  if ((residual?.count ?? 0) > 0) {
+    console.error("WARNING: rows still reference the loser id; re-run the merge.");
     process.exitCode = 1;
   }
 }

@@ -1,8 +1,8 @@
 import { env } from "cloudflare:test";
 
 /**
- * Seed helpers for canonical/auth identity-registry tests. Timestamps default
- * to a fixed instant so DATE→epoch conversions are assertable.
+ * Seed helpers for canonical identity-registry tests. Timestamps default to a
+ * fixed instant so epoch conversions are assertable.
  */
 
 export const SEED_NOW_MS = Date.parse("2026-08-01T00:00:00.000Z");
@@ -11,13 +11,21 @@ export const SEED_NOW_ISO = new Date(SEED_NOW_MS).toISOString();
 export async function insertCanonicalUser(options: {
   id: string;
   email: string | null;
+  emailVerified?: number;
   displayName?: string;
 }): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, ?, ?)`
+    `INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
+     VALUES (?, ?, ?, ?, NULL, ?, ?)`
   )
-    .bind(options.id, options.displayName ?? null, options.email, SEED_NOW_MS, SEED_NOW_MS)
+    .bind(
+      options.id,
+      options.displayName ?? null,
+      options.email,
+      options.emailVerified ?? 0,
+      SEED_NOW_MS,
+      SEED_NOW_MS
+    )
     .run();
 }
 
@@ -27,12 +35,15 @@ export async function insertIdentity(options: {
   provider: string;
   providerUserId: string;
   issuer?: string | null;
+  accessToken?: string | null;
+  refreshToken?: string | null;
 }): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO user_identities (
        id, user_id, provider, provider_user_id, provider_login,
-       provider_email, provider_issuer, created_at
-     ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)`
+       provider_email, provider_issuer, created_at, access_token,
+       refresh_token, updated_at
+     ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)`
   )
     .bind(
       options.id,
@@ -40,57 +51,10 @@ export async function insertIdentity(options: {
       options.provider,
       options.providerUserId,
       options.issuer ?? null,
+      SEED_NOW_MS,
+      options.accessToken ?? null,
+      options.refreshToken ?? null,
       SEED_NOW_MS
-    )
-    .run();
-}
-
-export async function insertAuthUser(options: {
-  id: string;
-  email: string;
-  emailVerified?: number;
-  name?: string;
-  createdAtIso?: string;
-}): Promise<void> {
-  // Defaults to an hour before the real clock, not SEED_NOW_ISO: the strand
-  // sweep's age gate compares createdAt against 'now', so the default must
-  // be reliably past the grace period on any machine clock. Pass an explicit
-  // createdAtIso to pin an instant (fresh-strand and epoch-conversion tests).
-  const createdAtIso = options.createdAtIso ?? new Date(Date.now() - 3_600_000).toISOString();
-  await env.DB.prepare(
-    `INSERT INTO auth_users (id, name, email, emailVerified, image, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, NULL, ?, ?)`
-  )
-    .bind(
-      options.id,
-      options.name ?? options.email,
-      options.email,
-      options.emailVerified ?? 0,
-      createdAtIso,
-      createdAtIso
-    )
-    .run();
-}
-
-export async function insertAuthAccount(options: {
-  id: string;
-  accountId: string;
-  providerId: string;
-  userId: string;
-}): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO auth_accounts (
-       id, accountId, providerId, userId, accessToken, refreshToken, idToken,
-       accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt
-     ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
-  )
-    .bind(
-      options.id,
-      options.accountId,
-      options.providerId,
-      options.userId,
-      SEED_NOW_ISO,
-      SEED_NOW_ISO
     )
     .run();
 }
@@ -102,21 +66,53 @@ export async function insertAuthSession(options: { id: string; userId: string })
   )
     .bind(
       options.id,
-      SEED_NOW_ISO,
+      SEED_NOW_MS + 7 * 24 * 60 * 60 * 1000,
       `token-${options.id}`,
-      SEED_NOW_ISO,
-      SEED_NOW_ISO,
+      SEED_NOW_MS,
+      SEED_NOW_MS,
       options.userId
     )
     .run();
 }
 
-export async function getAuthUserRow(
-  id: string
-): Promise<{ id: string; name: string; email: string; emailVerified: number } | null> {
-  return env.DB.prepare(`SELECT id, name, email, emailVerified FROM auth_users WHERE id = ?`)
+export async function getUserRow(id: string): Promise<{
+  id: string;
+  display_name: string | null;
+  email: string | null;
+  email_verified: number;
+} | null> {
+  return env.DB.prepare(`SELECT id, display_name, email, email_verified FROM users WHERE id = ?`)
     .bind(id)
-    .first<{ id: string; name: string; email: string; emailVerified: number }>();
+    .first<{
+      id: string;
+      display_name: string | null;
+      email: string | null;
+      email_verified: number;
+    }>();
+}
+
+export async function getIdentityRow(
+  provider: string,
+  providerUserId: string
+): Promise<{
+  id: string;
+  user_id: string;
+  provider_issuer: string | null;
+  access_token: string | null;
+  created_at: number;
+} | null> {
+  return env.DB.prepare(
+    `SELECT id, user_id, provider_issuer, access_token, created_at
+     FROM user_identities WHERE provider = ? AND provider_user_id = ?`
+  )
+    .bind(provider, providerUserId)
+    .first<{
+      id: string;
+      user_id: string;
+      provider_issuer: string | null;
+      access_token: string | null;
+      created_at: number;
+    }>();
 }
 
 export async function countTableRows(table: string): Promise<number> {

@@ -44,8 +44,8 @@ async function testBrowserSessionCookie(): Promise<string> {
   const applicationTimestamp = now.getTime();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_users
-         (id, name, email, emailVerified, image, createdAt, updatedAt)
+      `INSERT OR IGNORE INTO users
+         (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_USER_ID,
@@ -53,40 +53,24 @@ async function testBrowserSessionCookie(): Promise<string> {
       "browser@test.local",
       1,
       null,
-      now.toISOString(),
-      now.toISOString()
-    ),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO users
-         (id, display_name, email, avatar_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(
-      TEST_BROWSER_USER_ID,
-      "Integration Browser User",
-      "browser@test.local",
-      null,
       applicationTimestamp,
       applicationTimestamp
     ),
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_accounts
-         (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
-          accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO user_identities
+         (id, user_id, provider, provider_user_id, provider_login, provider_email,
+          provider_issuer, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_ACCOUNT_ID,
-      TEST_BROWSER_PROVIDER_SUBJECT,
-      "github",
       TEST_BROWSER_USER_ID,
+      "github",
+      TEST_BROWSER_PROVIDER_SUBJECT,
       null,
       null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      now.toISOString(),
-      now.toISOString()
+      "https://github.com",
+      applicationTimestamp,
+      applicationTimestamp
     ),
     env.DB.prepare(
       `INSERT OR IGNORE INTO auth_sessions
@@ -94,10 +78,10 @@ async function testBrowserSessionCookie(): Promise<string> {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_SESSION_ID,
-      expiresAt.toISOString(),
+      expiresAt.getTime(),
       TEST_BROWSER_SESSION_TOKEN,
-      now.toISOString(),
-      now.toISOString(),
+      applicationTimestamp,
+      applicationTimestamp,
       "127.0.0.1",
       "integration-test",
       TEST_BROWSER_USER_ID

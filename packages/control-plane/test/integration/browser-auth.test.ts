@@ -1,6 +1,5 @@
 import { env } from "cloudflare:test";
 import { BROWSER_AUTH_CLIENT_IP_HEADER } from "@open-inspect/shared/browser-auth-routes";
-import { getMigrations } from "better-auth/db/migration";
 import { verifyGoogleIdToken } from "better-auth/social-providers";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -14,86 +13,91 @@ const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const MS_PER_SECOND = 1000;
 const UNUSED_PROFILE_RESOLVER = async () => null;
-const UNUSED_USER_PROJECTION = { project: async () => {} };
 
-const EXPECTED_COLUMNS = {
-  auth_users: [
-    ["id", "TEXT", 1, 1],
-    ["name", "TEXT", 1, 0],
-    ["email", "TEXT", 1, 0],
-    ["emailVerified", "INTEGER", 1, 0],
-    ["image", "TEXT", 0, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
+/**
+ * Post-consolidation shapes the adapter's field maps depend on: Better Auth's
+ * user/account models live in the canonical tables, sessions/verifications in
+ * their own epoch-ms tables.
+ */
+const EXPECTED_COLUMNS: Record<string, [string, string][]> = {
+  users: [
+    ["id", "TEXT"],
+    ["display_name", "TEXT"],
+    ["email", "TEXT"],
+    ["avatar_url", "TEXT"],
+    ["created_at", "INTEGER"],
+    ["updated_at", "INTEGER"],
+    ["email_verified", "INTEGER"],
   ],
   auth_sessions: [
-    ["id", "TEXT", 1, 1],
-    ["expiresAt", "DATE", 1, 0],
-    ["token", "TEXT", 1, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
-    ["ipAddress", "TEXT", 0, 0],
-    ["userAgent", "TEXT", 0, 0],
-    ["userId", "TEXT", 1, 0],
-  ],
-  auth_accounts: [
-    ["id", "TEXT", 1, 1],
-    ["accountId", "TEXT", 1, 0],
-    ["providerId", "TEXT", 1, 0],
-    ["userId", "TEXT", 1, 0],
-    ["accessToken", "TEXT", 0, 0],
-    ["refreshToken", "TEXT", 0, 0],
-    ["idToken", "TEXT", 0, 0],
-    ["accessTokenExpiresAt", "DATE", 0, 0],
-    ["refreshTokenExpiresAt", "DATE", 0, 0],
-    ["scope", "TEXT", 0, 0],
-    ["password", "TEXT", 0, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
+    ["id", "TEXT"],
+    ["expiresAt", "INTEGER"],
+    ["token", "TEXT"],
+    ["createdAt", "INTEGER"],
+    ["updatedAt", "INTEGER"],
+    ["ipAddress", "TEXT"],
+    ["userAgent", "TEXT"],
+    ["userId", "TEXT"],
   ],
   auth_verifications: [
-    ["id", "TEXT", 1, 1],
-    ["identifier", "TEXT", 1, 0],
-    ["value", "TEXT", 1, 0],
-    ["expiresAt", "DATE", 1, 0],
-    ["createdAt", "DATE", 1, 0],
-    ["updatedAt", "DATE", 1, 0],
+    ["id", "TEXT"],
+    ["identifier", "TEXT"],
+    ["value", "TEXT"],
+    ["expiresAt", "INTEGER"],
+    ["createdAt", "INTEGER"],
+    ["updatedAt", "INTEGER"],
   ],
-} as const;
+};
+
+const EXPECTED_IDENTITY_CREDENTIAL_COLUMNS = [
+  "access_token",
+  "refresh_token",
+  "id_token",
+  "access_token_expires_at",
+  "refresh_token_expires_at",
+  "scope",
+  "password",
+  "updated_at",
+];
 
 function createTestAuth() {
   return createUserAuth({
     database: env.DB,
     publicWebOrigin: PUBLIC_WEB_ORIGIN,
     secret: SECRET,
-    userProjection: UNUSED_USER_PROJECTION,
   });
 }
 
 describe("browser authentication", () => {
-  it("keeps the static schema aligned with the pinned Better Auth runtime", async () => {
-    const migrations = await getMigrations(createTestAuth().options);
-    expect(migrations.toBeCreated).toEqual([]);
-    expect(migrations.toBeAdded).toEqual([]);
-
+  it("keeps the consolidated schema aligned with the adapter's field maps", async () => {
     for (const [table, expectedColumns] of Object.entries(EXPECTED_COLUMNS)) {
       const columns = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{
         name: string;
         type: string;
-        notnull: number;
-        pk: number;
       }>();
-      expect(
-        columns.results.map(({ name, type, notnull, pk }) => [name, type, notnull, pk])
-      ).toEqual(expectedColumns);
+      expect(columns.results.map(({ name, type }) => [name, type])).toEqual(expectedColumns);
+    }
+    const identityColumns = await env.DB.prepare(`PRAGMA table_info(user_identities)`).all<{
+      name: string;
+    }>();
+    const names = identityColumns.results.map((column) => column.name);
+    for (const column of EXPECTED_IDENTITY_CREDENTIAL_COLUMNS) {
+      expect(names).toContain(column);
     }
 
+    // The account model's unique subject key — what lets identities serve as
+    // Better Auth accounts at all.
     const providerIdentityIndex = await env.DB.prepare(
       `SELECT "unique"
-       FROM pragma_index_list('auth_accounts')
-       WHERE name = 'idx_auth_accounts_provider_identity'`
+       FROM pragma_index_list('user_identities')
+       WHERE name = 'idx_user_identities_provider'`
     ).first<{ unique: number }>();
     expect(providerIdentityIndex?.unique).toBe(1);
+    // The parallel registry is gone.
+    const legacyTables = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('auth_users', 'auth_accounts')`
+    ).all();
+    expect(legacyTables.results).toEqual([]);
   });
 
   it("serves an anonymous session through Better Auth on Workers and D1", async () => {
@@ -109,7 +113,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -159,7 +162,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -193,7 +195,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -232,7 +233,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: localOrigin,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       github: {
         clientId: "github-app-client-id",
         clientSecret: "github-app-client-secret",
@@ -268,7 +268,6 @@ describe("browser authentication", () => {
       database: env.DB,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       google: {
         clientId: "google-client-id",
         clientSecret: "google-client-secret",
@@ -336,7 +335,6 @@ describe("browser authentication", () => {
         database: env.DB,
         publicWebOrigin: PUBLIC_WEB_ORIGIN,
         secret: SECRET,
-        userProjection: UNUSED_USER_PROJECTION,
         google: {
           clientId,
           clientSecret: "google-client-secret",
