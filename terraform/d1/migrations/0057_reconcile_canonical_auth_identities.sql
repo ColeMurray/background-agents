@@ -32,10 +32,13 @@
 --   WHERE email IS NOT NULL AND length(trim(email)) > 0;
 
 -- (1) The canonical user table becomes Better Auth's user model: add the
--- verification column. Write discipline from here on: bot ingress writes 0
--- (attributed, unproven); only completed OAuth proof at sign-in — or this
--- migration's one-time reviewed backlog verify (step 6) — writes 1. This
--- column is the implicit-linking gate (requireLocalEmailVerified).
+-- verification column. Write discipline from here on: 1 is written by
+-- completed OAuth proof at sign-in, by ingress from email-attesting
+-- providers (Slack/Linear — platform-verified mailboxes fetched server-side
+-- by first-party bots; EMAIL_ATTESTING_PROVIDERS in db/user-store.ts), and
+-- by this migration's one-time reviewed backlog verify (step 6). All other
+-- attribution writes 0. This column is the implicit-linking gate
+-- (requireLocalEmailVerified).
 ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0
   CHECK (email_verified IN (0, 1));
 

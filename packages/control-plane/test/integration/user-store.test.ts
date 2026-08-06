@@ -90,6 +90,59 @@ describe("UserStore", () => {
       expect(await store.getUserByEmail("   ")).toBeNull();
     });
 
+    it("attests slack- and linear-attributed emails as verified at creation", async () => {
+      // Both platforms verify mailbox ownership (Slack confirms address
+      // changes; Linear's email is its login credential), and the bots fetch
+      // the address server-side — so ingress writes count as proof.
+      const slack = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1ATTEST",
+        providerEmail: "slack.person@example.com",
+      });
+      const linear = await store.resolveOrCreateUser({
+        provider: "linear",
+        providerUserId: "linear-attest",
+        providerEmail: "linear.person@example.com",
+      });
+
+      expect((await store.getUserById(slack.id))!.emailVerified).toBe(true);
+      expect((await store.getUserById(linear.id))!.emailVerified).toBe(true);
+    });
+
+    it("stores non-attesting attribution as a claim, not proof", async () => {
+      const result = await store.resolveOrCreateUser({
+        provider: "github",
+        providerUserId: "12345",
+        providerEmail: "octocat@example.com",
+      });
+
+      const user = await store.getUserById(result.id);
+      expect(user!.email).toBe("octocat@example.com");
+      expect(user!.emailVerified).toBe(false);
+    });
+
+    it("carries attestation through the late email backfill", async () => {
+      // Slack user first seen without an email, whose profile later reports
+      // one: the backfill write carries the same attestation as creation.
+      const first = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1LATE",
+      });
+      expect(first.email).toBeNull();
+
+      const second = await store.resolveOrCreateUser({
+        provider: "slack",
+        providerUserId: "U1LATE",
+        providerEmail: "late.person@example.com",
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(await store.getUserById(first.id)).toMatchObject({
+        email: "late.person@example.com",
+        emailVerified: true,
+      });
+    });
+
     it("returns existing user for known identity and updates display_name", async () => {
       const first = await store.resolveOrCreateUser({
         provider: "github",

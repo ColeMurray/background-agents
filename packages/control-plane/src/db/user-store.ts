@@ -15,6 +15,22 @@ export interface ProviderIdentity {
   avatarUrl?: string;
 }
 
+/**
+ * Ingress providers whose attributed emails are platform-verified mailboxes
+ * fetched server-side by first-party bots: Slack confirms every address at
+ * signup and on change, and Linear's email is its login credential. Emails
+ * written from these providers carry verification (`email_verified = 1`) —
+ * the same weight as a completed OAuth sign-in proof, and what admits the
+ * user through Better Auth's implicit-linking gate at their first web
+ * sign-in. Every other provider's attribution stays unproven until the
+ * sign-in claim mints proof; a new ingress provider must be added here
+ * deliberately, never by default.
+ */
+const EMAIL_ATTESTING_PROVIDERS: ReadonlySet<ProviderIdentity["provider"]> = new Set([
+  "slack",
+  "linear",
+]);
+
 export interface ResolvedUser {
   id: string;
   displayName: string | null;
@@ -26,6 +42,7 @@ export interface User {
   id: string;
   displayName: string | null;
   email: string | null;
+  emailVerified: boolean;
   avatarUrl: string | null;
   createdAt: number;
   updatedAt: number;
@@ -45,6 +62,8 @@ export interface UserIdentity {
 export interface NewUser {
   displayName?: string;
   email?: string;
+  /** Whether `email` comes with mailbox-ownership proof (attesting provider). */
+  emailVerified?: boolean;
   avatarUrl?: string;
 }
 
@@ -60,6 +79,8 @@ export interface UserUpdate {
   displayName?: string;
   avatarUrl?: string;
   email?: string;
+  /** Only meaningful alongside `email`: its mailbox-ownership proof. */
+  emailVerified?: boolean;
 }
 
 // ── Row types (D1 snake_case) ───────────────────────────────────────
@@ -68,6 +89,7 @@ interface UserRow {
   id: string;
   display_name: string | null;
   email: string | null;
+  email_verified: number;
   avatar_url: string | null;
   created_at: number;
   updated_at: number;
@@ -91,6 +113,7 @@ function toUser(row: UserRow): User {
     id: row.id,
     displayName: row.display_name,
     email: row.email,
+    emailVerified: row.email_verified === 1,
     avatarUrl: row.avatar_url,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -189,18 +212,28 @@ export class UserStore {
     const id = generateId();
     const now = Date.now();
     const email = normalizeEmail(user.email);
+    const emailVerified = email !== null && user.emailVerified === true;
 
     await this.db
       .prepare(
-        "INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
       )
-      .bind(id, user.displayName ?? null, email, user.avatarUrl ?? null, now, now)
+      .bind(
+        id,
+        user.displayName ?? null,
+        email,
+        emailVerified ? 1 : 0,
+        user.avatarUrl ?? null,
+        now,
+        now
+      )
       .run();
 
     return {
       id,
       displayName: user.displayName ?? null,
       email,
+      emailVerified,
       avatarUrl: user.avatarUrl ?? null,
       createdAt: now,
       updatedAt: now,
@@ -255,8 +288,13 @@ export class UserStore {
     }
     if (updates.email !== undefined) {
       // A blank email normalizes to null — treated as absent, never stored.
+      // Verification travels with the email: it reflects the new address's
+      // proof (attesting provider or not), never the old address's state.
+      const email = normalizeEmail(updates.email);
       sets.push("email = ?");
-      values.push(normalizeEmail(updates.email));
+      values.push(email);
+      sets.push("email_verified = ?");
+      values.push(email !== null && updates.emailVerified === true ? 1 : 0);
     }
 
     if (sets.length === 0) return;
@@ -307,6 +345,7 @@ export class UserStore {
         const emailOwner = await this.getUserByEmail(normalizedEmail);
         if (!emailOwner) {
           updates.email = normalizedEmail;
+          updates.emailVerified = EMAIL_ATTESTING_PROVIDERS.has(identity.provider);
         } else if (emailOwner.id !== user.id) {
           // Another user owns this email — re-link this identity to that user.
           // This prevents permanent identity splits when e.g. a Slack identity
@@ -368,12 +407,15 @@ export class UserStore {
     const avatarUrl = identity.avatarUrl ?? null;
     const issuer = getSignInProviderIssuer(identity.provider);
 
+    const emailVerified =
+      normalizedEmail !== null && EMAIL_ATTESTING_PROVIDERS.has(identity.provider);
+
     await this.db.batch([
       this.db
         .prepare(
-          "INSERT INTO users (id, display_name, email, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+          "INSERT INTO users (id, display_name, email, email_verified, avatar_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
         )
-        .bind(userId, displayName, normalizedEmail, avatarUrl, now, now),
+        .bind(userId, displayName, normalizedEmail, emailVerified ? 1 : 0, avatarUrl, now, now),
       this.db
         .prepare(
           "INSERT INTO user_identities (id, user_id, provider, provider_user_id, provider_login, provider_email, provider_issuer, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"

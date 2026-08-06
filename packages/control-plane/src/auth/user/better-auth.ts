@@ -122,8 +122,9 @@ export function createUserAuth(config: UserAuthConfig) {
       // every request, and pre-cutover web sign-in did the same — refusing it
       // at the web door locked out every canonical user without a sign-in
       // identity (#1290). requireLocalEmailVerified stays at its default
-      // (true): `users.email_verified` — minted only from completed OAuth
-      // proof (or the one-time 0057 backlog verify) — is the linking gate.
+      // (true): `users.email_verified` — written by completed OAuth proof,
+      // attested bot ingress (EMAIL_ATTESTING_PROVIDERS in db/user-store.ts),
+      // or the one-time 0057 backlog verify — is the linking gate.
       encryptOAuthTokens: true,
     },
     verification: {

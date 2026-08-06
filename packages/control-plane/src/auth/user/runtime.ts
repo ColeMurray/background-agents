@@ -14,6 +14,7 @@ import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
 import { SignInClaim } from "./sign-in-claim";
+import { IdentityClaimStore } from "../../db/identity-claim-store";
 import type { SqlDatabase } from "../../db/sql-database";
 import type { Env } from "../../types";
 
@@ -200,7 +201,7 @@ function createUserAuthRuntime(
   database: SqlDatabase
 ): UserAuthRuntime {
   const admissionPolicy = new AdmissionPolicy(config.admission);
-  const claim = new SignInClaim(database);
+  const claim = new SignInClaim(new IdentityClaimStore(database));
   const github = withClaim(
     "github",
     claim,
