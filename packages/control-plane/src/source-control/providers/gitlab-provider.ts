@@ -147,6 +147,9 @@ const gitlabBranchHeadSchema = z.object({
   commit: z.object({ id: z.string().min(1) }),
 });
 
+/** Wire shape of list-branches results, limited to the branch name. */
+const gitlabBranchListSchema = z.array(z.object({ name: z.string() }));
+
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -518,7 +521,11 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         );
       }
 
-      const data = (await response.json()) as Array<{ name: string }>;
+      const data = await parseProviderResponse(
+        response,
+        gitlabBranchListSchema,
+        "GitLab list branches"
+      );
       return data.map((b) => ({ name: b.name }));
     } catch (error) {
       if (error instanceof SourceControlProviderError) {

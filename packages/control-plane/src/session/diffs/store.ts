@@ -9,18 +9,21 @@ import {
   type SessionDiffState,
   type StoredSessionDiffBundle,
 } from "@open-inspect/shared/types/session-diffs";
+import { z } from "zod";
 import type { SqlStorage } from "../sql-storage";
 import { DiffFileNotFoundError, DiffRevisionStaleError } from "./errors";
 
-interface SessionDiffRow {
-  revision_id: string | null;
-  trigger_message_id: string | null;
-  bundle_json: string | null;
-  captured_at: number | null;
-  last_error: string | null;
-  error_at: number | null;
-  updated_at: number;
-}
+const sessionDiffRowSchema = z.object({
+  revision_id: z.string().nullable(),
+  trigger_message_id: z.string().nullable(),
+  bundle_json: z.string().nullable(),
+  captured_at: z.number().nullable(),
+  last_error: z.string().nullable(),
+  error_at: z.number().nullable(),
+  updated_at: z.number(),
+});
+
+type SessionDiffRow = z.infer<typeof sessionDiffRowSchema>;
 
 /** Persists the single latest session-diff bundle in Durable Object SQLite. */
 export class SessionDiffStore {
@@ -102,13 +105,10 @@ export class SessionDiffStore {
   }
 
   private readRow(): SessionDiffRow | null {
-    return (
-      (
-        this.sql
-          .exec(`SELECT * FROM session_diff WHERE singleton = 1`)
-          .toArray() as SessionDiffRow[]
-      )[0] ?? null
-    );
+    const row = this.sql.exec(`SELECT * FROM session_diff WHERE singleton = 1`).toArray()[0];
+    if (!row) return null;
+    const parsed = sessionDiffRowSchema.safeParse(row);
+    return parsed.success ? parsed.data : null;
   }
 
   private parseBundle(row: SessionDiffRow | null): StoredSessionDiffBundle | null {
