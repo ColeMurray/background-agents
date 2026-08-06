@@ -99,12 +99,12 @@ WHERE EXISTS (SELECT 1 FROM auth_users WHERE auth_users.id = users.id);
 -- (5) Auth rows with no same-id canonical row become canonical users — they
 -- are real (web-first) registrations. The email-owner guard skips the strand
 -- class: a partial graph from a failed registration whose email belongs to a
--- different canonical user. Skipped strands are SUPERSEDED, not migrated:
--- after the cutover the affected person's sign-in misses on subject (their
--- account row below is FK-skipped the same way), falls back to their
--- verified email, and implicit linking lands them on the canonical owner —
--- the row that owns their history. This replaces 0057's former runtime sweep
--- with a one-time, preflight-counted supersession.
+-- different canonical user. Skipped strands are SUPERSEDED, not migrated —
+-- and not deleted by any runtime job: after the cutover the affected
+-- person's sign-in misses on subject (their account row below is FK-skipped
+-- the same way), falls back to their verified email, and implicit linking
+-- lands them on the canonical owner — the row that owns their history. The
+-- preflight count above sizes this class before the deploy.
 INSERT INTO users (
   id,
   display_name,
@@ -136,11 +136,13 @@ WHERE NOT EXISTS (SELECT 1 FROM users WHERE users.id = auth_users.id)
 -- Deploy-abort safety net for intra-statement collisions.
 ON CONFLICT DO NOTHING;
 
--- (6) One-time backlog verify (decision 4's single exception, reviewed via
--- the preflight count): every emailed canonical user existing at cutover is
--- treated as verified — they are legacy verified sign-ins or the enumerated
--- bot-attributed backlog. This is what unlocks the #1290 lockout cohorts.
--- All post-cutover verification comes only from OAuth proof at sign-in.
+-- (6) One-time backlog verify (reviewed via the preflight count): every
+-- emailed canonical user existing at cutover is treated as verified — they
+-- are legacy verified sign-ins or the enumerated bot-attributed backlog.
+-- This is what unlocks the #1290 lockouts: without it, the implicit-linking
+-- gate would refuse every pre-cutover user's first web sign-in. Post-cutover
+-- verification comes only from OAuth proof at sign-in and attesting ingress
+-- (step 1's write discipline).
 UPDATE users
 SET email_verified = 1
 WHERE email_verified = 0

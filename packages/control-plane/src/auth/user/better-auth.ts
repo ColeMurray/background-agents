@@ -30,8 +30,8 @@ export interface UserAuthConfig {
  * Better Auth persists directly into the canonical identity registry (issue
  * #1290 consolidation): its user model IS `users` and its account model IS
  * `user_identities`, via the field maps below and the canonical SQL adapter.
- * There is no second registry and therefore no projection/bridge machinery —
- * a bot-created GitHub identity is an account, so `findOAuthUser`'s
+ * With a single registry there is nothing to keep synchronized — a
+ * bot-created GitHub identity is an account, so `findOAuthUser`'s
  * account-first lookup signs bot-first users into their canonical row
  * natively. Sessions and OAuth-state verifications stay in Better Auth-owned
  * tables (epoch-ms columns, same adapter).

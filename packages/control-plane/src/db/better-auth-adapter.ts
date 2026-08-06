@@ -31,8 +31,9 @@ import type { SqlDatabase } from "./sql-database";
  * atomicity for identity integrity — register writes `users` +
  * `user_identities` with client-generated ids, and a failure between the two
  * self-heals at the next sign-in through implicit linking and the claim
- * decorator. A batch-buffered transaction (or a real one via the D1→SQLite
- * portability rung) can be layered in later without touching callers.
+ * decorator. A batch-buffered transaction (or a real one, on an engine with
+ * interactive transactions) can be layered in later without touching
+ * callers.
  */
 
 /** The factory-normalized where entry (`Required<Where>`), not re-exported by name. */

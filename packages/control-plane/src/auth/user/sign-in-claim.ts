@@ -9,11 +9,10 @@ const logger = createLogger("auth:sign-in-claim");
 /**
  * Claim-at-first-login decorator around the provider profile resolvers.
  *
- * With Better Auth persisting directly into the canonical registry, no
- * materialization or bridging is needed — a bot-created identity IS an
- * account, so `findOAuthUser`'s account-first lookup signs bot-first users
- * into their canonical row natively. What remains is proof-keeping for the
- * rows that lack it: GitHub ingress creates canonical rows NULL-email, and
+ * Better Auth persists directly into the canonical registry — a bot-created
+ * identity IS an account, so `findOAuthUser`'s account-first lookup signs
+ * bot-first users into their canonical row natively. What remains is
+ * proof-keeping for the rows that lack it: GitHub ingress creates canonical rows NULL-email, and
  * non-attesting attribution leaves `email_verified = 0` (Slack/Linear
  * ingress is attested — see `EMAIL_ATTESTING_PROVIDERS` in `db/user-store.ts`
  * — so their rows normally arrive already verified). The OAuth callback is
@@ -87,9 +86,11 @@ export class SignInClaim {
     if (targetEmail === null) {
       const emailOwnerId = await this.store.findEmailOwnerId(email);
       if (emailOwnerId !== null && emailOwnerId !== targetUserId) {
-        // Divergent multi-surface pair (cohort 6): the subject's row and the
-        // email's owner are different people-rows. The sign-in proceeds
-        // account-first onto the subject's row; the pair is merge work.
+        // Divergent multi-surface pair: one canonical row owns this person's
+        // provider subject (e.g. bot-created from GitHub, no email) while a
+        // different row owns their email (e.g. Slack-created). The sign-in
+        // proceeds account-first onto the subject's row; converging the pair
+        // is operator merge work (scripts/merge-split-users.ts).
         logger.warn("Subject and verified email belong to different canonical users", {
           event: "auth.subject_email_collision",
           provider,

@@ -185,7 +185,7 @@ function parseArgs(argv: string[]): CliOptions {
       continue;
     }
     // Unknown names are rejected before consuming a value: on a destructive
-    // tool, a typo (`--exec`, `--surviving_email`) must fail, not silently
+    // tool, a typo (`--exec`, `--survivor-id`) must fail, not silently
     // change what the run does.
     if (!VALUE_OPTIONS.has(name)) throw new Error(`Unknown option: --${name}`);
     const value = argv[++index];

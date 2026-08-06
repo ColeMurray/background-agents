@@ -218,8 +218,8 @@ describe("email claim (bot-first users with an attributed email)", () => {
   it("heals an unverified email owner that already has identities from other providers", async () => {
     // Bot-created user with a Google identity and an attributed (unproven)
     // email. The incoming GitHub sign-in proves exactly that email, so the
-    // claim mints verification and the linking gate admits the link — this
-    // cohort was a refusal under the parallel-registry design.
+    // claim mints verification and the linking gate admits the link instead
+    // of refusing the sign-in ("unable to link account").
     const canonicalId = "21111111111111111111111111111111";
     await insertCanonicalUser({ id: canonicalId, email: "octocat@example.com" });
     await insertIdentity({
@@ -291,7 +291,7 @@ describe("subject claim (bot-first identities are accounts)", () => {
     const { sessionUser } = await signIn("github");
 
     // The identity IS the account: Better Auth's account-first lookup lands
-    // on the canonical row with no materialization machinery.
+    // directly on the canonical row.
     expect(sessionUser?.id).toBe(canonicalId);
     // The claim backfilled the first trustworthy email.
     expect(await getUserRow(canonicalId)).toMatchObject({

@@ -98,7 +98,8 @@ describe("browser authentication", () => {
        WHERE name = 'idx_user_identities_provider'`
     ).first<{ unique: number }>();
     expect(providerIdentityIndex?.unique).toBe(1);
-    // The email-linking key: unique over non-NULL emails only.
+    // The email-linking key: unique over non-NULL emails only (bot-created
+    // users may have no email).
     const emailIndex = await env.DB.prepare(
       `SELECT "unique", partial
        FROM pragma_index_list('users')
@@ -129,7 +130,9 @@ describe("browser authentication", () => {
     expect(identityForeignKeys.results).toEqual([
       { target: "users", source_column: "user_id", target_column: "id", on_delete: "NO ACTION" },
     ]);
-    // The parallel registry is gone.
+    // The pre-consolidation Better Auth tables must stay gone: their
+    // reappearance would mean sign-ins writing outside the canonical
+    // registry again (migration 0057 dropped them).
     const legacyTables = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('auth_users', 'auth_accounts')`
     ).all();
