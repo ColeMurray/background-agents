@@ -147,8 +147,9 @@ WHERE email_verified = 0
 -- (7) Fold auth_accounts into user_identities.
 -- (7a) Same-owner subjects that already have an identity row: graft the OAuth
 -- credentials onto it (losing them would silently disconnect the live GitHub
--- credential path). Cross-owner subjects (the old R4 conflict class) are
--- deliberately not grafted — credentials never move between users.
+-- credential path). Cross-owner subjects — the same provider subject owned by
+-- different users in each registry — are deliberately not grafted:
+-- credentials never move between users.
 UPDATE user_identities
 SET
   access_token = (

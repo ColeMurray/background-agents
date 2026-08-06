@@ -1,14 +1,13 @@
 /**
  * Canonical email normalization for every database write, lookup, and
  * comparison, kept equal to the SQL-side `lower(trim(...))` used by the
- * reconciliation queries. `idx_users_email` is COLLATE NOCASE but not
- * whitespace-normalizing, so an untrimmed write could create a
+ * sign-in claim queries and migration 0057. `idx_users_email` is COLLATE
+ * NOCASE but not whitespace-normalizing, so an untrimmed write could create a
  * whitespace-variant duplicate of an existing email.
  *
- * A blank (or whitespace-only) email normalizes to `null`: `auth_users.email`
- * and `idx_users_email` are unique, so persisting `""` would make every
- * blank-emailed identity collide on one slot instead of being treated as
- * absent.
+ * A blank (or whitespace-only) email normalizes to `null`: `idx_users_email`
+ * is unique, so persisting `""` would make every blank-emailed identity
+ * collide on one slot instead of being treated as absent.
  *
  * `user-merge.ts` carries a byte-identical mirror: the operator CLI loads it
  * under Node's type-stripping loader, which cannot resolve extensionless

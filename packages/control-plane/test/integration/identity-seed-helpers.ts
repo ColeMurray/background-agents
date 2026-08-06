@@ -6,7 +6,6 @@ import { env } from "cloudflare:test";
  */
 
 export const SEED_NOW_MS = Date.parse("2026-08-01T00:00:00.000Z");
-export const SEED_NOW_ISO = new Date(SEED_NOW_MS).toISOString();
 
 export async function insertCanonicalUser(options: {
   id: string;

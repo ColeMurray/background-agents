@@ -318,8 +318,8 @@ describe("migration 0057: Better Auth → canonical consolidation", () => {
       accessToken: "owner-ciphertext",
     });
 
-    // Old R4 conflict shape: bot identity owned by one user, web account for
-    // the same subject owned by another.
+    // Cross-owner conflict shape: bot identity owned by one user, web account
+    // for the same subject owned by another.
     const botUserId = "62111111111111111111111111111111";
     const webUserId = "63111111111111111111111111111111";
     await seedCanonical(botUserId, "bot.person@example.com");

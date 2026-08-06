@@ -40,8 +40,7 @@ export default {
     if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
       const requestId = crypto.randomUUID();
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
-      const db = env.DB;
-      await runImageBuildScheduler(env, db, {
+      await runImageBuildScheduler(env, env.DB, {
         request_id: requestId,
         trace_id: requestId,
       });

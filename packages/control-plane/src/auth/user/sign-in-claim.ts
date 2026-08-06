@@ -27,7 +27,7 @@ const logger = createLogger("auth:sign-in-claim");
  *   canonical row's legacy email form (Better Auth's lookup is exact-match
  *   lowercase) and mint `email_verified = 1` from the proof so the implicit
  *   linking gate (`requireLocalEmailVerified`) admits the link. Verification
- *   is minted here and only here (decision 4); bot ingress always writes 0.
+ *   is minted here and only here; bot ingress always writes 0.
  *
  * Contract: the inner profile is always returned unchanged, and inner
  * failures (admission denials) propagate untouched. Claim failures are
