@@ -2261,6 +2261,159 @@ describe("SchedulerDO", () => {
       expect(mockStore.insertInvocationGuarded).not.toHaveBeenCalled();
     });
 
+    describe("lazy thread context", () => {
+      /** A slack-bot binding that records thread-context calls. */
+      function threadContextEnv(threadContext = "<thread_context>[]</thread_context>") {
+        const slackFetch = vi.fn(async () => Response.json({ threadContext }));
+        return {
+          slackFetch,
+          env: createEnv({
+            SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+            SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+          } as Partial<Env>),
+        };
+      }
+
+      function threadContextCalls(slackFetch: ReturnType<typeof vi.fn>) {
+        return slackFetch.mock.calls.filter((call) =>
+          String(call[0]).includes("/internal/thread-context")
+        );
+      }
+
+      it("does not request context for an unmatched reply", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        const { slackFetch, env } = threadContextEnv();
+
+        // Fails the automation's text condition, so no run is admitted.
+        await createSchedulerDO(env).fetch(slackEventRequest({ text: "unrelated chatter" }));
+
+        expect(threadContextCalls(slackFetch)).toHaveLength(0);
+      });
+
+      it("does not request context for a successfully steered reply", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(
+          sampleRunRow({ id: "active-run", session_id: "sess-running" })
+        );
+        const { slackFetch, env } = threadContextEnv();
+
+        await createSchedulerDO(env).fetch(
+          slackEventRequest({ text: "also update the changelog" })
+        );
+
+        expect(threadContextCalls(slackFetch)).toHaveLength(0);
+      });
+
+      it("does not request context when admission is skipped for concurrency", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.getActiveRunForKey.mockResolvedValue(sampleRunRow({ id: "busy" }));
+        const { slackFetch, env } = threadContextEnv();
+
+        await createSchedulerDO(env).fetch(slackEventRequest());
+
+        expect(threadContextCalls(slackFetch)).toHaveLength(0);
+      });
+
+      it("does not request context when the invocation is deduplicated", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        mockStore.insertInvocationGuarded.mockRejectedValue(
+          new Error("UNIQUE constraint failed: automation_invocations.trigger_key")
+        );
+        const { slackFetch, env } = threadContextEnv();
+
+        await createSchedulerDO(env).fetch(slackEventRequest());
+
+        expect(threadContextCalls(slackFetch)).toHaveLength(0);
+      });
+
+      it("requests context once for an admitted run and splices it into the prompt", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        const { slackFetch, env } = threadContextEnv();
+        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+
+        await createSchedulerDO(env).fetch(slackEventRequest());
+
+        expect(threadContextCalls(slackFetch)).toHaveLength(1);
+        const prompt = await getPromptBody(vi.mocked(stub.fetch));
+        const content = String(prompt.content);
+        // Rebuilt block: history sits ahead of the triggering message. Assert both
+        // markers exist first — indexOf returns -1 when absent, and -1 < n passes.
+        const threadIndex = content.indexOf("<thread_context>");
+        const userIndex = content.indexOf("<user_content>");
+        expect(threadIndex).toBeGreaterThanOrEqual(0);
+        expect(userIndex).toBeGreaterThanOrEqual(0);
+        expect(threadIndex).toBeLessThan(userIndex);
+        expect(content).toContain("please deploy the api");
+      });
+
+      it("reuses one context result across several matching automations", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([
+          sampleSlackAutomation,
+          { ...sampleSlackAutomation, id: "auto-slack-2" },
+        ]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        const { slackFetch, env } = threadContextEnv();
+
+        await createSchedulerDO(env).fetch(slackEventRequest());
+
+        expect(mockStore.insertInvocationGuarded).toHaveBeenCalledTimes(2);
+        // Two admitted runs, one Slack read.
+        expect(threadContextCalls(slackFetch)).toHaveLength(1);
+      });
+
+      it("launches without history when the context request fails", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        const slackFetch = vi.fn(async () => new Response("nope", { status: 500 }));
+        const env = createEnv({
+          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        } as Partial<Env>);
+        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+
+        await createSchedulerDO(env).fetch(slackEventRequest());
+
+        const prompt = await getPromptBody(vi.mocked(stub.fetch));
+        expect(String(prompt.content)).toContain("A message was posted in #ops.");
+        expect(String(prompt.content)).not.toContain("<thread_context>");
+      });
+
+      it("launches without history when the context request is aborted", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        // What a timed-out binding fetch looks like to the caller.
+        const slackFetch = vi.fn(async () => {
+          throw Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" });
+        });
+        const env = createEnv({
+          SLACK_BOT: { fetch: slackFetch } as unknown as Fetcher,
+          SERVICE_AUTH_SECRET_SLACK_BOT: "test-secret",
+        } as Partial<Env>);
+        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+
+        await createSchedulerDO(env).fetch(slackEventRequest());
+
+        // The run still launches — a slow Slack read must not strand children.
+        const prompt = await getPromptBody(vi.mocked(stub.fetch));
+        expect(String(prompt.content)).toContain("A message was posted in #ops.");
+        expect(String(prompt.content)).not.toContain("<thread_context>");
+      });
+
+      it("skips the request entirely for a top-level message", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        const { slackFetch, env } = threadContextEnv();
+
+        await createSchedulerDO(env).fetch(slackEventRequest({ threadTs: undefined }));
+
+        expect(threadContextCalls(slackFetch)).toHaveLength(0);
+      });
+    });
+
     it("steers the thread session even when the follow-up fails trigger conditions", async () => {
       mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
       mockStore.getLatestSteerableRunForThread.mockResolvedValue(

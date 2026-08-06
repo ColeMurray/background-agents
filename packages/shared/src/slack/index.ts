@@ -43,6 +43,8 @@ export {
 } from "./mrkdwn";
 export type { MentionPolicy, SanitizeOptions, SanitizeResult } from "./mrkdwn";
 export { resolveUserNames } from "./resolve-users";
+export { selectThreadWindow, classifyThreadSpeaker } from "./thread-context";
+export type { ThreadWindowOptions, ThreadSpeaker } from "./thread-context";
 export {
   SLACK_DENIAL_REASONS,
   SLACK_DENIAL_STATUS,

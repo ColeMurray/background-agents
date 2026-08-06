@@ -298,10 +298,23 @@ The feature is **disabled by default** and gated by the `SLACK_TRIGGERS_ENABLED`
 When the flag is off, the bot ignores channel messages and forwards nothing; authoring a Slack
 automation in the web app is still allowed, but it will not run until the flag is enabled.
 
-Slack Message automations currently ingest the message's own text only. File uploads, including
-image-only `file_share` messages, do not start these automations; attachments on automation thread
-replies are not forwarded to the session; and the body of a forwarded message is not read. Use an
-interactive DM or `@mention` when the agent needs an image or a forwarded message.
+Slack Message automations ingest message text only. A message that carries an attachment does start
+an automation, but on its text alone — the attachment itself is not forwarded, so an image-only
+message with no text starts nothing. Attachments on automation thread replies are likewise not
+forwarded to the session, and the body of a forwarded message is not read. Use an interactive DM or
+`@mention` when the agent needs an image or a forwarded message.
+
+When the triggering message is a **reply**, the agent also receives the thread it was posted in, so
+it can read the reply in context rather than as an isolated sentence. The thread is read only once a
+run has actually been admitted — never for messages that match no automation, for follow-ups that
+continue an existing session, or for firings dropped as concurrent or duplicate — and once per
+message however many automations match it. Top-level messages have no thread to read.
+
+The context is the most recent 20 messages plus the thread's opening message, each truncated to
+1,024 characters, with speakers shown by display name and the bot's own earlier turns marked as its
+own. It is passed as JSON and labelled untrusted: Slack text is written by people who may not be
+asking the agent anything, so it is presented as a record of the conversation rather than as
+instructions. If Slack cannot be read, the run starts with no thread history rather than failing.
 
 ### Slack app setup
 
