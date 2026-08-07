@@ -110,10 +110,7 @@ describe("SessionRepository", () => {
       mock.setData(currentRevisionQuery, [{ current_revision: 4 }]);
 
       const delta = { operations: [{ type: "state_patch" as const, patch: { title: "Updated" } }] };
-      const revision = repo.appendSessionViewDelta(delta, 1_000, () => {
-        repo.updateSessionTitle("sess-1", "Updated", 1_000);
-        return true;
-      });
+      const revision = repo.updateSessionTitleWithViewDelta("sess-1", "Updated", 1_000);
 
       expect(revision).toBe(5);
       expect(transactions).toBe(1);
@@ -127,50 +124,15 @@ describe("SessionRepository", () => {
       expect(mock.calls[3].params).toEqual([5, JSON.stringify(delta), 1_000]);
     });
 
-    it("stops when the projection mutation throws or returns a promise", () => {
-      mock.setData(currentRevisionQuery, [{ current_revision: 0 }]);
-
-      expect(() =>
-        repo.appendSessionViewDelta(
-          { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
-          1,
-          () => {
-            throw new Error("projection failed");
-          }
-        )
-      ).toThrow("projection failed");
-      expect(mock.calls).toHaveLength(1);
-
-      mock.reset();
-      mock.setData(currentRevisionQuery, [{ current_revision: 0 }]);
-      expect(() =>
-        repo.appendSessionViewDelta(
-          { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
-          1,
-          (async () => true) as unknown as () => true
-        )
-      ).toThrow("must be synchronous");
-      expect(mock.calls).toHaveLength(0);
-    });
-
-    it("validates the delta before running the projection mutation", () => {
-      let mutated = false;
-      expect(() =>
-        repo.appendSessionViewDelta({ operations: [] } as never, 1, () => {
-          mutated = true;
-          return true;
-        })
-      ).toThrow();
-      expect(mutated).toBe(false);
-      expect(mock.calls).toHaveLength(0);
-    });
-
-    it("returns only a complete contiguous revision range", () => {
+    it("returns only a complete contiguous range of validated deltas", () => {
+      const delta = JSON.stringify({
+        operations: [{ type: "state_patch", patch: { title: "Updated" } }],
+      });
       mock.setData(currentRevisionQuery, [{ current_revision: 4 }]);
       mock.setData(rangeQuery, [
-        { revision: 2, payload: "two", created_at: 2 },
-        { revision: 3, payload: "three", created_at: 3 },
-        { revision: 4, payload: "four", created_at: 4 },
+        { revision: 2, payload: delta, created_at: 2 },
+        { revision: 3, payload: delta, created_at: 3 },
+        { revision: 4, payload: delta, created_at: 4 },
       ]);
       expect(repo.readContiguousSessionViewDeltas(1, 4)?.map((row) => row.revision)).toEqual([
         2, 3, 4,
@@ -178,12 +140,19 @@ describe("SessionRepository", () => {
       expect(repo.readContiguousSessionViewDeltas(4, 4)).toEqual([]);
 
       mock.setData(rangeQuery, [
-        { revision: 2, payload: "two", created_at: 2 },
-        { revision: 4, payload: "four", created_at: 4 },
+        { revision: 2, payload: delta, created_at: 2 },
+        { revision: 4, payload: delta, created_at: 4 },
       ]);
       expect(repo.readContiguousSessionViewDeltas(1, 4)).toBeNull();
       expect(repo.readContiguousSessionViewDeltas(5, 4)).toBeNull();
       expect(repo.readContiguousSessionViewDeltas(4, 5)).toBeNull();
+
+      mock.setData(rangeQuery, [
+        { revision: 2, payload: "not-json", created_at: 2 },
+        { revision: 3, payload: delta, created_at: 3 },
+        { revision: 4, payload: delta, created_at: 4 },
+      ]);
+      expect(repo.readContiguousSessionViewDeltas(1, 4)).toBeNull();
     });
 
     it("rejects invalid revisions before querying", () => {

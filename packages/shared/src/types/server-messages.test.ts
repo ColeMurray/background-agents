@@ -121,9 +121,33 @@ describe("session view contracts", () => {
   });
 
   it("rejects immutable and secret state patch fields", () => {
+    expect(sessionStatePatchSchema.safeParse({}).success).toBe(false);
     expect(sessionStatePatchSchema.safeParse({ id: "session-2" }).success).toBe(false);
     expect(sessionStatePatchSchema.safeParse({ ttydToken: "secret" }).success).toBe(false);
     expect(sessionDeltaSchema.safeParse({ operations: [] }).success).toBe(false);
+  });
+
+  it("rejects mismatched bootstrap identity and malformed stable event envelopes", () => {
+    const bootstrap = {
+      sessionId: "session-1",
+      viewRevision: 3,
+      state: bootstrapState,
+      artifacts: [],
+      replay: { events: [], hasMore: false, cursor: null },
+    };
+    expect(
+      sessionBootstrapSchema.safeParse({ ...bootstrap, sessionId: "different-session" }).success
+    ).toBe(false);
+    expect(
+      sessionBootstrapSchema.safeParse({
+        ...bootstrap,
+        replay: {
+          events: [{ timelineSequence: 1, event: { type: "future" } }],
+          hasMore: false,
+          cursor: null,
+        },
+      }).success
+    ).toBe(false);
   });
 
   it.each([

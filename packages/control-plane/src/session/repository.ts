@@ -65,6 +65,12 @@ export interface WsClientMappingResult {
   auth_name?: string | null;
 }
 
+export interface SessionViewDeltaRecord {
+  revision: number;
+  delta: SessionDelta;
+  createdAt: number;
+}
+
 /**
  * Minimal sandbox state for circuit breaker checks.
  * Only includes fields needed for spawn decisions.
@@ -293,26 +299,20 @@ export class SessionRepository {
     return revision;
   }
 
-  appendSessionViewDelta(
+  private appendSessionViewDelta(
     delta: SessionDelta,
     createdAt: number,
-    mutateProjection: () => true
+    mutateProjection: () => void
   ): number {
     requireViewRevision(createdAt, "Session view delta timestamp");
     const payload = JSON.stringify(sessionDeltaSchema.parse(delta));
-    if (mutateProjection.constructor.name === "AsyncFunction") {
-      throw new Error("Session view projection mutation must be synchronous");
-    }
 
     return this.transactionSync(() => {
       const currentRevision = this.getCurrentViewRevision();
       const revision = currentRevision + 1;
       requireViewRevision(revision, "Next session view revision");
 
-      const mutationResult: unknown = mutateProjection();
-      if (mutationResult !== true) {
-        throw new Error("Session view projection mutation must be synchronous");
-      }
+      mutateProjection();
 
       this.sql.exec(
         `UPDATE session_view_metadata SET current_revision = ? WHERE singleton = 1`,
@@ -328,10 +328,19 @@ export class SessionRepository {
     });
   }
 
+  updateSessionTitleWithViewDelta(sessionId: string, title: string, updatedAt: number): number {
+    const delta: SessionDelta = {
+      operations: [{ type: "state_patch", patch: { title } }],
+    };
+    return this.appendSessionViewDelta(delta, updatedAt, () => {
+      this.updateSessionTitle(sessionId, title, updatedAt);
+    });
+  }
+
   readContiguousSessionViewDeltas(
     afterRevision: number,
     throughRevision: number
-  ): SessionViewDeltaRow[] | null {
+  ): SessionViewDeltaRecord[] | null {
     requireViewRevision(afterRevision, "Resume session view revision");
     requireViewRevision(throughRevision, "Target session view revision");
     if (afterRevision > throughRevision) return null;
@@ -350,11 +359,22 @@ export class SessionRepository {
     );
 
     let expectedRevision = afterRevision + 1;
+    const records: SessionViewDeltaRecord[] = [];
     for (const row of rows) {
       if (!Number.isSafeInteger(row.revision) || row.revision !== expectedRevision) return null;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+        return null;
+      }
+      const delta = sessionDeltaSchema.safeParse(payload);
+      if (!delta.success) return null;
+      if (!Number.isSafeInteger(row.created_at) || row.created_at < 0) return null;
+      records.push({ revision: row.revision, delta: delta.data, createdAt: row.created_at });
       expectedRevision += 1;
     }
-    return expectedRevision === throughRevision + 1 ? rows : null;
+    return expectedRevision === throughRevision + 1 ? records : null;
   }
 
   pruneSessionViewDeltas(options: { maxRetainedRevisions: number; createdBefore: number }): number {

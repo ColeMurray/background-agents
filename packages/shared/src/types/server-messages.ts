@@ -85,32 +85,47 @@ const historyCursorSchema = z.object({
   sequence: z.number().int().nonnegative().optional(),
 });
 
-export const sessionViewEventSchema = z.object({
-  eventId: z.string().min(1),
-  timelineSequence: viewRevisionSchema,
-  event: sandboxEventSchema,
-});
+export const sessionViewEventSchema = z
+  .object({
+    eventId: z.string().min(1),
+    timelineSequence: viewRevisionSchema,
+    event: sandboxEventSchema,
+  })
+  .strict();
 export type SessionViewEvent = z.infer<typeof sessionViewEventSchema>;
 
-const tolerantSessionViewEventsSchema = z.array(z.unknown()).transform((items) =>
+const sessionViewEventEnvelopeSchema = z
+  .object({
+    eventId: z.string().min(1),
+    timelineSequence: viewRevisionSchema,
+    event: z.unknown(),
+  })
+  .strict();
+
+const tolerantSessionViewEventsSchema = z.array(sessionViewEventEnvelopeSchema).transform((items) =>
   items.flatMap((item) => {
-    const result = sessionViewEventSchema.safeParse(item);
-    return result.success ? [result.data] : [];
+    const event = sandboxEventSchema.safeParse(item.event);
+    return event.success ? [{ ...item, event: event.data }] : [];
   })
 );
 
-export const sessionBootstrapSchema = z.object({
-  sessionId: z.string(),
-  viewRevision: viewRevisionSchema,
-  state: sessionBootstrapStateSchema,
-  artifacts: z.array(sessionArtifactSchema),
-  replay: z.object({
-    events: tolerantSessionViewEventsSchema,
-    hasMore: z.boolean(),
-    cursor: historyCursorSchema.nullable(),
-  }),
-  spawnError: z.string().nullable().optional(),
-});
+export const sessionBootstrapSchema = z
+  .object({
+    sessionId: z.string(),
+    viewRevision: viewRevisionSchema,
+    state: sessionBootstrapStateSchema,
+    artifacts: z.array(sessionArtifactSchema),
+    replay: z.object({
+      events: tolerantSessionViewEventsSchema,
+      hasMore: z.boolean(),
+      cursor: historyCursorSchema.nullable(),
+    }),
+    spawnError: z.string().nullable().optional(),
+  })
+  .refine((bootstrap) => bootstrap.sessionId === bootstrap.state.id, {
+    message: "Bootstrap sessionId must match state.id",
+    path: ["sessionId"],
+  });
 export type SessionBootstrap = z.infer<typeof sessionBootstrapSchema>;
 
 export const sessionStatePatchSchema = z
@@ -128,7 +143,10 @@ export const sessionStatePatchSchema = z
     sandboxDashboardUrl: z.string().nullable().optional(),
     repositories: z.array(sessionRepositoryStateSchema).optional(),
   })
-  .strict();
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0, {
+    message: "Session state patch must contain at least one field",
+  });
 export type SessionStatePatch = z.infer<typeof sessionStatePatchSchema>;
 
 export const sessionViewOperationSchema = z.discriminatedUnion("type", [

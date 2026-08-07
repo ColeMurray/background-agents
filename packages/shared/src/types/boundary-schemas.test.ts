@@ -594,6 +594,20 @@ describe("boundary schemas", () => {
       }
     );
 
+    it.each([{ resumeRevision: 1 }, { forceSnapshot: true }])(
+      "rejects V2 fields without viewProtocol: %o",
+      (fields) => {
+        expect(
+          clientMessageSchema.safeParse({
+            type: "subscribe",
+            token: "ws-token",
+            clientId: "client-1",
+            ...fields,
+          }).success
+        ).toBe(false);
+      }
+    );
+
     it("parses presence messages with an omitted cursor", () => {
       const result = clientMessageSchema.safeParse({
         type: "presence",
