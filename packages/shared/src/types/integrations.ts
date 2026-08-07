@@ -36,6 +36,8 @@ export interface GitHubBotSettings {
 export interface ScmSettings {
   /** Always open pull/merge requests created by sessions as drafts. */
   alwaysUseDraftMode?: boolean;
+  /** Label applied to pull/merge requests created by sessions. */
+  pullRequestLabel?: string;
 }
 
 /** A repository override must choose an explicit value rather than inherit. */

@@ -20,6 +20,8 @@ const { useSWRMock, mutateMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
 }));
 
+const fetchMock = vi.fn();
+
 vi.mock("swr", () => ({
   default: useSWRMock,
   mutate: mutateMock,
@@ -46,6 +48,8 @@ beforeEach(() => {
   };
   repoSettingsError = undefined;
   mutateMock.mockReset();
+  fetchMock.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
   useSWRMock.mockReset();
   useSWRMock.mockImplementation((key: string) => {
     if (key === "/api/scm-settings") {
@@ -63,6 +67,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
 });
 
 describe("getScmRepoSettingsPath", () => {
@@ -124,5 +129,74 @@ describe("getScmRepoSettingsPath", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Unable to load source control settings");
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("renders global and repository label settings", () => {
+    globalData = {
+      settings: {
+        defaults: { alwaysUseDraftMode: false, pullRequestLabel: "global-generated" },
+      },
+    };
+    repoSettingsData = {
+      repos: [
+        {
+          repo: "acme/web",
+          settings: { alwaysUseDraftMode: false, pullRequestLabel: "repo-generated" },
+        },
+      ],
+    };
+
+    render(<ScmSettingsPage />);
+
+    expect(screen.getByRole("textbox", { name: "Pull request label" })).toHaveValue(
+      "global-generated"
+    );
+    expect(
+      screen.getByRole("textbox", { name: "Pull request label override for acme/web" })
+    ).toHaveValue("repo-generated");
+  });
+
+  it("trims and saves the global pull request label", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    render(<ScmSettingsPage />);
+
+    const input = screen.getByRole("textbox", { name: "Pull request label" });
+    await user.type(input, "  generated  ");
+    await user.click(screen.getAllByRole("button", { name: "Save" })[0]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scm-settings",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: {
+            defaults: { alwaysUseDraftMode: false, pullRequestLabel: "generated" },
+          },
+        }),
+      })
+    );
+  });
+
+  it("trims and saves a repository pull request label override", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    render(<ScmSettingsPage />);
+
+    const input = screen.getByRole("textbox", {
+      name: "Pull request label override for acme/web",
+    });
+    await user.type(input, "  repo-generated  ");
+    await user.click(screen.getAllByRole("button", { name: "Save" })[1]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scm-settings/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          settings: { alwaysUseDraftMode: false, pullRequestLabel: "repo-generated" },
+        }),
+      })
+    );
   });
 });

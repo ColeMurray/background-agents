@@ -20,9 +20,9 @@ export class ScmSettingsValidationError extends Error {
   }
 }
 
-const ALLOWED_SCM_SETTING_KEYS = new Set(["alwaysUseDraftMode"]);
+const ALLOWED_SCM_SETTING_KEYS = new Set(["alwaysUseDraftMode", "pullRequestLabel"]);
 
-function validateScmSettings(settings: unknown): asserts settings is ScmSettings {
+function validateAndNormalizeScmSettings(settings: unknown): ScmSettings {
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
     throw new ScmSettingsValidationError("SCM settings must be an object");
   }
@@ -33,17 +33,32 @@ function validateScmSettings(settings: unknown): asserts settings is ScmSettings
     }
   }
 
-  const { alwaysUseDraftMode } = settings as { alwaysUseDraftMode?: unknown };
+  const { alwaysUseDraftMode, pullRequestLabel } = settings as {
+    alwaysUseDraftMode?: unknown;
+    pullRequestLabel?: unknown;
+  };
   if (alwaysUseDraftMode !== undefined && typeof alwaysUseDraftMode !== "boolean") {
     throw new ScmSettingsValidationError("alwaysUseDraftMode must be a boolean");
   }
+
+  if (pullRequestLabel !== undefined && typeof pullRequestLabel !== "string") {
+    throw new ScmSettingsValidationError("pullRequestLabel must be a string");
+  }
+
+  const normalizedLabel =
+    typeof pullRequestLabel === "string" ? pullRequestLabel.trim() : undefined;
+  return {
+    ...(alwaysUseDraftMode !== undefined ? { alwaysUseDraftMode } : {}),
+    ...(normalizedLabel ? { pullRequestLabel: normalizedLabel } : {}),
+  };
 }
 
-function validateScmRepoSettings(settings: unknown): asserts settings is ScmRepoSettings {
-  validateScmSettings(settings);
-  if (settings.alwaysUseDraftMode === undefined) {
+function validateAndNormalizeScmRepoSettings(settings: unknown): ScmRepoSettings {
+  const normalized = validateAndNormalizeScmSettings(settings);
+  if (normalized.alwaysUseDraftMode === undefined) {
     throw new ScmSettingsValidationError("alwaysUseDraftMode is required for repository overrides");
   }
+  return { ...normalized, alwaysUseDraftMode: normalized.alwaysUseDraftMode };
 }
 
 /**
@@ -75,10 +90,11 @@ export class ScmSettingsStore {
         throw new ScmSettingsValidationError(`Unknown SCM global setting: ${key}`);
       }
     }
-    if (config.defaults !== undefined) {
-      validateScmSettings(config.defaults);
-    }
-    await this.store.setGlobal(SCM_SETTINGS_KEY, config);
+    const normalized: ScmGlobalConfig =
+      config.defaults === undefined
+        ? {}
+        : { defaults: validateAndNormalizeScmSettings(config.defaults) };
+    await this.store.setGlobal(SCM_SETTINGS_KEY, normalized);
   }
 
   deleteGlobal(): Promise<void> {
@@ -90,8 +106,8 @@ export class ScmSettingsStore {
   }
 
   async setRepoSettings(repo: string, settings: ScmRepoSettings): Promise<void> {
-    validateScmRepoSettings(settings);
-    await this.store.setRepoSettings(SCM_SETTINGS_KEY, repo, settings);
+    const normalized = validateAndNormalizeScmRepoSettings(settings);
+    await this.store.setRepoSettings(SCM_SETTINGS_KEY, repo, normalized);
   }
 
   deleteRepoSettings(repo: string): Promise<void> {

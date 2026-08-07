@@ -43,9 +43,11 @@ describe("ScmSettingsStore", () => {
   });
 
   it("delegates setGlobal to the 'scm' key", async () => {
-    await store.setGlobal({ defaults: { alwaysUseDraftMode: true } });
+    await store.setGlobal({
+      defaults: { alwaysUseDraftMode: true, pullRequestLabel: "  open-inspect  " },
+    });
     expect(delegate.setGlobal).toHaveBeenCalledWith("scm", {
-      defaults: { alwaysUseDraftMode: true },
+      defaults: { alwaysUseDraftMode: true, pullRequestLabel: "open-inspect" },
     });
   });
 
@@ -55,7 +57,10 @@ describe("ScmSettingsStore", () => {
       { repo: "acme/web", settings: { alwaysUseDraftMode: true } },
     ]);
 
-    await store.setRepoSettings("Acme/Web", { alwaysUseDraftMode: true });
+    await store.setRepoSettings("Acme/Web", {
+      alwaysUseDraftMode: true,
+      pullRequestLabel: "  generated  ",
+    });
     const repoSettings = await store.getRepoSettings("acme/web");
     const list = await store.listRepoSettings();
     await store.deleteRepoSettings("acme/web");
@@ -63,6 +68,7 @@ describe("ScmSettingsStore", () => {
 
     expect(delegate.setRepoSettings).toHaveBeenCalledWith("scm", "Acme/Web", {
       alwaysUseDraftMode: true,
+      pullRequestLabel: "generated",
     });
     expect(delegate.getRepoSettings).toHaveBeenCalledWith("scm", "acme/web");
     expect(repoSettings).toEqual({ alwaysUseDraftMode: false });
@@ -81,6 +87,36 @@ describe("ScmSettingsStore", () => {
 
     expect(delegate.setGlobal).not.toHaveBeenCalled();
     expect(delegate.setRepoSettings).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-string pullRequestLabel and does not write", async () => {
+    await expect(
+      store.setGlobal({
+        defaults: { pullRequestLabel: 42 as unknown as string },
+      })
+    ).rejects.toThrow("pullRequestLabel must be a string");
+    await expect(
+      store.setRepoSettings("acme/web", {
+        alwaysUseDraftMode: false,
+        pullRequestLabel: true as unknown as string,
+      })
+    ).rejects.toThrow("pullRequestLabel must be a string");
+
+    expect(delegate.setGlobal).not.toHaveBeenCalled();
+    expect(delegate.setRepoSettings).not.toHaveBeenCalled();
+  });
+
+  it("normalizes an empty label to an inherited or unset value", async () => {
+    await store.setGlobal({ defaults: { pullRequestLabel: "   " } });
+    await store.setRepoSettings("acme/web", {
+      alwaysUseDraftMode: false,
+      pullRequestLabel: "   ",
+    });
+
+    expect(delegate.setGlobal).toHaveBeenCalledWith("scm", { defaults: {} });
+    expect(delegate.setRepoSettings).toHaveBeenCalledWith("scm", "acme/web", {
+      alwaysUseDraftMode: false,
+    });
   });
 
   it("rejects unknown keys and unsupported global config and does not write", async () => {
@@ -119,13 +155,13 @@ describe("ScmSettingsStore", () => {
   it("resolves a repo's effective settings from the underlying merged config", async () => {
     delegate.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
-      settings: { alwaysUseDraftMode: false },
+      settings: { alwaysUseDraftMode: false, pullRequestLabel: "generated" },
     });
 
     const resolved = await store.getResolvedSettings("acme/web");
 
     expect(delegate.getResolvedConfig).toHaveBeenCalledWith("scm", "acme/web");
-    expect(resolved).toEqual({ alwaysUseDraftMode: false });
+    expect(resolved).toEqual({ alwaysUseDraftMode: false, pullRequestLabel: "generated" });
   });
 
   it("constructs the underlying IntegrationSettingsStore", () => {
