@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";

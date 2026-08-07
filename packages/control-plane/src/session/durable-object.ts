@@ -15,6 +15,7 @@ import {
   type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
@@ -58,7 +59,6 @@ import type {
   ClientInfo,
   ServerMessage,
   SessionRepositoryState,
-  SandboxStatus,
 } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";

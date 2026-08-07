@@ -1,6 +1,6 @@
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared";
 import { z } from "zod";
-import type { SessionStatus } from "../../../types";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
 import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";

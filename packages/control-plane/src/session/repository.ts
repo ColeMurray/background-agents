@@ -24,8 +24,8 @@ import type {
   MessageSource,
   ParticipantRole,
   SpawnSource,
-  ArtifactType,
-} from "../types";
+} from "@open-inspect/shared/types/sessions";
+import type { ArtifactType } from "../types";
 import {
   eventTimelineCursorFromRow,
   type EventListCursor,
