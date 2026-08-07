@@ -23,6 +23,11 @@ interface ToolCallItemProps {
   showTime?: boolean;
 }
 
+//Registry
+const TOOL_RENDERERS: Record<string, React.ComponentType<ToolCallItemProps>> = {
+  "slack-notify": SlackNotifyEvent,
+};
+
 function ToolIcon({ name }: { name: string | null }) {
   if (!name) return null;
 
@@ -95,14 +100,11 @@ export function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }
 }
 
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
-  if (event.tool === "slack-notify") {
+  const Renderer = TOOL_RENDERERS[event.tool];
+
+  if (Renderer) {
     return (
-      <SlackNotifyEvent
-        event={event}
-        isExpanded={isExpanded}
-        onToggle={onToggle}
-        showTime={showTime}
-      />
+      <Renderer event={event} isExpanded={isExpanded} onToggle={onToggle} showTime={showTime} />
     );
   }
 
