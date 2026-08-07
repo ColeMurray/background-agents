@@ -10,7 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
-import { sandboxEventSchema } from "@open-inspect/shared";
+import { sandboxEventSchema } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";

@@ -1,4 +1,4 @@
-import { type SandboxEvent } from "@open-inspect/shared";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
   SESSION_DIFF_ID_PATTERN,
   sessionDiffFailureSchema,

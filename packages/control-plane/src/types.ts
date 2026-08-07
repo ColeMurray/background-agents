@@ -16,20 +16,22 @@ export type {
   ArtifactType,
   CreateSessionRequest,
   CreateSessionResponse,
-  EventResponse,
-  EventType,
-  GitSyncStatus,
-  ListEventsResponse,
   MessageSource,
   MessageStatus,
   ParticipantRole,
   ParticipantPresence,
   SpawnSource,
-  SandboxEvent,
   SandboxStatus,
   SessionState,
   SessionStatus,
 } from "@open-inspect/shared";
+export type {
+  EventResponse,
+  EventType,
+  GitSyncStatus,
+  ListEventsResponse,
+  SandboxEvent,
+} from "@open-inspect/shared/types/sandbox-events";
 export type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 export type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 export type {

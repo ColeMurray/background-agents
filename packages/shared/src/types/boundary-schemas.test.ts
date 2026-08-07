@@ -7,12 +7,9 @@ import {
   createSessionRequestSchema,
   callbackContextSchema,
   listArtifactsResponseSchema,
-  listEventsResponseSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
-  sandboxEventSchema,
-  toolCallIdentityKey,
   sendPromptRequestSchema,
   serverMessageSchema,
   sessionParticipantProfilesResponseSchema,
@@ -20,6 +17,11 @@ import {
   spawnChildSessionRequestSchema,
   cancelChildSessionRequestSchema,
 } from ".";
+import {
+  listEventsResponseSchema,
+  sandboxEventSchema,
+  toolCallIdentityKey,
+} from "./sandbox-events";
 
 describe("boundary schemas", () => {
   describe("createSessionRequestSchema", () => {

@@ -15,7 +15,7 @@ import type {
   SandboxRow,
   SessionRepositoryRow,
 } from "./types";
-import { toolCallIdentityKey } from "@open-inspect/shared";
+import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SessionStatus,
   SandboxStatus,

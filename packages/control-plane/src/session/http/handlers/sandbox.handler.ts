@@ -1,10 +1,10 @@
 import type { Logger } from "../../../logger";
 import {
   createMediaArtifactRequestSchema,
-  sandboxEventSchema,
   type CreateMediaArtifactRequest,
   type SessionArtifact,
 } from "@open-inspect/shared";
+import { sandboxEventSchema } from "@open-inspect/shared/types/sandbox-events";
 import type { ParticipantRole, SandboxEvent } from "../../../types";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
