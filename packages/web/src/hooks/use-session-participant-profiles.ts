@@ -3,9 +3,9 @@
 import {
   sessionParticipantProfilesResponseSchema,
   type ParticipantPresence,
-  type SandboxEvent,
   type SessionParticipantProfile,
 } from "@open-inspect/shared";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { useEffect, useMemo, useRef } from "react";
 import useSWR from "swr";
 import { resolveParticipantDisplay } from "@/lib/participant-display";

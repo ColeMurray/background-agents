@@ -1,33 +1,22 @@
 import { z } from "zod";
 
-export type ArtifactType = "pr" | "screenshot" | "video" | "preview" | "branch";
-
 export const artifactTypeSchema = z.enum(["pr", "screenshot", "video", "preview", "branch"]);
-
-export const recordSchema = z.record(z.string(), z.unknown());
+export type ArtifactType = z.infer<typeof artifactTypeSchema>;
 
 // Artifact created by session
-export interface SessionArtifact {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-  /**
-   * Last content change (epoch ms). Optional for rolling deploys — producers
-   * predating PR lifecycle tracking omit it; consumers fall back to createdAt.
-   */
-  updatedAt?: number;
-}
-
 export const sessionArtifactSchema = z.object({
   id: z.string(),
   type: artifactTypeSchema,
   url: z.string().nullable(),
-  metadata: recordSchema.nullable(),
+  metadata: z.record(z.string(), z.unknown()).nullable(),
   createdAt: z.number(),
+  /**
+   * Last content change (epoch ms). Optional for rolling deploys — producers
+   * predating PR lifecycle tracking omit it; consumers fall back to createdAt.
+   */
   updatedAt: z.number().optional(),
 });
+export type SessionArtifact = z.infer<typeof sessionArtifactSchema>;
 
 // ─── Pull request lifecycle ───────────────────────────────────────────────────
 

@@ -147,3 +147,24 @@ export function buildSessionSearchValue(session: Session): string {
 
   return [session.id, session.title, ...repositoryLabels].filter(Boolean).join(" ");
 }
+
+/**
+ * The session-detail route for a list entry, carrying the repo and title as
+ * query params so the destination page can render its header before the
+ * session payload loads.
+ */
+export function buildSessionHref(session: Session) {
+  const query: Record<string, string> = {};
+  if (session.repoOwner && session.repoName) {
+    query.repoOwner = session.repoOwner;
+    query.repoName = session.repoName;
+  }
+  if (session.title) {
+    query.title = session.title;
+  }
+
+  return {
+    pathname: `/session/${session.id}`,
+    query,
+  };
+}

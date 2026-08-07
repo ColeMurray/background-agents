@@ -411,7 +411,10 @@ export async function handleRequest(
     metrics,
     // eslint-disable-next-line no-restricted-syntax -- composition root: the one route-layer env.DB read
     db: instrumentD1(env.DB, metrics),
-    // eslint-disable-next-line no-restricted-syntax -- composition root injects the raw D1 adapter required by Better Auth
+    // env.DB (not the per-request instrumented wrapper) keys the memoized
+    // Better Auth runtime: the canonical adapter accepts any SqlDatabase, but
+    // cache identity requires the stable object.
+    // eslint-disable-next-line no-restricted-syntax -- composition root: stable cache key for the auth runtime
     getUserAuth: () => getUserAuth(env, env.DB),
     // eslint-disable-next-line no-restricted-syntax -- composition root owns normalized auth runtime construction
     getUserAuthRuntime: () => getUserAuthRuntime(env, env.DB),

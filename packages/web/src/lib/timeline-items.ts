@@ -1,5 +1,5 @@
 import type { SandboxEvent } from "@/types/session";
-import { toolCallIdentityKey } from "@open-inspect/shared";
+import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
 
 export type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 

@@ -1,5 +1,6 @@
 import { generateBranchName } from "@open-inspect/shared/git";
 import { toDisplayStatus } from "@open-inspect/shared";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -128,11 +129,8 @@ export interface PullRequestServiceDeps {
    * deployment has no D1 binding; the write is best-effort either way.
    */
   sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
-  /**
-   * Resolves the "always use draft mode" policy (global default merged with
-   * repo override) for the pull request's target repository.
-   */
-  resolveAlwaysDraftDefault: (repo: RepoIdentity) => Promise<boolean>;
+  /** Resolves SCM policy for the pull request's target repository. */
+  resolveScmSettings: (repo: RepoIdentity) => Promise<ScmSettings>;
 }
 
 /**
@@ -193,11 +191,11 @@ export class SessionPullRequestService {
         return this.duplicatePrError(targetRepo);
       }
 
-      let alwaysDraft: boolean;
+      let scmSettings: ScmSettings;
       try {
-        alwaysDraft = await this.deps.resolveAlwaysDraftDefault(targetRepo);
+        scmSettings = await this.deps.resolveScmSettings(targetRepo);
       } catch (error) {
-        this.deps.log.error("Failed to resolve pull request draft policy", {
+        this.deps.log.error("Failed to resolve pull request SCM policy", {
           repo_owner: targetRepo.repoOwner,
           repo_name: targetRepo.repoName,
           error: error instanceof Error ? error : String(error),
@@ -205,10 +203,10 @@ export class SessionPullRequestService {
         return {
           kind: "error",
           status: 503,
-          error: "Pull request draft policy is temporarily unavailable",
+          error: "Pull request policy is temporarily unavailable",
         };
       }
-      const draft = alwaysDraft || (input.draft ?? false);
+      const draft = scmSettings.alwaysUseDraftMode === true || (input.draft ?? false);
 
       let pushAuth: GitPushAuthContext;
       try {
@@ -315,6 +313,7 @@ export class SessionPullRequestService {
         sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
         draft,
+        labels: scmSettings.pullRequestLabel ? [scmSettings.pullRequestLabel] : undefined,
       });
 
       const artifactId = this.deps.generateId();

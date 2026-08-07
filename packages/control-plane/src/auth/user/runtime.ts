@@ -9,11 +9,13 @@ import {
   SIGN_IN_PROVIDER_ISSUERS,
   type SignInProvider,
 } from "@open-inspect/shared/sign-in-provider";
-import { createUserAuth, type UserAuthConfig } from "./better-auth";
+import { createUserAuth, type SocialProviderAuthConfig } from "./better-auth";
 import { GitHubProviderIdentityResolver } from "./providers/github-identity";
 import { GitHubSignInProfileResolver } from "./providers/github-profile";
 import { GoogleSignInProfileResolver } from "./providers/google-profile";
-import { D1CanonicalUserProjection } from "../../db/canonical-user-projection";
+import { SignInClaim } from "./sign-in-claim";
+import { IdentityClaimStore } from "../../db/identity-claim-store";
+import type { SqlDatabase } from "../../db/sql-database";
 import type { Env } from "../../types";
 
 const MINIMUM_SECRET_LENGTH = 32;
@@ -146,7 +148,7 @@ function createGitHubAuthConfig(
   credentials: OAuthCredentials | null,
   appName: string,
   admissionPolicy: AdmissionPolicy
-): UserAuthConfig["github"] {
+): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "github");
 
@@ -167,7 +169,7 @@ function createGitHubAuthConfig(
 function createGoogleAuthConfig(
   credentials: OAuthCredentials | null,
   admissionPolicy: AdmissionPolicy
-): UserAuthConfig["google"] {
+): SocialProviderAuthConfig | undefined {
   if (!credentials) return undefined;
   requireProviderAdmission(admissionPolicy, "google");
 
@@ -182,19 +184,39 @@ function createGoogleAuthConfig(
   };
 }
 
+function withClaim(
+  provider: SignInProvider,
+  claim: SignInClaim,
+  config: SocialProviderAuthConfig | undefined
+): SocialProviderAuthConfig | undefined {
+  if (!config) return undefined;
+  return {
+    ...config,
+    getUserInfo: claim.wrapResolver(provider, config.getUserInfo),
+  };
+}
+
 function createUserAuthRuntime(
   config: NormalizedUserAuthConfig,
-  database: D1Database
+  database: SqlDatabase
 ): UserAuthRuntime {
   const admissionPolicy = new AdmissionPolicy(config.admission);
-  const github = createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy);
-  const google = createGoogleAuthConfig(config.providers.google, admissionPolicy);
+  const claim = new SignInClaim(new IdentityClaimStore(database));
+  const github = withClaim(
+    "github",
+    claim,
+    createGitHubAuthConfig(config.providers.github, config.appName, admissionPolicy)
+  );
+  const google = withClaim(
+    "google",
+    claim,
+    createGoogleAuthConfig(config.providers.google, admissionPolicy)
+  );
 
   const auth = createUserAuth({
     database,
     publicWebOrigin: config.publicWebOrigin,
     secret: config.secret,
-    userProjection: new D1CanonicalUserProjection(database),
     ...(github ? { github } : {}),
     ...(google ? { google } : {}),
   });
@@ -206,7 +228,7 @@ function createUserAuthRuntime(
   };
 }
 
-export function createUserAuthRuntimeFromEnv(env: Env, database: D1Database): UserAuthRuntime {
+export function createUserAuthRuntimeFromEnv(env: Env, database: SqlDatabase): UserAuthRuntime {
   return createUserAuthRuntime(normalizeUserAuthConfig(env), database);
 }
 
@@ -217,7 +239,7 @@ export interface UserAuthRuntime {
   readonly enabledProviders: readonly SignInProvider[];
 }
 
-export function createUserAuthFromEnv(env: Env, database: D1Database): BetterAuthInstance {
+export function createUserAuthFromEnv(env: Env, database: SqlDatabase): BetterAuthInstance {
   return createUserAuthRuntimeFromEnv(env, database).auth;
 }
 
@@ -226,13 +248,13 @@ interface CachedUserAuth {
   readonly runtime: UserAuthRuntime;
 }
 
-const userAuthByDatabase = new WeakMap<D1Database, CachedUserAuth>();
+const userAuthByDatabase = new WeakMap<SqlDatabase, CachedUserAuth>();
 
 function configurationFingerprint(config: NormalizedUserAuthConfig): string {
   return JSON.stringify(config);
 }
 
-export function getUserAuthRuntime(env: Env, database: D1Database): UserAuthRuntime {
+export function getUserAuthRuntime(env: Env, database: SqlDatabase): UserAuthRuntime {
   const config = normalizeUserAuthConfig(env);
   const fingerprint = configurationFingerprint(config);
   const cached = userAuthByDatabase.get(database);
@@ -244,7 +266,7 @@ export function getUserAuthRuntime(env: Env, database: D1Database): UserAuthRunt
   return runtime;
 }
 
-export function getUserAuth(env: Env, database: D1Database): BetterAuthInstance {
+export function getUserAuth(env: Env, database: SqlDatabase): BetterAuthInstance {
   return getUserAuthRuntime(env, database).auth;
 }
 

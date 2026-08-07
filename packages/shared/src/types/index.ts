@@ -87,23 +87,6 @@ export type {
 } from "./artifacts";
 export { sessionArtifactSchema } from "./artifacts";
 
-export {
-  eventResponseSchema,
-  eventTypeSchema,
-  listEventsResponseSchema,
-  sandboxEventSchema,
-  toolCallIdentityKey,
-  toolCallIdentityTuple,
-} from "./sandbox-events";
-export type {
-  AgentEvent,
-  SandboxEvent,
-  EventResponse,
-  ListEventsResponse,
-  GitSyncStatus,
-  EventType,
-} from "./sandbox-events";
-
 export type {
   SessionParticipant,
   Session,
@@ -191,7 +174,6 @@ export {
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
   cancelChildSessionRequestSchema,
-  spawnContextSchema,
 } from "./session-api";
 export type {
   UserPreferences,
@@ -209,7 +191,6 @@ export type {
   ListSessionsResponse,
   SpawnChildSessionRequest,
   CancelChildSessionRequest,
-  SpawnContext,
   ChildSessionFinalResponse,
   ChildSessionTrajectory,
   ChildSessionDetail,

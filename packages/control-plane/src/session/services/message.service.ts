@@ -1,6 +1,7 @@
 import type { ArtifactRow } from "../types";
 import type { SessionMessage } from "@open-inspect/shared";
-import type { ArtifactResponse, ListEventsResponse } from "../../types";
+import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
+import type { ArtifactResponse } from "../../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";

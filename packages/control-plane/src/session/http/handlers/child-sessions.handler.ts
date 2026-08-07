@@ -1,8 +1,8 @@
-import type { SpawnContext } from "@open-inspect/shared";
 import type { SessionStatus } from "../../../types";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
+import type { SpawnContext } from "../../spawn-context";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
