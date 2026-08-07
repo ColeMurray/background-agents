@@ -6,6 +6,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { EnrichedRepository, ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import { getScmRepoSettingsPath, ScmSettingsPage } from "./scm-settings";
 
 expect.extend(matchers);
@@ -38,11 +39,12 @@ let repoSettingsError: unknown;
 let availableReposData: EnrichedRepository[];
 
 function repo(fullName: string): EnrichedRepository {
-  const [owner, name] = fullName.split("/");
+  const repository = parseRepositoryFullName(fullName);
+  if (!repository) throw new Error(`Invalid repository full name: ${fullName}`);
   return {
     id: 1,
-    owner,
-    name,
+    owner: repository.repoOwner,
+    name: repository.repoName,
     fullName,
     private: false,
     description: null,
@@ -270,15 +272,15 @@ describe("getScmRepoSettingsPath", () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
     repoSettingsData = { repos: [] };
-    availableReposData = [repo("acme/api")];
+    availableReposData = [repo("group/subgroup/repository")];
     render(<ScmSettingsPage />);
 
     await user.click(screen.getByRole("combobox", { name: "Select a repository" }));
-    await user.click(await screen.findByRole("option", { name: "acme/api" }));
+    await user.click(await screen.findByRole("option", { name: "group/subgroup/repository" }));
     await user.click(screen.getByRole("button", { name: "Add Override" }));
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/scm-settings/repos/acme/api",
+      "/api/scm-settings/repos/group%2Fsubgroup/repository",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ settings: {} }),
