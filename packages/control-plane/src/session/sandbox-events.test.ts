@@ -104,6 +104,7 @@ function createProcessor() {
     applySessionTitleUpdate,
     waitUntil,
     recordTerminalMessage,
+    log,
   };
 }
 
@@ -123,6 +124,28 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
+  });
+
+  it("logs when the post-completion snapshot fails", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageTimestamps.mockReturnValue({ created_at: 1000, started_at: 1100 });
+    h.triggerSnapshot.mockRejectedValue(new Error("snapshot backend down"));
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    const settled = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+    expect(settled.every(({ status }) => status === "fulfilled")).toBe(true);
+    expect(h.log.error).toHaveBeenCalledWith("snapshot.trigger.background_error", {
+      reason: "execution_complete",
+      error: expect.any(Error),
+    });
   });
 
   it("updates heartbeat without broadcasting", async () => {

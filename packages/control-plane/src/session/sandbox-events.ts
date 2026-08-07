@@ -239,7 +239,14 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
+      this.ctx.waitUntil(
+        this.triggerSnapshot("execution_complete").catch((error) => {
+          this.log.error("snapshot.trigger.background_error", {
+            reason: "execution_complete",
+            error,
+          });
+        })
+      );
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();
