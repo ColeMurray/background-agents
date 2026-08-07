@@ -192,7 +192,6 @@ export {
   spawnChildSessionRequestSchema,
   cancelChildSessionRequestSchema,
 } from "./session-api";
-export { spawnContextSchema } from "./session-spawn-context";
 export type {
   UserPreferences,
   SlackCallbackContext,
@@ -213,7 +212,6 @@ export type {
   ChildSessionTrajectory,
   ChildSessionDetail,
 } from "./session-api";
-export type { SpawnContext } from "./session-spawn-context";
 
 export {
   MAX_ENVIRONMENT_NAME_LENGTH,

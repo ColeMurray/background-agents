@@ -1,5 +1,5 @@
+import { isValidSandboxTimeoutMs } from "@open-inspect/shared/types/integrations";
 import { z } from "zod";
-import { isValidSandboxTimeoutMs } from "./integrations";
 
 const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
 
