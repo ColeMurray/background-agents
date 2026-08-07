@@ -6,7 +6,10 @@
  * live in ./environment-secrets.
  */
 
-import { createEnvironmentInputSchema, updateEnvironmentInputSchema } from "@open-inspect/shared";
+import {
+  createEnvironmentInputSchema,
+  updateEnvironmentInputSchema,
+} from "@open-inspect/shared/types/environments";
 import {
   EnvironmentStore,
   toEnvironment,

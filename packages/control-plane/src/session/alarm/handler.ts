@@ -1,6 +1,6 @@
 import type { Logger } from "../../logger";
 import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
-import type { SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
+import type { AlarmScheduler, SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { SessionMessageQueue } from "../message-queue";
 import type { SessionRepository } from "../repository";
 
@@ -8,6 +8,7 @@ export interface AlarmHandlerDeps {
   repository: Pick<SessionRepository, "getProcessingMessageWithStartedAt">;
   messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
+  alarmScheduler: AlarmScheduler;
   executionTimeoutMs: number;
   now: () => number;
   /** Session-scoped logger — alarms run outside any request, so there is no request correlation. */
@@ -47,6 +48,11 @@ export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
             timeout_ms: deps.executionTimeoutMs,
           });
           await deps.messageQueue.failStuckProcessingMessage();
+        } else {
+          // An earlier lifecycle alarm has consumed the Durable Object's single
+          // alarm slot. Reassert this message's deadline before lifecycle handling
+          // schedules its next check so stuck-message recovery cannot be delayed.
+          await deps.alarmScheduler.scheduleAlarm(processing.started_at + deps.executionTimeoutMs);
         }
       }
 

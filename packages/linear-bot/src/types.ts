@@ -79,9 +79,11 @@ export type {
   RepoMetadata,
   ControlPlaneRepo,
   ControlPlaneReposResponse,
+} from "@open-inspect/shared/types/repository-catalog";
+export type {
   Environment,
   ListEnvironmentsResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/environments";
 
 /**
  * Project→target mapping stored in KV under "config:project-repos".
@@ -92,19 +94,26 @@ export interface ProjectRepoMapping {
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 
-export interface IssueSession {
-  sessionId: string;
-  issueId: string;
-  issueIdentifier: string;
+/**
+ * The issue→session mapping persisted in KV. Canonical as a schema because the
+ * stored value is untrusted on read: `lookupIssueSession` parses with this, so
+ * the runtime contract and the type can never drift apart.
+ */
+export const issueSessionSchema = z.object({
+  sessionId: z.string(),
+  issueId: z.string(),
+  issueIdentifier: z.string(),
   /** Set for repository sessions; absent for environment sessions. */
-  repoOwner?: string;
-  repoName?: string;
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
   /** Set for environment sessions. */
-  environmentId?: string;
-  model: string;
-  agentSessionId?: string;
-  createdAt: number;
-}
+  environmentId: z.string().optional(),
+  model: z.string(),
+  agentSessionId: z.string().optional(),
+  createdAt: z.number(),
+});
+
+export type IssueSession = z.infer<typeof issueSessionSchema>;
 
 // Re-export CallbackContext types from shared
 export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
@@ -138,7 +147,10 @@ export interface ToolCallCallback {
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
-export type { ClassificationResult, ConfidenceLevel } from "@open-inspect/shared";
+export type {
+  ClassificationResult,
+  ConfidenceLevel,
+} from "@open-inspect/shared/types/repository-catalog";
 
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 

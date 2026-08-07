@@ -9,11 +9,9 @@
  * 3. Token valid for 1 hour
  */
 
-import {
-  DEFAULT_APP_NAME,
-  type CacheStore,
-  type InstallationRepository,
-} from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
+import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
+import type { CacheStore } from "@open-inspect/shared/cache-store";
 import { z } from "zod";
 
 import { base64UrlEncode } from "./encoding";
@@ -444,7 +442,7 @@ export async function getCachedInstallationTokenWithExpiry(
 }
 
 // Re-export from shared for backward compatibility
-export type { InstallationRepository } from "@open-inspect/shared";
+export type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 
 /**
  * List all repositories accessible to the GitHub App installation.

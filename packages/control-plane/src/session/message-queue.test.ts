@@ -8,6 +8,7 @@ import type { SessionRepository } from "./repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
+import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
@@ -99,6 +100,9 @@ function buildQueue() {
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
+    getProcessingMessageWithCreatedAt: vi.fn(
+      () => null as { id: string; created_at: number } | null
+    ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
     updateMessageToProcessing: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
@@ -140,6 +144,7 @@ function buildQueue() {
   const waitUntil = vi.fn();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
+  const recordTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
@@ -160,7 +165,9 @@ function buildQueue() {
     sandboxLifecycle,
     null,
     "github",
-    EXECUTION_TIMEOUT_MS
+    createEarliestAlarmScheduler({ getAlarm, setAlarm }),
+    EXECUTION_TIMEOUT_MS,
+    recordTerminalMessage
   );
 
   return {
@@ -176,6 +183,7 @@ function buildQueue() {
     getAlarm,
     setAlarm,
     callbackService,
+    recordTerminalMessage,
   };
 }
 
@@ -190,6 +198,39 @@ describe("SessionMessageQueue", () => {
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(1);
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
+  });
+
+  it("does not block queue processing on the sandbox spawn", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    let resolveSpawn!: () => void;
+    h.sandboxLifecycle.spawnSandbox.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveSpawn = resolve;
+      })
+    );
+
+    // Resolves immediately even though the spawn is still in flight; the
+    // spawn is handed to waitUntil so the prompt response is not held open.
+    await h.queue.processMessageQueue();
+
+    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    resolveSpawn();
+    await h.waitUntil.mock.calls[0][0];
+  });
+
+  it("broadcasts sandbox_error when the background spawn throws", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.sandboxLifecycle.spawnSandbox.mockRejectedValue(new Error("modal exploded"));
+
+    await h.queue.processMessageQueue();
+    await h.waitUntil.mock.calls[0][0];
+
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_error",
+      error: "modal exploded",
+    });
   });
 
   it("marks session active when a prompt is enqueued", async () => {
@@ -355,12 +396,13 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("uses the provider-agnostic auth name for user messages without SCM identity", () => {
+  it("uses the canonical profile userId instead of a bot transport identity", () => {
     const h = buildQueue();
     const participant = createParticipant({
       scm_name: null,
       scm_login: null,
-      auth_name: "Pat PM",
+      user_id: "slack:U123",
+      canonical_user_id: "user-pat",
     });
 
     h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
@@ -369,7 +411,7 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({
         type: "sandbox_event",
         event: expect.objectContaining({
-          author: expect.objectContaining({ name: "Pat PM" }),
+          author: expect.objectContaining({ userId: "user-pat", name: "slack:U123" }),
         }),
       })
     );
@@ -392,6 +434,26 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ type: "prompt", messageId: "msg-42" })
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
+  });
+
+  it("drops a persisted reasoning effort that the session model does not support", async () => {
+    const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.repository.getSession.mockReturnValue(
+      createSession({ model: "xai/grok-build-0.1", reasoning_effort: "high" })
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      sandboxWs,
+      expect.objectContaining({
+        model: "xai/grok-build-0.1",
+        reasoningEffort: undefined,
+      })
+    );
   });
 
   it("falls back atomically when GitHub author mapping is incomplete", async () => {
@@ -554,8 +616,11 @@ describe("SessionMessageQueue", () => {
   it("marks processing message failed and broadcasts synthetic completion on stop", async () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
-    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-9" });
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-9", status: "processing", created_at: 900 })
+    );
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    h.recordTerminalMessage.mockReturnValue(new Promise<void>(() => {}));
 
     await h.queue.stopExecution();
 
@@ -569,15 +634,23 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ type: "execution_complete", success: false }),
       expect.any(Number)
     );
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
+      messageId: "msg-9",
+      messageCreatedAt: 900,
+      terminalMessageCompletedAt: expect.any(Number),
+    });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-    expect(h.waitUntil).toHaveBeenCalledTimes(1);
+    expect(h.waitUntil).toHaveBeenCalledTimes(2);
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 
   it("suppresses session status reconcile when stopExecution is called with suppress flag", async () => {
     const h = buildQueue();
-    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-10" });
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-10",
+      created_at: 900,
+    });
 
     await h.queue.stopExecution({ suppressStatusReconcile: true });
 
@@ -586,11 +659,20 @@ describe("SessionMessageQueue", () => {
 
   it("reconciles session status when failing a stuck processing message", async () => {
     const h = buildQueue();
-    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-timeout" });
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-timeout", status: "processing", created_at: 800 })
+    );
+    h.recordTerminalMessage.mockReturnValue(new Promise<void>(() => {}));
 
     await h.queue.failStuckProcessingMessage();
 
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
+      messageId: "msg-timeout",
+      messageCreatedAt: 800,
+      terminalMessageCompletedAt: expect.any(Number),
+    });
+    expect(h.waitUntil).toHaveBeenCalledTimes(2);
   });
 
   describe("enqueuePromptFromApi", () => {
@@ -601,7 +683,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -623,7 +705,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
       });
 
       expect(h.participantService.create).toHaveBeenCalledWith("github:1001", "github:1001");
@@ -635,7 +717,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
         scmEnrichment: {
           userId: "1001",
           login: "octocat",
@@ -664,7 +746,7 @@ describe("SessionMessageQueue", () => {
       await h.queue.enqueuePromptFromApi({
         content: "Fix bug",
         authorId: "github:1001",
-        source: "github-bot",
+        source: "github",
       });
 
       expect(h.repository.updateParticipantCoalesce).not.toHaveBeenCalled();

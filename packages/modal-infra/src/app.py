@@ -27,7 +27,6 @@ app = modal.App("open-inspect")
 # Includes all dependencies needed by the function modules at import time
 function_image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")  # For scheduler git ls-remote checks
     .pip_install(
         "pydantic>=2.0",
         "httpx",
@@ -56,14 +55,13 @@ github_app_secrets = modal.Secret.from_name(
 # Secret for internal API authentication and deployment configuration.
 # Required keys:
 #   MODAL_API_SECRET: verify requests from control plane to Modal endpoints
-#   SERVICE_AUTH_SECRET: sign requests from Modal to control plane (sig1)
 # Optional keys (add to the same secret as needed):
 #   ALLOWED_CONTROL_PLANE_HOSTS: comma-separated list of permitted callback hosts
 #   SCM_PROVIDER: "github" (default) or "gitlab" — selects the clone credential type
 #   GITLAB_ACCESS_TOKEN: GitLab PAT used as clone credential when SCM_PROVIDER=gitlab
 internal_api_secret = modal.Secret.from_name(
     "internal-api",
-    required_keys=["MODAL_API_SECRET", "SERVICE_AUTH_SECRET"],
+    required_keys=["MODAL_API_SECRET"],
 )
 
 

@@ -12,6 +12,8 @@ vi.mock("../../auth/github-app", () => ({
 }));
 
 import {
+  fetchWithTimeout,
+  getCachedInstallationToken,
   getCachedInstallationTokenWithExpiry,
   getInstallationRepository,
   listInstallationRepositories,
@@ -20,6 +22,27 @@ import {
 const mockGetInstallationRepository = vi.mocked(getInstallationRepository);
 const mockListInstallationRepositories = vi.mocked(listInstallationRepositories);
 const mockGetCachedInstallationTokenWithExpiry = vi.mocked(getCachedInstallationTokenWithExpiry);
+const mockGetCachedInstallationToken = vi.mocked(getCachedInstallationToken);
+const mockFetchWithTimeout = vi.mocked(fetchWithTimeout);
+
+function makeResponse(body: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === "string" ? body : JSON.stringify(body)),
+  } as unknown as Response;
+}
+
+const fakeAuth = { authType: "app" as const, token: "ghs_test" };
+const fakeRepository = {
+  owner: "acme",
+  name: "web",
+  fullName: "acme/web",
+  defaultBranch: "main",
+  isPrivate: true,
+  providerRepoId: 1,
+};
 
 const fakeAppConfig = {
   appId: "123",
@@ -30,6 +53,130 @@ const fakeAppConfig = {
 describe("GitHubSourceControlProvider", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("getBranchHead", () => {
+    it("resolves a slash-containing branch and returns its full SHA", async () => {
+      mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+      mockFetchWithTimeout.mockResolvedValue(
+        new Response(JSON.stringify({ object: { sha: "abc123" } }), { status: 200 })
+      );
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "feature/test" })
+      ).resolves.toBe("abc123");
+      expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+        expect.stringContaining("heads/feature%2Ftest"),
+        expect.any(Object)
+      );
+    });
+
+    it("returns null only for a confirmed missing branch", async () => {
+      mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+      mockFetchWithTimeout.mockResolvedValue(new Response("", { status: 404 }));
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
+      ).resolves.toBeNull();
+    });
+
+    it("rejects malformed branch ref responses", async () => {
+      mockGetCachedInstallationToken.mockResolvedValue("installation-token");
+      mockFetchWithTimeout.mockResolvedValue(makeJsonResponse({ object: {} }));
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      const err = await provider
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to resolve branch head: unexpected response shape (object.sha)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
+  });
+
+  describe("getRepository", () => {
+    it("maps GitHub repository metadata from a valid API response", async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        makeJsonResponse({
+          id: 42,
+          name: "web",
+          full_name: "acme/web",
+          default_branch: "main",
+          private: true,
+          owner: { login: "acme" },
+        })
+      );
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      await expect(
+        provider.getRepository(
+          { authType: "app", token: "installation-token" },
+          { owner: "acme", name: "web" }
+        )
+      ).resolves.toEqual({
+        owner: "acme",
+        name: "web",
+        fullName: "acme/web",
+        defaultBranch: "main",
+        isPrivate: true,
+        providerRepoId: 42,
+      });
+    });
+
+    it("rejects malformed repository metadata responses", async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        makeJsonResponse({
+          id: 42,
+          name: "web",
+          full_name: "acme/web",
+          default_branch: null,
+          private: true,
+          owner: { login: "acme" },
+        })
+      );
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      const err = await provider
+        .getRepository(
+          { authType: "app", token: "installation-token" },
+          { owner: "acme", name: "web" }
+        )
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to get repository: unexpected response shape (default_branch)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
+
+    it("rejects non-JSON repository responses", async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        new Response("<html>gateway</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        })
+      );
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+
+      const err = await provider
+        .getRepository(
+          { authType: "app", token: "installation-token" },
+          { owner: "acme", name: "web" }
+        )
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to get repository: response body is not JSON"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
   });
 
   describe("checkRepositoryAccess", () => {
@@ -347,15 +494,84 @@ describe("GitHubSourceControlProvider", () => {
       expect((err as SourceControlProviderError).httpStatus).toBe(500);
     });
   });
+
+  describe("createPullRequest", () => {
+    const prResponseBody = {
+      number: 7,
+      html_url: "https://github.com/acme/web/pull/7",
+      url: "https://api.github.com/repos/acme/web/pulls/7",
+      state: "open",
+      draft: false,
+      merged: false,
+      head: { ref: "feature" },
+      base: { ref: "main" },
+    };
+
+    it("creates a non-draft PR by default and does not send the draft flag", async () => {
+      mockFetchWithTimeout.mockResolvedValueOnce(makeResponse(prResponseBody));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const result = await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+      });
+
+      expect(result.id).toBe(7);
+      expect(result.lifecycleState).toBe("open");
+      expect(result.isDraft).toBe(false);
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
+      const sentBody = JSON.parse(mockFetchWithTimeout.mock.calls[0][1]?.body as string);
+      expect(sentBody.draft).toBeUndefined();
+    });
+
+    it("forwards the draft flag when draft is requested", async () => {
+      mockFetchWithTimeout.mockResolvedValueOnce(makeResponse({ ...prResponseBody, draft: true }));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const result = await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        draft: true,
+      });
+
+      expect(result.isDraft).toBe(true);
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(1);
+      const sentBody = JSON.parse(mockFetchWithTimeout.mock.calls[0][1]?.body as string);
+      expect(sentBody.draft).toBe(true);
+    });
+
+    it("throws a SourceControlProviderError when PR creation fails", async () => {
+      mockFetchWithTimeout.mockResolvedValueOnce(
+        makeResponse("Validation failed: head branch does not exist", 422)
+      );
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      const err = await provider
+        .createPullRequest(fakeAuth, {
+          repository: fakeRepository,
+          title: "Add feature",
+          body: "Body",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          draft: true,
+        })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).httpStatus).toBe(422);
+    });
+  });
 });
 
 // ─── PR lifecycle tracking (getPullRequest + status derivation) ───────────────
 
-import { fetchWithTimeout, getCachedInstallationToken } from "../../auth/github-app";
 import { deriveGitHubPullRequestStatus } from "./github-provider";
-
-const mockFetchWithTimeout = vi.mocked(fetchWithTimeout);
-const mockGetCachedInstallationToken = vi.mocked(getCachedInstallationToken);
 
 function makeJsonResponse(body: unknown, status = 200): Response {
   return {

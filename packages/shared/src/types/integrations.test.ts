@@ -3,11 +3,27 @@ import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_SLACK_ROUTING_RULES,
+  isValidSandboxTimeoutMs,
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("isValidSandboxTimeoutMs", () => {
+  it("accepts safe positive whole-second millisecond values", () => {
+    expect(isValidSandboxTimeoutMs(1_000)).toBe(true);
+    expect(isValidSandboxTimeoutMs(14_400_000)).toBe(true);
+  });
+
+  it.each([undefined, "1000", 0, -1_000, 1_500, 1_000.5, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid timeout %s",
+    (value) => {
+      expect(isValidSandboxTimeoutMs(value)).toBe(false);
+    }
+  );
+});
 
 describe("resolveBuildTimeoutSeconds", () => {
   it("defaults when no setting is present", () => {
@@ -131,6 +147,34 @@ describe("normalizeRoutingRules", () => {
       })
     );
     expect(normalizeRoutingRules(many)).toHaveLength(MAX_SLACK_ROUTING_RULES);
+  });
+});
+
+describe("slackIntegrationSettingsRoutingResponseSchema", () => {
+  it("parses a valid routing settings response", () => {
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse({
+      settings: {
+        defaults: {
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("parses a null settings response", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({ settings: null }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed routing rules", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({
+        settings: { defaults: { routingRules: [{ keyword: "frontend" }] } },
+      }).success
+    ).toBe(false);
   });
 });
 

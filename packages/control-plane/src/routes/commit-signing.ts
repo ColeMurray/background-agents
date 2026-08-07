@@ -1,4 +1,4 @@
-import { commitSigningWriteRequestSchema } from "@open-inspect/shared";
+import { commitSigningWriteRequestSchema } from "@open-inspect/shared/types/commit-signing";
 
 import {
   OpenSshKeyValidationError,

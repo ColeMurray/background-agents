@@ -7,7 +7,7 @@ import {
   getDefaultReasoningEffort,
   getValidModelOrDefault,
   isValidReasoningEffort,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 
 /**
  * Resolve a target (repository or environment) from the static team mapping:

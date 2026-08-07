@@ -1,9 +1,14 @@
 import { z } from "zod";
-import { recordSchema, type AgentResponse } from "./artifacts";
+import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
-import type { Session } from "./sessions";
-import { sessionStatusSchema, type SandboxStatus, type SessionStatus } from "./statuses";
+import {
+  messageSourceSchema,
+  sessionStatusSchema,
+  type SandboxStatus,
+  type Session,
+  type SessionStatus,
+} from "./sessions";
 
 export interface UserPreferences {
   userId: string;
@@ -23,6 +28,13 @@ export const slackCallbackContextSchema = z.object({
   model: z.string(),
   reasoningEffort: z.string().optional(),
   reactionMessageTs: z.string().optional(),
+  /**
+   * Set when the session belongs to an automation rather than an interactive
+   * request. A thread follow-up completes through the same callback as an
+   * `@mention` turn, so the route alone cannot tell the two apart, and only the
+   * control plane knows which automation (if any) owns the thread.
+   */
+  automationId: z.string().optional(),
 });
 
 export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
@@ -85,7 +97,7 @@ export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
 export const sendPromptRequestSchema = z.object({
   content: z.string().min(1),
-  source: z.string().optional(),
+  source: messageSourceSchema.optional(),
   model: z.string().optional(),
   reasoningEffort: z.string().optional(),
   attachments: z.unknown().optional(),
@@ -208,7 +220,7 @@ export const createMediaArtifactRequestSchema = z.object({
   artifactId: z.string(),
   artifactType: z.string(),
   objectKey: z.string(),
-  metadata: recordSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
@@ -251,36 +263,6 @@ export const cancelChildSessionRequestSchema = z.object({
 });
 
 export type CancelChildSessionRequest = z.infer<typeof cancelChildSessionRequestSchema>;
-
-/**
- * Returned by the parent Durable Object's GET /internal/spawn-context.
- *
- * Deliberately scalar in v1: child sessions inherit — and are restricted to —
- * the parent's PRIMARY repository, even for multi-repo parents. The spawn
- * route validates against the scalar mirror. Letting children target another
- * repository requires spawnContext.repositories, a named fast-follow (design
- * §13.13), not a v1 promise.
- */
-export const spawnContextSchema = z.object({
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  repoId: z.number().nullable(),
-  model: z.string(),
-  reasoningEffort: z.string().nullable(),
-  baseBranch: z.string().nullable(),
-  owner: z.object({
-    userId: z.string(),
-    scmUserId: z.string().nullable(),
-    scmLogin: z.string().nullable(),
-    scmName: z.string().nullable(),
-    scmEmail: z.string().nullable(),
-    scmAccessTokenEncrypted: z.string().nullable(),
-    scmRefreshTokenEncrypted: z.string().nullable(),
-    scmTokenExpiresAt: z.number().nullable(),
-  }),
-});
-
-export type SpawnContext = z.infer<typeof spawnContextSchema>;
 
 /** Returned by the child Durable Object's GET /internal/child-summary. */
 export interface ChildSessionFinalResponse extends AgentResponse {

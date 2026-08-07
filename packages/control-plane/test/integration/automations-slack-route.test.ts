@@ -4,7 +4,7 @@ import { AutomationStore, type AutomationRow } from "../../src/db/automation-sto
 import { SlackChannelStore } from "../../src/db/slack-channel-store";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
-import type { TriggerConfig } from "@open-inspect/shared";
+import type { TriggerConfig } from "@open-inspect/shared/triggers";
 
 function makeSlackAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
   const now = Date.now();

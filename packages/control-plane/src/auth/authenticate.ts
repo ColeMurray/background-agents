@@ -10,7 +10,7 @@
  * path and a DO round-trip), so they are not dispatched here.
  */
 
-import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared";
+import { SERVICE_SIGNATURE_HEADER } from "@open-inspect/shared/service-auth";
 import { authenticateSession, SessionIntegrityError } from "./user/session-authenticator";
 import { isAuthError, type AuthResult } from "./result";
 import { authenticateServiceRequest } from "./service/request-authenticator";
@@ -90,7 +90,5 @@ export async function authenticate(
     }
   }
 
-  // No recognized credential. The shared bearer is retired — a
-  // legacy internal token is just another unrecognized Authorization value.
   return { reason: "Unauthorized", status: 401, failedScheme: "none" };
 }

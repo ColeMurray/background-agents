@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, type ClipboardEvent } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
-import { encodeRepositoryPathSegments } from "@open-inspect/shared";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

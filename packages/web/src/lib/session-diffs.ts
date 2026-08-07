@@ -5,7 +5,7 @@ import {
   type SessionDiffManifest,
   type SessionDiffRepository,
   type SessionDiffState,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 
 type ReadySessionDiffRepository = Extract<SessionDiffRepository, { status: "ready" }>;
 

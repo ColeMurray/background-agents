@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { E2BSandboxProvider, type E2BProviderConfig } from "./e2b-provider";
 import { SandboxProviderError } from "../provider";
 import {
@@ -235,6 +235,11 @@ describe("E2BSandboxProvider", () => {
     await provider.createSandbox(baseCreateConfig);
     expect(client.createSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutSeconds: 1800 })
+    );
+    expect(client.writeSessionEnv).toHaveBeenCalledWith(
+      "e2b-id",
+      expect.objectContaining({ SANDBOX_TIMEOUT_SECONDS: "1800" }),
+      expect.any(Object)
     );
   });
 

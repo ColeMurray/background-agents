@@ -119,16 +119,13 @@ describe("GET /api/image-builds feed", () => {
               scopeKind: "repo",
               scopeId: "acme/web",
               repositoriesFingerprint: "fp-repo",
-              repositories: [],
             },
             {
               scopeKind: "environment",
               scopeId: "env_1",
               repositoriesFingerprint: "fp-env",
-              repositories: [],
             },
           ],
-          minRuntimeVersion: 53,
         });
       }
       if (path === "/image-builds/enabled-repos") {

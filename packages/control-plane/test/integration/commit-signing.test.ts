@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { SELF, env } from "cloudflare:test";
 
-import { generateInternalToken } from "@open-inspect/shared";
+import { generateInternalToken } from "@open-inspect/shared/auth";
 import { signGitPayloadWithOpenSshEd25519PrivateKey } from "../../src/auth/openssh-ed25519";
 import { CommitSigningStore } from "../../src/db/commit-signing";
 import { cleanD1Tables } from "./cleanup";

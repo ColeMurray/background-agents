@@ -1,5 +1,6 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
-import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
+import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
 import type { SandboxStatus } from "../../src/types";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
@@ -43,8 +44,8 @@ async function testBrowserSessionCookie(): Promise<string> {
   const applicationTimestamp = now.getTime();
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_users
-         (id, name, email, emailVerified, image, createdAt, updatedAt)
+      `INSERT OR IGNORE INTO users
+         (id, display_name, email, email_verified, avatar_url, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_USER_ID,
@@ -52,40 +53,24 @@ async function testBrowserSessionCookie(): Promise<string> {
       "browser@test.local",
       1,
       null,
-      now.toISOString(),
-      now.toISOString()
-    ),
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO users
-         (id, display_name, email, avatar_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(
-      TEST_BROWSER_USER_ID,
-      "Integration Browser User",
-      "browser@test.local",
-      null,
       applicationTimestamp,
       applicationTimestamp
     ),
     env.DB.prepare(
-      `INSERT OR IGNORE INTO auth_accounts
-         (id, accountId, providerId, userId, accessToken, refreshToken, idToken,
-          accessTokenExpiresAt, refreshTokenExpiresAt, scope, password, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO user_identities
+         (id, user_id, provider, provider_user_id, provider_login, provider_email,
+          provider_issuer, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_ACCOUNT_ID,
-      TEST_BROWSER_PROVIDER_SUBJECT,
-      "github",
       TEST_BROWSER_USER_ID,
+      "github",
+      TEST_BROWSER_PROVIDER_SUBJECT,
       null,
       null,
-      null,
-      null,
-      null,
-      null,
-      null,
-      now.toISOString(),
-      now.toISOString()
+      "https://github.com",
+      applicationTimestamp,
+      applicationTimestamp
     ),
     env.DB.prepare(
       `INSERT OR IGNORE INTO auth_sessions
@@ -93,10 +78,10 @@ async function testBrowserSessionCookie(): Promise<string> {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       TEST_BROWSER_SESSION_ID,
-      expiresAt.toISOString(),
+      expiresAt.getTime(),
       TEST_BROWSER_SESSION_TOKEN,
-      now.toISOString(),
-      now.toISOString(),
+      applicationTimestamp,
+      applicationTimestamp,
       "127.0.0.1",
       "integration-test",
       TEST_BROWSER_USER_ID
@@ -165,6 +150,7 @@ export async function initSession(overrides?: {
   title?: string;
   model?: string;
   reasoningEffort?: string;
+  sandboxSettings?: SandboxSettings;
   userId?: string;
   scmLogin?: string;
 }) {
@@ -235,7 +221,8 @@ export async function seedEvents(
   await runInDurableObject(stub, (instance: SessionDO) => {
     for (const e of events) {
       instance.ctx.storage.sql.exec(
-        "INSERT INTO events (id, type, data, message_id, created_at) VALUES (?, ?, ?, ?, ?)",
+        `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+         VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events))`,
         e.id,
         e.type,
         e.data,
@@ -352,7 +339,7 @@ export function collectMessages(
  */
 export async function openClientWs(
   sessionName: string,
-  opts?: { subscribe?: boolean; userId?: string }
+  opts?: { subscribe?: boolean; userId?: string; canonicalUserId?: string }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
@@ -372,7 +359,10 @@ export async function openClientWs(
   const tokenRes = await stub.fetch("http://internal/internal/ws-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId: opts.userId ?? "user-1" }),
+    body: JSON.stringify({
+      userId: opts.userId ?? "user-1",
+      canonicalUserId: opts.canonicalUserId,
+    }),
   });
   const { token, participantId } = await tokenRes.json<{
     token: string;

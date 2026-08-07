@@ -178,7 +178,9 @@ export function SessionDetailsOverlay({
 
   return (
     <div className={`fixed inset-0 z-50 lg:hidden ${open ? "" : "pointer-events-none"}`}>
-      <div
+      <button
+        type="button"
+        aria-label="Close session details"
         className={`absolute inset-0 bg-overlay transition-opacity duration-200 ${
           open ? "opacity-100" : "opacity-0"
         }`}

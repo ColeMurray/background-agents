@@ -6,7 +6,8 @@
  */
 
 import { z } from "zod";
-import type { InstallationRepository, PullRequestStatus } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
+import type { PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,
   SourceControlAuthContext,
@@ -140,6 +141,11 @@ const gitlabRepositoryListSchema = z.array(
     visibility: z.enum(["private", "internal", "public"]),
   })
 );
+
+/** Wire shape of a GitLab branch response, limited to the head commit ID. */
+const gitlabBranchHeadSchema = z.object({
+  commit: z.object({ id: z.string().min(1) }),
+});
 
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
@@ -520,6 +526,39 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       }
       throw SourceControlProviderError.fromFetchError(
         `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  async getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null> {
+    const projectPath = encodeProjectPath(config.owner, config.name);
+    try {
+      const response = await fetchWithTimeout(
+        `${GITLAB_API_BASE}/projects/${projectPath}/repository/branches/${encodeURIComponent(
+          config.branch
+        )}`,
+        { headers: this.headers(this.accessToken) }
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const error = await response.text();
+        throw SourceControlProviderError.fromFetchError(
+          `Failed to resolve branch head: ${response.status} ${error}`,
+          new Error(error),
+          response.status
+        );
+      }
+      const data = await parseProviderResponse(
+        response,
+        gitlabBranchHeadSchema,
+        "Failed to resolve branch head"
+      );
+      return data.commit.id;
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve branch head: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

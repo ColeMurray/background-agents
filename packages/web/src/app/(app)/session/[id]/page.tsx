@@ -27,11 +27,8 @@ import {
   type SessionListResponse,
 } from "@/lib/session-list";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import {
-  DEFAULT_MODEL,
-  getDefaultReasoningEffort,
-  type SessionAttachmentReference,
-} from "@open-inspect/shared";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { DEFAULT_MODEL, getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { resolveModelPreference, type ModelPreference } from "@/lib/model-selection";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import {
@@ -41,7 +38,10 @@ import {
 import type { ComboboxGroup } from "@/components/ui/combobox";
 import { useSessionDiffs } from "@/hooks/use-session-diffs";
 import { resolveDiffSelection, type DiffSelection } from "@/lib/session-diffs";
-import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import type {
+  SessionDiffFile,
+  SessionDiffRepository,
+} from "@open-inspect/shared/types/session-diffs";
 import { SessionChangesPanel } from "@/components/session-changes-panel";
 import {
   SESSION_CHANGES_LAYOUT_ID,
@@ -50,8 +50,17 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
+import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+import {
+  classifySessionReadAttempt,
+  markMessageRead,
+  reconcileSessionReadState,
+  SessionReadRequestError,
+} from "@/lib/session-read-state";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
+
+const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 
 export default function SessionPage() {
   return (
@@ -85,6 +94,11 @@ function SessionPageContent() {
     reconnect,
     loadOlderEvents,
   } = useSessionSocket(sessionId);
+  const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
+    sessionId,
+    participants,
+    events
+  );
 
   const fallbackSessionInfo = useMemo(
     () => ({
@@ -134,20 +148,30 @@ function SessionPageContent() {
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Terminal panel state
-  const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("terminal-visible") === "true";
-  });
-  const toggleTerminal = useCallback(() => {
-    const next = !terminalOpen;
-    localStorage.setItem("terminal-visible", String(next));
-    setTerminalOpen(next);
-  }, [terminalOpen]);
-  const closeTerminal = useCallback(() => {
-    setTerminalOpen(false);
-    localStorage.setItem("terminal-visible", "false");
+  // Terminal panel state. Starts closed so the server and the client render the
+  // same markup, then adopts the stored preference after hydration.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setTerminalOpen(localStorage.getItem(TERMINAL_VISIBLE_STORAGE_KEY) === "true");
+    } catch {
+      // Storage is optional; the terminal stays closed when it is unavailable.
+    }
   }, []);
+  const applyTerminalOpen = useCallback((next: boolean) => {
+    setTerminalOpen(next);
+    try {
+      localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, String(next));
+    } catch {
+      // Continue with the in-memory preference when storage is unavailable.
+    }
+  }, []);
+  const toggleTerminal = useCallback(() => {
+    applyTerminalOpen(!terminalOpen);
+  }, [applyTerminalOpen, terminalOpen]);
+  const closeTerminal = useCallback(() => {
+    applyTerminalOpen(false);
+  }, [applyTerminalOpen]);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
@@ -206,6 +230,24 @@ function SessionPageContent() {
     setSelectedDiff(selection);
     setIsDetailsOpen(false);
   }, []);
+  const attemptMarkVisibleMessageRead = useCallback(
+    async (messageId: string) => {
+      try {
+        const result = await markMessageRead(sessionId, messageId);
+        await reconcileSessionReadState(result);
+        return classifySessionReadAttempt(result);
+      } catch (error) {
+        if (
+          error instanceof SessionReadRequestError &&
+          [400, 401, 403, 404, 405].includes(error.status)
+        ) {
+          return "permanent_failure" as const;
+        }
+        return "retry" as const;
+      }
+    },
+    [sessionId]
+  );
   const closeDiff = useCallback(() => {
     const returnSelection = diffReturnFocusRef.current;
     setSelectedDiff(null);
@@ -236,11 +278,20 @@ function SessionPageContent() {
             events={events}
             sessionId={sessionId}
             currentParticipantId={currentParticipantId}
+            participantProfiles={profiles}
             isProcessing={isProcessing}
             loadingHistory={loadingHistory}
             showSkeleton={showTimelineSkeleton}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
+            terminalMessageReadObservationEnabled={
+              !replaying &&
+              !loadingHistory &&
+              !isDetailsOpen &&
+              selectedMediaArtifactId === null &&
+              resolvedDiff === null
+            }
+            onMarkMessageRead={attemptMarkVisibleMessageRead}
           />
         </Panel>
         {showTerminal && (
@@ -301,7 +352,7 @@ function SessionPageContent() {
               <SessionRightSidebar
                 sessionId={sessionId}
                 sessionState={sessionState}
-                participants={participants}
+                participants={profiledParticipants}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -333,7 +384,7 @@ function SessionPageContent() {
             <SessionRightSidebar
               sessionId={sessionId}
               sessionState={sessionState}
-              participants={participants}
+              participants={profiledParticipants}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -356,7 +407,7 @@ function SessionPageContent() {
           onReturnFocus={focusDetailsTrigger}
           sessionId={sessionId}
           sessionState={sessionState}
-          participants={participants}
+          participants={profiledParticipants}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}

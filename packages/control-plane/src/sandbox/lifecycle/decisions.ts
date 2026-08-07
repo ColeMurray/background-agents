@@ -30,6 +30,16 @@ export function isDeadSandboxStatus(status: SandboxStatus): boolean {
   return DEAD_SANDBOX_STATUSES.has(status);
 }
 
+/**
+ * Whether a sandbox lifecycle state must reject bridge reconnects.
+ *
+ * Failed is intentionally reconnectable: a slow boot can outlive the
+ * connecting watchdog and then self-heal when its bridge arrives.
+ */
+export function isSandboxReconnectBlockedStatus(status: SandboxStatus): boolean {
+  return status === "stopped" || status === "stale";
+}
+
 // ==================== Circuit Breaker ====================
 
 /**
@@ -224,6 +234,14 @@ export function evaluateSpawnDecision(
 ): SpawnAction {
   const timeSinceLastSpawn = now - state.createdAt;
 
+  // In-memory flag first: it is set synchronously when a spawn/restore starts,
+  // but the persisted "spawning" status lands only after the first await. A
+  // second evaluation in that window must not pick resume/restore again, or
+  // concurrent prompts launch duplicate sandboxes.
+  if (isSpawningInMemory) {
+    return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
+  }
+
   if (
     supportsPersistentResume &&
     state.providerObjectId &&
@@ -279,11 +297,6 @@ export function evaluateSpawnDecision(
       action: "wait",
       reason: `last spawn was ${Math.round(timeSinceLastSpawn / 1000)}s ago, waiting`,
     };
-  }
-
-  // Check in-memory flag for same-request protection
-  if (isSpawningInMemory) {
-    return { action: "skip", reason: "spawn already in progress (in-memory flag)" };
   }
 
   // All checks passed - spawn a new sandbox
@@ -598,10 +611,7 @@ export interface ExecutionTimeoutConfig {
 }
 
 /**
- * Default: 90 minutes — matches the bridge's PROMPT_MAX_DURATION.
- * The control plane timeout should never preempt the bridge's own timeout for
- * legitimate long-running prompts. It fires only when the bridge is dead and
- * can't enforce its own timeout.
+ * Legacy fallback for sessions without a configured sandbox timeout.
  */
 export const DEFAULT_EXECUTION_TIMEOUT_MS = 90 * 60 * 1000;
 

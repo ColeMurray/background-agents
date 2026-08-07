@@ -50,6 +50,50 @@ function ToolIcon({ name }: { name: string | null }) {
   }
 }
 
+export function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
+  const formatted = formatToolCall(event);
+  const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
+  const { args, output } = formatted.getDetails();
+  const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;
+  const nonPatchArgs =
+    isApplyPatch && args
+      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "patchText"))
+      : args;
+  const hasNonPatchArgs = !!nonPatchArgs && Object.keys(nonPatchArgs).length > 0;
+
+  return (
+    <div className="p-3 bg-card border border-border-muted text-xs overflow-hidden">
+      {hasNonPatchArgs && (
+        <div className="mb-2">
+          <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
+          <pre className="overflow-x-auto text-foreground whitespace-pre-wrap">
+            {JSON.stringify(nonPatchArgs, null, 2)}
+          </pre>
+        </div>
+      )}
+      {patchText && (
+        <div className="mb-2">
+          <div className="text-muted-foreground mb-1 font-medium">Patch:</div>
+          <pre className="overflow-x-auto max-h-64 text-foreground whitespace-pre-wrap">
+            {patchText}
+          </pre>
+        </div>
+      )}
+      {output && (
+        <div>
+          <div className="text-muted-foreground mb-1 font-medium">Output:</div>
+          <pre className="overflow-x-auto max-h-48 text-foreground whitespace-pre-wrap">
+            {output}
+          </pre>
+        </div>
+      )}
+      {!hasNonPatchArgs && !patchText && !output && (
+        <span className="text-secondary-foreground">No details available</span>
+      )}
+    </div>
+  );
+}
+
 export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: ToolCallItemProps) {
   if (event.tool === "slack-notify") {
     return (
@@ -63,16 +107,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
   }
 
   const formatted = formatToolCall(event);
-  const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
   const time = formatSessionEventTime(event.timestamp);
-
-  const { args, output } = formatted.getDetails();
-  const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;
-  const nonPatchArgs =
-    isApplyPatch && args
-      ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== "patchText"))
-      : args;
-  const hasNonPatchArgs = !!nonPatchArgs && Object.keys(nonPatchArgs).length > 0;
 
   return (
     <div className="py-0.5">
@@ -96,34 +131,8 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
       </button>
 
       {isExpanded && (
-        <div className="mt-2 ml-5 p-3 bg-card border border-border-muted text-xs overflow-hidden">
-          {hasNonPatchArgs && (
-            <div className="mb-2">
-              <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
-              <pre className="overflow-x-auto text-foreground whitespace-pre-wrap">
-                {JSON.stringify(nonPatchArgs, null, 2)}
-              </pre>
-            </div>
-          )}
-          {patchText && (
-            <div className="mb-2">
-              <div className="text-muted-foreground mb-1 font-medium">Patch:</div>
-              <pre className="overflow-x-auto max-h-64 text-foreground whitespace-pre-wrap">
-                {patchText}
-              </pre>
-            </div>
-          )}
-          {output && (
-            <div>
-              <div className="text-muted-foreground mb-1 font-medium">Output:</div>
-              <pre className="overflow-x-auto max-h-48 text-foreground whitespace-pre-wrap">
-                {output}
-              </pre>
-            </div>
-          )}
-          {!hasNonPatchArgs && !patchText && !output && (
-            <span className="text-secondary-foreground">No details available</span>
-          )}
+        <div className="mt-2 ml-5">
+          <ToolCallDetails event={event} />
         </div>
       )}
     </div>

@@ -1,20 +1,17 @@
 import {
-  timingSafeEqual,
   type ImageBuildRecordView,
   type ImageBuildScopeKind,
   type ImageBuildStatus,
   type RepositoryShaEntry,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/image-builds";
 import type {
-  ImageBuildCallbackBuild,
   ImageBuildProvider,
   ImageBuildScope,
   MarkImageBuildReadyResult,
   SupersededImageBuild,
 } from "../image-builds/model";
+import { ImageBuildFinalizationStore } from "./image-build-finalization";
 import type { SqlDatabase } from "./sql-database";
-
-const MS_PER_SECOND = 1000;
 
 /** D1 caps bound parameters per statement; IN-list queries chunk below it. */
 const MAX_SCOPE_IDS_PER_QUERY = 50;
@@ -56,19 +53,6 @@ const STATUS_VIEW_COLUMNS = STATUS_VIEW_KEYS.join(", ");
 // mark is attributable regardless of which path performed it.
 const STALE_BUILD_TIMEOUT_MESSAGE = "build timed out (no callback received)";
 
-/** Row slice read by the callback-token auth checks. */
-interface CallbackTokenRow {
-  id: string;
-  scope_kind: ImageBuildScopeKind;
-  scope_id: string;
-  provider: ImageBuildProvider;
-  provider_session_id: string | null;
-  status: ImageBuildStatus;
-  callback_token_hash: string | null;
-  callback_token_expires_at: number | null;
-  callback_token_used_at: number | null;
-}
-
 /** Registration input for a new building row. */
 export interface ImageBuildRegistration {
   id: string;
@@ -90,6 +74,10 @@ export interface ImageBuildRow extends ImageBuildRecordView {
   provider_image_id: string | null;
   repositories_fingerprint: string;
   provider_session_id: string | null;
+  completion_hash: string | null;
+  finalization_lease_token: string | null;
+  finalization_lease_expires_at: number | null;
+  provider_session_cleanup_pending: number | null;
   callback_token_hash: string | null;
   callback_token_expires_at: number | null;
   callback_token_used_at: number | null;
@@ -103,7 +91,78 @@ export interface ReapableImageBuildRow {
   provider: ImageBuildProvider;
   provider_image_id: string | null;
   provider_session_id: string | null;
+  created_at: number;
 }
+
+export interface ImageBuildSessionCleanupRow {
+  id: string;
+  provider: ImageBuildProvider;
+  status: ImageBuildStatus;
+  provider_image_id: string | null;
+  provider_session_id: string;
+  provider_session_cleanup_pending: number | null;
+  error_message: string | null;
+  created_at: number;
+}
+
+export interface RecoverableImageBuildFinalizationRow {
+  id: string;
+  completion_hash: string;
+  callback_token_used_at: number;
+}
+
+export const PROVIDER_SESSION_CLEANUP_SQL = `SELECT id, provider, status,
+        provider_image_id, provider_session_id, provider_session_cleanup_pending,
+        error_message, created_at
+ FROM image_builds
+ WHERE status IN ('ready', 'failed', 'superseded')
+   AND provider_session_id IS NOT NULL
+   AND provider_session_cleanup_pending IS NOT 0
+ ORDER BY created_at, id`;
+
+export const RECOVERABLE_IMAGE_FINALIZATIONS_SQL = `SELECT id, completion_hash,
+        callback_token_used_at
+ FROM image_builds
+ WHERE status = 'building'
+   AND callback_token_used_at IS NOT NULL
+   AND completion_hash IS NOT NULL
+   AND (
+     finalization_lease_token IS NULL
+     OR finalization_lease_expires_at IS NULL
+     OR finalization_lease_expires_at <= ?
+   )
+ ORDER BY callback_token_used_at, id`;
+
+export const SUPERSEDED_IMAGES_SQL = `SELECT id, scope_kind, scope_id, provider,
+        provider_image_id, provider_session_id, created_at
+ FROM image_builds
+ WHERE status = 'superseded'
+   AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
+ ORDER BY created_at, id`;
+
+export const FAILED_IMAGE_ARTIFACTS_SQL = `SELECT id, scope_kind, scope_id, provider,
+        provider_image_id, provider_session_id, created_at
+ FROM image_builds
+ WHERE status = 'failed' AND provider_image_id IS NOT NULL
+   AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
+ ORDER BY created_at, id`;
+
+export const DELETE_OLD_FAILED_BUILDS_SQL = `DELETE FROM image_builds
+WHERE status = 'failed' AND provider_image_id IS NULL
+  AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)
+  AND created_at < ?`;
+
+export const MARK_STALE_IMAGE_BUILDS_SQL = `UPDATE image_builds
+SET status = 'failed',
+    error_message = ?,
+    finalization_lease_token = NULL,
+    finalization_lease_expires_at = NULL
+WHERE status = 'building'
+  AND created_at < ?
+  AND provider_image_id IS NULL
+  AND callback_token_used_at IS NULL
+  AND completion_hash IS NULL
+  AND finalization_lease_token IS NULL`;
 
 /**
  * D1-backed image-build registry and state machine.
@@ -120,7 +179,11 @@ export interface ReapableImageBuildRow {
  * question belong to image-builds/scope.ts.
  */
 export class ImageBuildStore {
-  constructor(private readonly db: SqlDatabase) {}
+  readonly finalization: ImageBuildFinalizationStore;
+
+  constructor(private readonly db: SqlDatabase) {
+    this.finalization = new ImageBuildFinalizationStore(db);
+  }
 
   /**
    * Registers a build unless one is already in flight for the same
@@ -177,141 +240,15 @@ export class ImageBuildStore {
   ): Promise<boolean> {
     const result = await this.db
       .prepare(
-        "UPDATE image_builds SET provider_session_id = ? WHERE id = ? AND provider = ? AND status = 'building'"
-      )
-      .bind(providerSessionId, buildId, provider)
-      .run();
-
-    return (result.meta?.changes ?? 0) > 0;
-  }
-
-  async consumeCallbackToken(params: {
-    buildId: string;
-    provider: ImageBuildProvider;
-    tokenHash: string;
-    providerSessionId: string | null;
-    now: number;
-  }): Promise<ImageBuildCallbackBuild | null> {
-    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
-    if (!this.callbackTokenRowIsUsable(build, params)) return null;
-
-    const result = await this.db
-      .prepare(
-        `UPDATE image_builds SET callback_token_used_at = ?
-         WHERE id = ? AND provider = ? AND provider_session_id IS ? AND status = 'building'
-           AND callback_token_hash = ?
-           AND callback_token_expires_at >= ?
-           AND callback_token_used_at IS NULL`
-      )
-      .bind(
-        params.now,
-        params.buildId,
-        params.provider,
-        params.providerSessionId,
-        params.tokenHash,
-        params.now
-      )
-      .run();
-
-    if ((result.meta?.changes ?? 0) === 0) return null;
-
-    return {
-      id: build.id,
-      scope: { kind: build.scope_kind, id: build.scope_id },
-      provider: build.provider,
-      providerSessionId: build.provider_session_id,
-      status: build.status,
-    };
-  }
-
-  async verifyCallbackToken(params: {
-    buildId: string;
-    provider: ImageBuildProvider;
-    tokenHash: string;
-    providerSessionId: string | null;
-    now: number;
-  }): Promise<boolean> {
-    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
-    return this.callbackTokenRowIsUsable(build, params);
-  }
-
-  /**
-   * Token check for late-artifact recording: the row has already left
-   * 'building', so only the hash binding and expiry gate — not status,
-   * session binding, or single-use consumption.
-   */
-  async verifyCallbackTokenForArtifactRecording(params: {
-    buildId: string;
-    provider: ImageBuildProvider;
-    tokenHash: string;
-    now: number;
-  }): Promise<boolean> {
-    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
-    if (!build || !build.callback_token_hash || !build.callback_token_expires_at) return false;
-    if (build.callback_token_expires_at < params.now) return false;
-    return timingSafeEqual(build.callback_token_hash, params.tokenHash);
-  }
-
-  async markBuildFailedWithCallbackToken(params: {
-    buildId: string;
-    provider: ImageBuildProvider;
-    tokenHash: string;
-    providerSessionId: string | null;
-    error: string;
-    now: number;
-  }): Promise<boolean> {
-    const build = await this.readCallbackTokenRow(params.buildId, params.provider);
-    if (!this.callbackTokenRowIsUsable(build, params)) return false;
-
-    const result = await this.db
-      .prepare(
         `UPDATE image_builds
-         SET status = 'failed', error_message = ?, callback_token_used_at = ?
-         WHERE id = ? AND provider = ? AND provider_session_id IS ? AND status = 'building'
-           AND callback_token_hash = ?
-           AND callback_token_expires_at >= ?
-           AND callback_token_used_at IS NULL`
+         SET provider_session_id = ?, provider_session_cleanup_pending = 1
+         WHERE id = ? AND provider = ? AND status = 'building'
+           AND (provider_session_id IS NULL OR provider_session_id = ?)`
       )
-      .bind(
-        params.error,
-        params.now,
-        params.buildId,
-        params.provider,
-        params.providerSessionId,
-        params.tokenHash,
-        params.now
-      )
+      .bind(providerSessionId, buildId, provider, providerSessionId)
       .run();
 
     return (result.meta?.changes ?? 0) > 0;
-  }
-
-  private async readCallbackTokenRow(
-    buildId: string,
-    provider: ImageBuildProvider
-  ): Promise<CallbackTokenRow | null> {
-    return this.db
-      .prepare(
-        `SELECT id, scope_kind, scope_id, provider, provider_session_id, status,
-                callback_token_hash, callback_token_expires_at, callback_token_used_at
-         FROM image_builds WHERE id = ? AND provider = ?`
-      )
-      .bind(buildId, provider)
-      .first<CallbackTokenRow>();
-  }
-
-  /** Timing-safe, single-use, unexpired token bound to the build's provider session. */
-  private callbackTokenRowIsUsable(
-    build: CallbackTokenRow | null,
-    params: { tokenHash: string; providerSessionId: string | null; now: number }
-  ): build is CallbackTokenRow {
-    if (!build || build.status !== "building") return false;
-    if (!build.callback_token_hash || !build.callback_token_expires_at) return false;
-    if (build.callback_token_used_at !== null) return false;
-    if (build.callback_token_expires_at < params.now) return false;
-    if (!timingSafeEqual(build.callback_token_hash, params.tokenHash)) return false;
-    if (build.provider_session_id !== params.providerSessionId) return false;
-    return true;
   }
 
   /** The per-scope concurrency guard: at most one in-flight build. */
@@ -347,46 +284,14 @@ export class ImageBuildStore {
     return row !== null;
   }
 
-  async getCallbackBuild(buildId: string): Promise<ImageBuildCallbackBuild | null> {
-    const build = await this.db
-      .prepare(
-        "SELECT id, scope_kind, scope_id, provider, provider_session_id, status FROM image_builds WHERE id = ?"
-      )
-      .bind(buildId)
-      .first<{
-        id: string;
-        scope_kind: ImageBuildScopeKind;
-        scope_id: string;
-        provider: ImageBuildProvider;
-        provider_session_id: string | null;
-        status: ImageBuildStatus;
-      }>();
-
-    if (!build || build.status !== "building") return null;
-    return {
-      id: build.id,
-      scope: { kind: build.scope_kind, id: build.scope_id },
-      provider: build.provider,
-      providerSessionId: build.provider_session_id,
-      status: build.status,
-    };
-  }
-
   async tryMarkImageBuildReady(
     buildId: string,
     provider: ImageBuildProvider,
     providerImageId: string,
     repositoryShas: RepositoryShaEntry[],
     runtimeVersion: string,
-    buildDurationMs: number,
-    // When present, the single-use callback token is consumed in the SAME
-    // conditional UPDATE as the ready/superseded transition, so the token can
-    // never be burned without the build reaching a terminal state (a partial
-    // failure leaves the token replayable for the provider's retry). Absent for
-    // provider-session builds, which pre-consume the token before their
-    // deferred snapshot — their SQL is unchanged. Guards mirror
-    // consumeCallbackToken exactly (session binding, hash, expiry, single-use).
-    callbackToken?: { tokenHash: string; providerSessionId: string | null; now: number }
+    buildDurationSeconds: number,
+    finalizationLeaseToken?: string
   ): Promise<MarkImageBuildReadyResult> {
     const build = await this.db
       .prepare(
@@ -404,16 +309,16 @@ export class ImageBuildStore {
       return { type: "not_accepting_completion" };
     }
 
-    const tokenSet = callbackToken ? ", callback_token_used_at = ?" : "";
-    const tokenWhere = callbackToken
-      ? " AND provider_session_id IS ? AND callback_token_hash = ? AND callback_token_expires_at >= ? AND callback_token_used_at IS NULL"
+    const leaseSet = finalizationLeaseToken
+      ? ", finalization_lease_token = NULL, finalization_lease_expires_at = NULL"
       : "";
+    const leaseWhere = finalizationLeaseToken ? " AND finalization_lease_token = ?" : "";
 
     const updateResult = await this.db
       .prepare(
         `UPDATE image_builds
-         SET status = 'ready', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?${tokenSet}
-         WHERE id = ? AND provider = ? AND status = 'building'${tokenWhere}
+         SET status = 'ready', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?${leaseSet}
+         WHERE id = ? AND provider = ? AND status = 'building'${leaseWhere}
            AND NOT EXISTS (
              SELECT 1 FROM image_builds newer
              WHERE newer.scope_kind = ?
@@ -430,13 +335,10 @@ export class ImageBuildStore {
         providerImageId,
         JSON.stringify(repositoryShas),
         runtimeVersion,
-        buildDurationMs / MS_PER_SECOND,
-        ...(callbackToken ? [callbackToken.now] : []),
+        buildDurationSeconds,
         buildId,
         provider,
-        ...(callbackToken
-          ? [callbackToken.providerSessionId, callbackToken.tokenHash, callbackToken.now]
-          : []),
+        ...(finalizationLeaseToken ? [finalizationLeaseToken] : []),
         build.scope_kind,
         build.scope_id,
         provider,
@@ -455,11 +357,11 @@ export class ImageBuildStore {
           providerSessionId: build.provider_session_id,
           repositoryShas,
           runtimeVersion,
-          buildDurationMs,
+          buildDurationSeconds,
           scopeKind: build.scope_kind,
           scopeId: build.scope_id,
           createdAt: build.created_at,
-          callbackToken,
+          finalizationLeaseToken,
         })) ?? { type: "not_accepting_completion" }
       );
     }
@@ -522,25 +424,22 @@ export class ImageBuildStore {
     providerSessionId: string | null;
     repositoryShas: RepositoryShaEntry[];
     runtimeVersion: string;
-    buildDurationMs: number;
+    buildDurationSeconds: number;
     scopeKind: ImageBuildScopeKind;
     scopeId: string;
     createdAt: number;
-    // Consumed atomically with the superseded transition, exactly as in the
-    // ready path above. See tryMarkImageBuildReady's callbackToken note.
-    callbackToken?: { tokenHash: string; providerSessionId: string | null; now: number };
+    finalizationLeaseToken?: string;
   }): Promise<Extract<MarkImageBuildReadyResult, { type: "superseded_by_newer_ready" }> | null> {
-    const { callbackToken } = params;
-    const tokenSet = callbackToken ? ", callback_token_used_at = ?" : "";
-    const tokenWhere = callbackToken
-      ? " AND provider_session_id IS ? AND callback_token_hash = ? AND callback_token_expires_at >= ? AND callback_token_used_at IS NULL"
+    const leaseSet = params.finalizationLeaseToken
+      ? ", finalization_lease_token = NULL, finalization_lease_expires_at = NULL"
       : "";
+    const leaseWhere = params.finalizationLeaseToken ? " AND finalization_lease_token = ?" : "";
 
     const result = await this.db
       .prepare(
         `UPDATE image_builds
-         SET status = 'superseded', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?${tokenSet}
-         WHERE id = ? AND provider = ? AND status = 'building'${tokenWhere}
+         SET status = 'superseded', provider_image_id = ?, repository_shas = ?, runtime_version = ?, build_duration_seconds = ?${leaseSet}
+         WHERE id = ? AND provider = ? AND status = 'building'${leaseWhere}
            AND EXISTS (
              SELECT 1 FROM image_builds newer
              WHERE newer.scope_kind = ?
@@ -557,13 +456,10 @@ export class ImageBuildStore {
         params.providerImageId,
         JSON.stringify(params.repositoryShas),
         params.runtimeVersion,
-        params.buildDurationMs / MS_PER_SECOND,
-        ...(callbackToken ? [callbackToken.now] : []),
+        params.buildDurationSeconds,
         params.buildId,
         params.provider,
-        ...(callbackToken
-          ? [callbackToken.providerSessionId, callbackToken.tokenHash, callbackToken.now]
-          : []),
+        ...(params.finalizationLeaseToken ? [params.finalizationLeaseToken] : []),
         params.scopeKind,
         params.scopeId,
         params.provider,
@@ -587,57 +483,34 @@ export class ImageBuildStore {
     };
   }
 
-  /** Any-status row lookup for late-completion handling. */
-  async getBuildRow(buildId: string): Promise<{
-    id: string;
-    scope_kind: ImageBuildScopeKind;
-    scope_id: string;
-    provider: ImageBuildProvider;
-    status: ImageBuildStatus;
-  } | null> {
-    return this.db
-      .prepare("SELECT id, scope_kind, scope_id, provider, status FROM image_builds WHERE id = ?")
-      .bind(buildId)
-      .first<{
-        id: string;
-        scope_kind: ImageBuildScopeKind;
-        scope_id: string;
-        provider: ImageBuildProvider;
-        status: ImageBuildStatus;
-      }>();
-  }
-
-  /**
-   * Late completion for a build superseded out-of-band (entity delete, secret
-   * change) while it was in flight: the callback is rejected, but the
-   * provider artifact it reports already exists — record it on the superseded
-   * row so the reaper reclaims it instead of leaking it (Modal snapshots
-   * never expire). Only artifact-less superseded rows are written, so a
-   * ready row's artifact can never be clobbered by a replayed callback.
-   */
-  async recordArtifactOnSupersededBuild(
-    buildId: string,
-    provider: ImageBuildProvider,
-    providerImageId: string
+  async deleteSupersededImage(
+    imageBuildId: string,
+    reapedProviderImageId: string | null = null
   ): Promise<boolean> {
-    const result = await this.db
+    const deleteStatement = this.db
       .prepare(
-        `UPDATE image_builds SET provider_image_id = ?
-         WHERE id = ? AND provider = ? AND status = 'superseded' AND provider_image_id IS NULL`
+        `DELETE FROM image_builds
+         WHERE id = ? AND status = 'superseded' AND provider_image_id IS NULL
+           AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)`
       )
-      .bind(providerImageId, buildId, provider)
-      .run();
+      .bind(imageBuildId);
 
-    return (result.meta?.changes ?? 0) > 0;
-  }
+    if (reapedProviderImageId === null) {
+      const result = await deleteStatement.run();
+      return (result.meta?.changes ?? 0) > 0;
+    }
 
-  async deleteSupersededImage(imageBuildId: string): Promise<boolean> {
-    const result = await this.db
-      .prepare("DELETE FROM image_builds WHERE id = ? AND status = 'superseded'")
-      .bind(imageBuildId)
-      .run();
-
-    return (result.meta?.changes ?? 0) > 0;
+    const [, deleted] = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE image_builds SET provider_image_id = NULL
+           WHERE id = ? AND status = 'superseded' AND provider_image_id = ?
+             AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)`
+        )
+        .bind(imageBuildId, reapedProviderImageId),
+      deleteStatement,
+    ]);
+    return (deleted.meta?.changes ?? 0) > 0;
   }
 
   async markBuildFailed(
@@ -724,6 +597,28 @@ export class ImageBuildStore {
   }
 
   /**
+   * Authoritative scheduler input for one provider. Unlike the bounded UI
+   * history read, this cannot hide a live build behind failures from another
+   * provider.
+   */
+  async getReconciliationStatus(
+    scope: ImageBuildScope,
+    provider: ImageBuildProvider
+  ): Promise<ImageBuildRecordView[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT ${STATUS_VIEW_COLUMNS} FROM image_builds
+         WHERE scope_kind = ? AND scope_id = ? AND provider = ?
+           AND status IN ('building', 'ready')
+         ORDER BY created_at DESC`
+      )
+      .bind(scope.kind, scope.id, provider)
+      .all<ImageBuildRecordView>();
+
+    return result.results || [];
+  }
+
+  /**
    * Cross-scope status for the given (enabled) scopes: every non-superseded
    * row, so failed builds are visible in the aggregate feed alongside ready
    * and building rows. Unbounded per scope on purpose: the state machine caps
@@ -765,17 +660,25 @@ export class ImageBuildStore {
    * (mark-ready replacing an older ready) and out-of-band (entity delete,
    * secret change), so cleanup sweeps whatever is left.
    */
-  async getSupersededImages(limit: number): Promise<ReapableImageBuildRow[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
-         FROM image_builds WHERE status = 'superseded'
-         ORDER BY created_at ASC LIMIT ?`
-      )
-      .bind(limit)
-      .all<ReapableImageBuildRow>();
+  async getSupersededImages(): Promise<ReapableImageBuildRow[]> {
+    const result = await this.db.prepare(SUPERSEDED_IMAGES_SQL).all<ReapableImageBuildRow>();
 
     return result.results || [];
+  }
+
+  async listSessionCleanup(): Promise<ImageBuildSessionCleanupRow[]> {
+    const result = await this.db
+      .prepare(PROVIDER_SESSION_CLEANUP_SQL)
+      .all<ImageBuildSessionCleanupRow>();
+    return result.results ?? [];
+  }
+
+  async listRecoverableFinalizations(now: number): Promise<RecoverableImageBuildFinalizationRow[]> {
+    const result = await this.db
+      .prepare(RECOVERABLE_IMAGE_FINALIZATIONS_SQL)
+      .bind(now)
+      .all<RecoverableImageBuildFinalizationRow>();
+    return result.results ?? [];
   }
 
   /**
@@ -786,15 +689,8 @@ export class ImageBuildStore {
    * The failed row itself is kept — its error_message stays visible in the
    * status feeds — until clearFailedImageArtifact nulls its artifact columns.
    */
-  async getFailedImagesWithArtifacts(limit: number): Promise<ReapableImageBuildRow[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT id, scope_kind, scope_id, provider, provider_image_id, provider_session_id
-         FROM image_builds WHERE status = 'failed' AND provider_image_id IS NOT NULL
-         ORDER BY created_at ASC LIMIT ?`
-      )
-      .bind(limit)
-      .all<ReapableImageBuildRow>();
+  async getFailedImagesWithArtifacts(): Promise<ReapableImageBuildRow[]> {
+    const result = await this.db.prepare(FAILED_IMAGE_ARTIFACTS_SQL).all<ReapableImageBuildRow>();
 
     return result.results || [];
   }
@@ -817,7 +713,8 @@ export class ImageBuildStore {
     const result = await this.db
       .prepare(
         `UPDATE image_builds SET provider_image_id = NULL, provider_session_id = NULL
-         WHERE id = ? AND status = 'failed' AND provider_image_id = ?`
+         WHERE id = ? AND status = 'failed' AND provider_image_id = ?
+           AND (provider_session_id IS NULL OR provider_session_cleanup_pending = 0)`
       )
       .bind(imageBuildId, reapedProviderImageId)
       .run();
@@ -826,11 +723,10 @@ export class ImageBuildStore {
   }
 
   async markStaleBuildsAsFailed(maxAgeMs: number): Promise<number> {
-    const cutoff = Date.now() - maxAgeMs;
+    const now = Date.now();
+    const cutoff = now - maxAgeMs;
     const result = await this.db
-      .prepare(
-        "UPDATE image_builds SET status = 'failed', error_message = ? WHERE status = 'building' AND created_at < ?"
-      )
+      .prepare(MARK_STALE_IMAGE_BUILDS_SQL)
       .bind(STALE_BUILD_TIMEOUT_MESSAGE, cutoff)
       .run();
 
@@ -847,12 +743,23 @@ export class ImageBuildStore {
     provider: ImageBuildProvider,
     maxAgeMs: number
   ): Promise<number> {
-    const cutoff = Date.now() - maxAgeMs;
+    const now = Date.now();
+    const cutoff = now - maxAgeMs;
     const result = await this.db
       .prepare(
-        `UPDATE image_builds SET status = 'failed', error_message = ?
+        `UPDATE image_builds
+         SET status = 'failed',
+             error_message = ?,
+             finalization_lease_token = NULL,
+             finalization_lease_expires_at = NULL
          WHERE scope_kind = ? AND scope_id = ? AND provider = ? AND status = 'building'
-           AND created_at < ?`
+           AND created_at < ?
+           AND provider_image_id IS NULL
+           AND callback_token_used_at IS NULL
+           AND completion_hash IS NULL
+           AND finalization_lease_token IS NULL
+         ORDER BY created_at, id
+         LIMIT 1`
       )
       .bind(STALE_BUILD_TIMEOUT_MESSAGE, scope.kind, scope.id, provider, cutoff)
       .run();
@@ -868,13 +775,7 @@ export class ImageBuildStore {
    */
   async deleteOldFailedBuilds(maxAgeMs: number): Promise<number> {
     const cutoff = Date.now() - maxAgeMs;
-    const result = await this.db
-      .prepare(
-        `DELETE FROM image_builds
-         WHERE status = 'failed' AND provider_image_id IS NULL AND created_at < ?`
-      )
-      .bind(cutoff)
-      .run();
+    const result = await this.db.prepare(DELETE_OLD_FAILED_BUILDS_SQL).bind(cutoff).run();
 
     return result.meta?.changes ?? 0;
   }

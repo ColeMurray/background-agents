@@ -2,6 +2,35 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 1, 2026
+
+**Grok models with your SuperGrok subscription.** Use Grok 4.5 or Grok Build 0.1 through managed xAI
+OAuth, with opt-in model controls and reasoning-effort settings for Grok 4.5. Refresh credentials
+stay encrypted in the control plane while sandboxes receive only short-lived access tokens.
+
+## July 31, 2026
+
+**Automatic prebuild refresh.** Repository and environment images now rebuild automatically when
+tracked branches move or the sandbox runtime changes, with provider-neutral scheduling and durable
+finalization across Modal, Vercel, and OpenComputer.
+
+**Configurable session lifetimes.** Set sandbox timeouts globally or per repository and environment;
+the setting applies to fresh, restored, and resumed sandboxes, and child sessions inherit it.
+
+**More control over child sessions.** Child-session tools now use consistent `spawn-child`,
+`get-child-status`, and `cancel-child` names. Spawned children inherit the parent's model and
+reasoning effort by default, with optional per-child overrides.
+
+**Better Slack session guidance.** Workspace-wide instructions can now apply to every Slack-started
+session. Watched-channel automations can also return `NO_REPLY` when no response is useful, while
+failures and runs with artifacts still post normally.
+
+## July 30, 2026
+
+**Choose GitHub, Google, or both for sign-in.** Deployments can now enable either provider
+independently, and the sign-in page shows only the methods actually configured. Terraform validates
+the setup. The GitHub App remains required for repository access in Google-only deployments.
+
 ## July 26, 2026
 
 **Better Auth browser authentication.** Browser sign-in now uses control-plane-owned Better Auth
@@ -9,6 +38,9 @@ sessions with GitHub and optional Google providers. The web app forwards an exac
 authentication routes through a signed proxy, and browser resource requests require both that signed
 web-service channel and the browser session. Legacy browser tokens are retired during migration, so
 existing users must sign in again after upgrading.
+
+Note: GitHub sign-in requires the GitHub App `Email addresses: Read-only` account permission —
+without it the callback fails with a misleading `state_mismatch` error.
 
 ## July 24, 2026
 

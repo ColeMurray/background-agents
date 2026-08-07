@@ -36,7 +36,6 @@ describe("GoogleSignInProfileResolver", () => {
         verifiedEmails: ["person@example.com"],
         primaryEmail: "person@example.com",
       },
-      credential: null,
     });
     expect(result.user).toEqual({
       id: "google-subject",

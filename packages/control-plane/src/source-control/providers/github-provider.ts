@@ -6,7 +6,7 @@
  */
 
 import { z } from "zod";
-import type { InstallationRepository } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
 import type { PullRequestStatus } from "@open-inspect/shared";
 import type {
   SourceControlProvider,
@@ -102,6 +102,21 @@ const githubRepositoryLocationSchema = z.object({
   owner: z.object({ login: z.string() }),
 });
 
+/** Wire shape of GET /repos/{owner}/{repo}, limited to fields used for repo metadata. */
+const githubRepositoryInfoSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  full_name: z.string(),
+  default_branch: z.string(),
+  private: z.boolean(),
+  owner: z.object({ login: z.string() }),
+});
+
+/** Wire shape of a GitHub git-ref response, limited to the branch head SHA. */
+const githubBranchRefSchema = z.object({
+  object: z.object({ sha: z.string().min(1) }),
+});
+
 /** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -152,14 +167,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as {
-      id: number;
-      name: string;
-      full_name: string;
-      default_branch: string;
-      private: boolean;
-      owner: { login: string };
-    };
+    const data = await parseProviderResponse(
+      response,
+      githubRepositoryInfoSchema,
+      "Failed to get repository"
+    );
 
     return {
       owner: data.owner.login,
@@ -472,6 +484,55 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     } catch (error) {
       throw SourceControlProviderError.fromFetchError(
         `Failed to list branches: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
+  async getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot resolve branch head",
+        "permanent"
+      );
+    }
+    try {
+      const token = await getCachedInstallationToken(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
+      const response = await fetchWithTimeout(
+        `${GITHUB_API_BASE}/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/git/ref/heads/${encodeURIComponent(config.branch)}`,
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "User-Agent": this.userAgent,
+          },
+        }
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const error = await response.text();
+        throw SourceControlProviderError.fromFetchError(
+          `Failed to resolve branch head: ${response.status} ${error}`,
+          new Error(error),
+          response.status
+        );
+      }
+      const data = await parseProviderResponse(
+        response,
+        githubBranchRefSchema,
+        "Failed to resolve branch head"
+      );
+      return data.object.sha;
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve branch head: ${error instanceof Error ? error.message : String(error)}`,
         error,
         extractHttpStatus(error)
       );

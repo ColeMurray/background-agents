@@ -8,7 +8,7 @@ import {
   YAxis,
 } from "recharts";
 import { useId } from "react";
-import type { AnalyticsPullRequestTimeseriesPoint } from "@open-inspect/shared";
+import type { AnalyticsPullRequestTimeseriesPoint } from "@open-inspect/shared/types/analytics";
 import { Badge } from "@/components/ui/badge";
 import {
   formatAnalyticsCount,

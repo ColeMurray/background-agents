@@ -8,6 +8,7 @@
  * mapped into the same envelope shape so callers never need to catch.
  */
 
+import { z } from "zod";
 import { computeHmacHex, timingSafeEqual } from "../auth";
 
 const SLACK_API_BASE = "https://slack.com/api";
@@ -195,6 +196,23 @@ export function postMessage(
     text,
     thread_ts: options?.thread_ts,
     blocks: options?.blocks,
+    reply_broadcast: options?.reply_broadcast,
+  });
+}
+
+export function postBlocks(
+  token: string,
+  channel: string,
+  blocks: unknown[],
+  options?: {
+    thread_ts?: string;
+    reply_broadcast?: boolean;
+  }
+): Promise<SlackEnvelope<{ channel: string; ts: string }>> {
+  return slackPost(token, "chat.postMessage", {
+    channel,
+    blocks,
+    thread_ts: options?.thread_ts,
     reply_broadcast: options?.reply_broadcast,
   });
 }
@@ -395,34 +413,78 @@ export async function getThreadMessages(
   return { ok: true, messages };
 }
 
-/** A file object as it appears on a Slack message (subset of fields we use). */
-export interface SlackMessageFile {
-  id?: string;
-  name?: string;
-  title?: string;
-  mimetype?: string;
-  url_private?: string;
-  url_private_download?: string;
-  size?: number;
+/**
+ * A file object as it appears on a Slack message (subset of fields we use).
+ *
+ * The schema is the source of truth: `SlackMessageFile` is inferred from it and
+ * inbound-event validation reuses it, so adding a field here reaches both the
+ * type and the trust boundary at once.
+ */
+export const slackMessageFileSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().optional(),
+  title: z.string().optional(),
+  mimetype: z.string().optional(),
+  url_private: z.string().optional(),
+  url_private_download: z.string().optional(),
+  size: z.number().optional(),
   /** "external" marks remote files whose url_private is third-party-hosted. */
-  mode?: string;
-}
+  mode: z.string().optional(),
+});
+
+export type SlackMessageFile = z.infer<typeof slackMessageFileSchema>;
 
 /**
- * Fetch the files attached to a single message.
+ * A secondary attachment on a Slack message (subset of fields we use).
  *
- * `app_mention` events don't include the message's `files` array, so when an
- * event arrives without files we recover them from conversation history. Pass
- * `threadTs` when the message is a thread reply; otherwise the top-level
- * message at `ts` is fetched. Returns the failure arm on API errors so callers
- * can distinguish "the message has no files" from "the lookup failed".
+ * Two very different things arrive in this array. Sharing or forwarding a
+ * message produces a *message* attachment flagged `is_share` (and may also set
+ * `is_msg_unfurl`), carrying the shared message's author and body — which is the
+ * only place that body exists on the new message. A pasted Slack message link
+ * produces an attachment with `is_msg_unfurl` but not `is_share`. Callers that
+ * read message bodies must use `is_share` as the positive discriminator.
  */
-export async function getMessageFiles(
+export const slackMessageAttachmentSchema = z.object({
+  /** Set when the attachment is a shared/forwarded Slack message. */
+  is_share: z.boolean().optional(),
+  /** Set when the attachment unfurls a Slack message permalink. */
+  is_msg_unfurl: z.boolean().optional(),
+  /** Body of the shared message, in mrkdwn. */
+  text: z.string().optional(),
+  /** Plain-text rendering Slack always provides, e.g. "[date] user: body". */
+  fallback: z.string().optional(),
+  /** Display name of the shared message's author. */
+  author_name: z.string().optional(),
+  /** Channel the shared message came from; absent when Slack omits it. */
+  channel_name: z.string().optional(),
+  /** Id of the channel the shared message came from. */
+  channel_id: z.string().optional(),
+  /** Slack ts of the shared message, i.e. its identity within the channel. */
+  ts: z.string().optional(),
+  /** Permalink of the shared message. */
+  from_url: z.string().optional(),
+  /** Files the shared message carried, Slack-hosted like any message file. */
+  files: z.array(slackMessageFileSchema).optional(),
+});
+
+export type SlackMessageAttachment = z.infer<typeof slackMessageAttachmentSchema>;
+
+/**
+ * Fetch the files and attachments on a single message.
+ *
+ * `app_mention` events don't include the message's `files` array — and may omit
+ * `attachments` too — so when an event arrives without them we recover them
+ * from conversation history. Pass `threadTs` when the message is a thread
+ * reply; otherwise the top-level message at `ts` is fetched. Returns the
+ * failure arm on API errors so callers can distinguish "the message has none"
+ * from "the lookup failed".
+ */
+export async function getMessageDetails(
   token: string,
   channelId: string,
   ts: string,
   threadTs?: string
-): Promise<SlackEnvelope<{ files: SlackMessageFile[] }>> {
+): Promise<SlackEnvelope<{ files: SlackMessageFile[]; attachments: SlackMessageAttachment[] }>> {
   // Single-message fetch. The two endpoints sort differently, so the window
   // anchor differs: conversations.history returns newest-first, so
   // `latest=<ts>&inclusive=true&limit=1` yields the target; conversations.replies
@@ -431,7 +493,13 @@ export async function getMessageFiles(
   // latest to the same ts — an equal pair is a zero-width window that Slack
   // returns empty for. `limit=2` on replies tolerates the thread root being
   // included alongside the target; the find-by-ts below is the source of truth.
-  type HistoryResult = { messages?: Array<{ ts?: string; files?: SlackMessageFile[] }> };
+  type HistoryResult = {
+    messages?: Array<{
+      ts?: string;
+      files?: SlackMessageFile[];
+      attachments?: SlackMessageAttachment[];
+    }>;
+  };
   const res =
     threadTs && threadTs !== ts
       ? await slackGet<HistoryResult>(token, "conversations.replies", {
@@ -449,7 +517,7 @@ export async function getMessageFiles(
         });
   if (!res.ok) return res;
   const message = res.messages?.find((m) => m.ts === ts);
-  return { ok: true, files: message?.files ?? [] };
+  return { ok: true, files: message?.files ?? [], attachments: message?.attachments ?? [] };
 }
 
 export interface SlackUser {

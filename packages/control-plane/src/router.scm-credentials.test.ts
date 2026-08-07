@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { handleRequest } from "./router";
+import { handleRequest, isScmAgnosticRoute } from "./router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
 
 function createEnv() {
@@ -38,13 +38,43 @@ function createEnv() {
 }
 
 describe("SCM credentials router provider gate", () => {
+  it.each(["openai-token-refresh", "xai-token-refresh"])(
+    "rejects service authentication for the %s broker",
+    async (endpoint) => {
+      const { env } = createEnv();
+      const response = await handleRequest(
+        await signedServiceRequest(`https://test.local/sessions/session-1/${endpoint}`, {
+          method: "POST",
+        }),
+        env as never
+      );
+
+      expect(response.status).toBe(401);
+    }
+  );
+
+  it("allows a matching sandbox token to reach the xAI broker", async () => {
+    const { env, fetch } = createEnv();
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/session-1/xai-token-refresh", {
+        method: "POST",
+        headers: { Authorization: "Bearer sandbox-token" },
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(202);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(new URL(fetch.mock.calls[1][0].url).pathname).toBe("/internal/xai-token-refresh");
+  });
+
   it("allows GitLab deployments to reach the SCM credential broker", async () => {
     const { env, fetch } = createEnv();
 
     const response = await handleRequest(
       await signedServiceRequest("https://test.local/sessions/session-1/scm-credentials", {
         method: "POST",
-        service: "modal",
+        service: "linear-bot",
       }),
       env as never
     );
@@ -60,7 +90,7 @@ describe("SCM credentials router provider gate", () => {
 
     const response = await handleRequest(
       await signedServiceRequest("https://test.local/sessions/session-1/tunnel-urls", {
-        service: "modal",
+        service: "linear-bot",
       }),
       env as never
     );
@@ -69,6 +99,11 @@ describe("SCM credentials router provider gate", () => {
     expect(fetch).toHaveBeenCalledOnce();
     const request = fetch.mock.calls[0][0];
     expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
+  });
+
+  it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
+    expect(isScmAgnosticRoute("GET", "/scm-settings")).toBe(true);
+    expect(isScmAgnosticRoute("GET", "/scm-settings/repos")).toBe(true);
   });
 
   it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
@@ -105,7 +140,7 @@ describe("SCM credentials router provider gate", () => {
     const response = await handleRequest(
       await signedServiceRequest("https://test.local/sessions/session-1/pr", {
         method: "POST",
-        service: "modal",
+        service: "linear-bot",
       }),
       env as never
     );
@@ -115,5 +150,9 @@ describe("SCM credentials router provider gate", () => {
       error: "SCM provider 'gitlab' is not implemented in this deployment.",
     });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("allows GitLab deployments to reach the SCM-independent read-state route", async () => {
+    expect(isScmAgnosticRoute("PATCH", "/sessions/session-1/read-state")).toBe(true);
   });
 });

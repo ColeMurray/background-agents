@@ -54,6 +54,7 @@ export class SessionEventStream {
         kind: "timeline",
         createdAt: input.cursor.timestamp,
         id: input.cursor.id,
+        sequence: input.cursor.sequence,
       },
       excludeTypes: HISTORY_EXCLUDED_TYPES,
       limit: clampHistoryLimit(input.limit),
@@ -63,7 +64,13 @@ export class SessionEventStream {
       items: parseSandboxEvents(page.events),
       hasMore: page.hasMore,
       cursor: page.nextCursor
-        ? { timestamp: page.nextCursor.createdAt, id: page.nextCursor.id }
+        ? {
+            timestamp: page.nextCursor.createdAt,
+            id: page.nextCursor.id,
+            ...(page.nextCursor.sequence === undefined
+              ? {}
+              : { sequence: page.nextCursor.sequence }),
+          }
         : null,
     };
   }
@@ -96,8 +103,14 @@ function parseSandboxEvents(rows: EventRow[]): SandboxEvent[] {
   return events;
 }
 
-function cursorFromRow(row: Pick<EventRow, "created_at" | "id">): EventStreamCursor {
-  return { timestamp: row.created_at, id: row.id };
+function cursorFromRow(
+  row: Pick<EventRow, "created_at" | "id" | "timeline_sequence">
+): EventStreamCursor {
+  return {
+    timestamp: row.created_at,
+    id: row.id,
+    ...(row.timeline_sequence === undefined ? {} : { sequence: row.timeline_sequence }),
+  };
 }
 
 function toEventResponse(event: EventRow): EventResponse {

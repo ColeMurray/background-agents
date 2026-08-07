@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedEvents } from "./helpers";
-import type { SpawnContext, ChildSessionDetail } from "@open-inspect/shared";
+import type { ChildSessionDetail } from "@open-inspect/shared";
+import type { SpawnContext } from "../../src/session/spawn-context";
 
 const originalFetch = globalThis.fetch;
 
@@ -67,6 +68,7 @@ describe("DO internal sub-session routes", () => {
         userId: "user-1",
         scmLogin: "acmedev",
         model: "anthropic/claude-sonnet-4-6",
+        sandboxSettings: { sandboxTimeoutMs: 14_400_000 },
       });
 
       const res = await stub.fetch("http://internal/internal/spawn-context");
@@ -79,6 +81,7 @@ describe("DO internal sub-session routes", () => {
       expect(context.repoId).toBe(12345);
       expect(context.model).toBe("anthropic/claude-sonnet-4-6");
       expect(context.reasoningEffort).toBeNull();
+      expect(context.sandboxTimeoutMs).toBe(14_400_000);
 
       // Owner fields
       expect(context.owner).toBeDefined();

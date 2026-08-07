@@ -1,5 +1,4 @@
-import type { SignInProvider } from "../sign-in-provider";
-import type { ProviderCredentialInput } from "../provider-credential";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 
 export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvider> {
   readonly provider: P;
@@ -11,19 +10,6 @@ export interface VerifiedProviderIdentity<P extends SignInProvider = SignInProvi
   readonly verifiedEmails: readonly string[];
   readonly primaryEmail: string | null;
 }
-
-interface ProviderSignInResultByProvider {
-  readonly github: {
-    readonly identity: VerifiedProviderIdentity<"github">;
-    readonly credential: ProviderCredentialInput;
-  };
-  readonly google: {
-    readonly identity: VerifiedProviderIdentity<"google">;
-    readonly credential: null;
-  };
-}
-
-export type ProviderSignInResult<P extends SignInProvider> = ProviderSignInResultByProvider[P];
 
 export type OAuthProviderFailure =
   | "invalid_configuration"

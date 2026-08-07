@@ -1,6 +1,6 @@
-import { RepositoryPairValidationError } from "@open-inspect/shared";
+import { RepositoryPairValidationError } from "@open-inspect/shared/types/repositories";
 import { describe, expect, it } from "vitest";
-import type { SessionRepositoryRow } from "./repository";
+import type { SessionRepositoryRow } from "./types";
 import {
   AmbiguousRepositoryTargetError,
   buildSessionRepositories,

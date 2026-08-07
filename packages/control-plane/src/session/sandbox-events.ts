@@ -3,7 +3,6 @@ import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "../types";
-import { shouldPersistToolCallEvent } from "./event-persistence";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -12,6 +11,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
+import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -51,7 +51,8 @@ export class SessionSandboxEventProcessor {
     private readonly statusService: SessionStatusService,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
-    private readonly processMessageQueue: () => Promise<void>
+    private readonly processMessageQueue: () => Promise<void>,
+    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
   private get log(): Logger {
@@ -154,14 +155,8 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "tool_call") {
       this.updateLastActivity(now);
-      if (shouldPersistToolCallEvent(event.status)) {
-        this.repository.createEvent({
-          id: generateId(),
-          type: event.type,
-          data: JSON.stringify(event),
-          messageId,
-          createdAt: now,
-        });
+      if (messageId) {
+        this.repository.upsertToolCallEvent(messageId, event, now);
       }
       this.messenger.broadcast({ type: "sandbox_event", event });
 
@@ -192,17 +187,22 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "execution_complete") {
       const completionMessageId = messageId;
-      if (messageId) {
-        this.repository.upsertExecutionCompleteEvent(messageId, event, now);
-      }
       const isStillProcessing =
         completionMessageId != null && processingMessage?.id === completionMessageId;
 
       if (isStillProcessing) {
+        this.repository.upsertExecutionCompleteEvent(completionMessageId, event, now);
         const status = event.success ? "completed" : "failed";
         this.repository.updateMessageCompletion(completionMessageId, status, now);
 
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
+        if (timestamps) {
+          await this.recordTerminalMessage({
+            messageId: completionMessageId,
+            messageCreatedAt: timestamps.created_at,
+            terminalMessageCompletedAt: now,
+          });
+        }
         const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
         const processingDurationMs =
           timestamps?.started_at != null ? now - timestamps.started_at : undefined;

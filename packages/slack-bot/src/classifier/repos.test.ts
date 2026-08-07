@@ -66,6 +66,20 @@ describe("getRoutingRules", () => {
     expect(await getRoutingRules(env)).toEqual([{ keyword: "frontend", target: "acme/web" }]);
   });
 
+  it("fails open when routing rules have a malformed shape", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        settings: {
+          defaults: {
+            routingRules: [{ keyword: "frontend" }],
+          },
+        },
+      })
+    );
+
+    expect(await getRoutingRules(env)).toEqual([]);
+  });
+
   it("fails open to an empty list on a non-OK response", async () => {
     const env = makeEnv(new Response("error", { status: 500 }));
     expect(await getRoutingRules(env)).toEqual([]);
@@ -174,6 +188,35 @@ describe("getAvailableRepos", () => {
     } as unknown as Env;
 
     await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+  });
+
+  it("falls back when the control-plane repository response is malformed", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        repos: [{ owner: "Open-Inspect", name: "Background-Agents" }],
+        cached: false,
+        cachedAt: new Date().toISOString(),
+      })
+    );
+
+    await expect(getAvailableRepos(env, "trace-3")).resolves.toEqual([]);
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed cached repositories on the fallback path", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue([{ id: "acme/web", owner: "acme", private: false }]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    await expect(getAvailableRepos(env, "trace-4")).resolves.toEqual([]);
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
   });
 

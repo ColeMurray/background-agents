@@ -1,16 +1,81 @@
 import { z } from "zod";
 import { sessionArtifactSchema } from "./artifacts";
-import { sandboxEventSchema, tolerantSandboxEventsSchema } from "./sandbox-events";
-import { participantPresenceSchema, sessionStateSchema } from "./sessions";
-import { sandboxStatusSchema, sessionStatusSchema } from "./statuses";
+import { sessionRepositoryStateSchema } from "./repositories";
+import { sandboxEventSchema } from "./sandbox-events";
+import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
+
+/**
+ * Sandbox event arrays for session hydration — both the initial `subscribed`
+ * replay and paginated `history_page` items, which read from the same event
+ * store. Resilient to unknown/legacy event shapes: each event is validated
+ * individually and dropped if it doesn't match, instead of failing the whole
+ * message. A single unrecognized event must never wedge session hydration and
+ * strand the client on "loading session" forever.
+ */
+const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
+  events.flatMap((event) => {
+    const result = sandboxEventSchema.safeParse(event);
+    return result.success ? [result.data] : [];
+  })
+);
+
+const sessionStateSchema = z.object({
+  id: z.string(),
+  title: z.string().nullable(),
+  repoOwner: z.string().nullable(),
+  repoName: z.string().nullable(),
+  baseBranch: z.string().nullable(),
+  branchName: z.string().nullable(),
+  status: sessionStatusSchema,
+  sandboxStatus: sandboxStatusSchema,
+  messageCount: z.number(),
+  createdAt: z.number(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  isProcessing: z.boolean().optional(),
+  parentSessionId: z.string().nullable().optional(),
+  totalCost: z.number().optional(),
+  codeServerUrl: z.string().nullable().optional(),
+  codeServerPassword: z.string().nullable().optional(),
+  tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
+  ttydUrl: z.string().nullable().optional(),
+  ttydToken: z.string().nullable().optional(),
+  sandboxDashboardUrl: z.string().nullable().optional(),
+  /**
+   * Ordered repository list; [0] = primary. Optional so pre-feature servers
+   * and producers stay valid — consumers default to [] (absent means a
+   * scalar-era session; synthesize from repoOwner/repoName when rendering).
+   */
+  repositories: z.array(sessionRepositoryStateSchema).optional(),
+  // Environment provenance (design §7.6). environmentName resolves live —
+  // null when the environment was deleted after launch.
+  environmentId: z.string().nullable().optional(),
+  environmentName: z.string().nullable().optional(),
+});
+export type SessionState = z.infer<typeof sessionStateSchema>;
+
+const participantPresenceSchema = z.object({
+  participantId: z.string(),
+  userId: z.string(),
+  name: z.string(),
+  avatar: z.string().optional(),
+  status: z.enum(["active", "idle", "away"]),
+  lastSeen: z.number(),
+});
+export type ParticipantPresence = z.infer<typeof participantPresenceSchema>;
 
 const participantSummarySchema = z.object({
   participantId: z.string(),
+  userId: z.string().optional(),
   name: z.string(),
   avatar: z.string().optional(),
 });
 
-const historyCursorSchema = z.object({ timestamp: z.number(), id: z.string() });
+const historyCursorSchema = z.object({
+  timestamp: z.number(),
+  id: z.string(),
+  sequence: z.number().int().nonnegative().optional(),
+});
 
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),

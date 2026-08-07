@@ -1,4 +1,4 @@
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
 

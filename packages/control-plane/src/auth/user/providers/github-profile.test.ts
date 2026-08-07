@@ -42,13 +42,7 @@ describe("GitHubSignInProfileResolver", () => {
         verifiedEmails: ["secondary@example.com", "primary@example.com"],
         primaryEmail: "primary@example.com",
       },
-      credential: {
-        kind: "refreshable",
-        accessToken: "github-access-token",
-        accessExpiresAt: accessTokenExpiresAt.getTime(),
-        refreshToken: "github-refresh-token",
-        refreshExpiresAt: refreshTokenExpiresAt.getTime(),
-      },
+      accessToken: "github-access-token",
     });
     expect(result.user).toEqual({
       id: "583231",

@@ -8,7 +8,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { AnalyticsTimeseriesResponse } from "@open-inspect/shared";
+import type { AnalyticsTimeseriesResponse } from "@open-inspect/shared/types/analytics";
 import { Badge } from "@/components/ui/badge";
 import {
   buildTimeseriesChartData,

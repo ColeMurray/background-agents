@@ -1,35 +1,16 @@
-import type { SlackMessageFile } from "@open-inspect/shared";
 import { publishAppHome } from "../app-home";
 import { handleChannelTrigger } from "../channel-trigger";
 import { isDmDispatchable } from "../dm-utils";
 import type { BackgroundTaskScheduler } from "../messages/blocks";
 import type { Env } from "../types";
 import { handleAppMention, handleDirectMessage } from "./message-handler";
+import type { SlackEventPayload } from "./payload";
 
-export interface SlackEventPayload {
-  type: string;
-  event?: {
-    type: string;
-    text?: string;
-    user?: string;
-    channel?: string;
-    ts?: string;
-    thread_ts?: string;
-    bot_id?: string;
-    tab?: string;
-    channel_type?: string;
-    subtype?: string;
-    files?: SlackMessageFile[];
-    attachments?: Array<{
-      text?: string;
-      pretext?: string;
-      author_name?: string;
-      from_url?: string;
-      channel_name?: string;
-      footer?: string;
-    }>;
-  };
-}
+/**
+ * Re-exported so existing importers keep a single dispatcher-facing name; the
+ * type is inferred from `slackEventPayloadSchema` in `./payload`.
+ */
+export type { SlackEventPayload };
 
 export async function handleSlackEvent(
   payload: SlackEventPayload,
@@ -56,6 +37,7 @@ export async function handleSlackEvent(
         thread_ts: event.thread_ts,
         channel_type: event.channel_type,
         files: event.files,
+        attachments: event.attachments,
       },
       env,
       traceId,
@@ -73,6 +55,7 @@ export async function handleSlackEvent(
         ts: event.ts,
         thread_ts: event.thread_ts,
         files: event.files,
+        attachments: event.attachments,
       },
       env,
       traceId,

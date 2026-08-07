@@ -22,6 +22,51 @@ describe("GitLabSourceControlProvider", () => {
     vi.resetAllMocks();
   });
 
+  describe("getBranchHead", () => {
+    it("preserves nested namespaces and resolves slash-containing branches", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: { id: "def456" } }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      await expect(
+        provider.getBranchHead({
+          owner: "acme/platform",
+          name: "web",
+          branch: "feature/test",
+        })
+      ).resolves.toBe("def456");
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/projects/acme%2Fplatform%2Fweb/repository/branches/feature%2Ftest"
+        ),
+        expect.any(Object)
+      );
+    });
+
+    it("returns null for a confirmed missing branch", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({}, 404));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
+      ).resolves.toBeNull();
+    });
+
+    it("rejects malformed branch responses", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: {} }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      const err = await provider
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to resolve branch head: unexpected response shape (commit.id)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
+  });
+
   it("throws a permanent provider error when the access token is blank", () => {
     const createProvider = () => new GitLabSourceControlProvider({ accessToken: "   " });
 

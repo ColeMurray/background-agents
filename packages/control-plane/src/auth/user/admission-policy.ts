@@ -1,10 +1,18 @@
 import { z } from "zod";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import { DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS } from "./providers/constants";
-import type { ProviderSignInResult } from "./providers/types";
+import type { VerifiedProviderIdentity } from "./providers/types";
 
-export type VerifiedProviderSignIn =
-  | ProviderSignInResult<"github">
-  | ProviderSignInResult<"google">;
+export interface GitHubAdmissionEvidence {
+  readonly identity: VerifiedProviderIdentity<"github">;
+  readonly accessToken: string;
+}
+
+export interface GoogleAdmissionEvidence {
+  readonly identity: VerifiedProviderIdentity<"google">;
+}
+
+export type VerifiedProviderSignIn = GitHubAdmissionEvidence | GoogleAdmissionEvidence;
 
 export interface AdmissionPolicyConfig {
   readonly allowedGitHubUsers: readonly string[];
@@ -61,7 +69,7 @@ function emailDomain(email: string): string | null {
   return email.slice(separator + 1).toLowerCase();
 }
 
-function isGitHubSignIn(signIn: VerifiedProviderSignIn): signIn is ProviderSignInResult<"github"> {
+function isGitHubSignIn(signIn: VerifiedProviderSignIn): signIn is GitHubAdmissionEvidence {
   return signIn.identity.provider === "github";
 }
 
@@ -78,6 +86,22 @@ export class AdmissionPolicy {
       unsafeAllowAllUsers: config.unsafeAllowAllUsers,
     };
     this.fetcher = dependencies.fetcher ?? globalThis.fetch.bind(globalThis);
+  }
+
+  supportsSignInProvider(provider: SignInProvider): boolean {
+    const hasProviderNeutralAdmission =
+      this.config.allowedEmails.length > 0 || this.config.allowedEmailDomains.length > 0;
+    const hasGitHubAdmission =
+      this.config.allowedGitHubUsers.length > 0 ||
+      this.config.allowedGitHubOrganizations.length > 0;
+    const hasConfiguredAllowlist = hasProviderNeutralAdmission || hasGitHubAdmission;
+
+    if (!hasConfiguredAllowlist && this.config.unsafeAllowAllUsers) return true;
+    const providerSupport: Readonly<Record<SignInProvider, boolean>> = {
+      github: hasProviderNeutralAdmission || hasGitHubAdmission,
+      google: hasProviderNeutralAdmission,
+    };
+    return providerSupport[provider];
   }
 
   async requireAdmission(signIn: VerifiedProviderSignIn): Promise<AdmissionDecision> {
@@ -118,9 +142,9 @@ export class AdmissionPolicy {
   }
 
   private async requireGitHubOrganization(
-    signIn: ProviderSignInResult<"github">
+    signIn: GitHubAdmissionEvidence
   ): Promise<AdmissionDecision> {
-    const accessToken = signIn.credential.accessToken;
+    const accessToken = signIn.accessToken;
     let unavailable = false;
 
     for (const organization of this.config.allowedGitHubOrganizations) {
