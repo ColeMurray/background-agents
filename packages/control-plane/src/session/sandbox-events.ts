@@ -7,11 +7,10 @@ import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
+import type { SessionExecutionCompletion } from "./execution-completion";
 import type { SessionMessenger } from "./messenger";
-import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
-import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -48,11 +47,10 @@ export class SessionSandboxEventProcessor {
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
     private readonly triggerSnapshot: (reason: string) => Promise<void>,
-    private readonly statusService: SessionStatusService,
+    private readonly executionCompletion: SessionExecutionCompletion,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
-    private readonly processMessageQueue: () => Promise<void>,
-    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
+    private readonly processMessageQueue: () => Promise<void>
   ) {}
 
   private get log(): Logger {
@@ -187,57 +185,12 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "execution_complete") {
       const completionMessageId = messageId;
-      const isStillProcessing =
-        completionMessageId != null && processingMessage?.id === completionMessageId;
-
-      if (isStillProcessing) {
-        this.repository.upsertExecutionCompleteEvent(completionMessageId, event, now);
-        const status = event.success ? "completed" : "failed";
-        this.repository.updateMessageCompletion(completionMessageId, status, now);
-
-        const timestamps = this.repository.getMessageTimestamps(completionMessageId);
-        if (timestamps) {
-          await this.recordTerminalMessage({
-            messageId: completionMessageId,
-            messageCreatedAt: timestamps.created_at,
-            terminalMessageCompletedAt: now,
-          });
-        }
-        const totalDurationMs = timestamps ? now - timestamps.created_at : undefined;
-        const processingDurationMs =
-          timestamps?.started_at != null ? now - timestamps.started_at : undefined;
-        const queueDurationMs =
-          timestamps?.started_at != null
-            ? timestamps.started_at - timestamps.created_at
-            : undefined;
-
-        this.log.info("prompt.complete", {
-          event: "prompt.complete",
-          message_id: completionMessageId,
-          outcome: event.success ? "success" : "failure",
-          message_status: status,
-          total_duration_ms: totalDurationMs,
-          processing_duration_ms: processingDurationMs,
-          queue_duration_ms: queueDurationMs,
-        });
-
-        this.messenger.broadcast({ type: "sandbox_event", event });
-        this.messenger.broadcast({
-          type: "processing_status",
-          isProcessing: this.repository.getProcessingMessage() !== null,
-        });
-        this.ctx.waitUntil(
-          this.callbackService.notifyComplete(completionMessageId, event.success, event.error)
-        );
-
-        await this.statusService.reconcileAfterExecution(event.success);
-      } else {
-        this.log.info("prompt.complete", {
-          event: "prompt.complete",
-          message_id: completionMessageId,
-          outcome: "already_stopped",
-        });
-      }
+      await this.executionCompletion.completeFromSandbox(
+        event,
+        completionMessageId,
+        processingMessage?.id ?? null,
+        now
+      );
 
       this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
       this.updateLastActivity(now);

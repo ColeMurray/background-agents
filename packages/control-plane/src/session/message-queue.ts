@@ -30,7 +30,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
-import type { TerminalMessageProjectionInput } from "./terminal-message-projection";
+import type { SessionExecutionCompletion, StopExecutionOptions } from "./execution-completion";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -42,10 +42,6 @@ interface PromptMessageData {
   model?: string;
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
-}
-
-interface StopExecutionOptions {
-  suppressStatusReconcile?: boolean;
 }
 
 interface EnqueuePromptCoreData {
@@ -95,12 +91,12 @@ export class SessionMessageQueue {
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
+    private readonly executionCompletion: SessionExecutionCompletion,
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
     private readonly alarmScheduler: AlarmScheduler,
-    private readonly executionTimeoutMs: number,
-    private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
+    private readonly executionTimeoutMs: number
   ) {}
 
   async handlePromptMessage(
@@ -266,51 +262,7 @@ export class SessionMessageQueue {
   }
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
-    const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
-
-    if (processingMessage) {
-      this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
-      this.log.info("prompt.stopped", {
-        event: "prompt.stopped",
-        message_id: processingMessage.id,
-      });
-
-      const stopError = "Execution was stopped";
-      const syntheticExecutionComplete: Extract<SandboxEvent, { type: "execution_complete" }> = {
-        type: "execution_complete",
-        messageId: processingMessage.id,
-        success: false,
-        error: stopError,
-        sandboxId: "",
-        timestamp: now / 1000,
-      };
-      this.repository.upsertExecutionCompleteEvent(
-        processingMessage.id,
-        syntheticExecutionComplete,
-        now
-      );
-      this.ctx.waitUntil(
-        this.recordTerminalMessage({
-          messageId: processingMessage.id,
-          messageCreatedAt: processingMessage.created_at,
-          terminalMessageCompletedAt: now,
-        })
-      );
-
-      this.messenger.broadcast({
-        type: "sandbox_event",
-        event: syntheticExecutionComplete,
-      });
-
-      this.ctx.waitUntil(
-        this.callbackService.notifyComplete(processingMessage.id, false, stopError)
-      );
-
-      if (!options.suppressStatusReconcile) {
-        await this.sessionStatus.reconcileAfterExecution(false);
-      }
-    }
+    await this.executionCompletion.stopProcessingMessage(options);
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 
@@ -328,35 +280,7 @@ export class SessionMessageQueue {
    * prompt could be dispatched to a sandbox being shut down.
    */
   async failStuckProcessingMessage(): Promise<void> {
-    const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
-    if (!processingMessage) return;
-
-    this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
-
-    const stuckError = "Execution timed out (stuck processing)";
-    const syntheticEvent: Extract<SandboxEvent, { type: "execution_complete" }> = {
-      type: "execution_complete",
-      messageId: processingMessage.id,
-      success: false,
-      error: stuckError,
-      sandboxId: "",
-      timestamp: now / 1000,
-    };
-    this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
-    this.ctx.waitUntil(
-      this.recordTerminalMessage({
-        messageId: processingMessage.id,
-        messageCreatedAt: processingMessage.created_at,
-        terminalMessageCompletedAt: now,
-      })
-    );
-    this.messenger.broadcast({ type: "sandbox_event", event: syntheticEvent });
-    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-    this.ctx.waitUntil(
-      this.callbackService.notifyComplete(processingMessage.id, false, stuckError)
-    );
-    await this.sessionStatus.reconcileAfterExecution(false);
+    await this.executionCompletion.failStuckProcessingMessage();
   }
 
   writeUserMessageEvent(
