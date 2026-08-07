@@ -23,6 +23,22 @@ export const SESSION_ATTACHMENT_UPLOAD_TIMEOUT_MS = 60_000;
 const ATTACHMENTS_CHANGED_DURING_UPLOAD = "Attachments changed during upload; please retry";
 const ATTACHMENT_UPLOAD_TIMED_OUT = "Attachment upload timed out; please retry";
 
+function parseUploadErrorMessage(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || !("error" in value)) {
+    return null;
+  }
+  const error = value.error;
+  return typeof error === "string" && error.length > 0 ? error : null;
+}
+
+function parseAttachmentUploadResponse(value: unknown): { attachmentId: string } | null {
+  if (typeof value !== "object" || value === null || !("attachmentId" in value)) {
+    return null;
+  }
+  const attachmentId = value.attachmentId;
+  return typeof attachmentId === "string" && attachmentId.length > 0 ? { attachmentId } : null;
+}
+
 function isSupportedImage(file: File): boolean {
   return IMAGE_MIME_TYPES.has(file.type);
 }
@@ -194,15 +210,18 @@ export function useSessionAttachments() {
           }
           assertCurrent();
           if (!response.ok) {
-            const data = (await response.json().catch(() => null)) as { error?: string } | null;
-            throw new Error(data?.error || `Failed to upload ${fileName}`);
+            const message = parseUploadErrorMessage(await response.json().catch(() => null));
+            throw new Error(message || `Failed to upload ${fileName}`);
           }
-          const { attachmentId } = (await response.json()) as {
-            attachmentId: string;
-          };
+          const uploadResult = parseAttachmentUploadResponse(
+            await response.json().catch(() => null)
+          );
+          if (!uploadResult) {
+            throw new Error(`Failed to upload ${fileName}`);
+          }
           const attachment: SessionAttachmentReference = {
             name: fileName || "image-attachment",
-            attachmentId,
+            attachmentId: uploadResult.attachmentId,
           };
           uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
           uploaded.push(attachment);
