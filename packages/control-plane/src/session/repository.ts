@@ -16,16 +16,15 @@ import type {
   SessionRepositoryRow,
 } from "./types";
 import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
   ArtifactType,
-  SandboxEvent,
 } from "../types";
 import {
   eventTimelineCursorFromRow,
