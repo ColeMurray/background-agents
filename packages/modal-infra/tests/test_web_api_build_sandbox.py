@@ -330,6 +330,7 @@ async def test_create_clamps_build_execution_timeout_independently(monkeypatch):
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
             "repositories": REPOSITORIES,
+            **CALLBACK_CONTEXT,
             "build_execution_timeout_seconds": 99999,
             "build_timeout_seconds": 1,
         },
