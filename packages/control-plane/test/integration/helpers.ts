@@ -339,7 +339,14 @@ export function collectMessages(
  */
 export async function openClientWs(
   sessionName: string,
-  opts?: { subscribe?: boolean; userId?: string; canonicalUserId?: string }
+  opts?: {
+    subscribe?: boolean;
+    userId?: string;
+    canonicalUserId?: string;
+    viewProtocol?: 2;
+    resumeRevision?: number;
+    forceSnapshot?: boolean;
+  }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
@@ -373,7 +380,8 @@ export async function openClientWs(
   // The subscribed message now includes batched replay data, so we terminate on it
   // (presence_sync follows but is not needed for most tests).
   const collector = collectMessages(ws, {
-    until: (msg) => msg.type === "subscribed",
+    until: (msg) =>
+      opts.viewProtocol === 2 ? msg.type === "session_ready" : msg.type === "subscribed",
   });
 
   ws.send(
@@ -381,6 +389,9 @@ export async function openClientWs(
       type: "subscribe",
       token,
       clientId: `test-client-${Date.now()}`,
+      viewProtocol: opts.viewProtocol,
+      resumeRevision: opts.resumeRevision,
+      forceSnapshot: opts.forceSnapshot,
     })
   );
 

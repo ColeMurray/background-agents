@@ -30,7 +30,7 @@ type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 export interface SandboxHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
+    "createParticipant" | "createArtifactAndEventWithViewDelta" | "getProcessingMessage"
   >;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
@@ -117,14 +117,6 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         updatedAt: now,
       };
 
-      deps.repository.createArtifact({
-        id: artifact.id,
-        type: artifact.type,
-        url: artifact.url,
-        metadata: artifact.metadata ? JSON.stringify(artifact.metadata) : null,
-        createdAt: now,
-      });
-
       const event: Extract<SandboxEvent, { type: "artifact" }> = {
         type: "artifact",
         artifactType: artifact.type,
@@ -136,13 +128,22 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         timestamp: timestampSeconds,
       };
 
-      deps.repository.createEvent({
-        id: deps.generateId(),
-        type: event.type,
-        data: JSON.stringify(event),
-        messageId: processingMessage.id,
-        createdAt: now,
-      });
+      deps.repository.createArtifactAndEventWithViewDelta(
+        {
+          id: artifact.id,
+          type: artifact.type,
+          url: artifact.url,
+          metadata: artifact.metadata ? JSON.stringify(artifact.metadata) : null,
+          createdAt: now,
+        },
+        {
+          id: deps.generateId(),
+          type: event.type,
+          data: JSON.stringify(event),
+          messageId: processingMessage.id,
+          createdAt: now,
+        }
+      );
 
       deps.messenger.broadcast({ type: "artifact_created", artifact });
       deps.messenger.broadcast({ type: "sandbox_event", event });

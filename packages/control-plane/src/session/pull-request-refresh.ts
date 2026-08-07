@@ -26,6 +26,7 @@ export interface PullRequestRefreshRepository {
   listArtifacts(): ArtifactRow[];
   getArtifactById(artifactId: string): ArtifactRow | null;
   updateArtifact(artifactId: string, data: UpdateArtifactData): void;
+  updateArtifactWithViewDelta?(artifactId: string, data: UpdateArtifactData): number;
 }
 
 /** A per-artifact problem from a refresh pass; the caller decides logging. */
@@ -160,7 +161,11 @@ export async function refreshSessionPullRequests(
     const artifactUpdate = preparePullRequestArtifactUpdate(currentArtifact, snapshot, Date.now());
     if (!artifactUpdate) continue;
 
-    repository.updateArtifact(currentArtifact.id, artifactUpdate.update);
+    if (repository.updateArtifactWithViewDelta) {
+      repository.updateArtifactWithViewDelta(currentArtifact.id, artifactUpdate.update);
+    } else {
+      repository.updateArtifact(currentArtifact.id, artifactUpdate.update);
+    }
     updated.push(artifactUpdate.artifact);
   }
 

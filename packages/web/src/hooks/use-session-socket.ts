@@ -3,18 +3,23 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
+import { useSessionAccess } from "@/hooks/use-session-access";
 import {
   ingestLiveSandboxEvent,
   pendingToTokenEvent,
   toUiSandboxEvent,
   type PendingAssistantText,
 } from "@/lib/session-socket/event-log";
-import { initialSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
+import {
+  createSessionSocketState,
+  initialSessionSocketState,
+  sessionSocketReducer,
+} from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type { ServerMessage, SessionBootstrap } from "@open-inspect/shared/types/server-messages";
 
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
@@ -35,6 +40,7 @@ const NO_MESSAGES: Message[] = [];
 interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
+  ready: boolean;
   replaying: boolean;
   authError: string | null;
   connectionError: string | null;
@@ -68,9 +74,16 @@ interface UseSessionSocketReturn {
  * - SWR revalidation: `lib/session-socket/swr-revalidation` (applied below,
  *   the only place this hook touches the cache)
  */
-export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
-  const [state, dispatch] = useReducer(sessionSocketReducer, initialSessionSocketState);
+export function useSessionSocket(
+  sessionId: string,
+  initialBootstrap?: SessionBootstrap
+): UseSessionSocketReturn {
+  const [state, dispatch] = useReducer(sessionSocketReducer, initialBootstrap, (bootstrap) =>
+    bootstrap ? createSessionSocketState(bootstrap) : initialSessionSocketState
+  );
   const subscribedRef = useRef(false);
+  const revisionRef = useRef(initialBootstrap?.viewRevision ?? null);
+  const handledRecoveryNonceRef = useRef(0);
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
@@ -79,6 +92,17 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     resolve: (accepted: boolean) => void;
     timeout: ReturnType<typeof setTimeout>;
   } | null>(null);
+  const { access, clear: clearAccess, refetch: refetchAccess } = useSessionAccess(sessionId);
+
+  useEffect(() => {
+    revisionRef.current = state.lastAppliedRevision;
+  }, [state.lastAppliedRevision]);
+
+  useEffect(() => {
+    if (access !== undefined) {
+      dispatch({ type: "access_loaded", access });
+    }
+  }, [access]);
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -96,6 +120,11 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     pending.resolve(accepted);
   }, []);
 
+  useEffect(() => {
+    subscribedRef.current = state.ready;
+    if (state.ready) settleSubscriptionWaiters(true);
+  }, [state.ready, settleSubscriptionWaiters]);
+
   const handleMessage = useCallback(
     (message: ServerMessage) => {
       if (message.type === "sandbox_event") {
@@ -112,12 +141,24 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
       if (message.type === "subscribed") {
         console.log("WebSocket subscribed to session");
-        subscribedRef.current = true;
-        settleSubscriptionWaiters(true);
         pendingTextRef.current = null;
         if (message.spawnError && message.state.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
         }
+      } else if (message.type === "session_ready") {
+        revisionRef.current = message.appliedRevision;
+        void refetchAccess();
+      } else if (message.type === "session_sync_started") {
+        subscribedRef.current = false;
+      } else if (message.type === "session_delta") {
+        if (revisionRef.current !== null && message.revision === revisionRef.current + 1) {
+          revisionRef.current = message.revision;
+        }
+      } else if (message.type === "session_snapshot") {
+        revisionRef.current = message.bootstrap.viewRevision;
+      } else if (message.type === "session_access_changed") {
+        dispatch({ type: "access_loaded", access: null });
+        void clearAccess().then(() => refetchAccess());
       } else if (message.type === "sandbox_error") {
         console.error("Sandbox error:", message.error);
       } else if (message.type === "error") {
@@ -127,12 +168,26 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
         settlePendingPrompt(true);
       }
 
+      const clearsAccess =
+        message.type === "sandbox_spawning" ||
+        message.type === "sandbox_error" ||
+        (message.type === "sandbox_status" &&
+          ["spawning", "stale", "stopped", "failed"].includes(message.status)) ||
+        (message.type === "session_delta" &&
+          message.delta.operations.some(
+            (operation) =>
+              operation.type === "state_patch" &&
+              operation.patch.sandboxStatus !== undefined &&
+              ["spawning", "stale", "stopped", "failed"].includes(operation.patch.sandboxStatus)
+          ));
+      if (clearsAccess) void clearAccess();
+
       dispatch({ type: "server_message", message });
       for (const key of swrKeysToRevalidate(message, sessionId)) {
         mutate(key);
       }
     },
-    [sessionId, settlePendingPrompt, settleSubscriptionWaiters]
+    [clearAccess, refetchAccess, sessionId, settlePendingPrompt]
   );
 
   const handleClose = useCallback(() => {
@@ -145,8 +200,19 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   const transport = useSessionTransport(sessionId, {
     onMessage: handleMessage,
     onClose: handleClose,
+    getResumeRevision: () => revisionRef.current,
+    onProtocolError: () => dispatch({ type: "protocol_error" }),
   });
-  const { isOpen, send } = transport;
+  const { isOpen, send, reconnect } = transport;
+
+  useEffect(() => {
+    if (state.recoveryNonce === handledRecoveryNonceRef.current) return;
+    handledRecoveryNonceRef.current = state.recoveryNonce;
+    subscribedRef.current = false;
+    settleSubscriptionWaiters(false);
+    settlePendingPrompt(false);
+    reconnect(true);
+  }, [state.recoveryNonce, reconnect, settlePendingPrompt, settleSubscriptionWaiters]);
 
   useEffect(
     () => () => {
@@ -231,7 +297,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   );
 
   const stopExecution = useCallback(() => {
-    if (!isOpen()) {
+    if (!isOpen() || !subscribedRef.current) {
       return;
     }
     // Preserve partial content when stopping
@@ -244,7 +310,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   }, [isOpen, send]);
 
   const sendTyping = useCallback(() => {
-    if (!isOpen()) {
+    if (!isOpen() || !subscribedRef.current) {
       return;
     }
     send({ type: "typing" });
@@ -252,7 +318,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
 
   const { hasMoreHistory, loadingHistory, cursor } = state;
   const loadOlderEvents = useCallback(() => {
-    if (!isOpen()) return;
+    if (!isOpen() || !subscribedRef.current) return;
     if (!hasMoreHistory || loadingHistory || !cursor) return;
     dispatch({ type: "history_requested" });
     send({
@@ -267,6 +333,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
   return {
     connected: transport.connected,
     connecting: transport.connecting,
+    ready: state.ready,
     replaying: state.replaying,
     authError: transport.authError,
     connectionError: transport.connectionError,
@@ -282,7 +349,7 @@ export function useSessionSocket(sessionId: string): UseSessionSocketReturn {
     sendPrompt,
     stopExecution,
     sendTyping,
-    reconnect: transport.reconnect,
+    reconnect,
     loadOlderEvents,
   };
 }

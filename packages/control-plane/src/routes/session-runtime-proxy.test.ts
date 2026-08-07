@@ -42,6 +42,49 @@ function getHandler(method: string, path: string) {
 }
 
 describe("session runtime proxy routes", () => {
+  it("forwards bootstrap to the atomic internal endpoint", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ sessionId: "session-1" });
+    });
+    const { handler, match } = getHandler("GET", "/sessions/session-1/bootstrap");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/bootstrap"),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.bootstrap);
+  });
+
+  it("keeps session access client-only", async () => {
+    const fetch = vi.fn(async () => Response.json({ codeServer: null, ttyd: null }));
+    const { handler, match } = getHandler("GET", "/sessions/session-1/access");
+    const serviceCtx = createCtx();
+    serviceCtx.principal = { kind: "service", service: "web", actor: null };
+
+    const rejected = await handler(
+      new Request("https://test.local/sessions/session-1/access"),
+      createEnv(fetch),
+      match,
+      serviceCtx
+    );
+    expect(rejected.status).toBe(403);
+    expect(fetch).not.toHaveBeenCalled();
+
+    const accepted = await handler(
+      new Request("https://test.local/sessions/session-1/access"),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+    expect(accepted.status).toBe(200);
+  });
+
   it("forwards event query strings through the session runtime dependency", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {

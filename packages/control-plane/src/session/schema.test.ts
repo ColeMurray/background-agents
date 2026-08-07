@@ -256,6 +256,20 @@ describe("applyMigrations", () => {
     expect(migration?.run).toContain("VALUES (1, 0)");
   });
 
+  it("persists the negotiated view protocol for fresh and migrated sockets", () => {
+    expect(SCHEMA_SQL).toContain("view_protocol INTEGER NOT NULL DEFAULT 1");
+    expect(SCHEMA_SQL).toContain("applied_view_revision INTEGER NOT NULL DEFAULT 0");
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 40);
+    expect(typeof migration?.run).toBe("function");
+    const mock = createMockSql();
+    (migration!.run as (sql: SqlStorage) => void)(mock.sql);
+    expect(mock.calls.some((call) => call.query.includes("ADD COLUMN view_protocol"))).toBe(true);
+    expect(mock.calls.some((call) => call.query.includes("ADD COLUMN applied_view_revision"))).toBe(
+      true
+    );
+  });
+
   it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");

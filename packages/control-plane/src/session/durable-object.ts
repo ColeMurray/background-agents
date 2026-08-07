@@ -10,6 +10,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
+import {
+  sessionBootstrapSchema,
+  type SessionBootstrap,
+  type SessionBootstrapState,
+} from "@open-inspect/shared/types/server-messages";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
@@ -142,6 +147,8 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  * the client to fetch a fresh token on reconnect.
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const MAX_VIEW_CATCH_UP_REVISIONS = 500;
+const MAX_VIEW_CATCH_UP_BYTES = 1024 * 1024;
 
 type BoundarySchema<T> = {
   safeParse(
@@ -217,6 +224,8 @@ export class SessionDO extends DurableObject<Env> {
   private readonly routes = createSessionInternalRoutes({
     init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
+    bootstrap: () => this.handleBootstrap(),
+    access: () => this.handleSessionAccess(),
     prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
@@ -597,7 +606,8 @@ export class SessionDO extends DurableObject<Env> {
           return pullRequestService.createPullRequest(input);
         },
         getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
-        updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
+        updateArtifact: (artifactId, data) =>
+          this.repository.updateArtifactWithViewDelta(artifactId, data),
         messenger: this.messenger,
         now: () => Date.now(),
         triggerPullRequestRefresh: () => this.schedulePullRequestRefresh("manual"),
@@ -750,9 +760,20 @@ export class SessionDO extends DurableObject<Env> {
         })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
-      updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
-      updateSandboxForResume: (data) => this.repository.updateSandboxForResume(data),
-      updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
+      updateSandboxForSpawn: (data) => {
+        this.repository.updateSandboxForSpawnWithViewDelta(data);
+        this.broadcast({ type: "session_access_changed" });
+      },
+      updateSandboxForResume: (data) => {
+        this.repository.updateSandboxForResumeWithViewDelta(data);
+        this.broadcast({ type: "session_access_changed" });
+      },
+      updateSandboxModalObjectId: (id) =>
+        this.repository.updateSandboxModalObjectIdWithViewDelta(
+          id,
+          this.getSandboxDashboardUrl(id),
+          Date.now()
+        ),
       updateSandboxSnapshotImageId: (sandboxId, imageId) =>
         this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
       updateSandboxLastActivity: (timestamp) =>
@@ -766,19 +787,34 @@ export class SessionDO extends DurableObject<Env> {
         const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
           ? await encryptToken(password, this.env.REPO_SECRETS_ENCRYPTION_KEY)
           : password;
-        this.repository.updateSandboxCodeServer(url, encrypted);
+        this.repository.updateSandboxCodeServerWithViewDelta(url, encrypted, Date.now());
+        this.broadcast({ type: "session_access_changed" });
       },
-      clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
-      clearSandboxCodeServerUrl: () => this.repository.clearSandboxCodeServerUrl(),
-      updateSandboxTunnelUrls: (urls) => this.repository.updateSandboxTunnelUrls(urls),
-      clearSandboxTunnelUrls: () => this.repository.clearSandboxTunnelUrls(),
+      clearSandboxCodeServer: () => {
+        this.repository.clearSandboxCodeServerWithViewDelta(Date.now());
+        this.broadcast({ type: "session_access_changed" });
+      },
+      clearSandboxCodeServerUrl: () => {
+        this.repository.clearSandboxCodeServerUrlWithViewDelta(Date.now());
+        this.broadcast({ type: "session_access_changed" });
+      },
+      updateSandboxTunnelUrls: (urls) => {
+        this.repository.updateSandboxTunnelUrlsWithViewDelta(urls, Date.now());
+      },
+      clearSandboxTunnelUrls: () => {
+        this.repository.clearSandboxTunnelUrlsWithViewDelta(Date.now());
+      },
       updateSandboxTtyd: async (url, token) => {
         const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
           ? await encryptToken(token, this.env.REPO_SECRETS_ENCRYPTION_KEY)
           : token;
-        this.repository.updateSandboxTtyd(url, encrypted);
+        this.repository.updateSandboxTtydWithViewDelta(url, encrypted, Date.now());
+        this.broadcast({ type: "session_access_changed" });
       },
-      clearSandboxTtyd: () => this.repository.clearSandboxTtyd(),
+      clearSandboxTtyd: () => {
+        this.repository.clearSandboxTtydWithViewDelta(Date.now());
+        this.broadcast({ type: "session_access_changed" });
+      },
     };
 
     // Broadcaster adapter
@@ -913,7 +949,7 @@ export class SessionDO extends DurableObject<Env> {
     // Constructed here rather than in the constructor so they (and the
     // WebSocket manager they force) capture the session-scoped logger,
     // never the request-scoped child installed by fetch().
-    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.messenger = new SessionMessengerImpl(this.wsManager, this.repository);
     this.diffService = new SessionDiffService(
       new SessionDiffStore(this.sql),
       this.repository,
@@ -1344,7 +1380,13 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handleSubscribe(
     ws: WebSocket,
-    data: { token: string; clientId: string }
+    data: {
+      token: string;
+      clientId: string;
+      viewProtocol?: 2;
+      resumeRevision?: number;
+      forceSnapshot?: boolean;
+    }
   ): Promise<void> {
     // Validate the WebSocket auth token
     if (!data.token) {
@@ -1408,45 +1450,68 @@ export class SessionDO extends DurableObject<Env> {
       status: "active",
       lastSeen: Date.now(),
       clientId: data.clientId,
+      viewProtocol: data.viewProtocol ?? 1,
+      appliedViewRevision: 0,
       ws,
     };
 
-    this.wsManager.setClient(ws, clientInfo);
+    const participantSummary = {
+      participantId: participant.id,
+      userId: participant.canonical_user_id ?? participant.user_id,
+      name: resolveParticipantName(participant),
+      avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
+    };
 
+    this.wsManager.setClientSynchronizing(ws, true);
+    let appliedRevision: number | null = null;
+    try {
+      if (data.viewProtocol === 2) {
+        appliedRevision = this.sendV2Synchronization(ws, data, participant.id, participantSummary);
+      } else {
+        const sandbox = this.getSandbox();
+        const state = await this.getSessionState(sandbox);
+        const artifacts = this.messageService.listArtifacts();
+        const replay = this.eventStream.getReplay();
+        if (
+          this.safeSend(ws, {
+            type: "subscribed",
+            sessionId: state.id,
+            state,
+            artifacts: artifacts.artifacts,
+            participantId: participant.id,
+            participant: participantSummary,
+            replay,
+            spawnError: sandbox?.last_spawn_error ?? null,
+          } as ServerMessage)
+        ) {
+          appliedRevision = this.repository.getCurrentViewRevision();
+        }
+      }
+    } finally {
+      this.wsManager.setClientSynchronizing(ws, false);
+    }
+    if (appliedRevision === null) {
+      this.wsManager.close(ws, 4009, "Session synchronization failed");
+      return;
+    }
+
+    clientInfo.appliedViewRevision = appliedRevision;
+    this.wsManager.setClient(ws, clientInfo);
     const parsed = this.wsManager.classify(ws);
     if (parsed.kind === "client" && parsed.wsId) {
-      this.wsManager.persistClientMapping(parsed.wsId, participant.id, data.clientId);
+      this.wsManager.persistClientMapping(
+        parsed.wsId,
+        participant.id,
+        data.clientId,
+        clientInfo.viewProtocol,
+        appliedRevision
+      );
       this.log.debug("Stored ws_client_mapping", {
         ws_id: parsed.wsId,
         participant_id: participant.id,
+        view_protocol: clientInfo.viewProtocol,
       });
     }
-
-    // Gather session state and replay events, then send as a single message.
-    // Fetch sandbox once and thread it through to avoid a redundant SQLite read.
-    const sandbox = this.getSandbox();
-    const state = await this.getSessionState(sandbox);
-    const artifacts = this.messageService.listArtifacts();
-    const replay = this.eventStream.getReplay();
-
-    this.safeSend(ws, {
-      type: "subscribed",
-      sessionId: state.id,
-      state,
-      artifacts: artifacts.artifacts,
-      participantId: participant.id,
-      participant: {
-        participantId: participant.id,
-        userId: participant.canonical_user_id ?? participant.user_id,
-        name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(
-          participant.scm_login,
-          resolveScmProviderFromEnv(this.env.SCM_PROVIDER)
-        ),
-      },
-      replay,
-      spawnError: sandbox?.last_spawn_error ?? null,
-    } as ServerMessage);
 
     // Send current presence
     this.presenceService.sendPresence(ws);
@@ -1457,6 +1522,111 @@ export class SessionDO extends DurableObject<Env> {
     // Read-through backstop (design §5.3): opening the session refreshes its
     // PR state from the provider; changes arrive as artifact_updated.
     this.schedulePullRequestRefresh("open");
+  }
+
+  private sendV2Synchronization(
+    ws: WebSocket,
+    data: { resumeRevision?: number; forceSnapshot?: boolean },
+    participantId: string,
+    participant: { participantId: string; userId: string; name: string; avatar?: string }
+  ): number | null {
+    if (!data.forceSnapshot && data.resumeRevision !== undefined) {
+      const targetRevision = this.repository.getCurrentViewRevision();
+      const deltas = this.readBoundedViewCatchUp(data.resumeRevision, targetRevision);
+      if (deltas) {
+        return this.sendV2SyncMessages(ws, {
+          mode: "resume",
+          targetRevision,
+          deltas,
+          participantId,
+          participant,
+        });
+      }
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const bootstrap = this.getSessionBootstrap();
+      if (!bootstrap) return null;
+      const targetRevision = this.repository.getCurrentViewRevision();
+      const deltas = this.readBoundedViewCatchUp(bootstrap.viewRevision, targetRevision);
+      if (!deltas) continue;
+      return this.sendV2SyncMessages(ws, {
+        mode: "snapshot",
+        targetRevision,
+        bootstrap,
+        deltas,
+        participantId,
+        participant,
+      });
+    }
+    return null;
+  }
+
+  private readBoundedViewCatchUp(afterRevision: number, throughRevision: number) {
+    if (throughRevision - afterRevision > MAX_VIEW_CATCH_UP_REVISIONS) return null;
+    const deltas = this.repository.readContiguousSessionViewDeltas(afterRevision, throughRevision);
+    if (!deltas) return null;
+    const bytes = deltas.reduce((total, record) => total + JSON.stringify(record.delta).length, 0);
+    return bytes <= MAX_VIEW_CATCH_UP_BYTES ? deltas : null;
+  }
+
+  private sendV2SyncMessages(
+    ws: WebSocket,
+    input: {
+      mode: "resume" | "snapshot";
+      targetRevision: number;
+      bootstrap?: SessionBootstrap;
+      deltas: Array<{
+        revision: number;
+        delta: Extract<ServerMessage, { type: "session_delta" }>["delta"];
+      }>;
+      participantId: string;
+      participant: { participantId: string; userId: string; name: string; avatar?: string };
+    }
+  ): number | null {
+    if (
+      !this.safeSend(ws, {
+        type: "session_sync_started",
+        mode: input.mode,
+        targetRevision: input.targetRevision,
+      } satisfies ServerMessage)
+    ) {
+      return null;
+    }
+    if (
+      input.bootstrap &&
+      !this.safeSend(ws, {
+        type: "session_snapshot",
+        bootstrap: input.bootstrap,
+      } satisfies ServerMessage)
+    ) {
+      return null;
+    }
+    for (const record of input.deltas) {
+      if (
+        !this.safeSend(ws, {
+          type: "session_delta",
+          revision: record.revision,
+          delta: record.delta,
+        } satisfies ServerMessage)
+      ) {
+        return null;
+      }
+    }
+    const session = this.getSession();
+    const sessionId = this.getPublicSessionId(session);
+    if (
+      !this.safeSend(ws, {
+        type: "session_ready",
+        sessionId,
+        participantId: input.participantId,
+        participant: input.participant,
+        appliedRevision: input.targetRevision,
+      } satisfies ServerMessage)
+    ) {
+      return null;
+    }
+    return input.targetRevision;
   }
 
   /**
@@ -1485,6 +1655,8 @@ export class SessionDO extends DurableObject<Env> {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
+      viewProtocol: mapping.view_protocol ?? 1,
+      appliedViewRevision: mapping.applied_view_revision ?? 0,
       ws,
     };
 
@@ -1545,17 +1717,29 @@ export class SessionDO extends DurableObject<Env> {
     }
     client.lastFetchHistoryAt = now;
 
-    const page = this.eventStream.getHistoryPage({
-      cursor: data.cursor,
-      limit: data.limit,
-    });
-
-    this.safeSend(ws, {
-      type: "history_page",
-      items: page.items,
-      hasMore: page.hasMore,
-      cursor: page.cursor,
-    } as ServerMessage);
+    if (client.viewProtocol === 2) {
+      const page = this.eventStream.getViewHistoryPage({
+        cursor: data.cursor,
+        limit: data.limit,
+      });
+      this.safeSend(ws, {
+        type: "session_history_page",
+        items: page.items,
+        hasMore: page.hasMore,
+        cursor: page.cursor,
+      } as ServerMessage);
+    } else {
+      const page = this.eventStream.getHistoryPage({
+        cursor: data.cursor,
+        limit: data.limit,
+      });
+      this.safeSend(ws, {
+        type: "history_page",
+        items: page.items,
+        hasMore: page.hasMore,
+        cursor: page.cursor,
+      } as ServerMessage);
+    }
   }
 
   /**
@@ -1654,13 +1838,11 @@ export class SessionDO extends DurableObject<Env> {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     if (options.onlyIfUnset) {
-      const didUpdate = this.repository.updateSessionTitleIfUnset(session.id, titleText, updatedAt);
-      if (!didUpdate) {
+      if (session.title?.trim()) {
         return { ok: false, reason: "already_set", error: "Session title is already set" };
       }
-    } else {
-      this.repository.updateSessionTitle(session.id, titleText, updatedAt);
     }
+    this.repository.updateSessionTitleWithViewDelta(session.id, titleText, updatedAt);
 
     const publicSessionId = this.getPublicSessionId(session);
     this.syncSessionIndexTitle(publicSessionId, titleText, updatedAt);
@@ -1746,6 +1928,93 @@ export class SessionDO extends DurableObject<Env> {
       environmentId,
       environmentName,
     };
+  }
+
+  private handleBootstrap(): Response {
+    const bootstrap = this.getSessionBootstrap();
+    if (!bootstrap) return Response.json({ error: "Session not found" }, { status: 404 });
+    return Response.json(bootstrap, {
+      headers: { "Cache-Control": "private, no-store" },
+    });
+  }
+
+  private getSessionBootstrap(): SessionBootstrap | null {
+    const local = this.ctx.storage.transactionSync(() => {
+      const session = this.getSession();
+      if (!session) return null;
+      const sandbox = this.getSandbox();
+      const state: SessionBootstrapState = {
+        id: this.getPublicSessionId(session),
+        title: session.title,
+        repoOwner: session.repo_owner,
+        repoName: session.repo_name,
+        baseBranch: session.base_branch,
+        branchName: session.branch_name,
+        status: session.status,
+        sandboxStatus: sandbox?.status ?? "pending",
+        messageCount: this.repository.getMessageCount(),
+        createdAt: session.created_at,
+        model: session.model ?? DEFAULT_MODEL,
+        reasoningEffort: session.reasoning_effort ?? undefined,
+        isProcessing: this.getIsProcessing(),
+        parentSessionId: session.parent_session_id,
+        totalCost: session.total_cost ?? 0,
+        codeServerUrl: sandbox?.code_server_url ?? null,
+        tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
+        ttydUrl: sandbox?.ttyd_url ?? null,
+        sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
+        repositories: this.getSessionRepositoryStates(session),
+        environmentId: session.environment_id ?? null,
+        environmentName: null,
+      };
+      return {
+        sessionId: state.id,
+        viewRevision: this.repository.getCurrentViewRevision(),
+        state,
+        artifacts: this.messageService.listArtifacts().artifacts,
+        replay: this.eventStream.getViewReplay(),
+      };
+    });
+    if (!local) return null;
+
+    return sessionBootstrapSchema.parse(local);
+  }
+
+  private async handleSessionAccess(): Promise<Response> {
+    if (!this.getSession()) {
+      return Response.json({ error: "Session not found" }, { status: 404 });
+    }
+    const sandbox = this.getSandbox();
+    if (!sandbox) {
+      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409 });
+    }
+    if (sandbox.status !== "ready" && sandbox.status !== "running") {
+      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409 });
+    }
+
+    const decrypt = async (value: string | null): Promise<string | null> => {
+      if (!value) return null;
+      if (!this.env.REPO_SECRETS_ENCRYPTION_KEY) return value;
+      try {
+        return await decryptToken(value, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+      } catch {
+        return null;
+      }
+    };
+    const [codeServerPassword, ttydToken] = await Promise.all([
+      decrypt(sandbox.code_server_password),
+      decrypt(sandbox.ttyd_token),
+    ]);
+    return Response.json(
+      {
+        codeServer:
+          sandbox.code_server_url && codeServerPassword
+            ? { url: sandbox.code_server_url, password: codeServerPassword }
+            : null,
+        ttyd: sandbox.ttyd_url && ttydToken ? { url: sandbox.ttyd_url, token: ttydToken } : null,
+      },
+      { headers: { "Cache-Control": "private, no-store" } }
+    );
   }
 
   /**
@@ -1973,7 +2242,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private updateSandboxStatus(status: string): void {
-    this.repository.updateSandboxStatus(status as SandboxStatus);
+    this.repository.updateSandboxStatusWithViewDelta(status as SandboxStatus, Date.now());
   }
 
   // HTTP handlers

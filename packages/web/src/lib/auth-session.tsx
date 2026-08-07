@@ -1,6 +1,6 @@
 "use client";
 
-import useSWR, { mutate } from "swr";
+import useSWR, { mutate, SWRConfig } from "swr";
 import { z } from "zod";
 import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import {
@@ -9,12 +9,24 @@ import {
 } from "./browser-auth-session-contract";
 import { browserApiFetch } from "./browser-api-fetch";
 
-const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
+export const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
 
 export type AuthSessionUser = BrowserAuthSessionUser;
 
 export interface AuthSession {
   user: AuthSessionUser;
+}
+
+export function AuthSessionHydration({
+  session,
+  children,
+}: {
+  session: AuthSession;
+  children: React.ReactNode;
+}) {
+  return (
+    <SWRConfig value={{ fallback: { [BROWSER_AUTH_SESSION_PATH]: session } }}>{children}</SWRConfig>
+  );
 }
 
 export type AuthSessionState =

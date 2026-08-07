@@ -101,6 +101,8 @@ describe("useSessionTransport", () => {
         type: "subscribe",
         token: "ws-token",
         clientId: "00000000-0000-0000-0000-000000000000",
+        viewProtocol: 2,
+        forceSnapshot: false,
       },
     ]);
     await waitFor(() => {
@@ -108,6 +110,44 @@ describe("useSessionTransport", () => {
       expect(result.current.connecting).toBe(false);
     });
     expect(result.current.isOpen()).toBe(true);
+  });
+
+  it("sends the current resume revision and can force snapshot recovery", async () => {
+    const rendered = renderHook(() =>
+      useSessionTransport("session-1", {
+        onMessage,
+        onClose,
+        getResumeRevision: () => 7,
+      })
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => FakeWebSocket.instances[0].open());
+    expect(FakeWebSocket.instances[0].sentMessages[0]).toEqual(
+      expect.objectContaining({ viewProtocol: 2, resumeRevision: 7, forceSnapshot: false })
+    );
+
+    act(() => rendered.result.current.reconnect(true));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    act(() => FakeWebSocket.instances[1].open());
+    expect(FakeWebSocket.instances[1].sentMessages[0]).toEqual(
+      expect.objectContaining({ viewProtocol: 2, forceSnapshot: true })
+    );
+    expect(FakeWebSocket.instances[1].sentMessages[0]).not.toHaveProperty("resumeRevision");
+  });
+
+  it("reports malformed V2 messages instead of silently dropping them", async () => {
+    const onProtocolError = vi.fn();
+    renderHook(() => useSessionTransport("session-1", { onMessage, onClose, onProtocolError }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].receiveRaw(
+        JSON.stringify({ type: "session_delta", revision: 1, delta: { operations: [] } })
+      );
+    });
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(onProtocolError).toHaveBeenCalledOnce();
   });
 
   it("forwards schema-valid messages to onMessage and drops the rest", async () => {

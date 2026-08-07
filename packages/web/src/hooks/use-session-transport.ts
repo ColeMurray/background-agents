@@ -11,6 +11,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
 // WebSocket close codes
 const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
+const WS_CLOSE_PROTOCOL_ERROR = 4003;
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -58,6 +59,10 @@ export interface SessionTransportHandlers {
   onMessage: (message: ServerMessage) => void;
   /** The socket closed (any reason), before reconnection is scheduled. */
   onClose?: () => void;
+  /** Current canonical revision to resume from when opening a V2 socket. */
+  getResumeRevision?: () => number | null;
+  /** A malformed V2 message was received and requires snapshot recovery. */
+  onProtocolError?: () => void;
 }
 
 export interface UseSessionTransportReturn {
@@ -70,7 +75,7 @@ export interface UseSessionTransportReturn {
   /** Send a JSON payload; drops it silently when the socket is not open. */
   send: (payload: Record<string, unknown>) => void;
   /** Drop the connection and token, then connect fresh. */
-  reconnect: () => void;
+  reconnect: (forceSnapshot?: boolean) => void;
 }
 
 /**
@@ -88,6 +93,7 @@ export function useSessionTransport(
   const wsTokenRef = useRef<string | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
+  const forceSnapshotRef = useRef(false);
   // Monotonic id for connection attempts. reconnect() and unmount bump it so
   // a connect() that resumes after awaiting its token can tell it has been
   // superseded and must not open a socket.
@@ -99,12 +105,12 @@ export function useSessionTransport(
   const connectingEpochRef = useRef<number | null>(null);
 
   // Latest-handler ref so connect() stays stable across renders.
-  const { onMessage, onClose } = handlers;
-  const handlersRef = useRef({ onMessage, onClose });
+  const { onMessage, onClose, getResumeRevision, onProtocolError } = handlers;
+  const handlersRef = useRef({ onMessage, onClose, getResumeRevision, onProtocolError });
 
   useEffect(() => {
-    handlersRef.current = { onMessage, onClose };
-  }, [onMessage, onClose]);
+    handlersRef.current = { onMessage, onClose, getResumeRevision, onProtocolError };
+  }, [onMessage, onClose, getResumeRevision, onProtocolError]);
 
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -173,12 +179,17 @@ export function useSessionTransport(
     setConnecting(false);
     reconnectAttempts.current = 0;
 
-    // Subscribe to session with the auth token
+    const forceSnapshot = forceSnapshotRef.current;
+    forceSnapshotRef.current = false;
+    const resumeRevision = handlersRef.current.getResumeRevision?.() ?? null;
     ws.send(
       JSON.stringify({
         type: "subscribe",
         token: wsTokenRef.current,
         clientId: crypto.randomUUID(),
+        viewProtocol: 2,
+        ...(!forceSnapshot && resumeRevision !== null ? { resumeRevision } : {}),
+        forceSnapshot,
       })
     );
   }, []);
@@ -186,8 +197,24 @@ export function useSessionTransport(
   const handleSocketMessage = useCallback((ws: WebSocket, event: MessageEvent) => {
     if (wsRef.current !== ws) return;
     try {
-      const data = parseWsMessage(JSON.parse(event.data));
-      if (!data) return;
+      const raw: unknown = JSON.parse(event.data);
+      const data = parseWsMessage(raw);
+      if (!data) {
+        const type =
+          typeof raw === "object" && raw !== null && "type" in raw
+            ? (raw as { type?: unknown }).type
+            : undefined;
+        if (
+          type === "session_sync_started" ||
+          type === "session_delta" ||
+          type === "session_snapshot" ||
+          type === "session_ready" ||
+          type === "session_history_page"
+        ) {
+          handlersRef.current.onProtocolError?.();
+        }
+        return;
+      }
       handlersRef.current.onMessage(data);
     } catch (error) {
       console.error("Failed to parse WebSocket message:", error);
@@ -314,25 +341,32 @@ export function useSessionTransport(
     wsRef.current.send(JSON.stringify(payload));
   }, []);
 
-  const reconnect = useCallback(() => {
-    // A connect() still awaiting its token must not open a second socket
-    // alongside the one this call creates.
-    invalidateInFlightConnect();
-    const discarded = wsRef.current;
-    if (discarded) {
-      wsRef.current = null;
-      discarded.close();
-      // The discarded socket's close event is ignored by the identity guard
-      // (and may arrive late), so notify the protocol layer directly.
-      handlersRef.current.onClose?.();
-      setConnected(false);
-    }
-    reconnectAttempts.current = 0;
-    wsTokenRef.current = null; // Clear token to fetch fresh one
-    setAuthError(null);
-    setConnectionError(null);
-    connect();
-  }, [connect, invalidateInFlightConnect]);
+  const reconnect = useCallback(
+    (forceSnapshot = false) => {
+      // A connect() still awaiting its token must not open a second socket
+      // alongside the one this call creates.
+      invalidateInFlightConnect();
+      const discarded = wsRef.current;
+      if (discarded) {
+        wsRef.current = null;
+        discarded.close(
+          forceSnapshot ? WS_CLOSE_PROTOCOL_ERROR : undefined,
+          forceSnapshot ? "Session synchronization failed" : undefined
+        );
+        // The discarded socket's close event is ignored by the identity guard
+        // (and may arrive late), so notify the protocol layer directly.
+        handlersRef.current.onClose?.();
+        setConnected(false);
+      }
+      reconnectAttempts.current = 0;
+      forceSnapshotRef.current = forceSnapshot;
+      wsTokenRef.current = null; // Clear token to fetch fresh one
+      setAuthError(null);
+      setConnectionError(null);
+      connect();
+    },
+    [connect, invalidateInFlightConnect]
+  );
 
   // Connect on mount
   useEffect(() => {

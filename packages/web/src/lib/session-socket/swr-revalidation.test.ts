@@ -74,6 +74,41 @@ describe("swrKeysToRevalidate", () => {
     ).toEqual([`/api/sessions/${SESSION_ID}/diff`]);
   });
 
+  it("revalidates missed client-only data when V2 synchronization becomes ready", () => {
+    expect(
+      swrKeysToRevalidate(
+        {
+          type: "session_ready",
+          sessionId: SESSION_ID,
+          participantId: "participant-1",
+          appliedRevision: 4,
+        },
+        SESSION_ID
+      )
+    ).toEqual([
+      `/api/sessions/${SESSION_ID}/diff`,
+      `/api/sessions/${SESSION_ID}/children`,
+      `/api/sessions/${SESSION_ID}/participant-profiles`,
+      `/api/sessions/${SESSION_ID}/access`,
+    ]);
+    expect(swrKeysToRevalidate({ type: "session_access_changed" }, SESSION_ID)).toEqual([
+      `/api/sessions/${SESSION_ID}/access`,
+    ]);
+  });
+
+  it("revalidates the session list for relevant V2 state deltas", () => {
+    expect(
+      swrKeysToRevalidate(
+        {
+          type: "session_delta",
+          revision: 4,
+          delta: { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
+        },
+        SESSION_ID
+      )
+    ).toEqual([isUnarchivedSessionListKey]);
+  });
+
   it("returns nothing for view-only messages", () => {
     expect(swrKeysToRevalidate({ type: "pong", timestamp: 1 }, SESSION_ID)).toEqual([]);
     expect(

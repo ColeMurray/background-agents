@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
 import type { SessionState } from "@open-inspect/shared";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type { ServerMessage, SessionBootstrap } from "@open-inspect/shared/types/server-messages";
 import {
+  createSessionSocketState,
   initialSessionSocketState,
   sessionSocketReducer,
   type SessionSocketAction,
@@ -41,6 +42,33 @@ function createSubscribedMessage(overrides: Partial<SubscribedMessage> = {}): Su
   };
 }
 
+function createBootstrap(overrides: Partial<SessionBootstrap> = {}): SessionBootstrap {
+  return {
+    sessionId: "session-1",
+    viewRevision: 3,
+    state: createSessionState(),
+    artifacts: [],
+    replay: {
+      events: [
+        {
+          eventId: "event-1",
+          timelineSequence: 1,
+          event: {
+            type: "git_sync",
+            status: "completed",
+            sandboxId: "sb-1",
+            timestamp: 1,
+          },
+        },
+      ],
+      hasMore: true,
+      cursor: { timestamp: 1, id: "event-1", sequence: 1 },
+    },
+    spawnError: null,
+    ...overrides,
+  };
+}
+
 function reduce(state: SessionSocketState, ...actions: SessionSocketAction[]): SessionSocketState {
   return actions.reduce(sessionSocketReducer, state);
 }
@@ -56,6 +84,247 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  describe("V2 bootstrap and reconciliation", () => {
+    it("initializes rendered state and revision from the server bootstrap", () => {
+      const state = createSessionSocketState(createBootstrap());
+
+      expect(state.replaying).toBe(false);
+      expect(state.ready).toBe(false);
+      expect(state.lastAppliedRevision).toBe(3);
+      expect(state.events).toHaveLength(1);
+      expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
+    });
+
+    it("applies contiguous deltas, ignores duplicates, and enables actions only at ready", () => {
+      const started = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 4 })
+      );
+      const applied = reduce(
+        started,
+        serverMessage({
+          type: "session_delta",
+          revision: 4,
+          delta: { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
+        })
+      );
+      const duplicate = reduce(
+        applied,
+        serverMessage({
+          type: "session_delta",
+          revision: 4,
+          delta: { operations: [{ type: "state_patch", patch: { title: "Ignored" } }] },
+        })
+      );
+      const ready = reduce(
+        duplicate,
+        serverMessage({
+          type: "session_ready",
+          sessionId: "session-1",
+          participantId: "participant-1",
+          appliedRevision: 4,
+        })
+      );
+
+      expect(applied.ready).toBe(false);
+      expect(duplicate.sessionState?.title).toBe("Updated");
+      expect(ready.ready).toBe(true);
+      expect(ready.lastAppliedRevision).toBe(4);
+    });
+
+    it("continues applying contiguous live deltas after session_ready", () => {
+      const ready = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 3 }),
+        serverMessage({
+          type: "session_ready",
+          sessionId: "session-1",
+          participantId: "participant-1",
+          appliedRevision: 3,
+        })
+      );
+      const updated = reduce(
+        ready,
+        serverMessage({
+          type: "session_delta",
+          revision: 4,
+          delta: { operations: [{ type: "state_patch", patch: { title: "Live update" } }] },
+        })
+      );
+
+      expect(updated.ready).toBe(true);
+      expect(updated.lastAppliedRevision).toBe(4);
+      expect(updated.sessionState?.title).toBe("Live update");
+    });
+
+    it("does not double-count V2 step cost after the canonical total patch", () => {
+      const ready = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 4 }),
+        serverMessage({
+          type: "session_delta",
+          revision: 4,
+          delta: { operations: [{ type: "state_patch", patch: { totalCost: 2 } }] },
+        }),
+        serverMessage({
+          type: "session_ready",
+          sessionId: "session-1",
+          participantId: "participant-1",
+          appliedRevision: 4,
+        })
+      );
+      const withStep = reduce(ready, {
+        type: "events_appended",
+        events: [
+          {
+            type: "step_finish",
+            sandboxId: "sb-1",
+            messageId: "message-1",
+            timestamp: 2,
+            cost: 2,
+          },
+        ],
+      });
+
+      expect(withStep.sessionState?.totalCost).toBe(2);
+    });
+
+    it("forces recovery when a legacy canonical message bypasses V2 revisions", () => {
+      const ready = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 3 }),
+        serverMessage({
+          type: "session_ready",
+          sessionId: "session-1",
+          participantId: "participant-1",
+          appliedRevision: 3,
+        })
+      );
+      const invalid = reduce(ready, serverMessage({ type: "session_title", title: "Out of band" }));
+
+      expect(invalid.ready).toBe(false);
+      expect(invalid.recoveryNonce).toBe(1);
+      expect(invalid.sessionState?.title).toBe("Session 1");
+    });
+
+    it("upserts events by stable identity and keeps timeline sequence order", () => {
+      const base = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 5 })
+      );
+      const withNewEvent = reduce(
+        base,
+        serverMessage({
+          type: "session_delta",
+          revision: 4,
+          delta: {
+            operations: [
+              {
+                type: "event_upsert",
+                item: {
+                  eventId: "event-2",
+                  timelineSequence: 2,
+                  event: {
+                    type: "token",
+                    content: "new",
+                    messageId: "message-1",
+                    sandboxId: "sb-1",
+                    timestamp: 2,
+                  },
+                },
+              },
+            ],
+          },
+        })
+      );
+      const replaced = reduce(
+        withNewEvent,
+        serverMessage({
+          type: "session_delta",
+          revision: 5,
+          delta: {
+            operations: [
+              {
+                type: "event_upsert",
+                item: {
+                  eventId: "event-1",
+                  timelineSequence: 1,
+                  event: {
+                    type: "git_sync",
+                    status: "failed",
+                    sandboxId: "sb-1",
+                    timestamp: 3,
+                  },
+                },
+              },
+            ],
+          },
+        })
+      );
+
+      expect(replaced.viewEvents.map((item) => item.eventId)).toEqual(["event-1", "event-2"]);
+      expect(replaced.events).toHaveLength(2);
+      expect(replaced.events[0]).toEqual(expect.objectContaining({ status: "failed" }));
+    });
+
+    it("requests one snapshot recovery on a revision gap and preserves rendered state", () => {
+      const started = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 5 })
+      );
+      const failed = reduce(
+        started,
+        serverMessage({
+          type: "session_delta",
+          revision: 5,
+          delta: { operations: [{ type: "state_patch", patch: { title: "Gap" } }] },
+        })
+      );
+      const repeated = reduce(
+        failed,
+        serverMessage({
+          type: "session_delta",
+          revision: 6,
+          delta: { operations: [{ type: "state_patch", patch: { title: "Later" } }] },
+        })
+      );
+
+      expect(failed.recoveryNonce).toBe(1);
+      expect(repeated.recoveryNonce).toBe(1);
+      expect(repeated.sessionState?.title).toBe("Session 1");
+      expect(repeated.events).toHaveLength(1);
+    });
+
+    it("replaces canonical state from a snapshot and keeps it after disconnect", () => {
+      const started = reduce(
+        createSessionSocketState(createBootstrap()),
+        serverMessage({ type: "session_sync_started", mode: "snapshot", targetRevision: 8 })
+      );
+      const snapshot = reduce(
+        started,
+        serverMessage({
+          type: "session_snapshot",
+          bootstrap: createBootstrap({
+            viewRevision: 8,
+            state: createSessionState({ title: "Snapshot" }),
+            replay: { events: [], hasMore: false, cursor: null },
+          }),
+        }),
+        serverMessage({
+          type: "session_ready",
+          sessionId: "session-1",
+          participantId: "participant-1",
+          appliedRevision: 8,
+        }),
+        { type: "socket_closed" }
+      );
+
+      expect(snapshot.ready).toBe(false);
+      expect(snapshot.sessionState?.title).toBe("Snapshot");
+      expect(snapshot.events).toEqual([]);
+    });
+  });
+
   describe("subscribed", () => {
     it("hydrates the projection and ends replay", () => {
       const state = subscribedState({

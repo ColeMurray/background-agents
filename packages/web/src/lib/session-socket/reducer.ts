@@ -1,6 +1,11 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
+import type {
+  ServerMessage,
+  SessionBootstrap,
+  SessionDelta,
+  SessionViewEvent,
+} from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
@@ -17,8 +22,19 @@ export interface HistoryCursor {
  */
 export interface SessionSocketState {
   replaying: boolean;
+  ready: boolean;
+  protocol: "unknown" | "v2" | "legacy";
+  lastAppliedRevision: number | null;
+  recoveryNonce: number;
+  recovering: boolean;
+  sync: {
+    mode: "resume" | "snapshot";
+    targetRevision: number;
+    snapshotReceived: boolean;
+  } | null;
   sessionState: SessionState | null;
   events: SandboxEvent[];
+  viewEvents: SessionViewEvent[];
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
@@ -29,8 +45,15 @@ export interface SessionSocketState {
 
 export const initialSessionSocketState: SessionSocketState = {
   replaying: true,
+  ready: false,
+  protocol: "unknown",
+  lastAppliedRevision: null,
+  recoveryNonce: 0,
+  recovering: false,
+  sync: null,
   sessionState: null,
   events: [],
+  viewEvents: [],
   participants: [],
   artifacts: [],
   currentParticipantId: null,
@@ -48,8 +71,17 @@ export type SessionSocketAction =
   | { type: "history_requested" }
   /** A prompt was sent; optimistically mark the session as processing. */
   | { type: "prompt_sent" }
+  | { type: "access_loaded"; access: SessionAccessState | null }
+  | { type: "protocol_error" }
   /** The socket closed (clean or not). */
   | { type: "socket_closed" };
+
+export interface SessionAccessState {
+  codeServerUrl?: string | null;
+  codeServerPassword?: string | null;
+  ttydUrl?: string | null;
+  ttydToken?: string | null;
+}
 
 const CLEARED_SANDBOX_ACCESS_STATE = {
   codeServerUrl: undefined,
@@ -66,6 +98,113 @@ function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact
     return [nextArtifact, ...artifacts];
   }
   return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
+}
+
+function sortedViewEvents(items: SessionViewEvent[]): SessionViewEvent[] {
+  return [...items].sort(
+    (a, b) => a.timelineSequence - b.timelineSequence || a.eventId.localeCompare(b.eventId)
+  );
+}
+
+function upsertViewEvent(
+  items: SessionViewEvent[],
+  nextItem: SessionViewEvent
+): SessionViewEvent[] {
+  const existingIndex = items.findIndex((item) => item.eventId === nextItem.eventId);
+  if (existingIndex === -1) return sortedViewEvents([...items, nextItem]);
+  const next = [...items];
+  next[existingIndex] = nextItem;
+  return sortedViewEvents(next);
+}
+
+function withViewEvents(
+  state: SessionSocketState,
+  viewEvents: SessionViewEvent[]
+): SessionSocketState {
+  const sorted = sortedViewEvents(viewEvents);
+  return {
+    ...state,
+    viewEvents: sorted,
+    events: sorted.map((item) => toUiSandboxEvent(item.event)),
+  };
+}
+
+export function createSessionSocketState(bootstrap: SessionBootstrap): SessionSocketState {
+  const viewEvents = sortedViewEvents(bootstrap.replay.events);
+  return {
+    ...initialSessionSocketState,
+    replaying: false,
+    lastAppliedRevision: bootstrap.viewRevision,
+    sessionState: {
+      ...bootstrap.state,
+      isProcessing: bootstrap.state.isProcessing ?? false,
+      totalCost: bootstrap.state.totalCost ?? 0,
+    },
+    artifacts: bootstrap.artifacts.map(toUiArtifact),
+    viewEvents,
+    events: viewEvents.map((item) => toUiSandboxEvent(item.event)),
+    hasMoreHistory: bootstrap.replay.hasMore,
+    cursor: bootstrap.replay.cursor,
+  };
+}
+
+function protocolError(state: SessionSocketState): SessionSocketState {
+  if (state.recovering) return state;
+  return {
+    ...state,
+    ready: false,
+    sync: null,
+    recoveryNonce: state.recoveryNonce + 1,
+    recovering: true,
+  };
+}
+
+function replaceFromBootstrap(
+  state: SessionSocketState,
+  bootstrap: SessionBootstrap
+): SessionSocketState {
+  const replacement = createSessionSocketState(bootstrap);
+  return {
+    ...replacement,
+    protocol: "v2",
+    sync: state.sync && { ...state.sync, snapshotReceived: true },
+    recoveryNonce: state.recoveryNonce,
+    participants: state.participants,
+    currentParticipantId: state.currentParticipantId,
+  };
+}
+
+function applyDelta(state: SessionSocketState, delta: SessionDelta): SessionSocketState {
+  let next = state;
+  for (const operation of delta.operations) {
+    switch (operation.type) {
+      case "state_patch":
+        next = updateSessionState(next, (previous) => {
+          const sandboxStatus = operation.patch.sandboxStatus;
+          const clearAccess =
+            sandboxStatus === "spawning" ||
+            sandboxStatus === "stale" ||
+            sandboxStatus === "stopped" ||
+            sandboxStatus === "failed";
+          return {
+            ...previous,
+            ...operation.patch,
+            ...(clearAccess ? CLEARED_SANDBOX_ACCESS_STATE : {}),
+          };
+        });
+        break;
+      case "artifact_upsert":
+        next = {
+          ...next,
+          artifacts: upsertArtifact(next.artifacts, toUiArtifact(operation.artifact)),
+        };
+        break;
+      case "event_upsert":
+        next = withViewEvents(next, upsertViewEvent(next.viewEvents, operation.item));
+        break;
+    }
+  }
+  return next;
 }
 
 /**
@@ -135,6 +274,9 @@ function reduceServerMessage(
   state: SessionSocketState,
   message: Exclude<ServerMessage, { type: "sandbox_event" }>
 ): SessionSocketState {
+  if (state.protocol === "v2" && isLegacyCanonicalMessage(message)) {
+    return protocolError(state);
+  }
   switch (message.type) {
     case "subscribed":
       // Replace local artifacts and events with the subscribed snapshot so
@@ -143,6 +285,10 @@ function reduceServerMessage(
       return {
         ...state,
         replaying: false,
+        ready: true,
+        protocol: "legacy",
+        recovering: false,
+        sync: null,
         sessionState: {
           ...message.state,
           // Backward-compatible defaults for older sessions that may omit these.
@@ -154,12 +300,93 @@ function reduceServerMessage(
         events: message.replay
           ? collapseReplayTokenEvents(message.replay.events.map(toUiSandboxEvent))
           : [],
+        viewEvents: [],
         hasMoreHistory: message.replay?.hasMore ?? false,
         cursor: message.replay?.cursor ?? null,
         // A fetch_history dropped by a disconnect would otherwise leave this
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
       };
+
+    case "session_sync_started":
+      if (state.sync || message.targetRevision < (state.lastAppliedRevision ?? 0)) {
+        return protocolError(state);
+      }
+      return {
+        ...state,
+        ready: false,
+        protocol: "v2",
+        recovering: false,
+        sync: {
+          mode: message.mode,
+          targetRevision: message.targetRevision,
+          snapshotReceived: false,
+        },
+      };
+
+    case "session_snapshot":
+      if (
+        !state.sync ||
+        state.sync.mode !== "snapshot" ||
+        state.sync.snapshotReceived ||
+        message.bootstrap.state.id !== state.sessionState?.id ||
+        message.bootstrap.viewRevision > state.sync.targetRevision
+      ) {
+        return protocolError(state);
+      }
+      return replaceFromBootstrap(state, message.bootstrap);
+
+    case "session_delta": {
+      const isLiveV2Delta = state.protocol === "v2" && state.ready && !state.sync;
+      if (
+        (!state.sync && !isLiveV2Delta) ||
+        (state.sync?.mode === "snapshot" && !state.sync.snapshotReceived)
+      ) {
+        return protocolError(state);
+      }
+      const currentRevision = state.lastAppliedRevision;
+      if (currentRevision === null) return protocolError(state);
+      if (message.revision <= currentRevision) return state;
+      if (
+        message.revision !== currentRevision + 1 ||
+        (state.sync !== null && message.revision > state.sync.targetRevision)
+      ) {
+        return protocolError(state);
+      }
+      return {
+        ...applyDelta(state, message.delta),
+        lastAppliedRevision: message.revision,
+      };
+    }
+
+    case "session_ready":
+      if (
+        !state.sync ||
+        message.sessionId !== state.sessionState?.id ||
+        message.appliedRevision !== state.sync.targetRevision ||
+        message.appliedRevision !== state.lastAppliedRevision ||
+        (state.sync.mode === "snapshot" && !state.sync.snapshotReceived)
+      ) {
+        return protocolError(state);
+      }
+      return {
+        ...state,
+        ready: true,
+        replaying: false,
+        sync: null,
+        currentParticipantId: message.participantId || state.currentParticipantId,
+      };
+
+    case "session_history_page": {
+      let viewEvents = state.viewEvents;
+      for (const item of message.items) viewEvents = upsertViewEvent(viewEvents, item);
+      return {
+        ...withViewEvents(state, viewEvents),
+        hasMoreHistory: message.hasMore,
+        cursor: message.cursor,
+        loadingHistory: false,
+      };
+    }
 
     case "history_page":
       // Prepend older events to the beginning.
@@ -287,6 +514,7 @@ export function sessionSocketReducer(
       let next: SessionSocketState = { ...state, events: [...state.events, ...action.events] };
       for (const event of action.events) {
         if (
+          state.protocol !== "v2" &&
           event.type === "step_finish" &&
           typeof event.cost === "number" &&
           Number.isFinite(event.cost) &&
@@ -310,6 +538,41 @@ export function sessionSocketReducer(
       return updateSessionState(state, (prev) => ({ ...prev, isProcessing: true }));
 
     case "socket_closed":
-      return { ...state, replaying: false };
+      return {
+        ...state,
+        ready: false,
+        replaying: false,
+        sync: null,
+        participants: [],
+      };
+
+    case "access_loaded":
+      return updateSessionState(state, (previous) => ({
+        ...previous,
+        ...CLEARED_SANDBOX_ACCESS_STATE,
+        ...(action.access ?? {}),
+      }));
+
+    case "protocol_error":
+      return protocolError(state);
   }
+}
+
+function isLegacyCanonicalMessage(
+  message: Exclude<ServerMessage, { type: "sandbox_event" }>
+): boolean {
+  return (
+    message.type === "artifact_created" ||
+    message.type === "artifact_updated" ||
+    message.type === "sandbox_status" ||
+    message.type === "sandbox_ready" ||
+    message.type === "session_status" ||
+    message.type === "session_title" ||
+    message.type === "session_branch" ||
+    message.type === "processing_status" ||
+    message.type === "code_server_info" ||
+    message.type === "ttyd_info" ||
+    message.type === "tunnel_urls" ||
+    message.type === "sandbox_dashboard_url"
+  );
 }

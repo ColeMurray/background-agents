@@ -203,7 +203,7 @@ export class SessionMessageQueue {
       return;
     }
 
-    this.repository.updateMessageToProcessing(message.id, now);
+    this.repository.updateMessageToProcessingWithViewDelta(message.id, now);
     this.messenger.broadcast({ type: "processing_status", isProcessing: true });
     this.sandboxLifecycle.updateLastActivity(now);
 
@@ -271,7 +271,7 @@ export class SessionMessageQueue {
     const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
 
     if (processingMessage) {
-      this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
+      this.repository.updateMessageCompletionWithViewDelta(processingMessage.id, "failed", now);
       this.log.info("prompt.stopped", {
         event: "prompt.stopped",
         message_id: processingMessage.id,
@@ -286,7 +286,7 @@ export class SessionMessageQueue {
         sandboxId: "",
         timestamp: now / 1000,
       };
-      this.repository.upsertExecutionCompleteEvent(
+      this.repository.upsertExecutionCompleteEventWithViewDelta(
         processingMessage.id,
         syntheticExecutionComplete,
         now
@@ -333,7 +333,7 @@ export class SessionMessageQueue {
     const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
-    this.repository.updateMessageCompletion(processingMessage.id, "failed", now);
+    this.repository.updateMessageCompletionWithViewDelta(processingMessage.id, "failed", now);
 
     const stuckError = "Execution timed out (stuck processing)";
     const syntheticEvent: Extract<SandboxEvent, { type: "execution_complete" }> = {
@@ -344,7 +344,11 @@ export class SessionMessageQueue {
       sandboxId: "",
       timestamp: now / 1000,
     };
-    this.repository.upsertExecutionCompleteEvent(processingMessage.id, syntheticEvent, now);
+    this.repository.upsertExecutionCompleteEventWithViewDelta(
+      processingMessage.id,
+      syntheticEvent,
+      now
+    );
     this.ctx.waitUntil(
       this.recordTerminalMessage({
         messageId: processingMessage.id,
@@ -382,7 +386,7 @@ export class SessionMessageQueue {
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
-    this.repository.createEvent({
+    this.repository.createEventWithViewDelta({
       id: generateId(),
       type: "user_message",
       data: JSON.stringify(userMessageEvent),
@@ -469,7 +473,7 @@ export class SessionMessageQueue {
       this.log
     );
     try {
-      this.repository.createMessageWithAttachments(
+      this.repository.createMessageWithAttachmentsWithViewDelta(
         {
           id: messageId,
           authorId: data.participant.id,

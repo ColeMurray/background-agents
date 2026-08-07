@@ -144,6 +144,8 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: Date.now(),
     clientId: "client-1",
+    viewProtocol: 1,
+    appliedViewRevision: 0,
     ws: createFakeWebSocket(),
     ...overrides,
   };

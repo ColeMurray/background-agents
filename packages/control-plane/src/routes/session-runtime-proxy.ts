@@ -61,6 +61,21 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
   });
 }
 
+function clientOnlyProxyRoute(config: SimpleProxyRouteConfig): Route {
+  return sessionRoute({
+    method: config.method,
+    pattern: parsePattern(config.routePath),
+    handler: async (_request, _env, match, ctx) => {
+      if (ctx.principal?.kind !== "user") {
+        return error("Human user authentication required", 403);
+      }
+      const sessionId = getSessionId(match);
+      if (sessionId instanceof Response) return sessionId;
+      return ctx.sessionRuntime.fetch(sessionId, config.internalPath);
+    },
+  });
+}
+
 async function handleAddParticipant(
   request: Request,
   _env: Env,
@@ -225,6 +240,17 @@ function lifecycleProxyRoute(
 }
 
 export const sessionRuntimeProxyRoutes: Route[] = [
+  simpleProxyRoute({
+    method: "GET",
+    routePath: "/sessions/:id/bootstrap",
+    internalPath: SessionInternalPaths.bootstrap,
+    notFoundMessage: "Session not found",
+  }),
+  clientOnlyProxyRoute({
+    method: "GET",
+    routePath: "/sessions/:id/access",
+    internalPath: SessionInternalPaths.access,
+  }),
   simpleProxyRoute({
     method: "GET",
     routePath: "/sessions/:id",

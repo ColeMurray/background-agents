@@ -29,6 +29,7 @@ function createProcessor() {
     upsertTokenEvent: vi.fn(),
     upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
+    createArtifactAndEventWithViewDelta: vi.fn(),
     createEvent: vi.fn(),
     addSessionCost: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
@@ -43,6 +44,16 @@ function createProcessor() {
     updateSandboxGitSyncStatus: vi.fn(),
     updateSessionCurrentSha: vi.fn(),
   };
+  Object.assign(repository, {
+    upsertTokenEventWithViewDelta: repository.upsertTokenEvent,
+    upsertToolCallEventWithViewDelta: repository.upsertToolCallEvent,
+    createArtifactWithViewDelta: repository.createArtifact,
+    createEventWithViewDelta: repository.createEvent,
+    createGitSyncEventWithViewDelta: repository.createEvent,
+    addSessionCostWithViewDelta: repository.addSessionCost,
+    upsertExecutionCompleteEventWithViewDelta: repository.upsertExecutionCompleteEvent,
+    updateMessageCompletionWithViewDelta: repository.updateMessageCompletion,
+  });
 
   const callbackService = {
     notifyToolCall: vi.fn(async () => {}),
@@ -230,24 +241,26 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.createArtifact).toHaveBeenCalledWith({
-      id: expect.any(String),
-      type: "screenshot",
-      url: "sessions/session-1/media/artifact-1.png",
-      metadata: JSON.stringify({
-        objectKey: "sessions/session-1/media/artifact-1.png",
-        mimeType: "image/png",
-        sizeBytes: 512,
-      }),
-      createdAt: expect.any(Number),
-    });
-    expect(h.repository.createEvent).toHaveBeenCalledWith({
-      id: expect.any(String),
-      type: "artifact",
-      data: expect.any(String),
-      messageId: "msg-1",
-      createdAt: expect.any(Number),
-    });
+    expect(h.repository.createArtifactAndEventWithViewDelta).toHaveBeenCalledWith(
+      {
+        id: expect.any(String),
+        type: "screenshot",
+        url: "sessions/session-1/media/artifact-1.png",
+        metadata: JSON.stringify({
+          objectKey: "sessions/session-1/media/artifact-1.png",
+          mimeType: "image/png",
+          sizeBytes: 512,
+        }),
+        createdAt: expect.any(Number),
+      },
+      {
+        id: expect.any(String),
+        type: "artifact",
+        data: expect.any(String),
+        messageId: "msg-1",
+        createdAt: expect.any(Number),
+      }
+    );
     expect(h.broadcast).toHaveBeenNthCalledWith(1, {
       type: "artifact_created",
       artifact: {

@@ -146,6 +146,8 @@ export interface ClientInfo {
   status: "active" | "idle" | "away";
   lastSeen: number;
   clientId: string;
+  viewProtocol: 1 | 2;
+  appliedViewRevision: number;
   ws: WebSocket;
   lastFetchHistoryAt?: number;
 }

@@ -16,9 +16,13 @@ import type {
   SessionRepositoryRow,
   SessionViewDeltaRow,
 } from "./types";
-import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import { sandboxEventSchema, toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
 import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import { sessionDeltaSchema, type SessionDelta } from "@open-inspect/shared/types/server-messages";
+import {
+  sessionDeltaSchema,
+  type SessionDelta,
+  type SessionViewEvent,
+} from "@open-inspect/shared/types/server-messages";
 import type {
   SessionStatus,
   SandboxStatus,
@@ -28,22 +32,30 @@ import type {
   SpawnSource,
   ArtifactType,
 } from "../types";
+import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import {
   eventTimelineCursorFromRow,
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
+import { findPrArtifactForRepo } from "./pr-artifacts";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
+type GitSyncEvent = Extract<SandboxEvent, { type: "git_sync" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 const CURRENT_VIEW_REVISION_SQL =
   "SELECT current_revision FROM session_view_metadata WHERE singleton = 1";
+
+export const DEFAULT_SESSION_VIEW_RETENTION_REVISIONS = 10_000;
+export const DEFAULT_SESSION_VIEW_RETENTION_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const SESSION_VIEW_RETENTION_INTERVAL = 100;
 
 function requireViewRevision(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -63,6 +75,8 @@ export interface WsClientMappingResult {
   scm_login: string | null;
   /** Dormant legacy column may still be present on older mapping fixtures. */
   auth_name?: string | null;
+  view_protocol?: 1 | 2;
+  applied_view_revision?: number;
 }
 
 export interface SessionViewDeltaRecord {
@@ -255,6 +269,8 @@ export interface WsClientMappingData {
   wsId: string;
   participantId: string;
   clientId: string;
+  viewProtocol?: 1 | 2;
+  appliedViewRevision?: number;
   createdAt: number;
 }
 
@@ -299,20 +315,16 @@ export class SessionRepository {
     return revision;
   }
 
-  private appendSessionViewDelta(
-    delta: SessionDelta,
-    createdAt: number,
-    mutateProjection: () => void
-  ): number {
+  private appendSessionViewDelta(createdAt: number, mutateProjection: () => SessionDelta): number {
     requireViewRevision(createdAt, "Session view delta timestamp");
-    const payload = JSON.stringify(sessionDeltaSchema.parse(delta));
 
-    return this.transactionSync(() => {
+    const revision = this.transactionSync(() => {
       const currentRevision = this.getCurrentViewRevision();
       const revision = currentRevision + 1;
       requireViewRevision(revision, "Next session view revision");
 
-      mutateProjection();
+      const delta = sessionDeltaSchema.parse(mutateProjection());
+      const payload = JSON.stringify(delta);
 
       this.sql.exec(
         `UPDATE session_view_metadata SET current_revision = ? WHERE singleton = 1`,
@@ -326,15 +338,25 @@ export class SessionRepository {
       );
       return revision;
     });
+    if (revision % SESSION_VIEW_RETENTION_INTERVAL === 0) {
+      this.pruneSessionViewDeltas({
+        maxRetainedRevisions: DEFAULT_SESSION_VIEW_RETENTION_REVISIONS,
+        createdBefore: Math.max(0, createdAt - DEFAULT_SESSION_VIEW_RETENTION_AGE_MS),
+      });
+    }
+    return revision;
   }
 
   updateSessionTitleWithViewDelta(sessionId: string, title: string, updatedAt: number): number {
-    const delta: SessionDelta = {
-      operations: [{ type: "state_patch", patch: { title } }],
-    };
-    return this.appendSessionViewDelta(delta, updatedAt, () => {
+    return this.appendSessionViewDelta(updatedAt, () => {
       this.updateSessionTitle(sessionId, title, updatedAt);
+      return { operations: [{ type: "state_patch", patch: { title } }] };
     });
+  }
+
+  getSessionViewDelta(revision: number): SessionViewDeltaRecord | null {
+    const records = this.readContiguousSessionViewDeltas(revision - 1, revision);
+    return records?.[0] ?? null;
   }
 
   readContiguousSessionViewDeltas(
@@ -458,6 +480,17 @@ export class SessionRepository {
     this.sql.exec(`UPDATE session SET branch_name = ? WHERE id = ?`, branchName, sessionId);
   }
 
+  updateSessionBranchWithViewDelta(
+    sessionId: string,
+    branchName: string,
+    updatedAt: number
+  ): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSessionBranch(sessionId, branchName);
+      return { operations: [{ type: "state_patch", patch: { branchName } }] };
+    });
+  }
+
   updateSessionCurrentSha(sha: string): void {
     // Each session DO has exactly one session row
     this.sql.exec(
@@ -498,6 +531,17 @@ export class SessionRepository {
     );
   }
 
+  updateSessionStatusWithViewDelta(
+    sessionId: string,
+    status: SessionStatus,
+    updatedAt: number
+  ): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSessionStatus(sessionId, status, updatedAt);
+      return { operations: [{ type: "state_patch", patch: { status } }] };
+    });
+  }
+
   addSessionCost(cost: number, updatedAt: number): void {
     this.sql.exec(
       `UPDATE session
@@ -506,6 +550,14 @@ export class SessionRepository {
       cost,
       updatedAt
     );
+  }
+
+  addSessionCostWithViewDelta(cost: number, updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.addSessionCost(cost, updatedAt);
+      const totalCost = this.getSession()?.total_cost ?? 0;
+      return { operations: [{ type: "state_patch", patch: { totalCost } }] };
+    });
   }
 
   // === SESSION REPOSITORIES ===
@@ -562,6 +614,49 @@ export class SessionRepository {
     );
   }
 
+  updateSessionRepositoryBranchWithViewDelta(
+    repoOwner: string,
+    repoName: string,
+    branchName: string,
+    updatedAt: number
+  ): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSessionRepositoryBranch(repoOwner, repoName, branchName);
+      return {
+        operations: [
+          {
+            type: "state_patch",
+            patch: { repositories: this.getSessionRepositoryStateProjection() },
+          },
+        ],
+      };
+    });
+  }
+
+  private getSessionRepositoryStateProjection(): SessionRepositoryState[] {
+    const session = this.getSession();
+    if (!session) return [];
+    const artifacts = this.listArtifacts();
+    return this.getSessionRepositories().map((member) => ({
+      position: member.position,
+      repoOwner: member.repoOwner,
+      repoName: member.repoName,
+      repoId: member.row?.repo_id ?? (member.isPrimary ? session.repo_id : null),
+      baseBranch: member.baseBranch ?? "main",
+      branchName:
+        member.row?.branch_name ?? (member.isPrimary ? (session.branch_name ?? null) : null),
+      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session.base_sha ?? null) : null),
+      currentSha:
+        member.row?.current_sha ?? (member.isPrimary ? (session.current_sha ?? null) : null),
+      prUrl:
+        findPrArtifactForRepo(
+          artifacts,
+          { repoOwner: member.repoOwner, repoName: member.repoName },
+          member.isPrimary
+        )?.url ?? null,
+    }));
+  }
+
   setSessionDiffBaselines(
     repositories: Array<{
       position: number;
@@ -571,32 +666,65 @@ export class SessionRepository {
       isPrimary: boolean;
     }>
   ): void {
-    this.transactionSync(() => {
-      for (const repository of repositories) {
-        this.sql.exec(
-          `UPDATE session_repositories
+    this.transactionSync(() => this.setSessionDiffBaselineRows(repositories));
+  }
+
+  private setSessionDiffBaselineRows(
+    repositories: Array<{
+      position: number;
+      repoOwner: string;
+      repoName: string;
+      baseSha: string;
+      isPrimary: boolean;
+    }>
+  ): void {
+    for (const repository of repositories) {
+      this.sql.exec(
+        `UPDATE session_repositories
            SET base_sha = ?
            WHERE position = ?
              AND repo_owner = ? COLLATE NOCASE
              AND repo_name = ? COLLATE NOCASE
              AND base_sha IS NULL`,
-          repository.baseSha,
-          repository.position,
-          repository.repoOwner,
-          repository.repoName
-        );
-        if (repository.isPrimary) {
-          this.sql.exec(
-            `UPDATE session SET base_sha = ?
+        repository.baseSha,
+        repository.position,
+        repository.repoOwner,
+        repository.repoName
+      );
+      if (repository.isPrimary) {
+        this.sql.exec(
+          `UPDATE session SET base_sha = ?
              WHERE repo_owner = ? COLLATE NOCASE
                AND repo_name = ? COLLATE NOCASE
                AND base_sha IS NULL`,
-            repository.baseSha,
-            repository.repoOwner,
-            repository.repoName
-          );
-        }
+          repository.baseSha,
+          repository.repoOwner,
+          repository.repoName
+        );
       }
+    }
+  }
+
+  setSessionDiffBaselinesWithViewDelta(
+    repositories: Array<{
+      position: number;
+      repoOwner: string;
+      repoName: string;
+      baseSha: string;
+      isPrimary: boolean;
+    }>,
+    updatedAt: number
+  ): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.setSessionDiffBaselineRows(repositories);
+      return {
+        operations: [
+          {
+            type: "state_patch",
+            patch: { repositories: this.getSessionRepositoryStateProjection() },
+          },
+        ],
+      };
     });
   }
 
@@ -636,6 +764,13 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxStatusWithViewDelta(status: SandboxStatus, updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSandboxStatus(status);
+      return { operations: [{ type: "state_patch", patch: { sandboxStatus: status } }] };
+    });
+  }
+
   updateSandboxForSpawn(data: SpawnSandboxData): void {
     this.sql.exec(
       `UPDATE sandbox SET
@@ -644,13 +779,38 @@ export class SessionRepository {
          auth_token_hash = ?,
          auth_token = NULL,
          modal_sandbox_id = ?,
-         modal_object_id = NULL
+         modal_object_id = NULL,
+         code_server_url = NULL,
+         code_server_password = NULL,
+         tunnel_urls = NULL,
+         ttyd_url = NULL,
+         ttyd_token = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
       data.authTokenHash,
       data.modalSandboxId
     );
+  }
+
+  updateSandboxForSpawnWithViewDelta(data: SpawnSandboxData): number {
+    return this.appendSessionViewDelta(data.createdAt, () => {
+      this.updateSandboxForSpawn(data);
+      return {
+        operations: [
+          {
+            type: "state_patch",
+            patch: {
+              sandboxStatus: data.status,
+              codeServerUrl: null,
+              tunnelUrls: null,
+              ttydUrl: null,
+              sandboxDashboardUrl: null,
+            },
+          },
+        ],
+      };
+    });
   }
 
   updateSandboxForResume(data: ResumeSandboxData): void {
@@ -665,11 +825,33 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxForResumeWithViewDelta(data: ResumeSandboxData): number {
+    return this.appendSessionViewDelta(data.createdAt, () => {
+      this.updateSandboxForResume(data);
+      return {
+        operations: [{ type: "state_patch", patch: { sandboxStatus: data.status } }],
+      };
+    });
+  }
+
   updateSandboxModalObjectId(modalObjectId: string): void {
     this.sql.exec(
       `UPDATE sandbox SET modal_object_id = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       modalObjectId
     );
+  }
+
+  updateSandboxModalObjectIdWithViewDelta(
+    modalObjectId: string,
+    sandboxDashboardUrl: string | null,
+    updatedAt: number
+  ): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSandboxModalObjectId(modalObjectId);
+      return {
+        operations: [{ type: "state_patch", patch: { sandboxDashboardUrl } }],
+      };
+    });
   }
 
   updateSandboxSnapshotImageId(sandboxId: string, imageId: string): void {
@@ -713,16 +895,37 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxCodeServerWithViewDelta(url: string, password: string, updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSandboxCodeServer(url, password);
+      return { operations: [{ type: "state_patch", patch: { codeServerUrl: url } }] };
+    });
+  }
+
   clearSandboxCodeServer(): void {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = NULL, code_server_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
   }
 
+  clearSandboxCodeServerWithViewDelta(updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.clearSandboxCodeServer();
+      return { operations: [{ type: "state_patch", patch: { codeServerUrl: null } }] };
+    });
+  }
+
   clearSandboxCodeServerUrl(): void {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
+  }
+
+  clearSandboxCodeServerUrlWithViewDelta(updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.clearSandboxCodeServerUrl();
+      return { operations: [{ type: "state_patch", patch: { codeServerUrl: null } }] };
+    });
   }
 
   updateSandboxTunnelUrls(urls: Record<string, string>): void {
@@ -732,10 +935,24 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxTunnelUrlsWithViewDelta(urls: Record<string, string>, updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSandboxTunnelUrls(urls);
+      return { operations: [{ type: "state_patch", patch: { tunnelUrls: urls } }] };
+    });
+  }
+
   clearSandboxTunnelUrls(): void {
     this.sql.exec(
       `UPDATE sandbox SET tunnel_urls = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
+  }
+
+  clearSandboxTunnelUrlsWithViewDelta(updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.clearSandboxTunnelUrls();
+      return { operations: [{ type: "state_patch", patch: { tunnelUrls: null } }] };
+    });
   }
 
   updateSandboxTtyd(url: string, encryptedToken: string): void {
@@ -746,10 +963,24 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxTtydWithViewDelta(url: string, encryptedToken: string, updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.updateSandboxTtyd(url, encryptedToken);
+      return { operations: [{ type: "state_patch", patch: { ttydUrl: url } }] };
+    });
+  }
+
   clearSandboxTtyd(): void {
     this.sql.exec(
       `UPDATE sandbox SET ttyd_url = NULL, ttyd_token = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
+  }
+
+  clearSandboxTtydWithViewDelta(updatedAt: number): number {
+    return this.appendSessionViewDelta(updatedAt, () => {
+      this.clearSandboxTtyd();
+      return { operations: [{ type: "state_patch", patch: { ttydUrl: null } }] };
+    });
   }
 
   resetCircuitBreaker(): void {
@@ -958,12 +1189,32 @@ export class SessionRepository {
     });
   }
 
+  createMessageWithAttachmentsWithViewDelta(
+    data: CreateMessageData,
+    attachmentIds: string[]
+  ): number {
+    return this.appendSessionViewDelta(data.createdAt, () => {
+      this.attachments.claimForMessage(data.id, attachmentIds);
+      this.createMessage(data);
+      return {
+        operations: [{ type: "state_patch", patch: { messageCount: this.getMessageCount() } }],
+      };
+    });
+  }
+
   updateMessageToProcessing(messageId: string, startedAt: number): void {
     this.sql.exec(
       `UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?`,
       startedAt,
       messageId
     );
+  }
+
+  updateMessageToProcessingWithViewDelta(messageId: string, startedAt: number): number {
+    return this.appendSessionViewDelta(startedAt, () => {
+      this.updateMessageToProcessing(messageId, startedAt);
+      return { operations: [{ type: "state_patch", patch: { isProcessing: true } }] };
+    });
   }
 
   updateMessageCompletion(messageId: string, status: MessageStatus, completedAt: number): void {
@@ -973,6 +1224,24 @@ export class SessionRepository {
       completedAt,
       messageId
     );
+  }
+
+  updateMessageCompletionWithViewDelta(
+    messageId: string,
+    status: MessageStatus,
+    completedAt: number
+  ): number {
+    return this.appendSessionViewDelta(completedAt, () => {
+      this.updateMessageCompletion(messageId, status, completedAt);
+      return {
+        operations: [
+          {
+            type: "state_patch",
+            patch: { isProcessing: this.getProcessingMessage() !== null },
+          },
+        ],
+      };
+    });
   }
 
   getMessageTimestamps(
@@ -1033,6 +1302,42 @@ export class SessionRepository {
     );
   }
 
+  createEventWithViewDelta(data: CreateEventData): number | null {
+    return this.writeEventViewDelta(data.createdAt, () => this.createEvent(data), data.id);
+  }
+
+  createGitSyncEventWithViewDelta(data: CreateEventData, event: GitSyncEvent): number {
+    return this.appendSessionViewDelta(data.createdAt, () => {
+      this.createEvent(data);
+      this.updateSandboxGitSyncStatus(event.status);
+      if (event.sha) this.updateSessionCurrentSha(event.sha);
+
+      const row = this.rows<EventRow>(
+        this.sql.exec(`SELECT * FROM events WHERE id = ?`, data.id)
+      )[0];
+      if (!row || !Number.isSafeInteger(row.timeline_sequence) || row.timeline_sequence! < 0) {
+        throw new Error("Persisted event is missing a stable timeline sequence");
+      }
+      const operations: SessionDelta["operations"] = [
+        {
+          type: "event_upsert",
+          item: {
+            eventId: row.id,
+            timelineSequence: row.timeline_sequence!,
+            event,
+          },
+        },
+      ];
+      if (event.sha) {
+        operations.push({
+          type: "state_patch",
+          patch: { repositories: this.getSessionRepositoryStateProjection() },
+        });
+      }
+      return { operations };
+    });
+  }
+
   private upsertEventByMessageId<TType extends UpsertableEventType>(
     type: TType,
     messageId: string,
@@ -1059,6 +1364,19 @@ export class SessionRepository {
     this.upsertEventByMessageId("token", messageId, event, createdAt);
   }
 
+  upsertTokenEventWithViewDelta(
+    messageId: string,
+    event: TokenEvent,
+    createdAt: number
+  ): number | null {
+    const id = `token:${messageId}`;
+    return this.writeEventViewDelta(
+      createdAt,
+      () => this.upsertTokenEvent(messageId, event, createdAt),
+      id
+    );
+  }
+
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
     const id = `tool_call:${toolCallIdentityKey(event)}`;
     this.sql.exec(
@@ -1075,12 +1393,60 @@ export class SessionRepository {
     );
   }
 
+  upsertToolCallEventWithViewDelta(
+    messageId: string,
+    event: ToolCallEvent,
+    createdAt: number
+  ): number | null {
+    const id = `tool_call:${toolCallIdentityKey(event)}`;
+    return this.writeEventViewDelta(
+      createdAt,
+      () => this.upsertToolCallEvent(messageId, event, createdAt),
+      id
+    );
+  }
+
   upsertExecutionCompleteEvent(
     messageId: string,
     event: ExecutionCompleteEvent,
     createdAt: number
   ): void {
     this.upsertEventByMessageId("execution_complete", messageId, event, createdAt);
+  }
+
+  upsertExecutionCompleteEventWithViewDelta(
+    messageId: string,
+    event: ExecutionCompleteEvent,
+    createdAt: number
+  ): number | null {
+    const id = `execution_complete:${messageId}`;
+    return this.writeEventViewDelta(
+      createdAt,
+      () => this.upsertExecutionCompleteEvent(messageId, event, createdAt),
+      id
+    );
+  }
+
+  private writeEventViewDelta(
+    createdAt: number,
+    write: () => void,
+    eventId: string
+  ): number | null {
+    return this.appendSessionViewDelta(createdAt, () => {
+      write();
+      const row = this.rows<EventRow>(
+        this.sql.exec(`SELECT * FROM events WHERE id = ?`, eventId)
+      )[0];
+      if (!row || !Number.isSafeInteger(row.timeline_sequence) || row.timeline_sequence! < 0) {
+        throw new Error("Persisted event is missing a stable timeline sequence");
+      }
+      const item: SessionViewEvent = {
+        eventId: row.id,
+        timelineSequence: row.timeline_sequence!,
+        event: sandboxEventSchema.parse(JSON.parse(row.data)),
+      };
+      return { operations: [{ type: "event_upsert", item }] };
+    });
   }
 
   listEventPage(options: ListEventPageOptions): EventPage {
@@ -1174,6 +1540,58 @@ export class SessionRepository {
     );
   }
 
+  createArtifactWithViewDelta(data: CreateArtifactData): number {
+    return this.appendSessionViewDelta(data.createdAt, () => {
+      this.createArtifact(data);
+      const operations: SessionDelta["operations"] = [
+        { type: "artifact_upsert", artifact: artifactFromStoredData(data) },
+      ];
+      if (data.type === "pr") {
+        operations.push({
+          type: "state_patch",
+          patch: { repositories: this.getSessionRepositoryStateProjection() },
+        });
+      }
+      return {
+        operations,
+      };
+    });
+  }
+
+  createArtifactAndEventWithViewDelta(
+    artifactData: CreateArtifactData,
+    eventData: CreateEventData
+  ): number {
+    return this.appendSessionViewDelta(artifactData.createdAt, () => {
+      this.createArtifact(artifactData);
+      this.createEvent(eventData);
+      const row = this.rows<EventRow>(
+        this.sql.exec(`SELECT * FROM events WHERE id = ?`, eventData.id)
+      )[0];
+      if (!row || !Number.isSafeInteger(row.timeline_sequence) || row.timeline_sequence! < 0) {
+        throw new Error("Persisted event is missing a stable timeline sequence");
+      }
+      const operations: SessionDelta["operations"] = [
+        { type: "artifact_upsert", artifact: artifactFromStoredData(artifactData) },
+        {
+          type: "event_upsert",
+          item: {
+            eventId: row.id,
+            timelineSequence: row.timeline_sequence!,
+            event: sandboxEventSchema.parse(JSON.parse(row.data)),
+          },
+        },
+      ];
+      if (artifactData.type === "pr") {
+        operations.push({
+          type: "state_patch",
+          patch: { repositories: this.getSessionRepositoryStateProjection() },
+        });
+      }
+      return { operations };
+    });
+  }
+
   updateArtifact(artifactId: string, data: UpdateArtifactData): void {
     this.sql.exec(
       `UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?`,
@@ -1182,6 +1600,24 @@ export class SessionRepository {
       data.updatedAt,
       artifactId
     );
+  }
+
+  updateArtifactWithViewDelta(artifactId: string, data: UpdateArtifactData): number {
+    return this.appendSessionViewDelta(data.updatedAt, () => {
+      this.updateArtifact(artifactId, data);
+      const row = this.getArtifactById(artifactId);
+      if (!row) throw new Error("Updated artifact is missing");
+      const operations: SessionDelta["operations"] = [
+        { type: "artifact_upsert", artifact: artifactFromRow(row) },
+      ];
+      if (row.type === "pr") {
+        operations.push({
+          type: "state_patch",
+          patch: { repositories: this.getSessionRepositoryStateProjection() },
+        });
+      }
+      return { operations };
+    });
   }
 
   listArtifacts(): ArtifactRow[] {
@@ -1199,18 +1635,31 @@ export class SessionRepository {
 
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO ws_client_mapping (ws_id, participant_id, client_id, created_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO ws_client_mapping
+         (ws_id, participant_id, client_id, view_protocol, applied_view_revision, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       data.wsId,
       data.participantId,
       data.clientId,
+      data.viewProtocol ?? 1,
+      data.appliedViewRevision ?? 0,
       data.createdAt
+    );
+  }
+
+  updateWsClientViewRevision(wsId: string, revision: number): void {
+    requireViewRevision(revision, "Applied client view revision");
+    this.sql.exec(
+      `UPDATE ws_client_mapping SET applied_view_revision = ? WHERE ws_id = ?`,
+      revision,
+      wsId
     );
   }
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+      `SELECT m.participant_id, m.client_id, m.view_protocol, m.applied_view_revision,
+              p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,
@@ -1237,4 +1686,34 @@ export class SessionRepository {
     const rows = result.toArray() as Array<{ author_id: string }>;
     return rows[0] ?? null;
   }
+}
+
+function parseArtifactMetadata(metadata: string | null): Record<string, unknown> | null {
+  if (!metadata) return null;
+  const parsed: unknown = JSON.parse(metadata);
+  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
+}
+
+function artifactFromStoredData(data: CreateArtifactData): SessionArtifact {
+  return {
+    id: data.id,
+    type: data.type,
+    url: data.url,
+    metadata: parseArtifactMetadata(data.metadata),
+    createdAt: data.createdAt,
+    updatedAt: data.createdAt,
+  };
+}
+
+function artifactFromRow(row: ArtifactRow): SessionArtifact {
+  return {
+    id: row.id,
+    type: row.type,
+    url: row.url,
+    metadata: parseArtifactMetadata(row.metadata),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }

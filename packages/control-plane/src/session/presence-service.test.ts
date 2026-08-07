@@ -24,6 +24,8 @@ function createMockClient(overrides?: Partial<ClientInfo>): ClientInfo {
     status: "active",
     lastSeen: 1000,
     clientId: "client-1",
+    viewProtocol: 1,
+    appliedViewRevision: 0,
     ws: {} as WebSocket,
     ...overrides,
   };

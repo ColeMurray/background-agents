@@ -64,7 +64,19 @@ export interface SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
 
   /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    viewProtocol?: 1 | 2,
+    appliedViewRevision?: number
+  ): void;
+
+  getClientViewState(
+    ws: WebSocket
+  ): { wsId: string; viewProtocol: 1 | 2; appliedViewRevision: number } | null;
+  advanceClientViewRevision(ws: WebSocket, revision: number): void;
+  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
 
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
   hasPersistedMapping(wsId: string): boolean;
@@ -89,6 +101,7 @@ export interface SessionWebSocketManager {
 
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private clients = new Map<WebSocket, ClientInfo>();
+  private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
 
   constructor(
@@ -231,13 +244,56 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return this.repository.getWsClientMapping(parsed.wsId);
   }
 
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void {
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    viewProtocol: 1 | 2 = 1,
+    appliedViewRevision = 0
+  ): void {
     this.repository.upsertWsClientMapping({
       wsId,
       participantId,
       clientId,
+      viewProtocol,
+      appliedViewRevision,
       createdAt: Date.now(),
     });
+  }
+
+  getClientViewState(
+    ws: WebSocket
+  ): { wsId: string; viewProtocol: 1 | 2; appliedViewRevision: number } | null {
+    const parsed = this.classify(ws);
+    if (parsed.kind !== "client" || !parsed.wsId) return null;
+    const client = this.clients.get(ws);
+    if (client) {
+      return {
+        wsId: parsed.wsId,
+        viewProtocol: client.viewProtocol,
+        appliedViewRevision: client.appliedViewRevision,
+      };
+    }
+    const mapping = this.repository.getWsClientMapping(parsed.wsId);
+    if (!mapping) return null;
+    return {
+      wsId: parsed.wsId,
+      viewProtocol: mapping.view_protocol ?? 1,
+      appliedViewRevision: mapping.applied_view_revision ?? 0,
+    };
+  }
+
+  advanceClientViewRevision(ws: WebSocket, revision: number): void {
+    const state = this.getClientViewState(ws);
+    if (!state) return;
+    const client = this.clients.get(ws);
+    if (client) client.appliedViewRevision = revision;
+    this.repository.updateWsClientViewRevision(state.wsId, revision);
+  }
+
+  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
+    if (synchronizing) this.synchronizingClients.add(ws);
+    else this.synchronizingClients.delete(ws);
   }
 
   hasPersistedMapping(wsId: string): boolean {
@@ -312,6 +368,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
     if (ws.readyState !== WebSocket.OPEN) return;
     if (this.clients.has(ws)) return;
+    if (this.synchronizingClients.has(ws)) return;
     if (this.hasPersistedMapping(wsId)) return;
 
     this.log.warn("ws.connect", {

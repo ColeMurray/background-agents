@@ -1297,7 +1297,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO ws_client_mapping");
-      expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000]);
+      expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1, 0, 1000]);
     });
   });
 

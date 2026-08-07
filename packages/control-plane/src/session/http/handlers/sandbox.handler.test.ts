@@ -6,8 +6,9 @@ import { createSandboxHandler } from "./sandbox.handler";
 function createHandler() {
   const repository = {
     createParticipant: vi.fn(),
-    createArtifact: vi.fn(),
-    createEvent: vi.fn(),
+    createArtifactWithViewDelta: vi.fn(),
+    createEventWithViewDelta: vi.fn(),
+    createArtifactAndEventWithViewDelta: vi.fn(),
     getProcessingMessage: vi.fn(),
   };
   const processSandboxEvent = vi.fn();
@@ -220,37 +221,39 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok", artifactId: "artifact-1" });
-    expect(repository.createArtifact).toHaveBeenCalledWith({
-      id: "artifact-1",
-      type: "screenshot",
-      url: "sessions/session-1/media/artifact-1.png",
-      metadata: JSON.stringify({
-        objectKey: "sessions/session-1/media/artifact-1.png",
-        mimeType: "image/png",
-        sizeBytes: 128,
-      }),
-      createdAt: 1234,
-    });
-    expect(repository.createEvent).toHaveBeenCalledWith({
-      id: "event-1",
-      type: "artifact",
-      data: JSON.stringify({
-        type: "artifact",
-        artifactType: "screenshot",
-        artifactId: "artifact-1",
+    expect(repository.createArtifactAndEventWithViewDelta).toHaveBeenCalledWith(
+      {
+        id: "artifact-1",
+        type: "screenshot",
         url: "sessions/session-1/media/artifact-1.png",
-        metadata: {
+        metadata: JSON.stringify({
           objectKey: "sessions/session-1/media/artifact-1.png",
           mimeType: "image/png",
           sizeBytes: 128,
-        },
+        }),
+        createdAt: 1234,
+      },
+      {
+        id: "event-1",
+        type: "artifact",
+        data: JSON.stringify({
+          type: "artifact",
+          artifactType: "screenshot",
+          artifactId: "artifact-1",
+          url: "sessions/session-1/media/artifact-1.png",
+          metadata: {
+            objectKey: "sessions/session-1/media/artifact-1.png",
+            mimeType: "image/png",
+            sizeBytes: 128,
+          },
+          messageId: "msg-1",
+          sandboxId: "sandbox-1",
+          timestamp: 1.234,
+        }),
         messageId: "msg-1",
-        sandboxId: "sandbox-1",
-        timestamp: 1.234,
-      }),
-      messageId: "msg-1",
-      createdAt: 1234,
-    });
+        createdAt: 1234,
+      }
+    );
     expect(broadcast).toHaveBeenNthCalledWith(1, {
       type: "artifact_created",
       artifact: {
@@ -298,8 +301,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid media artifact body" });
-    expect(repository.createArtifact).not.toHaveBeenCalled();
-    expect(repository.createEvent).not.toHaveBeenCalled();
+    expect(repository.createArtifactAndEventWithViewDelta).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -325,8 +327,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "No active prompt" });
-    expect(repository.createArtifact).not.toHaveBeenCalled();
-    expect(repository.createEvent).not.toHaveBeenCalled();
+    expect(repository.createArtifactAndEventWithViewDelta).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
   });
 

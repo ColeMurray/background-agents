@@ -1,12 +1,17 @@
 import type { ClientMessage, ServerMessage } from "../types";
-import type {
-  EventResponse,
-  ListEventsResponse,
-  SandboxEvent,
+import {
+  sandboxEventSchema,
+  type EventResponse,
+  type ListEventsResponse,
+  type SandboxEvent,
 } from "@open-inspect/shared/types/sandbox-events";
 import { encodeEventTimelineCursor, type EventListCursor } from "./event-cursor";
 import type { EventRow } from "./types";
 import type { SessionRepository } from "./repository";
+import type {
+  SessionBootstrap,
+  SessionViewEvent,
+} from "@open-inspect/shared/types/server-messages";
 
 const DEFAULT_REPLAY_LIMIT = 500;
 const DEFAULT_HISTORY_LIMIT = 200;
@@ -19,6 +24,7 @@ export type EventStreamCursor = NonNullable<
 >;
 export type SessionReplay = NonNullable<Extract<ServerMessage, { type: "subscribed" }>["replay"]>;
 export type SessionHistoryPage = Omit<Extract<ServerMessage, { type: "history_page" }>, "type">;
+export type SessionViewReplay = SessionBootstrap["replay"];
 
 export type SessionEventStreamRepository = Pick<
   SessionRepository,
@@ -47,6 +53,15 @@ export class SessionEventStream {
     };
   }
 
+  getViewReplay(limit = DEFAULT_REPLAY_LIMIT): SessionViewReplay {
+    const rows = this.repository.getEventsForReplay(limit);
+    return {
+      events: parseSessionViewEvents(rows),
+      hasMore: rows.length >= limit,
+      cursor: rows.length > 0 ? cursorFromRow(rows[0]) : null,
+    };
+  }
+
   getHistoryPage(input: { cursor: EventStreamCursor; limit?: number }): SessionHistoryPage {
     const page = this.repository.getEventTimelinePage({
       cursor: {
@@ -61,6 +76,36 @@ export class SessionEventStream {
 
     return {
       items: parseSandboxEvents(page.events),
+      hasMore: page.hasMore,
+      cursor: page.nextCursor
+        ? {
+            timestamp: page.nextCursor.createdAt,
+            id: page.nextCursor.id,
+            ...(page.nextCursor.sequence === undefined
+              ? {}
+              : { sequence: page.nextCursor.sequence }),
+          }
+        : null,
+    };
+  }
+
+  getViewHistoryPage(input: { cursor: EventStreamCursor; limit?: number }): {
+    items: SessionViewEvent[];
+    hasMore: boolean;
+    cursor: EventStreamCursor | null;
+  } {
+    const page = this.repository.getEventTimelinePage({
+      cursor: {
+        kind: "timeline",
+        createdAt: input.cursor.timestamp,
+        id: input.cursor.id,
+        sequence: input.cursor.sequence,
+      },
+      excludeTypes: HISTORY_EXCLUDED_TYPES,
+      limit: clampHistoryLimit(input.limit),
+    });
+    return {
+      items: parseSessionViewEvents(page.events),
       hasMore: page.hasMore,
       cursor: page.nextCursor
         ? {
@@ -97,6 +142,25 @@ function parseSandboxEvents(rows: EventRow[]): SandboxEvent[] {
       events.push(JSON.parse(row.data) as SandboxEvent);
     } catch {
       // Preserve existing replay/history behavior: malformed events are skipped.
+    }
+  }
+  return events;
+}
+
+function parseSessionViewEvents(rows: EventRow[]): SessionViewEvent[] {
+  const events: SessionViewEvent[] = [];
+  for (const row of rows) {
+    if (!Number.isSafeInteger(row.timeline_sequence) || row.timeline_sequence! < 0) continue;
+    try {
+      const event = sandboxEventSchema.safeParse(JSON.parse(row.data));
+      if (!event.success) continue;
+      events.push({
+        eventId: row.id,
+        timelineSequence: row.timeline_sequence!,
+        event: event.data,
+      });
+    } catch {
+      // Boundary validation tolerates legacy event shapes; malformed JSON is omitted here.
     }
   }
   return events;

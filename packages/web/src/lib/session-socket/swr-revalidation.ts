@@ -38,6 +38,27 @@ export function swrKeysToRevalidate(
     case "diff_state_changed":
       return [`/api/sessions/${sessionId}/diff`];
 
+    case "session_access_changed":
+      return [`/api/sessions/${sessionId}/access`];
+
+    case "session_ready":
+      return [
+        `/api/sessions/${sessionId}/diff`,
+        `/api/sessions/${sessionId}/children`,
+        `/api/sessions/${sessionId}/participant-profiles`,
+        `/api/sessions/${sessionId}/access`,
+      ];
+
+    case "session_delta":
+      return message.delta.operations.some(
+        (operation) =>
+          (operation.type === "artifact_upsert" && operation.artifact.type === "pr") ||
+          (operation.type === "state_patch" &&
+            (operation.patch.title !== undefined || operation.patch.status !== undefined))
+      )
+        ? [isUnarchivedSessionListKey]
+        : [];
+
     default:
       return [];
   }

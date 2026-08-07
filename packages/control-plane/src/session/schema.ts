@@ -196,6 +196,8 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
   client_id TEXT,
+  view_protocol INTEGER NOT NULL DEFAULT 1,
+  applied_view_revision INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
@@ -518,6 +520,20 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 39,
     description: "Add revisioned session view deltas",
     run: SESSION_VIEW_TABLES_SQL,
+  },
+  {
+    id: 40,
+    description: "Persist client session view protocol and revision",
+    run: (sql) => {
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN view_protocol INTEGER NOT NULL DEFAULT 1`
+      );
+      runMigration(
+        sql,
+        `ALTER TABLE ws_client_mapping ADD COLUMN applied_view_revision INTEGER NOT NULL DEFAULT 0`
+      );
+    },
   },
 ];
 
