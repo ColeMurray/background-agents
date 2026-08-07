@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { recordSchema, type AgentResponse } from "./artifacts";
+import type { AgentResponse } from "./artifacts";
 import { isValidSandboxTimeoutMs } from "./integrations";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
@@ -222,7 +222,7 @@ export const createMediaArtifactRequestSchema = z.object({
   artifactId: z.string(),
   artifactType: z.string(),
   objectKey: z.string(),
-  metadata: recordSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
