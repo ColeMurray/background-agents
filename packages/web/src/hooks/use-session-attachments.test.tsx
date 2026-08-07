@@ -83,6 +83,47 @@ describe("useSessionAttachments", () => {
     expect(uploaded.map((attachment) => attachment.attachmentId)).toEqual(["up-1", "up-2"]);
   });
 
+  it("rejects malformed successful upload responses", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ id: "up-1" }, { status: 201 }))
+    );
+
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => {
+      result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
+    });
+
+    await act(async () => {
+      await expect(result.current.uploadAll("session-1")).rejects.toThrow(
+        "Failed to upload shot.png"
+      );
+    });
+    expect(result.current.attachmentError).toBe("Failed to upload shot.png");
+  });
+
+  it("falls back when an upload error body is malformed", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ error: 123 }, { status: 503 }))
+    );
+
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => {
+      result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
+    });
+
+    await act(async () => {
+      await expect(result.current.uploadAll("session-1")).rejects.toThrow(
+        "Failed to upload shot.png"
+      );
+    });
+  });
+
   it("enforces the attachment limit across back-to-back additions", () => {
     vi.spyOn(URL, "createObjectURL").mockImplementation((file) => `blob:${file}`);
     const { result } = renderHook(() => useSessionAttachments());
