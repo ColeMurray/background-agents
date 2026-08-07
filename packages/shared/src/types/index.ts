@@ -130,8 +130,27 @@ export {
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";
 
-export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage, SessionState, ParticipantPresence } from "./server-messages";
+export {
+  serverMessageSchema,
+  sessionBootstrapSchema,
+  sessionBootstrapStateSchema,
+  sessionDeltaSchema,
+  sessionStatePatchSchema,
+  sessionViewEventSchema,
+  sessionViewOperationSchema,
+  viewRevisionSchema,
+} from "./server-messages";
+export type {
+  ParticipantPresence,
+  ServerMessage,
+  SessionBootstrap,
+  SessionBootstrapState,
+  SessionDelta,
+  SessionState,
+  SessionStatePatch,
+  SessionViewEvent,
+  SessionViewOperation,
+} from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,

@@ -20,6 +20,11 @@ import type {
   ListAutomationsResponse,
   RepositoryInput,
   SandboxEvent,
+  SessionBootstrap,
+  SessionDelta,
+  SessionStatePatch,
+  SessionViewEvent,
+  SessionViewOperation,
   ServerMessage,
   UpdateEnvironmentInput,
   createEnvironmentInputSchema,
@@ -27,6 +32,11 @@ import type {
   createSessionRequestSchema,
   repositoryInputSchema,
   sandboxEventSchema,
+  sessionBootstrapSchema,
+  sessionDeltaSchema,
+  sessionStatePatchSchema,
+  sessionViewEventSchema,
+  sessionViewOperationSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
 } from ".";
@@ -43,6 +53,11 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<CreateSessionInput>().toEqualTypeOf<z.output<typeof createSessionInputSchema>>();
   expectTypeOf<SandboxEvent>().toEqualTypeOf<z.output<typeof sandboxEventSchema>>();
   expectTypeOf<ServerMessage>().toEqualTypeOf<z.output<typeof serverMessageSchema>>();
+  expectTypeOf<SessionBootstrap>().toEqualTypeOf<z.output<typeof sessionBootstrapSchema>>();
+  expectTypeOf<SessionDelta>().toEqualTypeOf<z.output<typeof sessionDeltaSchema>>();
+  expectTypeOf<SessionStatePatch>().toEqualTypeOf<z.output<typeof sessionStatePatchSchema>>();
+  expectTypeOf<SessionViewEvent>().toEqualTypeOf<z.output<typeof sessionViewEventSchema>>();
+  expectTypeOf<SessionViewOperation>().toEqualTypeOf<z.output<typeof sessionViewOperationSchema>>();
   expectTypeOf<AutomationRepositoryInput>().toEqualTypeOf<RepositoryInput>();
 });
 

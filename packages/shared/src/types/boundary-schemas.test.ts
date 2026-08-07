@@ -558,6 +558,41 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    it("parses legacy and V2 subscribe messages", () => {
+      expect(
+        clientMessageSchema.safeParse({
+          type: "subscribe",
+          token: "ws-token",
+          clientId: "client-1",
+        }).success
+      ).toBe(true);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "subscribe",
+          token: "ws-token",
+          clientId: "client-1",
+          viewProtocol: 2,
+          resumeRevision: 7,
+          forceSnapshot: false,
+        }).success
+      ).toBe(true);
+    });
+
+    it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+      "rejects invalid V2 resume revision %s",
+      (resumeRevision) => {
+        expect(
+          clientMessageSchema.safeParse({
+            type: "subscribe",
+            token: "ws-token",
+            clientId: "client-1",
+            viewProtocol: 2,
+            resumeRevision,
+          }).success
+        ).toBe(false);
+      }
+    );
+
     it("parses presence messages with an omitted cursor", () => {
       const result = clientMessageSchema.safeParse({
         type: "presence",

@@ -19,6 +19,8 @@ const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
   })
 );
 
+export const viewRevisionSchema = z.number().int().nonnegative().safe();
+
 const sessionStateSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
@@ -54,6 +56,12 @@ const sessionStateSchema = z.object({
 });
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
+export const sessionBootstrapStateSchema = sessionStateSchema.omit({
+  codeServerPassword: true,
+  ttydToken: true,
+});
+export type SessionBootstrapState = z.infer<typeof sessionBootstrapStateSchema>;
+
 const participantPresenceSchema = z.object({
   participantId: z.string(),
   userId: z.string(),
@@ -76,6 +84,64 @@ const historyCursorSchema = z.object({
   id: z.string(),
   sequence: z.number().int().nonnegative().optional(),
 });
+
+export const sessionViewEventSchema = z.object({
+  eventId: z.string().min(1),
+  timelineSequence: viewRevisionSchema,
+  event: sandboxEventSchema,
+});
+export type SessionViewEvent = z.infer<typeof sessionViewEventSchema>;
+
+const tolerantSessionViewEventsSchema = z.array(z.unknown()).transform((items) =>
+  items.flatMap((item) => {
+    const result = sessionViewEventSchema.safeParse(item);
+    return result.success ? [result.data] : [];
+  })
+);
+
+export const sessionBootstrapSchema = z.object({
+  sessionId: z.string(),
+  viewRevision: viewRevisionSchema,
+  state: sessionBootstrapStateSchema,
+  artifacts: z.array(sessionArtifactSchema),
+  replay: z.object({
+    events: tolerantSessionViewEventsSchema,
+    hasMore: z.boolean(),
+    cursor: historyCursorSchema.nullable(),
+  }),
+  spawnError: z.string().nullable().optional(),
+});
+export type SessionBootstrap = z.infer<typeof sessionBootstrapSchema>;
+
+export const sessionStatePatchSchema = z
+  .object({
+    title: z.string().nullable().optional(),
+    branchName: z.string().nullable().optional(),
+    status: sessionStatusSchema.optional(),
+    sandboxStatus: sandboxStatusSchema.optional(),
+    messageCount: z.number().int().nonnegative().optional(),
+    isProcessing: z.boolean().optional(),
+    totalCost: z.number().nonnegative().optional(),
+    codeServerUrl: z.string().nullable().optional(),
+    tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
+    ttydUrl: z.string().nullable().optional(),
+    sandboxDashboardUrl: z.string().nullable().optional(),
+    repositories: z.array(sessionRepositoryStateSchema).optional(),
+  })
+  .strict();
+export type SessionStatePatch = z.infer<typeof sessionStatePatchSchema>;
+
+export const sessionViewOperationSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("state_patch"), patch: sessionStatePatchSchema }).strict(),
+  z.object({ type: z.literal("event_upsert"), item: sessionViewEventSchema }).strict(),
+  z.object({ type: z.literal("artifact_upsert"), artifact: sessionArtifactSchema }).strict(),
+]);
+export type SessionViewOperation = z.infer<typeof sessionViewOperationSchema>;
+
+export const sessionDeltaSchema = z.object({
+  operations: z.array(sessionViewOperationSchema).min(1),
+});
+export type SessionDelta = z.infer<typeof sessionDeltaSchema>;
 
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
@@ -148,6 +214,31 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ttyd_info"), url: z.string(), token: z.string() }),
   z.object({ type: z.literal("tunnel_urls"), urls: z.record(z.string(), z.string()) }),
   z.object({ type: z.literal("sandbox_dashboard_url"), url: z.string() }),
+  z.object({
+    type: z.literal("session_sync_started"),
+    mode: z.enum(["resume", "snapshot"]),
+    targetRevision: viewRevisionSchema,
+  }),
+  z.object({
+    type: z.literal("session_delta"),
+    revision: viewRevisionSchema,
+    delta: sessionDeltaSchema,
+  }),
+  z.object({ type: z.literal("session_snapshot"), bootstrap: sessionBootstrapSchema }),
+  z.object({
+    type: z.literal("session_history_page"),
+    items: tolerantSessionViewEventsSchema,
+    hasMore: z.boolean(),
+    cursor: historyCursorSchema.nullable(),
+  }),
+  z.object({
+    type: z.literal("session_ready"),
+    sessionId: z.string(),
+    participantId: z.string(),
+    participant: participantSummarySchema.optional(),
+    appliedRevision: viewRevisionSchema,
+  }),
+  z.object({ type: z.literal("session_access_changed") }),
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
 ]);
 

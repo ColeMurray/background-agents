@@ -14,8 +14,9 @@ import type {
   ArtifactRow,
   SandboxRow,
   SessionRepositoryRow,
+  SessionViewDeltaRow,
 } from "./types";
-import { toolCallIdentityKey } from "@open-inspect/shared";
+import { sessionDeltaSchema, toolCallIdentityKey, type SessionDelta } from "@open-inspect/shared";
 import type {
   SessionStatus,
   SandboxStatus,
@@ -41,6 +42,14 @@ type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
+const CURRENT_VIEW_REVISION_SQL =
+  "SELECT current_revision FROM session_view_metadata WHERE singleton = 1";
+
+function requireViewRevision(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a nonnegative safe integer`);
+  }
+}
 
 /**
  * WS client mapping result for hibernation recovery.
@@ -270,6 +279,110 @@ export class SessionRepository {
 
   private rows<T>(result: SqlResult): T[] {
     return result.toArray() as T[];
+  }
+
+  // === SESSION VIEW DELTAS ===
+
+  getCurrentViewRevision(): number {
+    const rows = this.rows<{ current_revision: number }>(this.sql.exec(CURRENT_VIEW_REVISION_SQL));
+    const revision = rows[0]?.current_revision;
+    if (revision === undefined) {
+      throw new Error("Session view revision metadata is missing");
+    }
+    requireViewRevision(revision, "Stored session view revision");
+    return revision;
+  }
+
+  appendSessionViewDelta(
+    delta: SessionDelta,
+    createdAt: number,
+    mutateProjection: () => true
+  ): number {
+    requireViewRevision(createdAt, "Session view delta timestamp");
+    const payload = JSON.stringify(sessionDeltaSchema.parse(delta));
+    if (mutateProjection.constructor.name === "AsyncFunction") {
+      throw new Error("Session view projection mutation must be synchronous");
+    }
+
+    return this.transactionSync(() => {
+      const currentRevision = this.getCurrentViewRevision();
+      const revision = currentRevision + 1;
+      requireViewRevision(revision, "Next session view revision");
+
+      const mutationResult: unknown = mutateProjection();
+      if (mutationResult !== true) {
+        throw new Error("Session view projection mutation must be synchronous");
+      }
+
+      this.sql.exec(
+        `UPDATE session_view_metadata SET current_revision = ? WHERE singleton = 1`,
+        revision
+      );
+      this.sql.exec(
+        `INSERT INTO session_view_deltas (revision, payload, created_at) VALUES (?, ?, ?)`,
+        revision,
+        payload,
+        createdAt
+      );
+      return revision;
+    });
+  }
+
+  readContiguousSessionViewDeltas(
+    afterRevision: number,
+    throughRevision: number
+  ): SessionViewDeltaRow[] | null {
+    requireViewRevision(afterRevision, "Resume session view revision");
+    requireViewRevision(throughRevision, "Target session view revision");
+    if (afterRevision > throughRevision) return null;
+
+    const currentRevision = this.getCurrentViewRevision();
+    if (throughRevision > currentRevision) return null;
+    if (afterRevision === throughRevision) return [];
+
+    const rows = this.rows<SessionViewDeltaRow>(
+      this.sql.exec(
+        `SELECT revision, payload, created_at FROM session_view_deltas
+         WHERE revision > ? AND revision <= ? ORDER BY revision ASC`,
+        afterRevision,
+        throughRevision
+      )
+    );
+
+    let expectedRevision = afterRevision + 1;
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.revision) || row.revision !== expectedRevision) return null;
+      expectedRevision += 1;
+    }
+    return expectedRevision === throughRevision + 1 ? rows : null;
+  }
+
+  pruneSessionViewDeltas(options: { maxRetainedRevisions: number; createdBefore: number }): number {
+    if (!Number.isSafeInteger(options.maxRetainedRevisions) || options.maxRetainedRevisions < 0) {
+      throw new Error("Session view retention count must be a nonnegative safe integer");
+    }
+    requireViewRevision(options.createdBefore, "Session view retention timestamp");
+
+    return this.transactionSync(() => {
+      const currentRevision = this.getCurrentViewRevision();
+      const countCutoff = Math.max(0, currentRevision - options.maxRetainedRevisions);
+      const ageRows = this.rows<{ revision: number | null }>(
+        this.sql.exec(
+          `SELECT MAX(revision) AS revision FROM session_view_deltas WHERE created_at < ?`,
+          options.createdBefore
+        )
+      );
+      const ageCutoff = ageRows[0]?.revision ?? 0;
+      if (!Number.isSafeInteger(ageCutoff) || ageCutoff < 0 || ageCutoff > currentRevision) {
+        throw new Error("Stored session view retention cutoff is invalid");
+      }
+
+      const cutoff = Math.max(countCutoff, ageCutoff);
+      if (cutoff === 0) return 0;
+      const result = this.sql.exec(`DELETE FROM session_view_deltas WHERE revision <= ?`, cutoff);
+      result.toArray();
+      return result.rowsWritten ?? 0;
+    });
   }
 
   // === SESSION ===

@@ -40,6 +40,19 @@ const SESSION_DIFF_TABLE_SQL = `CREATE TABLE IF NOT EXISTS session_diff (
   updated_at INTEGER NOT NULL
 );`;
 
+const SESSION_VIEW_TABLES_SQL = `CREATE TABLE IF NOT EXISTS session_view_metadata (
+  singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+  current_revision INTEGER NOT NULL
+);
+
+INSERT OR IGNORE INTO session_view_metadata (singleton, current_revision) VALUES (1, 0);
+
+CREATE TABLE IF NOT EXISTS session_view_deltas (
+  revision INTEGER PRIMARY KEY,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);`;
+
 export const SCHEMA_SQL = `
 -- Core session state
 CREATE TABLE IF NOT EXISTS session (
@@ -174,6 +187,9 @@ ${SESSION_REPOSITORIES_TABLE_SQL};
 
 -- Latest durable checkout diff bundle. Source patches live only in this bounded row.
 ${SESSION_DIFF_TABLE_SQL}
+
+-- Ordered canonical changes used to resume server-rendered session views
+${SESSION_VIEW_TABLES_SQL}
 
 -- WebSocket client mapping for hibernation recovery
 CREATE TABLE IF NOT EXISTS ws_client_mapping (
@@ -497,6 +513,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
         `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence)`
       );
     },
+  },
+  {
+    id: 39,
+    description: "Add revisioned session view deltas",
+    run: SESSION_VIEW_TABLES_SQL,
   },
 ];
 

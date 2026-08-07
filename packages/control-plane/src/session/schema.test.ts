@@ -243,6 +243,19 @@ describe("applyMigrations", () => {
     expect(backfill).toBeDefined();
   });
 
+  it("adds revisioned session view tables for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_view_metadata");
+    expect(SCHEMA_SQL).toContain("CREATE TABLE IF NOT EXISTS session_view_deltas");
+    expect(SCHEMA_SQL).toContain(
+      "INSERT OR IGNORE INTO session_view_metadata (singleton, current_revision) VALUES (1, 0)"
+    );
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 39);
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_view_metadata");
+    expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_view_deltas");
+    expect(migration?.run).toContain("VALUES (1, 0)");
+  });
+
   it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");

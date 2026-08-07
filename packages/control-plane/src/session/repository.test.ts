@@ -81,6 +81,131 @@ describe("SessionRepository", () => {
     );
   });
 
+  describe("session view deltas", () => {
+    const currentRevisionQuery =
+      "SELECT current_revision FROM session_view_metadata WHERE singleton = 1";
+    const rangeQuery = `SELECT revision, payload, created_at FROM session_view_deltas
+         WHERE revision > ? AND revision <= ? ORDER BY revision ASC`;
+    const ageCutoffQuery =
+      "SELECT MAX(revision) AS revision FROM session_view_deltas WHERE created_at < ?";
+
+    it("reads the current revision and rejects missing metadata", () => {
+      mock.setData(currentRevisionQuery, [{ current_revision: 4 }]);
+      expect(repo.getCurrentViewRevision()).toBe(4);
+
+      mock.setData(currentRevisionQuery, []);
+      expect(() => repo.getCurrentViewRevision()).toThrow("revision metadata is missing");
+    });
+
+    it("writes a projection mutation and delta in one transaction", () => {
+      let transactions = 0;
+      repo = new SessionRepository(
+        mock.sql,
+        (closure) => {
+          transactions += 1;
+          return closure();
+        },
+        new SessionAttachmentRepository(mock.sql)
+      );
+      mock.setData(currentRevisionQuery, [{ current_revision: 4 }]);
+
+      const delta = { operations: [{ type: "state_patch" as const, patch: { title: "Updated" } }] };
+      const revision = repo.appendSessionViewDelta(delta, 1_000, () => {
+        repo.updateSessionTitle("sess-1", "Updated", 1_000);
+        return true;
+      });
+
+      expect(revision).toBe(5);
+      expect(transactions).toBe(1);
+      expect(mock.calls.map((call) => call.query)).toEqual([
+        currentRevisionQuery,
+        "UPDATE session SET title = ?, updated_at = ? WHERE id = ?",
+        "UPDATE session_view_metadata SET current_revision = ? WHERE singleton = 1",
+        "INSERT INTO session_view_deltas (revision, payload, created_at) VALUES (?, ?, ?)",
+      ]);
+      expect(mock.calls[2].params).toEqual([5]);
+      expect(mock.calls[3].params).toEqual([5, JSON.stringify(delta), 1_000]);
+    });
+
+    it("stops when the projection mutation throws or returns a promise", () => {
+      mock.setData(currentRevisionQuery, [{ current_revision: 0 }]);
+
+      expect(() =>
+        repo.appendSessionViewDelta(
+          { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
+          1,
+          () => {
+            throw new Error("projection failed");
+          }
+        )
+      ).toThrow("projection failed");
+      expect(mock.calls).toHaveLength(1);
+
+      mock.reset();
+      mock.setData(currentRevisionQuery, [{ current_revision: 0 }]);
+      expect(() =>
+        repo.appendSessionViewDelta(
+          { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
+          1,
+          (async () => true) as unknown as () => true
+        )
+      ).toThrow("must be synchronous");
+      expect(mock.calls).toHaveLength(0);
+    });
+
+    it("validates the delta before running the projection mutation", () => {
+      let mutated = false;
+      expect(() =>
+        repo.appendSessionViewDelta({ operations: [] } as never, 1, () => {
+          mutated = true;
+          return true;
+        })
+      ).toThrow();
+      expect(mutated).toBe(false);
+      expect(mock.calls).toHaveLength(0);
+    });
+
+    it("returns only a complete contiguous revision range", () => {
+      mock.setData(currentRevisionQuery, [{ current_revision: 4 }]);
+      mock.setData(rangeQuery, [
+        { revision: 2, payload: "two", created_at: 2 },
+        { revision: 3, payload: "three", created_at: 3 },
+        { revision: 4, payload: "four", created_at: 4 },
+      ]);
+      expect(repo.readContiguousSessionViewDeltas(1, 4)?.map((row) => row.revision)).toEqual([
+        2, 3, 4,
+      ]);
+      expect(repo.readContiguousSessionViewDeltas(4, 4)).toEqual([]);
+
+      mock.setData(rangeQuery, [
+        { revision: 2, payload: "two", created_at: 2 },
+        { revision: 4, payload: "four", created_at: 4 },
+      ]);
+      expect(repo.readContiguousSessionViewDeltas(1, 4)).toBeNull();
+      expect(repo.readContiguousSessionViewDeltas(5, 4)).toBeNull();
+      expect(repo.readContiguousSessionViewDeltas(4, 5)).toBeNull();
+    });
+
+    it("rejects invalid revisions before querying", () => {
+      for (const revision of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(() => repo.readContiguousSessionViewDeltas(revision, 2)).toThrow();
+      }
+      expect(mock.calls).toEqual([]);
+    });
+
+    it("prunes one oldest prefix using count and age cutoffs", () => {
+      mock.setData(currentRevisionQuery, [{ current_revision: 10 }]);
+      mock.setData(ageCutoffQuery, [{ revision: 3 }]);
+      mock.setRowsWritten("DELETE FROM session_view_deltas WHERE revision <= ?", 5);
+
+      expect(repo.pruneSessionViewDeltas({ maxRetainedRevisions: 5, createdBefore: 1_000 })).toBe(
+        5
+      );
+      const deleteCall = mock.calls.find((call) => call.query.startsWith("DELETE FROM"));
+      expect(deleteCall?.params).toEqual([5]);
+    });
+  });
+
   // === SESSION ===
 
   describe("getSession", () => {
