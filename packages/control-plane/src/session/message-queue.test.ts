@@ -230,7 +230,7 @@ describe("SessionMessageQueue", () => {
       }),
       event: expect.objectContaining({
         type: "user_message",
-        data: expect.any(String),
+        data: expect.stringContaining('"kind":"review"'),
       }),
       feedbackKey: command.feedbackKey,
       pullRequestKey: "github:99:42",
@@ -244,6 +244,12 @@ describe("SessionMessageQueue", () => {
     const event = JSON.parse(String(admission.event.data)) as { messageId?: unknown };
     expect(event.messageId).toBe(admission.message.id);
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "sandbox_event",
+        event: expect.objectContaining({ origin: command.origin }),
+      })
+    );
   });
 
   it("re-drives a duplicate pending Autofix message", async () => {
@@ -270,6 +276,9 @@ describe("SessionMessageQueue", () => {
 
     expect(result).toEqual({ kind: "duplicate", messageId: "msg-existing" });
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
+    expect(h.broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sandbox_event" })
+    );
   });
 
   it("does not re-drive a duplicate pending Autofix message into an archived session", async () => {

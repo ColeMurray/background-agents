@@ -9,6 +9,7 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 import type { GitHubAutofixEnvelope } from "@open-inspect/shared";
 import { handleAutofixQueue } from "./autofix/handler";
+import { checkAutofixQueueHealth } from "./autofix/queue-health";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 
@@ -38,7 +39,7 @@ export default {
   /**
    * Cron trigger handler — wakes the SchedulerDO to process overdue automations.
    */
-  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (event.cron === IMAGE_BUILD_SCHEDULER_CRON) {
       const requestId = crypto.randomUUID();
       // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
@@ -52,6 +53,8 @@ export default {
       logger.warn("Unknown scheduled trigger", { cron: event.cron });
       return;
     }
+    ctx.waitUntil(checkAutofixQueueHealth(env, logger));
+
     if (!env.SCHEDULER) {
       logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
       return;

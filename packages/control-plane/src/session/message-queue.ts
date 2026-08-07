@@ -125,12 +125,10 @@ export class SessionMessageQueue {
 
     const now = Date.now();
     const messageId = generateId();
-    const userMessageEvent = this.buildUserMessageEvent(
-      participant,
-      command.prompt,
-      messageId,
-      now
-    );
+    const userMessageEvent = {
+      ...this.buildUserMessageEvent(participant, command.prompt, messageId, now),
+      origin: command.origin,
+    };
     const admission = this.repository.admitAutofixMessage({
       message: {
         id: messageId,
