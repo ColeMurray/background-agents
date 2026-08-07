@@ -5,7 +5,7 @@
 
 import {
   getPermalink,
-  postMessage,
+  postBlocks,
   sanitizeAgentText,
   splitIntoSlackSections,
   SLACK_DENIAL_STATUS,
@@ -125,11 +125,9 @@ export async function handleSlackNotify(
     appName: env.APP_NAME ?? "Open-Inspect",
     webAppUrl: env.WEB_APP_URL,
   });
-  // A section-split message has no single text body; the notification preview
-  // takes the opening section.
-  const post = await postMessage(token, parsed.channel, sections[0] ?? sanitized.text, {
+  // Without top-level text, Slack derives screen-reader text from the blocks.
+  const post = await postBlocks(token, parsed.channel, blocks, {
     thread_ts: parsed.threadTs,
-    blocks,
   });
 
   if (!post.ok) {
