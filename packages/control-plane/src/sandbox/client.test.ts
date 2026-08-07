@@ -482,7 +482,6 @@ describe("ModalClient", () => {
       failure_callback_url: "https://worker.test/image-builds/build-failed",
       build_execution_timeout_seconds: 1800,
       provider_session_timeout_seconds: 2400,
-      build_timeout_seconds: 2400,
     });
     expect(result).toEqual({ providerSessionId: "modal-session-1" });
   });
