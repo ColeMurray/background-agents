@@ -2,7 +2,7 @@
  * Session-specific type definitions.
  */
 
-import type { ResolvedSessionAttachment, ArtifactType } from "../types";
+import type { ResolvedSessionAttachment } from "../types";
 import type {
   SessionStatus,
   SandboxStatus,
@@ -11,6 +11,7 @@ import type {
   ParticipantRole,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
+import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 

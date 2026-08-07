@@ -66,27 +66,6 @@ export type {
   ConfidenceLevel,
 } from "./repository-catalog";
 
-export { listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
-export type {
-  SessionArtifact,
-  ManualPullRequestArtifactMetadata,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-  PullRequest,
-  PullRequestLifecycleState,
-  PullRequestStatus,
-  PullRequestDisplayStatus,
-  PullRequestArtifactMetadata,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  MediaArtifactInfo,
-  AgentResponse,
-  ArtifactType,
-} from "./artifacts";
-export { sessionArtifactSchema } from "./artifacts";
-
 export {
   serverMessageSchema,
   sessionSnapshotSchema,

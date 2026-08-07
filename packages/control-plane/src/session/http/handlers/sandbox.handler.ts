@@ -2,8 +2,8 @@ import type { Logger } from "../../../logger";
 import {
   createMediaArtifactRequestSchema,
   type CreateMediaArtifactRequest,
-  type SessionArtifact,
 } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";

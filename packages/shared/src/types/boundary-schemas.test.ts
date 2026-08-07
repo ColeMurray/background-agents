@@ -8,7 +8,6 @@ import {
   createSessionRequestSchema,
   callbackContextSchema,
   MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
-  listArtifactsResponseSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
@@ -19,6 +18,7 @@ import {
   cancelChildSessionRequestSchema,
 } from ".";
 import { sessionParticipantProfilesResponseSchema } from "./sessions";
+import { listArtifactsResponseSchema } from "./artifacts";
 import {
   listEventsResponseSchema,
   sandboxEventSchema,

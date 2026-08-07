@@ -1,6 +1,6 @@
 import { generateBranchName } from "@open-inspect/shared/git";
-import { toDisplayStatus } from "@open-inspect/shared";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
+import { toDisplayStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
