@@ -39,6 +39,7 @@ import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
+import { autofixRoutes } from "./routes/autofix";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
@@ -164,7 +165,8 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
 function isWebServiceAuthRoute(method: string, path: string): boolean {
   return (
     isBrowserAuthProxyRoute(method, path) ||
-    (method === "GET" && path === "/internal/auth/sign-in-providers")
+    (method === "GET" &&
+      (path === "/internal/auth/sign-in-providers" || path === "/autofix/activity"))
   );
 }
 
@@ -370,6 +372,9 @@ const routes: Route[] = [
 
   // Analytics
   ...analyticsRoutes,
+
+  // Pull request feedback Autofix activity
+  ...autofixRoutes,
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,

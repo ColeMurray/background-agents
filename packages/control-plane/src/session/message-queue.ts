@@ -5,6 +5,10 @@ import type {
   SessionAttachmentReference,
   ResolvedSessionAttachment,
 } from "@open-inspect/shared/types/session-attachments";
+import type {
+  GitHubAutofixSessionCommand,
+  GitHubAutofixSessionResponse,
+} from "@open-inspect/shared";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -64,6 +68,8 @@ interface EnqueuedPrompt {
   position: number;
 }
 
+const AUTOFIX_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1_000;
+
 function resolveParticipantGitIdentity(
   participant: ParticipantRow | null,
   scmProvider: SourceControlProviderName
@@ -102,6 +108,87 @@ export class SessionMessageQueue {
     private readonly executionTimeoutMs: number,
     private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
+
+  async enqueueAutofix(
+    command: Extract<GitHubAutofixSessionCommand, { type: "enqueue_feedback" }>
+  ): Promise<GitHubAutofixSessionResponse> {
+    const userId = `github:${command.author.id}`;
+    let participant = this.participantService.getByUserId(userId);
+    if (!participant) {
+      participant = this.participantService.create(userId, command.author.login);
+    }
+    this.repository.updateParticipantCoalesce(participant.id, {
+      scmUserId: command.author.id,
+      scmLogin: command.author.login,
+      scmName: command.author.login,
+    });
+
+    const now = Date.now();
+    const messageId = generateId();
+    const userMessageEvent = this.buildUserMessageEvent(
+      participant,
+      command.prompt,
+      messageId,
+      now
+    );
+    const admission = this.repository.admitAutofixMessage({
+      message: {
+        id: messageId,
+        authorId: participant.id,
+        content: command.prompt,
+        source: "github",
+        status: "pending",
+        createdAt: now,
+      },
+      event: {
+        id: generateId(),
+        type: "user_message",
+        data: JSON.stringify(userMessageEvent),
+        messageId,
+        createdAt: now,
+      },
+      feedbackKey: command.feedbackKey,
+      pullRequestKey: `github:${command.pullRequest.repositoryId}:${command.pullRequest.number}`,
+      originContext: JSON.stringify(command.origin),
+      attemptLimit: command.attemptLimit,
+      windowStart: now - AUTOFIX_ATTEMPT_WINDOW_MS,
+    });
+    if (admission.kind === "rejected") {
+      return admission;
+    }
+
+    if (admission.kind === "enqueued") {
+      this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+      this.log.info("autofix.enqueue", {
+        feedback_key: command.feedbackKey,
+        message_id: admission.messageId,
+        pull_request_number: command.pullRequest.number,
+        artifact_id: command.pullRequest.artifactId,
+      });
+    }
+    await this.redrivePendingAutofix(admission.messageId);
+    return admission;
+  }
+
+  async lookupAutofix(feedbackKey: string): Promise<GitHubAutofixSessionResponse> {
+    const messageId = this.repository.getAutofixMessageId(feedbackKey);
+    if (!messageId) return { kind: "not_found" };
+
+    await this.redrivePendingAutofix(messageId);
+    return { kind: "found", messageId };
+  }
+
+  private async redrivePendingAutofix(messageId: string): Promise<void> {
+    if (this.repository.getMessageStatus(messageId) !== "pending") {
+      return;
+    }
+    const session = this.repository.getSession();
+    if (!session || session.status === "archived" || session.status === "cancelled") {
+      return;
+    }
+    await this.sessionStatus.transition("active");
+    await this.processMessageQueue();
+  }
 
   async handlePromptMessage(
     ws: WebSocket,
@@ -366,9 +453,33 @@ export class SessionMessageQueue {
     now: number,
     attachments?: ResolvedSessionAttachment[]
   ): void {
+    const userMessageEvent = this.buildUserMessageEvent(
+      participant,
+      content,
+      messageId,
+      now,
+      attachments
+    );
+    this.repository.createEvent({
+      id: generateId(),
+      type: "user_message",
+      data: JSON.stringify(userMessageEvent),
+      messageId,
+      createdAt: now,
+    });
+    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+  }
+
+  private buildUserMessageEvent(
+    participant: ParticipantRow,
+    content: string,
+    messageId: string,
+    now: number,
+    attachments?: ResolvedSessionAttachment[]
+  ): Extract<SandboxEvent, { type: "user_message" }> {
     // Metadata only — base64 payloads would bloat the events table and every
     // broadcast, and DO SQLite rows cap at 2 MB.
-    const userMessageEvent: SandboxEvent = {
+    return {
       type: "user_message",
       content,
       messageId,
@@ -381,14 +492,6 @@ export class SessionMessageQueue {
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
-    this.repository.createEvent({
-      id: generateId(),
-      type: "user_message",
-      data: JSON.stringify(userMessageEvent),
-      messageId,
-      createdAt: now,
-    });
-    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
   }
 
   async enqueuePromptFromApi(

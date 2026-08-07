@@ -106,6 +106,9 @@ CREATE TABLE IF NOT EXISTS messages (
   reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
+  autofix_feedback_key TEXT,                        -- Stable provider feedback identity for idempotency
+  autofix_pr_key TEXT,                              -- Stable provider PR identity for rolling attempt limits
+  origin_context TEXT,                              -- Typed JSON describing the external feedback origin
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
   created_at INTEGER NOT NULL,
@@ -187,6 +190,12 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_autofix_feedback
+  ON messages(autofix_feedback_key)
+  WHERE autofix_feedback_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
+  ON messages(autofix_pr_key, created_at)
+  WHERE autofix_pr_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
@@ -496,6 +505,25 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       sql.exec(
         `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence)`
       );
+    },
+  },
+  {
+    id: 39,
+    description: "Add Autofix message admission metadata",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN autofix_feedback_key TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN autofix_pr_key TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN origin_context TEXT`);
+      sql.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_autofix_feedback
+          ON messages(autofix_feedback_key)
+          WHERE autofix_feedback_key IS NOT NULL
+      `);
+      sql.exec(`
+        CREATE INDEX IF NOT EXISTS idx_messages_autofix_pr_created
+          ON messages(autofix_pr_key, created_at)
+          WHERE autofix_pr_key IS NOT NULL
+      `);
     },
   },
 ];

@@ -7,6 +7,7 @@ export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
   prompt: "/internal/prompt",
+  autofix: "/internal/autofix",
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
   createMediaArtifact: "/internal/create-media-artifact",

@@ -298,6 +298,28 @@ describe("IntegrationSettingsStore", () => {
       expect(result?.defaults?.allowedTriggerUsers).toEqual(["alice", "bob"]);
     });
 
+    it("normalizes Autofix settings into a complete replacement block", async () => {
+      await store.setGlobal("github", {
+        defaults: {
+          autofix: {
+            enabled: true,
+            allowedReviewBots: [" CodeRabbitAI[bot] ", "coderabbitai[bot]"],
+            maxAttemptsPerPrPer24Hours: 12,
+          },
+        },
+      });
+
+      const result = await store.getGlobal("github");
+      expect(result?.defaults?.autofix).toEqual({
+        enabled: true,
+        reviewsEnabled: true,
+        prCommentsEnabled: true,
+        openInspectReviewsEnabled: true,
+        allowedReviewBots: ["coderabbitai[bot]"],
+        maxAttemptsPerPrPer24Hours: 12,
+      });
+    });
+
     it("rejects non-array defaults.allowedTriggerUsers", async () => {
       await expect(
         store.setGlobal("github", {

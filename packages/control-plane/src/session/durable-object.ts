@@ -95,6 +95,7 @@ import { SessionTerminalMessageProjection } from "./terminal-message-projection"
 import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
+import { createAutofixHandler, type AutofixHandler } from "./http/handlers/autofix.handler";
 import {
   createChildSessionsHandler,
   type ChildSessionsHandler,
@@ -120,6 +121,7 @@ import {
   type ParticipantsHandler,
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
+import { SessionAutofixService } from "./services/autofix.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { SessionDiffStore } from "./diffs/store";
@@ -186,9 +188,11 @@ export class SessionDO extends DurableObject<Env> {
   private _messageQueue: SessionMessageQueue | null = null;
   // Message service (lazily initialized)
   private _messageService: MessageService | null = null;
+  private _autofixService: SessionAutofixService | null = null;
   private _eventStream: SessionEventStream | null = null;
   // Messages handler (lazily initialized)
   private _messagesHandler: MessagesHandler | null = null;
+  private _autofixHandler: AutofixHandler | null = null;
   // Child sessions handler (lazily initialized)
   private _childSessionsHandler: ChildSessionsHandler | null = null;
   // Sandbox handler (lazily initialized)
@@ -218,6 +222,7 @@ export class SessionDO extends DurableObject<Env> {
     init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
     prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
+    autofix: (request, _url, log) => this.autofixHandler.handle(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
     createMediaArtifact: (request) => this.sandboxHandler.createMediaArtifact(request),
@@ -455,6 +460,14 @@ export class SessionDO extends DurableObject<Env> {
     return this._eventStream;
   }
 
+  private get autofixService(): SessionAutofixService {
+    if (!this._autofixService) {
+      this._autofixService = new SessionAutofixService(this.messageQueue);
+    }
+
+    return this._autofixService;
+  }
+
   private get messagesHandler(): MessagesHandler {
     if (!this._messagesHandler) {
       this._messagesHandler = createMessagesHandler({
@@ -463,6 +476,14 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     return this._messagesHandler;
+  }
+
+  private get autofixHandler(): AutofixHandler {
+    if (!this._autofixHandler) {
+      this._autofixHandler = createAutofixHandler(this.autofixService);
+    }
+
+    return this._autofixHandler;
   }
 
   private get childSessionsHandler(): ChildSessionsHandler {
