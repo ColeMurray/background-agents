@@ -1,4 +1,4 @@
-import type { ArtifactType } from "../types";
+import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 
 const VALID_ARTIFACT_TYPES = [
   "pr",

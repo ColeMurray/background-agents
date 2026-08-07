@@ -1,7 +1,8 @@
 import { createLogger } from "../logger";
+import type { ArtifactResponse } from "@open-inspect/shared/types/artifacts";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
 import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
-import type { ArtifactResponse, Env } from "../types";
+import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
 import {
   createPartialStoredObjectResponse,

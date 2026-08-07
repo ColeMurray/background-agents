@@ -1,14 +1,14 @@
-import type {
-  ScreenshotArtifactMetadata,
-  SessionArtifact,
-  VideoArtifactMetadata,
-} from "@open-inspect/shared";
-import { sessionArtifactSchema } from "@open-inspect/shared";
+import {
+  sessionArtifactSchema,
+  type ArtifactResponse,
+  type ScreenshotArtifactMetadata,
+  type SessionArtifact,
+  type VideoArtifactMetadata,
+} from "@open-inspect/shared/types/artifacts";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { ObjectStorage } from "../storage/object-storage";
-import type { ArtifactResponse } from "../types";
 import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 

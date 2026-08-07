@@ -2,7 +2,6 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type { ArtifactType } from "@open-inspect/shared";
 import type {
   MessageSource,
   MessageStatus,
@@ -13,7 +12,6 @@ import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 export type {
-  ArtifactType,
   CreateSessionRequest,
   CreateSessionResponse,
   ParticipantPresence,
@@ -174,15 +172,6 @@ export interface MessageResponse {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-}
-
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface ParticipantResponse {
