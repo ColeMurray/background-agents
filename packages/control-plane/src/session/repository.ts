@@ -349,7 +349,9 @@ export class SessionRepository {
 
   updateSessionTitleWithViewDelta(sessionId: string, title: string, updatedAt: number): number {
     return this.appendSessionViewDelta(updatedAt, () => {
-      this.updateSessionTitle(sessionId, title, updatedAt);
+      if (!this.updateSessionTitle(sessionId, title, updatedAt)) {
+        throw new Error("Session title update did not match a session");
+      }
       return { operations: [{ type: "state_patch", patch: { title } }] };
     });
   }
@@ -499,13 +501,15 @@ export class SessionRepository {
     );
   }
 
-  updateSessionTitle(sessionId: string, title: string, updatedAt: number): void {
-    this.sql.exec(
+  updateSessionTitle(sessionId: string, title: string, updatedAt: number): boolean {
+    const result = this.sql.exec(
       `UPDATE session SET title = ?, updated_at = ? WHERE id = ?`,
       title,
       updatedAt,
       sessionId
     );
+    result.toArray();
+    return result.rowsWritten === 1;
   }
 
   updateSessionTitleIfUnset(sessionId: string, title: string, updatedAt: number): boolean {

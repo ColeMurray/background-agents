@@ -108,6 +108,7 @@ describe("SessionRepository", () => {
         new SessionAttachmentRepository(mock.sql)
       );
       mock.setData(currentRevisionQuery, [{ current_revision: 4 }]);
+      mock.setDefaultRowsWritten(1);
 
       const delta = { operations: [{ type: "state_patch" as const, patch: { title: "Updated" } }] };
       const revision = repo.updateSessionTitleWithViewDelta("sess-1", "Updated", 1_000);

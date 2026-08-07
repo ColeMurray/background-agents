@@ -105,6 +105,14 @@ describe("session view delta storage", () => {
       expect(session).not.toBeNull();
       const baselineRevision = repository.getCurrentViewRevision();
 
+      expect(() =>
+        repository.updateSessionTitleWithViewDelta("missing-session", "Not applied", 500)
+      ).toThrow("did not match a session");
+      expect(repository.getCurrentViewRevision()).toBe(baselineRevision);
+      expect(
+        repository.readContiguousSessionViewDeltas(baselineRevision, baselineRevision)
+      ).toEqual([]);
+
       instance.ctx.storage.sql.exec(`CREATE TRIGGER reject_session_view_delta
         BEFORE INSERT ON session_view_deltas
         BEGIN
