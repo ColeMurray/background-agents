@@ -38,6 +38,7 @@ import {
 const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
 const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
+const DEFAULT_PULL_REQUEST_LABEL = "";
 
 export function getScmRepoSettingsPath(fullName: string): `/api/${string}` | null {
   const repository = parseRepositoryFullName(fullName);
@@ -167,7 +168,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
     settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE
   );
   const [pullRequestLabel, setPullRequestLabel] = useState(
-    settings?.defaults?.pullRequestLabel ?? ""
+    settings?.defaults?.pullRequestLabel ?? DEFAULT_PULL_REQUEST_LABEL
   );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -178,7 +179,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
       setAlwaysUseDraftMode(
         settings?.defaults?.alwaysUseDraftMode ?? DEFAULT_ALWAYS_USE_DRAFT_MODE
       );
-      setPullRequestLabel(settings?.defaults?.pullRequestLabel ?? "");
+      setPullRequestLabel(settings?.defaults?.pullRequestLabel ?? DEFAULT_PULL_REQUEST_LABEL);
     }
   }, [settings, dirty]);
 
@@ -193,7 +194,7 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
       if (res.ok) {
         await mutate(GLOBAL_SETTINGS_KEY);
         setAlwaysUseDraftMode(DEFAULT_ALWAYS_USE_DRAFT_MODE);
-        setPullRequestLabel("");
+        setPullRequestLabel(DEFAULT_PULL_REQUEST_LABEL);
         setDirty(false);
         toast.success("Settings reset to defaults.");
       } else {
@@ -416,14 +417,16 @@ function RepoOverrideRow({
   const [draftMode, setDraftMode] = useState<DraftOverrideMode>(() =>
     deriveDraftOverrideMode(entry.settings)
   );
-  const [pullRequestLabel, setPullRequestLabel] = useState(entry.settings.pullRequestLabel ?? "");
+  const [pullRequestLabel, setPullRequestLabel] = useState(
+    entry.settings.pullRequestLabel ?? DEFAULT_PULL_REQUEST_LABEL
+  );
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     if (dirty || saving) return;
     setDraftMode(deriveDraftOverrideMode(entry.settings));
-    setPullRequestLabel(entry.settings.pullRequestLabel ?? "");
+    setPullRequestLabel(entry.settings.pullRequestLabel ?? DEFAULT_PULL_REQUEST_LABEL);
   }, [entry.settings, dirty, saving]);
 
   const handleSave = async () => {
