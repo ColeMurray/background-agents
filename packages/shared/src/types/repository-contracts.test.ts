@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   automationRepositoriesInputSchema,
-  createSessionRequestSchema,
+  MAX_AUTOMATION_REPOSITORIES,
+  MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
   decodeRepositoryPathSegments,
   encodeRepositoryPathSegments,
@@ -13,6 +14,7 @@ import {
   toRepositoryRef,
 } from "./index";
 import { sandboxEventSchema } from "./sandbox-events";
+import { createSessionRequestSchema } from "./session-api";
 
 describe("repository full names", () => {
   it("round-trips a repository with a nested owner namespace", () => {

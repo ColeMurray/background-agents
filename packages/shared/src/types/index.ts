@@ -126,45 +126,6 @@ export type {
 } from "./session-diffs";
 
 export {
-  automationCallbackContextSchema,
-  callbackContextSchema,
-  linearCallbackContextSchema,
-  linearStartCallbackSchema,
-  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
-  childFollowUpPromptRequestSchema,
-  sendPromptRequestSchema,
-  slackCallbackContextSchema,
-  createSessionRequestSchema,
-  createSessionInputSchema,
-  createMediaArtifactRequestSchema,
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-  spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-} from "./session-api";
-export type {
-  UserPreferences,
-  SlackCallbackContext,
-  LinearCallbackContext,
-  LinearStartCallback,
-  AutomationCallbackContext,
-  CallbackContext,
-  ChildFollowUpPromptRequest,
-  SendPromptRequest,
-  CreateSessionRequest,
-  CreateSessionInput,
-  CreateMediaArtifactRequest,
-  CreateSessionResponse,
-  SendPromptResponse,
-  ListSessionsResponse,
-  SpawnChildSessionRequest,
-  CancelChildSessionRequest,
-  ChildSessionFinalResponse,
-  ChildSessionTrajectory,
-  ChildSessionDetail,
-} from "./session-api";
-
-export {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,

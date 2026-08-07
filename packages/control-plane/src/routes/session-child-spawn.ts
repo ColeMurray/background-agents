@@ -1,4 +1,4 @@
-import { spawnChildSessionRequestSchema } from "@open-inspect/shared";
+import { spawnChildSessionRequestSchema } from "@open-inspect/shared/types/session-api";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,

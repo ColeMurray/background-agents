@@ -11,12 +11,7 @@ import type {
 import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
-export type {
-  CreateSessionRequest,
-  CreateSessionResponse,
-  ParticipantPresence,
-  SessionState,
-} from "@open-inspect/shared";
+export type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 export type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 export type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 export type {

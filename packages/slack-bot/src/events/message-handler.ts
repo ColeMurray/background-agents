@@ -10,7 +10,7 @@ import {
   classifyThreadSpeaker,
   updateMessage,
 } from "@open-inspect/shared/slack";
-import type { CallbackContext } from "@open-inspect/shared";
+import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
