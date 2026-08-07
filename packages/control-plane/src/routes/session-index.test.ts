@@ -119,6 +119,26 @@ describe("session index routes", () => {
     });
   });
 
+  it("passes validated status filters through to the store", async () => {
+    const response = await listSessions("?status=active&excludeStatus=archived");
+
+    expect(response.status).toBe(200);
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active", excludeStatus: "archived" })
+    );
+  });
+
+  it.each([
+    ["?status=unknown", "Invalid status"],
+    ["?excludeStatus=unknown", "Invalid excludeStatus"],
+  ])("rejects invalid status filters before querying the store", async (query, message) => {
+    const response = await listSessions(query);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: message });
+    expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
+  });
+
   it("passes validated creator filters through to the store", async () => {
     const response = await listSessions(
       "?createdBy=0123456789abcdef0123456789abcdef&createdBy=0123456789abcdef0123456789abcdef"
@@ -142,6 +162,7 @@ describe("session index routes", () => {
     });
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
     expect(mockSessionIndexStore.list).toHaveBeenCalledWith({
       status: undefined,
       excludeStatus: undefined,
@@ -151,6 +172,20 @@ describe("session index routes", () => {
       offset: 0,
       viewerUserId: "0123456789abcdef0123456789abcdef",
     });
+  });
+
+  it("does not mark service session lists as private viewer data", async () => {
+    const response = await listSessions("", {
+      kind: "service",
+      service: "linear-bot",
+      actor: null,
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Cache-Control")).toBeNull();
+    expect(mockSessionIndexStore.list).toHaveBeenCalledWith(
+      expect.not.objectContaining({ viewerUserId: expect.anything() })
+    );
   });
 
   it("passes the automation-lineage exclusion through to the store", async () => {

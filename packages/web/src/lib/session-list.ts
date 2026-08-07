@@ -1,11 +1,16 @@
-import type { Session } from "@open-inspect/shared";
+import {
+  serializeSessionListQuery,
+  SESSION_LIST_CURRENT_USER,
+  type Session,
+  type SessionListQuery,
+} from "@open-inspect/shared";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
 export const SESSIONS_API_PATH = "/api/sessions";
-export const CURRENT_USER_CREATED_BY = "me";
+export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",
   limit: SESSIONS_PAGE_SIZE,
@@ -21,41 +26,12 @@ export interface SessionListResponse {
   hasMore: boolean;
 }
 
-export function buildSessionsPageKey({
-  limit = SESSIONS_PAGE_SIZE,
-  offset = 0,
-  status,
-  excludeStatus,
-  excludeAutomationLineage,
-  createdBy,
-}: {
-  limit?: number;
-  offset?: number;
-  status?: string;
-  excludeStatus?: string;
-  excludeAutomationLineage?: boolean;
-  createdBy?: readonly string[];
-}): BrowserApiPath {
-  const searchParams = new URLSearchParams({
-    limit: String(limit),
-    offset: String(offset),
+export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {
+  const searchParams = serializeSessionListQuery({
+    ...options,
+    limit: options.limit ?? SESSIONS_PAGE_SIZE,
+    offset: options.offset ?? 0,
   });
-
-  if (status) {
-    searchParams.set("status", status);
-  }
-
-  if (excludeStatus) {
-    searchParams.set("excludeStatus", excludeStatus);
-  }
-
-  if (excludeAutomationLineage) {
-    searchParams.set("excludeAutomationLineage", "true");
-  }
-
-  for (const userId of createdBy ?? []) {
-    searchParams.append("createdBy", userId);
-  }
 
   return `${SESSIONS_API_PATH}?${searchParams.toString()}`;
 }

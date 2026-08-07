@@ -3,6 +3,7 @@ import type {
   SessionReadAction,
   SessionReadResult,
   SessionReadState,
+  SessionListQuery,
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared";
@@ -107,15 +108,10 @@ interface SessionRow {
   updated_at: number;
 }
 
-export interface ListSessionsOptions {
-  status?: SessionStatus;
-  excludeStatus?: SessionStatus;
-  excludeAutomationLineage?: boolean;
+export interface ListSessionsOptions extends Omit<SessionListQuery, "createdBy"> {
   repoOwner?: string;
   repoName?: string;
   createdByUserIds?: readonly string[];
-  limit?: number;
-  offset?: number;
   viewerUserId?: string;
 }
 
