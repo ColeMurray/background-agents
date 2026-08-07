@@ -151,12 +151,10 @@ describe("ScmSettingsStore", () => {
     expect(delegate.setRepoSettings).not.toHaveBeenCalled();
   });
 
-  it("rejects an empty repository override and does not write", async () => {
-    await expect(
-      store.setRepoSettings("acme/web", {} as unknown as ScmRepoSettings)
-    ).rejects.toThrow("alwaysUseDraftMode is required for repository overrides");
+  it("allows an empty repository override so every field inherits", async () => {
+    await store.setRepoSettings("acme/web", {});
 
-    expect(delegate.setRepoSettings).not.toHaveBeenCalled();
+    expect(delegate.setRepoSettings).toHaveBeenCalledWith("scm", "acme/web", {});
   });
 
   it.each([null, false])("rejects provided falsy global defaults: %j", async (defaults) => {

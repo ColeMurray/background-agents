@@ -79,7 +79,7 @@ function isScmSettings(value: unknown): value is ScmSettings {
 }
 
 function isScmRepoSettings(value: unknown): value is ScmRepoSettings {
-  return isScmSettings(value) && typeof value.alwaysUseDraftMode === "boolean";
+  return isScmSettings(value);
 }
 
 function isGlobalResponse(value: unknown): value is GlobalResponse {
@@ -341,9 +341,7 @@ function RepoOverridesSection({
       const res = await browserApiFetch(settingsPath, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        // Seed the new override from the current global default so adding one
-        // doesn't silently flip a repo to draft when the global is off.
-        body: JSON.stringify({ settings: { alwaysUseDraftMode: globalDefault } }),
+        body: JSON.stringify({ settings: {} }),
       });
 
       if (res.ok) {
@@ -364,7 +362,12 @@ function RepoOverridesSection({
       {overrides.length > 0 ? (
         <div className="space-y-2 mb-4">
           {overrides.map((entry) => (
-            <RepoOverrideRow key={entry.repo} entry={entry} globalLabel={globalLabel} />
+            <RepoOverrideRow
+              key={entry.repo}
+              entry={entry}
+              globalDefault={globalDefault}
+              globalLabel={globalLabel}
+            />
           ))}
         </div>
       ) : (
@@ -375,7 +378,7 @@ function RepoOverridesSection({
 
       <div className="flex items-center gap-2">
         <Select value={addingRepo} onValueChange={setAddingRepo}>
-          <SelectTrigger className="flex-1">
+          <SelectTrigger className="flex-1" aria-label="Select a repository">
             <SelectValue placeholder="Select a repository..." />
           </SelectTrigger>
           <SelectContent>
@@ -394,24 +397,34 @@ function RepoOverridesSection({
   );
 }
 
+type DraftOverrideMode = "inherit" | "draft" | "ready";
+
+function deriveDraftOverrideMode(settings: ScmRepoSettings): DraftOverrideMode {
+  if (settings.alwaysUseDraftMode === undefined) return "inherit";
+  return settings.alwaysUseDraftMode ? "draft" : "ready";
+}
+
 function RepoOverrideRow({
   entry,
+  globalDefault,
   globalLabel,
 }: {
   entry: RepoSettingsEntry;
+  globalDefault: boolean;
   globalLabel?: string;
 }) {
-  const [alwaysUseDraftMode, setAlwaysUseDraftMode] = useState(entry.settings.alwaysUseDraftMode);
+  const [draftMode, setDraftMode] = useState<DraftOverrideMode>(() =>
+    deriveDraftOverrideMode(entry.settings)
+  );
   const [pullRequestLabel, setPullRequestLabel] = useState(entry.settings.pullRequestLabel ?? "");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
-    if (!dirty) {
-      setAlwaysUseDraftMode(entry.settings.alwaysUseDraftMode);
-      setPullRequestLabel(entry.settings.pullRequestLabel ?? "");
-    }
-  }, [entry.settings.alwaysUseDraftMode, entry.settings.pullRequestLabel, dirty]);
+    if (dirty || saving) return;
+    setDraftMode(deriveDraftOverrideMode(entry.settings));
+    setPullRequestLabel(entry.settings.pullRequestLabel ?? "");
+  }, [entry.settings, dirty, saving]);
 
   const handleSave = async () => {
     const settingsPath = getScmRepoSettingsPath(entry.repo);
@@ -419,10 +432,10 @@ function RepoOverrideRow({
     setSaving(true);
 
     const normalizedLabel = pullRequestLabel.trim();
-    const settings: ScmRepoSettings = {
-      alwaysUseDraftMode,
-      ...(normalizedLabel ? { pullRequestLabel: normalizedLabel } : {}),
-    };
+    const settings: ScmRepoSettings = {};
+    if (draftMode === "draft") settings.alwaysUseDraftMode = true;
+    if (draftMode === "ready") settings.alwaysUseDraftMode = false;
+    if (normalizedLabel) settings.pullRequestLabel = normalizedLabel;
 
     try {
       const res = await browserApiFetch(settingsPath, {
@@ -483,17 +496,26 @@ function RepoOverrideRow({
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex items-center gap-2 text-sm cursor-pointer">
-          <input
-            type="checkbox"
-            checked={alwaysUseDraftMode}
-            onChange={() => {
-              setAlwaysUseDraftMode(!alwaysUseDraftMode);
+        <label className="text-sm">
+          <span className="block text-muted-foreground mb-1">Draft mode override</span>
+          <Select
+            value={draftMode}
+            onValueChange={(value: DraftOverrideMode) => {
+              setDraftMode(value);
               setDirty(true);
             }}
-            className="rounded border-border"
-          />
-          <span className="text-muted-foreground">Always use draft mode</span>
+          >
+            <SelectTrigger density="compact" aria-label={`Draft mode override for ${entry.repo}`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">
+                Inherit global ({globalDefault ? "always draft" : "ready unless requested"})
+              </SelectItem>
+              <SelectItem value="draft">Override: always draft</SelectItem>
+              <SelectItem value="ready">Override: ready unless requested</SelectItem>
+            </SelectContent>
+          </Select>
         </label>
 
         <label className="text-sm">

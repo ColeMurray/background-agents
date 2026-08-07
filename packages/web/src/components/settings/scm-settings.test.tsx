@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 /// <reference types="@testing-library/jest-dom" />
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import type { EnrichedRepository, ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
 import { getScmRepoSettingsPath, ScmSettingsPage } from "./scm-settings";
 
 expect.extend(matchers);
@@ -35,6 +35,34 @@ let globalData: unknown;
 let globalError: unknown;
 let repoSettingsData: unknown;
 let repoSettingsError: unknown;
+let availableReposData: EnrichedRepository[];
+
+function repo(fullName: string): EnrichedRepository {
+  const [owner, name] = fullName.split("/");
+  return {
+    id: 1,
+    owner,
+    name,
+    fullName,
+    private: false,
+    description: null,
+    defaultBranch: "main",
+    archived: false,
+  };
+}
+
+// Radix Select uses pointer-capture APIs that jsdom doesn't implement.
+beforeAll(() => {
+  if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = () => false;
+  }
+  if (!Element.prototype.releasePointerCapture) {
+    Element.prototype.releasePointerCapture = () => {};
+  }
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+});
 
 beforeEach(() => {
   globalData = {
@@ -47,6 +75,7 @@ beforeEach(() => {
     ] satisfies RepoSettingsEntry[],
   };
   repoSettingsError = undefined;
+  availableReposData = [];
   mutateMock.mockReset();
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -59,7 +88,7 @@ beforeEach(() => {
       return { data: repoSettingsData, error: repoSettingsError, isLoading: false };
     }
     if (key === "/api/repos") {
-      return { data: { repos: [] }, isLoading: false };
+      return { data: { repos: availableReposData }, isLoading: false };
     }
     return { data: undefined, isLoading: false };
   });
@@ -85,9 +114,10 @@ describe("getScmRepoSettingsPath", () => {
     const user = userEvent.setup();
     const { rerender } = render(<ScmSettingsPage />);
 
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-    expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked();
-    expect(screen.getAllByRole("checkbox")[1]).not.toBeChecked();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(
+      screen.getByRole("combobox", { name: "Draft mode override for acme/web" })
+    ).toHaveTextContent("Override: ready unless requested");
 
     globalData = { settings: { defaults: { alwaysUseDraftMode: true } } };
     repoSettingsData = {
@@ -96,12 +126,17 @@ describe("getScmRepoSettingsPath", () => {
     rerender(<ScmSettingsPage />);
 
     await waitFor(() => {
-      expect(screen.getAllByRole("checkbox")[0]).toBeChecked();
-      expect(screen.getAllByRole("checkbox")[1]).toBeChecked();
+      expect(screen.getByRole("checkbox")).toBeChecked();
+      expect(
+        screen.getByRole("combobox", { name: "Draft mode override for acme/web" })
+      ).toHaveTextContent("Override: always draft");
     });
 
-    await user.click(screen.getAllByRole("checkbox")[0]);
-    await user.click(screen.getAllByRole("checkbox")[1]);
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("combobox", { name: "Draft mode override for acme/web" }));
+    await user.click(
+      await screen.findByRole("option", { name: "Override: ready unless requested" })
+    );
 
     globalData = { settings: { defaults: { alwaysUseDraftMode: true } } };
     repoSettingsData = {
@@ -109,8 +144,10 @@ describe("getScmRepoSettingsPath", () => {
     };
     rerender(<ScmSettingsPage />);
 
-    expect(screen.getAllByRole("checkbox")[0]).not.toBeChecked();
-    expect(screen.getAllByRole("checkbox")[1]).not.toBeChecked();
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(
+      screen.getByRole("combobox", { name: "Draft mode override for acme/web" })
+    ).toHaveTextContent("Override: ready unless requested");
   });
 
   it("does not render editable controls when a required settings query fails", () => {
@@ -123,7 +160,9 @@ describe("getScmRepoSettingsPath", () => {
   });
 
   it("does not render editable controls for an unexpected settings response", () => {
-    repoSettingsData = { repos: [{ repo: "acme/web", settings: {} }] };
+    repoSettingsData = {
+      repos: [{ repo: "acme/web", settings: { alwaysUseDraftMode: "yes" } }],
+    };
 
     render(<ScmSettingsPage />);
 
@@ -141,7 +180,7 @@ describe("getScmRepoSettingsPath", () => {
       repos: [
         {
           repo: "acme/web",
-          settings: { alwaysUseDraftMode: false, pullRequestLabel: "repo-generated" },
+          settings: { pullRequestLabel: "repo-generated" },
         },
       ],
     };
@@ -154,6 +193,9 @@ describe("getScmRepoSettingsPath", () => {
     expect(
       screen.getByRole("textbox", { name: "Pull request label override for acme/web" })
     ).toHaveValue("repo-generated");
+    expect(
+      screen.getByRole("combobox", { name: "Draft mode override for acme/web" })
+    ).toHaveTextContent("Inherit global (ready unless requested)");
   });
 
   it("trims and saves the global pull request label", async () => {
@@ -181,6 +223,9 @@ describe("getScmRepoSettingsPath", () => {
   it("trims and saves a repository pull request label override", async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    repoSettingsData = {
+      repos: [{ repo: "acme/web", settings: {} }],
+    };
     render(<ScmSettingsPage />);
 
     const input = screen.getByRole("textbox", {
@@ -194,8 +239,49 @@ describe("getScmRepoSettingsPath", () => {
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
-          settings: { alwaysUseDraftMode: false, pullRequestLabel: "repo-generated" },
+          settings: { pullRequestLabel: "repo-generated" },
         }),
+      })
+    );
+  });
+
+  it("saves an explicit repository draft override independently", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    repoSettingsData = {
+      repos: [{ repo: "acme/web", settings: {} }],
+    };
+    render(<ScmSettingsPage />);
+
+    await user.click(screen.getByRole("combobox", { name: "Draft mode override for acme/web" }));
+    await user.click(await screen.findByRole("option", { name: "Override: always draft" }));
+    await user.click(screen.getAllByRole("button", { name: "Save" })[1]);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scm-settings/repos/acme/web",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ settings: { alwaysUseDraftMode: true } }),
+      })
+    );
+  });
+
+  it("adds a repository override without snapshotting global settings", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    repoSettingsData = { repos: [] };
+    availableReposData = [repo("acme/api")];
+    render(<ScmSettingsPage />);
+
+    await user.click(screen.getByRole("combobox", { name: "Select a repository" }));
+    await user.click(await screen.findByRole("option", { name: "acme/api" }));
+    await user.click(screen.getByRole("button", { name: "Add Override" }));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/scm-settings/repos/acme/api",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ settings: {} }),
       })
     );
   });

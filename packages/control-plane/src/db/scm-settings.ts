@@ -57,14 +57,6 @@ function validateAndNormalizeScmSettings(settings: unknown): ScmSettings {
   };
 }
 
-function validateAndNormalizeScmRepoSettings(settings: unknown): ScmRepoSettings {
-  const normalized = validateAndNormalizeScmSettings(settings);
-  if (normalized.alwaysUseDraftMode === undefined) {
-    throw new ScmSettingsValidationError("alwaysUseDraftMode is required for repository overrides");
-  }
-  return { ...normalized, alwaysUseDraftMode: normalized.alwaysUseDraftMode };
-}
-
 /**
  * Global defaults + per-repo overrides for source-control (SCM) behavior, such
  * as always opening pull/merge requests as drafts. Applies to both GitHub and
@@ -110,7 +102,7 @@ export class ScmSettingsStore {
   }
 
   async setRepoSettings(repo: string, settings: ScmRepoSettings): Promise<void> {
-    const normalized = validateAndNormalizeScmRepoSettings(settings);
+    const normalized = validateAndNormalizeScmSettings(settings);
     await this.store.setRepoSettings(SCM_SETTINGS_KEY, repo, normalized);
   }
 

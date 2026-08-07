@@ -40,10 +40,8 @@ export interface ScmSettings {
   pullRequestLabel?: string;
 }
 
-/** A repository override must choose an explicit value rather than inherit. */
-export interface ScmRepoSettings extends ScmSettings {
-  alwaysUseDraftMode: boolean;
-}
+/** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
+export type ScmRepoSettings = ScmSettings;
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
