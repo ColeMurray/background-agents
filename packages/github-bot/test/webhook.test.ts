@@ -163,7 +163,7 @@ describe("POST /webhooks/github", () => {
 
   it("allows redelivery after async processing failure clears the marker", async () => {
     const body = JSON.stringify({
-      action: "opened",
+      action: "synchronize",
       pull_request: {
         number: 42,
         title: "Broken payload",

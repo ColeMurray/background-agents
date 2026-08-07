@@ -3,18 +3,18 @@
 A stateless Cloudflare Worker that translates GitHub webhook events into Open-Inspect coding agent
 sessions. It provides two capabilities:
 
-1. **Code Review** — Review newly opened PRs when auto-review is enabled and submit structured
-   feedback.
+1. **Code Review** — Review non-draft PRs when they open, reopen, become ready, or receive a new
+   commit, then submit structured feedback.
 2. **Comment-Triggered Actions** — @mention the bot in a PR comment; it reads the PR context and
    responds with analysis, a summary comment, or a review-thread reply.
 
 For day-to-day usage, see the user-facing
 [GitHub integration guide](../../docs/integrations/GITHUB.md).
 
-The bot is a **webhook-to-session translator** — it verifies webhooks, posts an acknowledgment
-reaction, creates a session via the control plane, and sends a prompt. The agent in the sandbox
-handles all GitHub interaction (posting reviews, comments, pushing code) directly using the `gh`
-CLI.
+The bot is a **webhook-to-session translator** — it verifies webhooks, posts a pending
+`open-inspect` commit status and an acknowledgment reaction, creates a session through the control
+plane, and sends a prompt. The agent in the sandbox posts the review and replaces the pending status
+with a successful status linked to that review.
 
 Webhook deliveries are deduplicated with Cloudflare KV using `X-GitHub-Delivery`, so GitHub retries
 and manual redeliveries do not create duplicate sessions.
@@ -83,7 +83,8 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 
 The existing GitHub App needs these additions:
 
-**Permissions**: `Pull requests: Read & write`, `Issues: Read & write`
+**Permissions**: `Commit statuses: Read & write`, `Pull requests: Read & write`,
+`Issues: Read & write`
 
 **Event subscriptions**: `Pull request`, `Issue comment`, `Pull request review comment`
 
@@ -108,37 +109,40 @@ access model and can authenticate auxiliary private repos on the configured SCM 
 
 ## Webhook Events
 
-| Event                         | Action             | Trigger                     | Handler                   |
-| ----------------------------- | ------------------ | --------------------------- | ------------------------- |
-| `pull_request`                | `opened`           | Non-draft PR opened         | `handlePullRequestOpened` |
-| `pull_request`                | `review_requested` | Compatibility event path    | `handleReviewRequested`   |
-| `issue_comment`               | `created`          | @mention in a PR comment    | `handleIssueComment`      |
-| `pull_request_review_comment` | `created`          | @mention in a review thread | `handleReviewComment`     |
+| Event                         | Action                                                  | Trigger                       | Handler                          |
+| ----------------------------- | ------------------------------------------------------- | ----------------------------- | -------------------------------- |
+| `pull_request`                | `opened`, `reopened`, `synchronize`, `ready_for_review` | Non-draft PR review lifecycle | `handlePullRequestReviewTrigger` |
+| `pull_request`                | `review_requested`                                      | Compatibility event path      | `handleReviewRequested`          |
+| `issue_comment`               | `created`                                               | @mention in a PR comment      | `handleIssueComment`             |
+| `pull_request_review_comment` | `created`                                               | @mention in a review thread   | `handleReviewComment`            |
 
 All events are processed asynchronously via `executionCtx.waitUntil()`. The webhook endpoint returns
 200 immediately after signature verification and delivery dedupe.
 
 ### Handler Flows
 
-**Pull Request Opened (Auto-Review):**
+**Pull Request Review Trigger (Auto-Review):**
 
-1. Check `pull_request.draft` — skip draft PRs
-2. Apply the configured trigger-user gate — bot-created PRs are reviewed when the bot login is
-   explicitly listed in `allowedTriggerUsers`
-3. Post eyes reaction on the PR (fire-and-forget)
-4. Create session via control plane
-5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
-   PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
+1. Check `pull_request.draft` — skip draft PRs.
+2. Apply the configured trigger-user gate. The bot reviews bot-created PRs only when
+   `allowedTriggerUsers` includes its login.
+3. Post a pending `open-inspect` status on `pull_request.head.sha`.
+4. Post an eyes reaction on the PR.
+5. Create a session through the control plane.
+6. Send the code review prompt. The prompt posts the completed review, then replaces the status on
+   the same head SHA with `success` and links it to the review. Reviews of the bot's own PRs use
+   `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
 
 This handler is retained for webhook compatibility. The user-facing GitHub workflow does not ask
 people to request the GitHub App bot through the PR reviewer picker.
 
-1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not
-2. Post eyes reaction on the PR (fire-and-forget)
-3. Create session via control plane
-4. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+1. Check `requested_reviewer.login` matches `GITHUB_BOT_USERNAME` — return early if not.
+2. Post a pending `open-inspect` status on `pull_request.head.sha`.
+3. Post an eyes reaction on the PR.
+4. Create a session through the control plane.
+5. Send the code review prompt, which posts the successful status after the review.
 
 **Issue Comment:**
 

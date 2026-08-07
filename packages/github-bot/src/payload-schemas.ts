@@ -33,8 +33,15 @@ const pullRequestSchema = z.object({
   base: z.object({ ref: z.string() }),
 });
 
-export const pullRequestOpenedPayloadSchema = z.object({
-  action: z.literal("opened"),
+export const pullRequestReviewTriggerActionSchema = z.enum([
+  "opened",
+  "reopened",
+  "synchronize",
+  "ready_for_review",
+]);
+
+export const pullRequestReviewTriggerPayloadSchema = z.object({
+  action: pullRequestReviewTriggerActionSchema,
   pull_request: pullRequestSchema.extend({ draft: z.boolean() }),
   repository: repositorySchema,
   sender: githubSenderSchema,
@@ -100,7 +107,7 @@ export const webhookActionPayloadSchema = z
   })
   .passthrough();
 
-export type PullRequestOpenedPayload = z.infer<typeof pullRequestOpenedPayloadSchema>;
+export type PullRequestReviewTriggerPayload = z.infer<typeof pullRequestReviewTriggerPayloadSchema>;
 export type ReviewRequestedPayload = z.infer<typeof reviewRequestedPayloadSchema>;
 export type IssueCommentPayload = z.infer<typeof issueCommentPayloadSchema>;
 export type ReviewCommentPayload = z.infer<typeof reviewCommentPayloadSchema>;

@@ -1,3 +1,5 @@
+import { REVIEW_COMPLETED_DESCRIPTION, REVIEW_STATUS_CONTEXT } from "./github-auth";
+
 function buildCustomInstructionsSection(instructions: string | null | undefined): string {
   if (!instructions?.trim()) return "";
   return `\n## Custom Instructions\n${instructions}`;
@@ -43,6 +45,7 @@ export function buildCodeReviewPrompt(params: {
   author: string;
   base: string;
   head: string;
+  headSha: string;
   isPublic: boolean;
   codeReviewInstructions?: string | null;
   isSelfReview?: boolean;
@@ -56,6 +59,7 @@ export function buildCodeReviewPrompt(params: {
     author,
     base,
     head,
+    headSha,
     isPublic,
     codeReviewInstructions,
     isSelfReview = false,
@@ -107,12 +111,19 @@ ${prDescriptionBlock}
    - Performance implications
    - Code clarity and maintainability
 3. You may read individual files in the repo for additional context beyond the diff
-4. When your review is complete, submit it via:
+4. When your review is complete, submit it and mark the triggering commit's review status complete:
 
-   gh api repos/${owner}/${repo}/pulls/${number}/reviews \\
+   review_url="$(gh api repos/${owner}/${repo}/pulls/${number}/reviews \\
      --method POST \\
      -f body="<your review summary>" \\
-     -f event="${reviewEvent}"
+     -f event="${reviewEvent}" \\
+     --jq '.html_url')" && \\
+   gh api repos/${owner}/${repo}/statuses/${headSha} \\
+     --method POST \\
+     -f state="success" \\
+     -f context="${REVIEW_STATUS_CONTEXT}" \\
+     -f description="${REVIEW_COMPLETED_DESCRIPTION}" \\
+     -f target_url="$review_url"
 
    ${reviewEventGuidance}
 
