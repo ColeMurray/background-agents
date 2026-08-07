@@ -4,8 +4,8 @@ import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent, ServerMessage } from "../types";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
+import type { SessionExecutionCompletion } from "./execution-completion";
 import type { SessionRepository } from "./repository";
-import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
@@ -57,11 +57,14 @@ function createProcessor() {
   const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
-  const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
+  const executionCompletion = {
+    completeFromSandbox: vi.fn(async () => {}),
+    stopProcessingMessage: vi.fn(async () => {}),
+    failStuckProcessingMessage: vi.fn(async () => {}),
+  };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
   const updateLastActivity = vi.fn();
-  const recordTerminalMessage = vi.fn(async () => {});
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const waitUntil = vi.fn();
   const log = {
@@ -82,11 +85,10 @@ function createProcessor() {
     diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,
     triggerSnapshot,
-    statusService as unknown as SessionStatusService,
+    executionCompletion as unknown as SessionExecutionCompletion,
     updateLastActivity,
     scheduleInactivityCheck,
-    processMessageQueue,
-    recordTerminalMessage
+    processMessageQueue
   );
 
   return {
@@ -97,13 +99,12 @@ function createProcessor() {
     broadcast,
     diffService,
     triggerSnapshot,
-    statusService,
+    executionCompletion,
     scheduleInactivityCheck,
     processMessageQueue,
     updateLastActivity,
     applySessionTitleUpdate,
     waitUntil,
-    recordTerminalMessage,
   };
 }
 
@@ -122,7 +123,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
 
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
-    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
+    expect(h.executionCompletion.completeFromSandbox).toHaveBeenCalledOnce();
   });
 
   it("updates heartbeat without broadcasting", async () => {
@@ -333,31 +334,52 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
-      "msg-1",
+    expect(h.executionCompletion.completeFromSandbox).toHaveBeenCalledWith(
       event,
-      expect.any(Number)
-    );
-    expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
-      "completed",
+      "msg-1",
       expect.any(Number)
     );
-    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
-      messageId: "msg-1",
-      messageCreatedAt: 1000,
-      terminalMessageCompletedAt: expect.any(Number),
-    });
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
     expect(h.processMessageQueue).toHaveBeenCalledTimes(1);
     expect(h.waitUntil).toHaveBeenCalled();
   });
 
-  it("does not project a duplicate terminal event after the message already stopped", async () => {
+  it("waits for completion finalization before snapshot, queue drain, and acknowledgement", async () => {
+    const h = createProcessor();
+    const sandboxWs = { readyState: WebSocket.OPEN } as WebSocket;
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
+    let resolveCompletion!: () => void;
+    h.executionCompletion.completeFromSandbox.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveCompletion = resolve;
+      })
+    );
+
+    const processing = h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2,
+      ackId: "ack-1",
+    });
+
+    expect(h.triggerSnapshot).not.toHaveBeenCalled();
+    expect(h.processMessageQueue).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
+
+    resolveCompletion();
+    await processing;
+
+    expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
+    expect(h.processMessageQueue).toHaveBeenCalledOnce();
+    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "ack", ackId: "ack-1" });
+  });
+
+  it("delegates a late terminal event with no processing owner", async () => {
     const h = createProcessor();
 
     await h.processor.processSandboxEvent({
@@ -368,11 +390,15 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2_000,
     });
 
-    expect(h.recordTerminalMessage).not.toHaveBeenCalled();
-    expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
+    expect(h.executionCompletion.completeFromSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "execution_complete" }),
+      "msg-1",
+      null,
+      expect.any(Number)
+    );
   });
 
-  it("projects a failed sandbox completion", async () => {
+  it("delegates a failed sandbox completion", async () => {
     const h = createProcessor();
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-failed" });
     h.repository.getMessageTimestamps.mockReturnValue({ created_at: 900, started_at: 1_000 });
@@ -386,16 +412,12 @@ describe("SessionSandboxEventProcessor", () => {
       timestamp: 2_000,
     });
 
-    expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
+    expect(h.executionCompletion.completeFromSandbox).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-failed", success: false }),
       "msg-failed",
-      "failed",
+      "msg-failed",
       expect.any(Number)
     );
-    expect(h.recordTerminalMessage).toHaveBeenCalledWith({
-      messageId: "msg-failed",
-      messageCreatedAt: 900,
-      terminalMessageCompletedAt: expect.any(Number),
-    });
   });
 
   it("resolves pending push when push_complete event arrives", async () => {

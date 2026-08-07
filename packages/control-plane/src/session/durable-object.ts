@@ -91,6 +91,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SessionExecutionCompletionService } from "./execution-completion";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
@@ -212,6 +213,7 @@ export class SessionDO extends DurableObject<Env> {
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
   private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
+  private _executionCompletion: SessionExecutionCompletionService | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -408,12 +410,12 @@ export class SessionDO extends DurableObject<Env> {
         this.participantService,
         this.callbackService,
         this.statusService,
+        this.executionCompletion,
         this.lifecycleManager,
         this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
         this.alarmScheduler,
-        this.executionTimeoutMs,
-        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
+        this.executionTimeoutMs
       );
     }
 
@@ -432,6 +434,21 @@ export class SessionDO extends DurableObject<Env> {
       );
     }
     return this._terminalMessageProjection;
+  }
+
+  private get executionCompletion(): SessionExecutionCompletionService {
+    if (!this._executionCompletion) {
+      this._executionCompletion = new SessionExecutionCompletionService(
+        this.ctx,
+        this.log,
+        this.repository,
+        this.callbackService,
+        this.messenger,
+        this.statusService,
+        this.terminalMessageProjection
+      );
+    }
+    return this._executionCompletion;
   }
 
   private get messageService(): MessageService {
@@ -693,11 +710,10 @@ export class SessionDO extends DurableObject<Env> {
         this.diffService,
         (title, options) => this.applySessionTitleUpdate(title, options),
         (reason) => this.triggerSnapshot(reason),
-        this.statusService,
+        this.executionCompletion,
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
-        () => this.messageQueue.processMessageQueue(),
-        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
+        () => this.messageQueue.processMessageQueue()
       );
     }
 
