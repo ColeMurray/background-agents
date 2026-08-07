@@ -1,7 +1,7 @@
 import {
   cancelChildSessionRequestSchema,
   type CancelChildSessionRequest,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "../session/contracts";
 import type { Env } from "../types";

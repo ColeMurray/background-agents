@@ -3,7 +3,7 @@
  */
 
 import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
-import type { SlackCallbackContext } from "../types";
+import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
