@@ -261,8 +261,8 @@ async def test_create_rejects_non_integer_build_timeout(monkeypatch, field):
 
 
 @pytest.mark.asyncio
-async def test_create_reads_legacy_build_timeout_key_during_rename_skew(monkeypatch):
-    """An older control plane sends build_timeout_seconds; honor it until both planes rename."""
+async def test_create_ignores_retired_build_timeout_seconds_key(monkeypatch):
+    """The pre-rename build_timeout_seconds key is retired; only the renamed key is read."""
     service = _patch_dependencies(monkeypatch)
 
     await _call(
@@ -277,27 +277,10 @@ async def test_create_reads_legacy_build_timeout_key_during_rename_skew(monkeypa
         },
     )
 
-    assert service.create.await_args.kwargs["timeout_seconds"] == 4200
-
-
-@pytest.mark.asyncio
-async def test_create_prefers_renamed_provider_session_timeout_key_over_legacy(monkeypatch):
-    service = _patch_dependencies(monkeypatch)
-
-    await _call(
-        web_api.api_create_build_sandbox,
-        {
-            "scope_kind": "repo",
-            "scope_id": "acme/repo",
-            "build_id": "imgb-1",
-            "repositories": REPOSITORIES,
-            **CALLBACK_CONTEXT,
-            "provider_session_timeout_seconds": 2400,
-            "build_timeout_seconds": 4200,
-        },
+    assert (
+        service.create.await_args.kwargs["timeout_seconds"]
+        == DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
     )
-
-    assert service.create.await_args.kwargs["timeout_seconds"] == 2400
 
 
 @pytest.mark.asyncio
@@ -330,8 +313,9 @@ async def test_create_clamps_build_execution_timeout_independently(monkeypatch):
             "scope_id": "acme/repo",
             "build_id": "imgb-1",
             "repositories": REPOSITORIES,
+            **CALLBACK_CONTEXT,
             "build_execution_timeout_seconds": 99999,
-            "build_timeout_seconds": 1,
+            "provider_session_timeout_seconds": 1,
         },
     )
 
