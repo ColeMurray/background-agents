@@ -12,11 +12,11 @@ import {
   RepositoryPairValidationError,
   sendPromptRequestSchema,
   serverMessageSchema,
-  sessionParticipantProfilesResponseSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
   cancelChildSessionRequestSchema,
 } from ".";
+import { sessionParticipantProfilesResponseSchema } from "./sessions";
 import {
   listEventsResponseSchema,
   sandboxEventSchema,

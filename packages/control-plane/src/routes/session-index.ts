@@ -1,4 +1,4 @@
-import { sessionReadActionSchema, type SessionStatus } from "@open-inspect/shared";
+import { sessionReadActionSchema, type SessionStatus } from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {

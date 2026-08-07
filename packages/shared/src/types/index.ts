@@ -87,32 +87,6 @@ export type {
 } from "./artifacts";
 export { sessionArtifactSchema } from "./artifacts";
 
-export type {
-  SessionParticipant,
-  Session,
-  SessionMessage,
-  PullRequestSummary,
-  SessionReadState,
-  SessionReadAction,
-  SessionReadResult,
-  SessionParticipantProfile,
-  SessionParticipantProfilesResponse,
-  SessionStatus,
-  SandboxStatus,
-  MessageStatus,
-  MessageSource,
-  ParticipantRole,
-  SpawnSource,
-} from "./sessions";
-export {
-  messageSourceSchema,
-  sessionStatusSchema,
-  sessionReadActionSchema,
-  sessionReadResultSchema,
-  sessionParticipantProfileSchema,
-  sessionParticipantProfilesResponseSchema,
-} from "./sessions";
-
 export { serverMessageSchema } from "./server-messages";
 export type { ServerMessage, SessionState, ParticipantPresence } from "./server-messages";
 

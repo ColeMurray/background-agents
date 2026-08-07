@@ -1,5 +1,5 @@
 import type { ArtifactRow } from "../types";
-import type { SessionMessage } from "@open-inspect/shared";
+import type { SessionMessage } from "@open-inspect/shared/types/sessions";
 import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 import type { ArtifactResponse } from "../../types";
 import type { SessionRepository } from "../repository";

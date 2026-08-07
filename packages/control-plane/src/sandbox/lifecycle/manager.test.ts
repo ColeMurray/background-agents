@@ -36,7 +36,7 @@ import {
   type StopResult,
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
-import type { SandboxStatus } from "../../types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
 // ==================== Mock Factories ====================
 

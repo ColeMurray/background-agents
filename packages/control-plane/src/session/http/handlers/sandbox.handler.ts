@@ -5,7 +5,7 @@ import {
   type SessionArtifact,
 } from "@open-inspect/shared";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import type { ParticipantRole } from "../../../types";
+import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
 import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";

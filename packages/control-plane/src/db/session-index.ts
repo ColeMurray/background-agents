@@ -5,7 +5,7 @@ import type {
   SessionReadState,
   SessionStatus,
   SpawnSource,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
