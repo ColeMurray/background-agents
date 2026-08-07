@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { CLASSIFIER_PROMPT_MAX_CHARS } from "@open-inspect/shared";
 import type { Env, Environment, RepoConfig } from "../types";
 
 const {
@@ -7,18 +8,22 @@ const {
   mockBuildRepoDescriptions,
   mockGetRoutingRules,
   mockGetAvailableEnvironments,
+  mockSignedControlPlaneFetch,
+  mockAnthropicConstructor,
 } = vi.hoisted(() => ({
   mockMessagesCreate: vi.fn(),
   mockGetAvailableRepos: vi.fn(),
   mockBuildRepoDescriptions: vi.fn(),
   mockGetRoutingRules: vi.fn(),
   mockGetAvailableEnvironments: vi.fn(),
+  mockSignedControlPlaneFetch: vi.fn(),
+  mockAnthropicConstructor: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
   // vitest 4 only treats `function`/`class` implementations as constructable;
   // an arrow function here throws "is not a constructor" on `new Anthropic()`.
-  default: vi.fn().mockImplementation(function () {
+  default: mockAnthropicConstructor.mockImplementation(function () {
     return {
       messages: {
         create: mockMessagesCreate,
@@ -39,6 +44,10 @@ vi.mock("./environments", async (importOriginal) => ({
   getAvailableEnvironments: mockGetAvailableEnvironments,
   // Imported by targets.ts (via ../targets); unused in these tests.
   getEnvironmentById: vi.fn(),
+}));
+
+vi.mock("../internal-auth", () => ({
+  signedControlPlaneFetch: mockSignedControlPlaneFetch,
 }));
 
 import { RepoClassifier } from "./index";
@@ -85,7 +94,7 @@ const TEST_ENVIRONMENT: Environment = {
 
 const TEST_ENV = {
   ANTHROPIC_API_KEY: "test-api-key",
-  CLASSIFICATION_MODEL: "claude-haiku-4-5",
+  CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
 } as Env;
 
 /** The classified repo's fullName, or undefined for null/environment targets. */
@@ -102,6 +111,7 @@ describe("RepoClassifier", () => {
     mockGetRoutingRules.mockResolvedValue([]);
     mockGetAvailableEnvironments.mockResolvedValue([]);
     mockBuildRepoDescriptions.mockResolvedValue("- acme/prod\n- acme/web");
+    mockSignedControlPlaneFetch.mockRejectedValue(new Error("unexpected control-plane call"));
   });
 
   it("uses tool output when provider returns valid structured classification", async () => {
@@ -127,8 +137,10 @@ describe("RepoClassifier", () => {
     expect(classifiedRepoFullName(result)).toBe("acme/prod");
     expect(result.confidence).toBe("high");
     expect(result.needsClarification).toBe(false);
+    expect(mockAnthropicConstructor).toHaveBeenCalledOnce();
     expect(mockMessagesCreate).toHaveBeenCalledWith(
       expect.objectContaining({
+        model: "claude-haiku-4-5",
         temperature: 0,
         tool_choice: expect.objectContaining({
           type: "tool",
@@ -186,6 +198,134 @@ describe("RepoClassifier", () => {
     expect(result.alternatives).toBeUndefined();
   });
 
+  describe("Anthropic tool-input normalization", () => {
+    it.each([
+      ["blank", { targetId: "   " }],
+      ["missing", {}],
+      ["non-string", { targetId: 42 }],
+    ])("treats %s targetId as null", async (_label, targetFields) => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_normalized_target",
+            name: "classify_target",
+            input: {
+              ...targetFields,
+              confidence: "high",
+              reasoning: "The model could not identify a target.",
+              alternatives: [],
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("an ambiguous request");
+
+      expect(result.target).toBeNull();
+      expect(result.confidence).toBe("high");
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("trims and lowercases confidence, trims and deduplicates alternatives, and ignores extra keys", async () => {
+      mockMessagesCreate.mockResolvedValue({
+        content: [
+          {
+            type: "tool_use",
+            id: "toolu_normalized_fields",
+            name: "classify_target",
+            input: {
+              targetId: " acme/prod ",
+              confidence: " Medium ",
+              reasoning: "  The message names the production worker.  ",
+              alternatives: [" acme/web ", "acme/web", " acme/prod "],
+              extra: "ignored",
+            },
+          },
+        ],
+      });
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("work on production");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(result.confidence).toBe("medium");
+      expect(result.reasoning).toBe("The message names the production worker.");
+      expect(result.alternatives).toEqual([{ kind: "repository", repo: TEST_REPOS[1] }]);
+      expect(result.needsClarification).toBe(true);
+    });
+  });
+
+  it("bounds the generated prompt consistently for Anthropic and OpenAI while preserving the message and task", async () => {
+    const oversizedCatalog = "catalog-entry ".repeat(10_000);
+    const context = {
+      channelId: "C123",
+      channelName: "engineering",
+      previousMessages: ["thread-context ".repeat(10_000)],
+    };
+    mockBuildRepoDescriptions.mockReturnValue(oversizedCatalog);
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_oversized_anthropic",
+          name: "classify_target",
+          input: {
+            targetId: "acme/prod",
+            confidence: "high",
+            reasoning: "The message names prod.",
+            alternatives: [],
+          },
+        },
+      ],
+    });
+
+    const message = "Current user message must remain intact.";
+    const anthropicClassifier = new RepoClassifier(TEST_ENV);
+    await anthropicClassifier.classify(message, context);
+    const anthropicPrompt = mockMessagesCreate.mock.calls[0][0].messages[0].content;
+
+    mockMessagesCreate.mockClear();
+    mockSignedControlPlaneFetch.mockResolvedValue(
+      Response.json({
+        decision: {
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "The message names prod.",
+          alternatives: [],
+        },
+      })
+    );
+    const openAiClassifier = new RepoClassifier({
+      ...TEST_ENV,
+      CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+    });
+    await openAiClassifier.classify(message, context);
+    const openAiPrompt = JSON.parse(mockSignedControlPlaneFetch.mock.calls[0][1].body).prompt;
+
+    expect(anthropicPrompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(openAiPrompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(openAiPrompt).toBe(anthropicPrompt);
+    expect(anthropicPrompt).toContain(message);
+    expect(anthropicPrompt).toContain("## Your Task");
+    expect(anthropicPrompt).toContain("[truncated]");
+  });
+
+  it("returns an actionable error when the current message cannot fit intact", async () => {
+    const classifier = new RepoClassifier(TEST_ENV);
+    const result = await classifier.classify("user-message ".repeat(CLASSIFIER_PROMPT_MAX_CHARS));
+
+    expect(result).toMatchObject({
+      target: null,
+      confidence: "low",
+      reasoning: "This Slack message is too long to classify. Please shorten it and try again.",
+      needsClarification: true,
+    });
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+    expect(mockSignedControlPlaneFetch).not.toHaveBeenCalled();
+  });
+
   describe("routing rules", () => {
     it("routes deterministically when a keyword matches, without calling the LLM", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
@@ -229,6 +369,7 @@ describe("RepoClassifier", () => {
       expect(classifiedRepoFullName(result)).toBe("acme/web");
       expect(result.needsClarification).toBe(false);
       expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockAnthropicConstructor).not.toHaveBeenCalled();
     });
 
     it("skips a rule whose target is not accessible and falls through to the LLM", async () => {
@@ -663,6 +804,111 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("web app issue");
 
       expect(result.reasoning).toBe("Mentions &lt;!channel&gt; &amp; the web app.");
+    });
+  });
+
+  describe("provider selection", () => {
+    const OPENAI_ENV = {
+      ...TEST_ENV,
+      CLASSIFICATION_MODEL: "openai/gpt-5.6-luna",
+    } as Env;
+
+    const openAiDecision = {
+      targetId: "acme/web",
+      confidence: "high",
+      reasoning: "The message names the web application.",
+      alternatives: [],
+    } as const;
+
+    it("uses the signed control-plane adapter for OpenAI classification", async () => {
+      mockSignedControlPlaneFetch.mockResolvedValue(Response.json({ decision: openAiDecision }));
+
+      const classifier = new RepoClassifier(OPENAI_ENV);
+      const result = await classifier.classify("web app issue", undefined, "trace-openai");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/web");
+      expect(result.needsClarification).toBe(false);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockAnthropicConstructor).not.toHaveBeenCalled();
+      expect(mockSignedControlPlaneFetch).toHaveBeenCalledOnce();
+
+      const [calledEnv, request, init] = mockSignedControlPlaneFetch.mock.calls[0];
+      expect(calledEnv).toBe(OPENAI_ENV);
+      expect(request).toMatchObject({
+        method: "POST",
+        url: "https://internal/internal/classifier/infer",
+        traceId: "trace-openai",
+      });
+      expect(JSON.parse(request.body)).toEqual({
+        model: "openai/gpt-5.6-luna",
+        prompt: expect.any(String),
+      });
+      expect(init).toEqual({ headers: { Accept: "application/json" } });
+    });
+
+    it("rejects a non-canonical bare OpenAI model", async () => {
+      const classifier = new RepoClassifier({
+        ...OPENAI_ENV,
+        CLASSIFICATION_MODEL: "gpt-5.6-luna",
+      } as Env);
+      const result = await classifier.classify("web app issue");
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockSignedControlPlaneFetch).not.toHaveBeenCalled();
+    });
+
+    it("returns clarification when the OpenAI response is malformed", async () => {
+      mockSignedControlPlaneFetch.mockResolvedValue(
+        Response.json({ decision: { targetId: null } })
+      );
+
+      const classifier = new RepoClassifier(OPENAI_ENV);
+      const result = await classifier.classify("web app issue");
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(result.reasoning).toContain("structured model output");
+    });
+
+    it("returns clarification when the OpenAI adapter receives a non-OK response", async () => {
+      mockSignedControlPlaneFetch.mockResolvedValue(
+        new Response("upstream failure", { status: 503 })
+      );
+
+      const classifier = new RepoClassifier(OPENAI_ENV);
+      const result = await classifier.classify("web app issue");
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+    });
+
+    it("does not call a provider for an unsupported classifier model", async () => {
+      const classifier = new RepoClassifier({
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "openai/gpt-5.6-sol",
+      } as Env);
+      const result = await classifier.classify("web app issue");
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockSignedControlPlaneFetch).not.toHaveBeenCalled();
+    });
+
+    it("keeps deterministic routing ahead of an unsupported provider", async () => {
+      mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
+
+      const classifier = new RepoClassifier({
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "unsupported/model",
+      } as Env);
+      const result = await classifier.classify("frontend issue");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/web");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockSignedControlPlaneFetch).not.toHaveBeenCalled();
     });
   });
 });
