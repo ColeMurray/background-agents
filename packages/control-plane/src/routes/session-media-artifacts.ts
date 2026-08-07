@@ -1,14 +1,14 @@
-import type {
-  ScreenshotArtifactMetadata,
-  SessionArtifact,
-  VideoArtifactMetadata,
-} from "@open-inspect/shared";
-import { sessionArtifactSchema } from "@open-inspect/shared";
+import {
+  sessionArtifactSchema,
+  type ArtifactResponse,
+  type ScreenshotArtifactMetadata,
+  type SessionArtifact,
+  type VideoArtifactMetadata,
+} from "@open-inspect/shared/types/artifacts";
 import { z } from "zod";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import type { ObjectStorage } from "../storage/object-storage";
-import type { ArtifactResponse } from "../types";
 import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 
@@ -21,6 +21,10 @@ const listArtifactsResponseSchema = z.object({
 const getArtifactResponseSchema = z.object({
   artifact: sessionArtifactSchema.nullable(),
 });
+
+export type NormalizedArtifactResponse = Omit<ArtifactResponse, "updatedAt"> & {
+  updatedAt: number;
+};
 
 /**
  * Reads a runtime response body as JSON, normalizing empty/non-JSON bodies to
@@ -35,7 +39,7 @@ async function readJsonBody(response: Response): Promise<unknown> {
  * tracking, so fall back to `createdAt` (the documented consumer rule) rather
  * than rejecting the response.
  */
-function toArtifactResponse(artifact: SessionArtifact): ArtifactResponse {
+function toArtifactResponse(artifact: SessionArtifact): NormalizedArtifactResponse {
   return { ...artifact, updatedAt: artifact.updatedAt ?? artifact.createdAt };
 }
 
@@ -119,7 +123,7 @@ export async function persistMediaArtifact(input: {
 export async function listSessionArtifactsFromRuntime(
   sessionId: string,
   ctx: SessionRouteContext
-): Promise<ArtifactResponse[] | Response> {
+): Promise<NormalizedArtifactResponse[] | Response> {
   const response = await ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.artifacts);
   if (!response.ok) {
     return response.status === 404
@@ -136,7 +140,7 @@ export async function getSessionArtifactFromRuntime(
   sessionId: string,
   artifactId: string,
   ctx: SessionRouteContext
-): Promise<ArtifactResponse | null | Response> {
+): Promise<NormalizedArtifactResponse | null | Response> {
   const response = await ctx.sessionRuntime.fetch(
     sessionId,
     SessionInternalPaths.artifacts,

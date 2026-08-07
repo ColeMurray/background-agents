@@ -3,28 +3,15 @@
  */
 
 import type {
-  ArtifactType,
   MessageSource,
   MessageStatus,
   ParticipantRole,
   SessionStatus,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
-export type {
-  ArtifactType,
-  CreateSessionRequest,
-  CreateSessionResponse,
-  MessageSource,
-  MessageStatus,
-  ParticipantRole,
-  ParticipantPresence,
-  SpawnSource,
-  SandboxStatus,
-  SessionState,
-  SessionStatus,
-} from "@open-inspect/shared";
+export type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 export type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 export type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 export type {
@@ -180,15 +167,6 @@ export interface MessageResponse {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-}
-
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-  updatedAt: number;
 }
 
 export interface ParticipantResponse {

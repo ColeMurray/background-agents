@@ -11,6 +11,7 @@ import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
@@ -54,7 +55,6 @@ import type {
   ServerMessage,
   SessionRepositoryState,
   SessionState,
-  SandboxStatus,
 } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";

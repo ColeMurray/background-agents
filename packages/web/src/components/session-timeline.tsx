@@ -22,7 +22,7 @@ import {
   type ToolCallEvent,
 } from "@/lib/timeline-items";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { SessionParticipantProfile } from "@open-inspect/shared";
+import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
 import { TerminalMessageReadObserver } from "./terminal-message-read-observer";

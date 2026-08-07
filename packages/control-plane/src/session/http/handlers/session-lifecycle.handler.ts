@@ -3,7 +3,11 @@ import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
-import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
+import type {
+  SandboxStatus,
+  SessionStatus,
+  SpawnSource,
+} from "@open-inspect/shared/types/sessions";
 import type { SessionRepository } from "../../repository";
 import type { SessionStatusService } from "../../session-status-service";
 import {

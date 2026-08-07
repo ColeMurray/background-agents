@@ -131,14 +131,7 @@ export interface SlackAppMentionEvent {
 
 export type { SlackInteractionPayload } from "../interaction-payload";
 
-/**
- * Callback context passed with prompts for follow-up notifications.
- */
-export type { SlackCallbackContext, CallbackContext } from "@open-inspect/shared";
-import type { SlackCallbackContext } from "@open-inspect/shared";
-
-// Keep backward-compatible alias
-export type SlackBotCallbackContext = SlackCallbackContext;
+import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 
 /**
  * Thread-to-session mapping stored in KV for conversation continuity.
@@ -190,12 +183,4 @@ export interface ToolCallCallback {
 /**
  * Event response from control-plane events API.
  */
-export type {
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  AgentResponse,
-  UserPreferences,
-} from "@open-inspect/shared";
 export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";

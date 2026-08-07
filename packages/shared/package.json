@@ -110,6 +110,18 @@
       "import": "./dist/types/sandbox-events.js",
       "types": "./dist/types/sandbox-events.d.ts"
     },
+    "./types/sessions": {
+      "import": "./dist/types/sessions.js",
+      "types": "./dist/types/sessions.d.ts"
+    },
+    "./types/artifacts": {
+      "import": "./dist/types/artifacts.js",
+      "types": "./dist/types/artifacts.d.ts"
+    },
+    "./types/session-api": {
+      "import": "./dist/types/session-api.js",
+      "types": "./dist/types/session-api.d.ts"
+    },
     "./types/session-attachments": {
       "import": "./dist/types/session-attachments.js",
       "types": "./dist/types/session-attachments.d.ts"

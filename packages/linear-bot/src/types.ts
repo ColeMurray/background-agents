@@ -2,7 +2,7 @@
  * Type definitions for the Linear bot.
  */
 
-import type { LinearCallbackContext } from "@open-inspect/shared";
+import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 
 /**
@@ -115,9 +115,6 @@ export const issueSessionSchema = z.object({
 
 export type IssueSession = z.infer<typeof issueSessionSchema>;
 
-// Re-export CallbackContext types from shared
-export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
-
 /**
  * Completion callback payload from control-plane.
  */
@@ -154,18 +151,7 @@ export type {
 
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 
-export type {
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  AgentResponse,
-} from "@open-inspect/shared";
 export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
-
-// ─── User Preferences ────────────────────────────────────────────────────────
-
-export type { UserPreferences } from "@open-inspect/shared";
 
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 

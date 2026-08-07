@@ -8,7 +8,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import type { AnalyticsPullRequestsResponse } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "../../src/db/session-index";
 import {
   SessionPullRequestStore,

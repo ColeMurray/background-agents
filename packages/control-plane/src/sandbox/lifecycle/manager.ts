@@ -12,7 +12,7 @@
 
 import type { McpServerConfig, SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { extractProviderAndModel } from "@open-inspect/shared/models";
-import type { SandboxStatus } from "../../types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { sessionHasRepository, type SandboxRow, type SessionRow } from "../../session/types";
 import {
   SandboxProviderError,

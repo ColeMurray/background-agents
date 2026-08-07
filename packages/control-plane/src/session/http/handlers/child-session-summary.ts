@@ -1,9 +1,9 @@
-import {
-  type ArtifactInfo,
-  type ChildSessionDetail,
-  type ChildSessionFinalResponse,
-  type ChildSessionTrajectory,
-} from "@open-inspect/shared";
+import type { ArtifactInfo } from "@open-inspect/shared/types/artifacts";
+import type {
+  ChildSessionDetail,
+  ChildSessionFinalResponse,
+  ChildSessionTrajectory,
+} from "@open-inspect/shared/types/session-api";
 import type { EventResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   buildAgentResponseFromEvents,

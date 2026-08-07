@@ -10,13 +10,8 @@
  */
 
 import { issueSessionSchema } from "./types";
-import type {
-  Env,
-  TeamRepoMapping,
-  ProjectRepoMapping,
-  UserPreferences,
-  IssueSession,
-} from "./types";
+import type { UserPreferences } from "@open-inspect/shared/types/session-api";
+import type { Env, TeamRepoMapping, ProjectRepoMapping, IssueSession } from "./types";
 import { createLogger } from "./logger";
 
 const log = createLogger("kv-store");

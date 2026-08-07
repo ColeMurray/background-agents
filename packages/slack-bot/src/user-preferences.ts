@@ -7,7 +7,8 @@ import {
   resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
-import type { Env, UserPreferences } from "./types";
+import type { UserPreferences } from "@open-inspect/shared/types/session-api";
+import type { Env } from "./types";
 import {
   getValidatedBranch,
   isValidBranchName,

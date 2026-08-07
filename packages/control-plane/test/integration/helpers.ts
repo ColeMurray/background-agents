@@ -1,7 +1,7 @@
 import { SELF, env, runInDurableObject } from "cloudflare:test";
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/service-auth";
-import type { SandboxStatus } from "../../src/types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
 

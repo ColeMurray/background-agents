@@ -2,7 +2,7 @@ import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";

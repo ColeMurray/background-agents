@@ -3,12 +3,13 @@ import {
   sendPromptResponseSchema,
   type CreateSessionResponse,
   type SendPromptResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
-import type { CallbackContext, Env } from "../types";
+import type { CallbackContext } from "@open-inspect/shared/types/session-api";
+import type { Env } from "../types";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 const log = createLogger("handler");
