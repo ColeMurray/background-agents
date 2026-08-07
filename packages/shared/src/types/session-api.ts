@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { AgentResponse } from "./artifacts";
-import { isValidSandboxTimeoutMs } from "./integrations";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
 import {
@@ -20,7 +19,6 @@ export interface UserPreferences {
 }
 
 const nonEmptyStringSchema = z.string().trim().min(1);
-const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
 
 export const slackCallbackContextSchema = z.object({
   source: z.literal("slack"),
@@ -265,38 +263,6 @@ export const cancelChildSessionRequestSchema = z.object({
 });
 
 export type CancelChildSessionRequest = z.infer<typeof cancelChildSessionRequestSchema>;
-
-/**
- * Returned by the parent Durable Object's GET /internal/spawn-context.
- *
- * Deliberately scalar in v1: child sessions inherit — and are restricted to —
- * the parent's PRIMARY repository, even for multi-repo parents. The spawn
- * route validates against the scalar mirror. Letting children target another
- * repository requires spawnContext.repositories, a named fast-follow (design
- * §13.13), not a v1 promise.
- */
-export const spawnContextSchema = z.object({
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  repoId: z.number().nullable(),
-  model: z.string(),
-  reasoningEffort: z.string().nullable(),
-  baseBranch: z.string().nullable(),
-  sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
-  owner: z.object({
-    userId: z.string(),
-    canonicalUserId: z.string().nullable().optional(),
-    scmUserId: z.string().nullable(),
-    scmLogin: z.string().nullable(),
-    scmName: z.string().nullable(),
-    scmEmail: z.string().nullable(),
-    scmAccessTokenEncrypted: z.string().nullable(),
-    scmRefreshTokenEncrypted: z.string().nullable(),
-    scmTokenExpiresAt: z.number().nullable(),
-  }),
-});
-
-export type SpawnContext = z.infer<typeof spawnContextSchema>;
 
 /** Returned by the child Durable Object's GET /internal/child-summary. */
 export interface ChildSessionFinalResponse extends AgentResponse {
