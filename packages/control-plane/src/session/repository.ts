@@ -16,17 +16,17 @@ import type {
   SessionRepositoryRow,
   SessionViewDeltaRow,
 } from "./types";
-import { sessionDeltaSchema, toolCallIdentityKey, type SessionDelta } from "@open-inspect/shared";
+import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import { sessionDeltaSchema, type SessionDelta } from "@open-inspect/shared/types/server-messages";
 import type {
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
   ArtifactType,
-  SandboxEvent,
 } from "../types";
 import {
   eventTimelineCursorFromRow,

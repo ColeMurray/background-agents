@@ -10,8 +10,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
-import { sandboxEventSchema } from "@open-inspect/shared";
+import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
 import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
@@ -52,7 +53,6 @@ import type {
   Env,
   ClientInfo,
   ServerMessage,
-  SandboxEvent,
   SessionRepositoryState,
   SessionState,
   SandboxStatus,
@@ -591,7 +591,7 @@ export class SessionDO extends DurableObject<Env> {
             messenger: this.messenger,
             appName: resolveAppName(this.env),
             sessionPullRequests: this.db ? new SessionPullRequestStore(this.db) : undefined,
-            resolveAlwaysDraftDefault: (repo) => this.resolveAlwaysDraftDefault(repo),
+            resolveScmSettings: (repo) => this.resolveScmSettings(repo),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -651,18 +651,15 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   /**
-   * Resolves the "always use draft mode" SCM setting (global default merged
-   * with the per-repo override) for the pull request's target repository.
-   * A deployment without D1 cannot have this policy configured, so it retains
-   * the ready-for-review default; storage failures propagate to fail closed.
+   * Resolves SCM settings (global defaults merged with the per-repo override)
+   * for the pull request's target repository. A deployment without D1 cannot
+   * have this policy configured, so it retains the built-in defaults; storage
+   * failures propagate to fail closed.
    */
-  private async resolveAlwaysDraftDefault(repo: RepoIdentity): Promise<boolean> {
-    if (!this.db) return false;
+  private async resolveScmSettings(repo: RepoIdentity): Promise<ScmSettings> {
+    if (!this.db) return {};
     const scmSettingsStore = new ScmSettingsStore(this.db);
-    const settings = await scmSettingsStore.getResolvedSettings(
-      `${repo.repoOwner}/${repo.repoName}`
-    );
-    return settings.alwaysUseDraftMode === true;
+    return scmSettingsStore.getResolvedSettings(`${repo.repoOwner}/${repo.repoName}`);
   }
 
   private get alarmHandler(): AlarmHandler {
@@ -1094,7 +1091,13 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.processMessageQueue();
+        this.ctx.waitUntil(
+          this.processMessageQueue().catch((error) => {
+            log.error("message_queue.process.background_error", {
+              error: error instanceof Error ? error : String(error),
+            });
+          })
+        );
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);

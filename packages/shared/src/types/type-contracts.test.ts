@@ -19,27 +19,28 @@ import type {
   CreateSessionRequest,
   ListAutomationsResponse,
   RepositoryInput,
-  SandboxEvent,
-  SessionBootstrap,
-  SessionDelta,
-  SessionStatePatch,
-  SessionViewEvent,
-  SessionViewOperation,
   ServerMessage,
   UpdateEnvironmentInput,
   createEnvironmentInputSchema,
   createSessionInputSchema,
   createSessionRequestSchema,
   repositoryInputSchema,
-  sandboxEventSchema,
+  serverMessageSchema,
+  updateEnvironmentInputSchema,
+} from ".";
+import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
+import type {
+  SessionBootstrap,
+  SessionDelta,
+  SessionStatePatch,
+  SessionViewEvent,
+  SessionViewOperation,
   sessionBootstrapSchema,
   sessionDeltaSchema,
   sessionStatePatchSchema,
   sessionViewEventSchema,
   sessionViewOperationSchema,
-  serverMessageSchema,
-  updateEnvironmentInputSchema,
-} from ".";
+} from "./server-messages";
 
 it("preserves public Zod input and output relationships", () => {
   expectTypeOf<RepositoryInput>().toEqualTypeOf<z.input<typeof repositoryInputSchema>>();

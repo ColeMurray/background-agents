@@ -1,10 +1,9 @@
+import type { ClientMessage, ServerMessage } from "../types";
 import type {
-  ClientMessage,
   EventResponse,
   ListEventsResponse,
   SandboxEvent,
-  ServerMessage,
-} from "../types";
+} from "@open-inspect/shared/types/sandbox-events";
 import { encodeEventTimelineCursor, type EventListCursor } from "./event-cursor";
 import type { EventRow } from "./types";
 import type { SessionRepository } from "./repository";

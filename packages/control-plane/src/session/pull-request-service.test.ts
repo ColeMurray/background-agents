@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
@@ -124,7 +125,7 @@ function createRepositoryRow(overrides: Partial<SessionRepositoryRow> = {}): Ses
   };
 }
 
-function createTestHarness(options: { alwaysDraftDefault?: boolean } = {}) {
+function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
   const log = createMockLogger();
   const provider = createMockProvider();
   const artifacts: ArtifactRow[] = [];
@@ -182,7 +183,7 @@ function createTestHarness(options: { alwaysDraftDefault?: boolean } = {}) {
     messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
     appName: "Open-Inspect",
     sessionPullRequests,
-    resolveAlwaysDraftDefault: vi.fn(async () => options.alwaysDraftDefault ?? false),
+    resolveScmSettings: vi.fn(async () => options.scmSettings ?? {}),
   };
 
   const service = new SessionPullRequestService(deps);
@@ -345,7 +346,7 @@ describe("SessionPullRequestService", () => {
   });
 
   it("falls back to the always-draft default when draft is unspecified", async () => {
-    harness = createTestHarness({ alwaysDraftDefault: true });
+    harness = createTestHarness({ scmSettings: { alwaysUseDraftMode: true } });
 
     await harness.service.createPullRequest(createInput());
 
@@ -356,7 +357,7 @@ describe("SessionPullRequestService", () => {
   });
 
   it("forces draft when always-draft is enabled, even if the request sets draft=false", async () => {
-    harness = createTestHarness({ alwaysDraftDefault: true });
+    harness = createTestHarness({ scmSettings: { alwaysUseDraftMode: true } });
 
     await harness.service.createPullRequest(createInput({ draft: false }));
 
@@ -366,20 +367,29 @@ describe("SessionPullRequestService", () => {
     );
   });
 
-  it("fails before push when the draft policy cannot be resolved", async () => {
-    vi.mocked(harness.deps.resolveAlwaysDraftDefault).mockRejectedValueOnce(
-      new Error("D1 unavailable")
-    );
+  it("fails before push when SCM policy cannot be resolved", async () => {
+    vi.mocked(harness.deps.resolveScmSettings).mockRejectedValueOnce(new Error("D1 unavailable"));
 
     const result = await harness.service.createPullRequest(createInput());
 
     expect(result).toEqual({
       kind: "error",
       status: 503,
-      error: "Pull request draft policy is temporarily unavailable",
+      error: "Pull request policy is temporarily unavailable",
     });
     expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
     expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+  });
+
+  it("passes the configured pull request label to the provider", async () => {
+    harness = createTestHarness({ scmSettings: { pullRequestLabel: "open-inspect" } });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ labels: ["open-inspect"] })
+    );
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {
@@ -543,22 +553,24 @@ describe("SessionPullRequestService", () => {
       );
     });
 
-    it("resolves the draft policy for the target member repository", async () => {
-      vi.mocked(harness.deps.resolveAlwaysDraftDefault).mockImplementation(
-        async (repo) => repo.repoName === "backend"
+    it("resolves SCM policy for the target member repository", async () => {
+      vi.mocked(harness.deps.resolveScmSettings).mockImplementation(async (repo) =>
+        repo.repoName === "backend"
+          ? { alwaysUseDraftMode: true, pullRequestLabel: "backend-generated" }
+          : {}
       );
 
       await harness.service.createPullRequest(
         createInput({ repoOwner: "acme", repoName: "backend", draft: false })
       );
 
-      expect(harness.deps.resolveAlwaysDraftDefault).toHaveBeenCalledWith({
+      expect(harness.deps.resolveScmSettings).toHaveBeenCalledWith({
         repoOwner: "acme",
         repoName: "backend",
       });
       expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ draft: true })
+        expect.objectContaining({ draft: true, labels: ["backend-generated"] })
       );
     });
 

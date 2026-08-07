@@ -155,14 +155,13 @@ export type {
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 
 export type {
-  EventResponse,
-  ListEventsResponse,
   ArtifactResponse,
   ListArtifactsResponse,
   ToolCallSummary,
   ArtifactInfo,
   AgentResponse,
 } from "@open-inspect/shared";
+export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 
 // ─── User Preferences ────────────────────────────────────────────────────────
 

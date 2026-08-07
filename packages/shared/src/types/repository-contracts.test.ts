@@ -10,11 +10,11 @@ import {
   formatRepositoryFullName,
   parseRepositoryFullName,
   prArtifactBelongsToRepo,
-  sandboxEventSchema,
   serverMessageSchema,
   sessionRepositoriesInputSchema,
   toRepositoryRef,
 } from "./index";
+import { sandboxEventSchema } from "./sandbox-events";
 
 describe("repository full names", () => {
   it("round-trips a repository with a nested owner namespace", () => {

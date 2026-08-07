@@ -6,14 +6,13 @@ import type {
   ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
   ArtifactType,
-  EventType,
 } from "../types";
+import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
