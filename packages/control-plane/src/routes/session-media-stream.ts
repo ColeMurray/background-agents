@@ -1,5 +1,4 @@
 import { createLogger } from "../logger";
-import type { ArtifactResponse } from "@open-inspect/shared/types/artifacts";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
 import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
@@ -9,7 +8,10 @@ import {
   createRangeNotSatisfiableResponse,
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
-import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
+import {
+  getSessionArtifactFromRuntime,
+  type NormalizedArtifactResponse,
+} from "./session-media-artifacts";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 export { parseByteRangeHeader } from "./requests/byte-range";
@@ -17,7 +19,7 @@ export { parseByteRangeHeader } from "./requests/byte-range";
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(
-  artifact: ArtifactResponse
+  artifact: NormalizedArtifactResponse
 ): "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | null {
   const mimeType = artifact.metadata?.mimeType;
   if (typeof mimeType !== "string") return null;
@@ -34,7 +36,7 @@ function getStoredContentType(metadata: ObjectStorageMetadata): string | null {
 }
 
 function resolveMediaContentType(
-  artifact: ArtifactResponse,
+  artifact: NormalizedArtifactResponse,
   metadata: ObjectStorageMetadata
 ): string | null {
   const storedContentType = getStoredContentType(metadata);
