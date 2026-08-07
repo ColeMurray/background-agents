@@ -106,6 +106,10 @@
       "import": "./dist/types/server-messages.js",
       "types": "./dist/types/server-messages.d.ts"
     },
+    "./types/sandbox-events": {
+      "import": "./dist/types/sandbox-events.js",
+      "types": "./dist/types/sandbox-events.d.ts"
+    },
     "./types/session-attachments": {
       "import": "./dist/types/session-attachments.js",
       "types": "./dist/types/session-attachments.d.ts"

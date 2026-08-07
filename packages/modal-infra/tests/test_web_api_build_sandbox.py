@@ -6,7 +6,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
 
 from src import web_api
-from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS
+from src.sandbox.build_session import DEFAULT_BUILD_TIMEOUT_SECONDS, MAX_BUILD_TIMEOUT_SECONDS
 
 REPOSITORIES = [{"repo_owner": "acme", "repo_name": "repo", "branch": "main"}]
 CALLBACK_CONTEXT = {
@@ -153,6 +153,29 @@ async def test_create_build_sandbox_rejects_missing_callback_urls(
 
 
 @pytest.mark.asyncio
+async def test_create_build_sandbox_rejects_callbacks_outside_control_plane(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+    monkeypatch.setattr(web_api, "validate_control_plane_url", lambda url: "worker.test" in url)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                "callback_url": "https://worker.test/image-builds/build-complete",
+                "failure_callback_url": "https://attacker.test/image-builds/build-failed",
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "callback URLs must target the control plane"
+    service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -238,8 +261,8 @@ async def test_create_rejects_non_integer_build_timeout(monkeypatch, field):
 
 
 @pytest.mark.asyncio
-async def test_create_reads_legacy_build_timeout_key_during_rename_skew(monkeypatch):
-    """An older control plane sends build_timeout_seconds; honor it until both planes rename."""
+async def test_create_ignores_retired_build_timeout_seconds_key(monkeypatch):
+    """The pre-rename build_timeout_seconds key is retired; only the renamed key is read."""
     service = _patch_dependencies(monkeypatch)
 
     await _call(
@@ -254,27 +277,10 @@ async def test_create_reads_legacy_build_timeout_key_during_rename_skew(monkeypa
         },
     )
 
-    assert service.create.await_args.kwargs["timeout_seconds"] == 4200
-
-
-@pytest.mark.asyncio
-async def test_create_prefers_renamed_provider_session_timeout_key_over_legacy(monkeypatch):
-    service = _patch_dependencies(monkeypatch)
-
-    await _call(
-        web_api.api_create_build_sandbox,
-        {
-            "scope_kind": "repo",
-            "scope_id": "acme/repo",
-            "build_id": "imgb-1",
-            "repositories": REPOSITORIES,
-            **CALLBACK_CONTEXT,
-            "provider_session_timeout_seconds": 2400,
-            "build_timeout_seconds": 4200,
-        },
+    assert (
+        service.create.await_args.kwargs["timeout_seconds"]
+        == DEFAULT_BUILD_TIMEOUT_SECONDS + web_api.IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
     )
-
-    assert service.create.await_args.kwargs["timeout_seconds"] == 2400
 
 
 @pytest.mark.asyncio
@@ -294,6 +300,30 @@ async def test_create_clamps_build_timeout_to_provider_maximum(monkeypatch):
     )
 
     assert service.create.await_args.kwargs["timeout_seconds"] == 4200
+
+
+@pytest.mark.asyncio
+async def test_create_clamps_build_execution_timeout_independently(monkeypatch):
+    service = _patch_dependencies(monkeypatch)
+
+    await _call(
+        web_api.api_create_build_sandbox,
+        {
+            "scope_kind": "repo",
+            "scope_id": "acme/repo",
+            "build_id": "imgb-1",
+            "repositories": REPOSITORIES,
+            **CALLBACK_CONTEXT,
+            "build_execution_timeout_seconds": 99999,
+            "provider_session_timeout_seconds": 1,
+        },
+    )
+
+    assert (
+        service.create.await_args.kwargs["build_execution_timeout_seconds"]
+        == MAX_BUILD_TIMEOUT_SECONDS
+    )
+    assert service.create.await_args.kwargs["timeout_seconds"] == 1
 
 
 @pytest.mark.asyncio

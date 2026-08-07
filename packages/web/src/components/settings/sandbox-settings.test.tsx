@@ -83,6 +83,14 @@ describe("SandboxSettingsPage — tunnel ports editor", () => {
     expect(screen.getByText("No tunnel ports configured.")).toBeInTheDocument();
   });
 
+  it("groups related sandbox controls under accessible names", () => {
+    renderWithSWR({ integrationId: "sandbox", settings: null });
+
+    for (const name of ["Service Ports", "Tunnel Ports", "Child Sessions", "Resources"]) {
+      expect(screen.getByRole("group", { name })).toBeInTheDocument();
+    }
+  });
+
   it("displays session timeout in minutes and saves milliseconds", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") return new Response(JSON.stringify({}), { status: 200 });

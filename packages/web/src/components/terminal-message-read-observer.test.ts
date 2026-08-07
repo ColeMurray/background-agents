@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldAttemptMarkMessageRead } from "./terminal-message-read-observer";
+import { shouldAttemptMarkMessageRead } from "./terminal-message-read-state";
 
 const readyState = {
   enabled: true,

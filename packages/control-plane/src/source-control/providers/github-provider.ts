@@ -249,6 +249,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
     // Add labels if requested
     if (config.labels && config.labels.length > 0) {
+      await this.ensureLabels(
+        auth.token,
+        config.repository.owner,
+        config.repository.name,
+        config.labels
+      );
       await this.addLabels(
         auth.token,
         config.repository.owner,
@@ -619,6 +625,55 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       repoName: config.name,
       force,
     };
+  }
+
+  /** Ensure requested labels exist without generating repeated mutating 422 responses. */
+  private async ensureLabels(
+    accessToken: string,
+    owner: string,
+    repo: string,
+    labels: string[]
+  ): Promise<void> {
+    const encodedOwner = encodeURIComponent(owner);
+    const encodedRepo = encodeURIComponent(repo);
+    const headers = {
+      Accept: "application/vnd.github.v3+json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": this.userAgent,
+    };
+
+    for (const label of labels) {
+      const labelUrl = `${GITHUB_API_BASE}/repos/${encodedOwner}/${encodedRepo}/labels/${encodeURIComponent(label)}`;
+      try {
+        const existing = await fetchWithTimeout(labelUrl, { headers });
+        if (existing.ok) continue;
+        if (existing.status !== 404) {
+          console.warn(`Failed to check label "${label}" in ${owner}/${repo}: ${existing.status}`);
+          continue;
+        }
+
+        const created = await fetchWithTimeout(
+          `${GITHUB_API_BASE}/repos/${encodedOwner}/${encodedRepo}/labels`,
+          {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: label, color: "ededed" }),
+          }
+        );
+        if (created.ok) continue;
+
+        // A concurrent creator can win between the GET and POST. Confirm the
+        // label now exists rather than treating every validation failure as a duplicate.
+        if (created.status === 422) {
+          const raced = await fetchWithTimeout(labelUrl, { headers });
+          if (raced.ok) continue;
+        }
+
+        console.warn(`Failed to create label "${label}" in ${owner}/${repo}: ${created.status}`);
+      } catch (error) {
+        console.warn(`Failed to ensure label "${label}" in ${owner}/${repo}:`, error);
+      }
+    }
   }
 
   /**

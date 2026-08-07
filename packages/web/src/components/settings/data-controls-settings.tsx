@@ -5,9 +5,10 @@ import Link from "next/link";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { buildSessionHref, type SessionItem } from "@/components/session-sidebar";
+import type { SessionItem } from "@/components/session-sidebar";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
+  buildSessionHref,
   buildSessionsPageKey,
   isUnarchivedSessionListKey,
   removeSessionFromList,

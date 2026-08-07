@@ -47,11 +47,22 @@ interface TriggerTypeSelectorProps {
   value: AutomationTriggerType;
   onChange: (type: AutomationTriggerType) => void;
   disabled?: boolean;
+  /** Id of the visible heading that names this group of mutually exclusive choices. */
+  labelledBy?: string;
 }
 
-export function TriggerTypeSelector({ value, onChange, disabled }: TriggerTypeSelectorProps) {
+export function TriggerTypeSelector({
+  value,
+  onChange,
+  disabled,
+  labelledBy,
+}: TriggerTypeSelectorProps) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <div
+      role="radiogroup"
+      aria-labelledby={labelledBy}
+      className="grid grid-cols-2 sm:grid-cols-3 gap-2"
+    >
       {TRIGGER_OPTIONS.map((option) => {
         const isSelected = value === option.type;
         const isDisabled = disabled || option.comingSoon;
@@ -60,6 +71,8 @@ export function TriggerTypeSelector({ value, onChange, disabled }: TriggerTypeSe
           <button
             key={option.type}
             type="button"
+            role="radio"
+            aria-checked={isSelected}
             onClick={() => !isDisabled && onChange(option.type)}
             disabled={isDisabled}
             className={`relative rounded-md border p-3 text-left transition text-sm ${

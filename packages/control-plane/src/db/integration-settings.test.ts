@@ -756,6 +756,27 @@ describe("IntegrationSettingsStore", () => {
     });
   });
 
+  describe("SCM field-level overrides", () => {
+    it("keeps omitted repository fields inherited when global defaults change", async () => {
+      await store.setGlobal("scm", {
+        defaults: { alwaysUseDraftMode: false, pullRequestLabel: "global" },
+      });
+      await store.setRepoSettings("scm", "acme/widgets", {
+        pullRequestLabel: "repository",
+      });
+
+      await store.setGlobal("scm", {
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "new-global" },
+      });
+      const config = await store.getResolvedConfig("scm", "acme/widgets");
+
+      expect(config.settings).toEqual({
+        alwaysUseDraftMode: true,
+        pullRequestLabel: "repository",
+      });
+    });
+  });
+
   describe("validation errors", () => {
     it("rejects invalid model ID", async () => {
       await expect(
