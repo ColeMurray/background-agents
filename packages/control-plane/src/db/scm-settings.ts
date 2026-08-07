@@ -47,6 +47,10 @@ function validateAndNormalizeScmSettings(settings: unknown): ScmSettings {
 
   const normalizedLabel =
     typeof pullRequestLabel === "string" ? pullRequestLabel.trim() : undefined;
+  if (normalizedLabel?.includes(",")) {
+    throw new ScmSettingsValidationError("pullRequestLabel must not contain commas");
+  }
+
   return {
     ...(alwaysUseDraftMode !== undefined ? { alwaysUseDraftMode } : {}),
     ...(normalizedLabel ? { pullRequestLabel: normalizedLabel } : {}),

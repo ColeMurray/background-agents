@@ -106,6 +106,21 @@ describe("ScmSettingsStore", () => {
     expect(delegate.setRepoSettings).not.toHaveBeenCalled();
   });
 
+  it("rejects commas in pullRequestLabel and does not write", async () => {
+    await expect(
+      store.setGlobal({ defaults: { pullRequestLabel: "release,agent" } })
+    ).rejects.toThrow("pullRequestLabel must not contain commas");
+    await expect(
+      store.setRepoSettings("acme/web", {
+        alwaysUseDraftMode: false,
+        pullRequestLabel: "release,agent",
+      })
+    ).rejects.toThrow("pullRequestLabel must not contain commas");
+
+    expect(delegate.setGlobal).not.toHaveBeenCalled();
+    expect(delegate.setRepoSettings).not.toHaveBeenCalled();
+  });
+
   it("normalizes an empty label to an inherited or unset value", async () => {
     await store.setGlobal({ defaults: { pullRequestLabel: "   " } });
     await store.setRepoSettings("acme/web", {
