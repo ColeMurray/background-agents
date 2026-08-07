@@ -5,8 +5,9 @@
 import { env } from "cloudflare:test";
 import { EnvironmentStore } from "../../src/db/environments";
 import type { ImageBuildScope } from "../../src/image-builds/model";
+import { MANAGED_SANDBOX_VERSION } from "../../src/runtime-release";
 
-export const RUNTIME_VERSION = "v56-managed-provider-runtime";
+export const RUNTIME_VERSION = MANAGED_SANDBOX_VERSION;
 export const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
 
 export function environmentScope(id: string): ImageBuildScope {

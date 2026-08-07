@@ -3,6 +3,7 @@ import type { ImageBuildStore } from "../db/image-builds";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SourceControlProvider } from "../source-control";
 import type { Env } from "../types";
+import { MANAGED_SANDBOX_VERSION } from "../runtime-release";
 import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { ImageBuildScheduler } from "./scheduler";
@@ -232,7 +233,7 @@ describe("ImageBuildScheduler", () => {
               baseSha: "abc123",
             }))
           ),
-          runtime_version: "v56-managed-provider-runtime",
+          runtime_version: MANAGED_SANDBOX_VERSION,
           build_duration_seconds: 1,
           error_message: null,
           created_at: 1,

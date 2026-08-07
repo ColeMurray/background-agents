@@ -60,6 +60,7 @@ if not API_KEY:
 
 RUNTIME_SRC = SCRIPT_DIR.parent / "sandbox-runtime" / "src" / "sandbox_runtime"
 STAGED = SCRIPT_DIR / "sandbox_runtime"
+RELEASE_PATH = RUNTIME_SRC / "release.json"
 
 if not RUNTIME_SRC.exists():
     print(f"Error: sandbox-runtime not found at {RUNTIME_SRC}", file=sys.stderr)
@@ -77,7 +78,13 @@ def _ignore_pycache(src: str, names: list[str]) -> list[str]:
 shutil.copytree(RUNTIME_SRC, STAGED, ignore=_ignore_pycache)
 atexit.register(lambda: shutil.rmtree(STAGED, ignore_errors=True))
 
+release = json.loads(RELEASE_PATH.read_text())
+opencode_version = release["opencode_version"]
 dockerfile = (SCRIPT_DIR / "e2b.Dockerfile").read_text()
+opencode_token = "__OPENCODE_VERSION__"
+if dockerfile.count(opencode_token) != 1:
+    raise RuntimeError(f"Expected exactly one {opencode_token} in e2b.Dockerfile")
+dockerfile = dockerfile.replace(opencode_token, opencode_version)
 
 print(f"Building E2B template: {TEMPLATE_ID} (cpu={CPU}, mem={MEM})")
 

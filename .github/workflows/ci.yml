@@ -34,6 +34,9 @@ jobs:
       - name: Test complexity reporter
         run: npm run test:lint-complexity
 
+      - name: Validate runtime release metadata
+        run: npm run test:runtime-release
+
       - name: Check Prettier formatting
         run: npm run format:check
 

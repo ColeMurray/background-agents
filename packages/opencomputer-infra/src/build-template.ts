@@ -2,8 +2,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { Image, Snapshots } from "@opencomputer/sdk/node";
+import release from "../../sandbox-runtime/src/sandbox_runtime/release.json";
 
-const OPENCODE_VERSION = "1.18.11";
+const OPENCODE_VERSION = release.opencode_version;
+const SANDBOX_VERSION = `v${release.managed_runtime_version}-opencode-${OPENCODE_VERSION.replaceAll(".", "-")}`;
 const CODE_SERVER_VERSION = "4.109.5";
 const PYTHON_VERSION = "3.12";
 const AGENT_BROWSER_VERSION = "0.21.2";
@@ -240,7 +242,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
-      SANDBOX_VERSION: "v56-opencode-1-18-11",
+      SANDBOX_VERSION,
     })
     .workdir(`${SANDBOX_HOME}/workspace`)
     .builderMemory(options.builderMemoryMb);
