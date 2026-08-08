@@ -237,10 +237,11 @@ image-only message with no text triggers nothing. Use an interactive bot DM or `
 input.
 
 When the triggering message is a reply, the thread it belongs to is passed to the agent alongside it
-— the most recent 20 messages plus the thread's opening message — so a reply is read in context
-instead of on its own. The thread is fetched only after a run is admitted, so unmatched messages,
-follow-ups that steer an existing session, and skipped or duplicate firings cost nothing. Conditions
-still match against the triggering message's text only, never the thread.
+— up to 20 earlier messages total, preserving the thread's opening message alongside the most recent
+replies — so a reply is read in context instead of on its own. The thread is fetched only after a
+run is admitted, so unmatched messages, follow-ups that steer an existing session, and skipped or
+duplicate firings cost nothing. Conditions still match against the triggering message's text only,
+never the thread.
 
 - **Slack Channel** (required) — the channels to watch. Pick channels by name in the web form;
   channel IDs (for example `C0123ABCD`) also work as a fallback when channel listing is unavailable.

@@ -34,6 +34,14 @@ describe("selectThreadWindow", () => {
     expect(window).toHaveLength(1);
   });
 
+  it("keeps only messages strictly newer than sinceTs", () => {
+    const window = selectThreadWindow(
+      [message("1.000001"), message("2.000002"), message("3.000003")],
+      { sinceTs: "2.000002", limit: 10 }
+    );
+    expect(window.map((m) => m.ts)).toEqual(["3.000003"]);
+  });
+
   it("applies exclusions before the limit so dropped messages cost no slots", () => {
     const messages = [
       message("1.000001", { bot_id: "B1" }),
@@ -55,6 +63,10 @@ describe("selectThreadWindow", () => {
     const messages = [message("1.000000"), message("2.000000")];
     const window = selectThreadWindow(messages, { limit: 5, keepRootTs: "1.000000" });
     expect(window.map((m) => m.ts)).toEqual(["1.000000", "2.000000"]);
+  });
+
+  it.each([0, -1])("returns no messages for a non-positive limit (%i)", (limit) => {
+    expect(selectThreadWindow([message("1.000000")], { limit })).toEqual([]);
   });
 });
 

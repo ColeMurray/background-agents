@@ -21,17 +21,23 @@ import { createLogger } from "./logger";
 const log = createLogger("thread-context");
 
 /**
- * Messages shown to the agent, most recent first plus the thread root. Bounded
- * because an automation can wake on a reply deep in a long thread and only the
- * tail bears on it.
+ * Messages shown to the agent: the thread root plus the most recent replies,
+ * rendered oldest-first. Bounded because an automation can wake on a reply deep
+ * in a long thread and only the tail bears on it.
  */
 export const THREAD_CONTEXT_MESSAGE_LIMIT = 20;
 
 /** Max characters kept per message. */
 export const THREAD_CONTEXT_MESSAGE_MAX_LENGTH = 1024;
 
-interface ThreadContextRecord {
-  speaker: string;
+export type ThreadContextSpeaker =
+  | { kind: "self" }
+  | { kind: "app"; id: string }
+  | { kind: "user"; id: string; displayName: string }
+  | { kind: "unknown" };
+
+export interface ThreadContextRecord {
+  speaker: ThreadContextSpeaker;
   text: string;
 }
 
@@ -41,10 +47,12 @@ interface ThreadContextRecord {
  * Slack text is attacker-controlled: it can contain newlines and literal tags.
  * A line-oriented `speaker: text` layout lets any participant forge a speaker
  * line or close the block and open another, so the messages are serialized as
- * JSON records instead — `JSON.stringify` escapes newlines and quotes, and every
- * left angle bracket is then replaced with its JSON unicode escape so no
- * delimiter can appear in the payload at all. The result still parses as JSON,
- * and round-trips to the original text.
+ * JSON records with discriminated speaker identities instead — `JSON.stringify`
+ * escapes newlines and quotes, and every left angle bracket is then replaced
+ * with its JSON unicode escape so no delimiter can appear in the payload at all.
+ * Keeping the speaker kind separate from its display name also prevents a Slack
+ * user from naming themselves like the assistant or an app. The result still
+ * parses as JSON and round-trips to the original text.
  */
 export function renderThreadContext(records: ThreadContextRecord[]): string {
   if (records.length === 0) return "";
@@ -111,13 +119,12 @@ export async function buildThreadContextForTrigger(
     const speaker = speakers[index]!;
     return {
       speaker:
-        speaker.kind === "self"
-          ? "you (this assistant)"
-          : speaker.kind === "app"
-            ? `app ${speaker.id}`
-            : speaker.kind === "user"
-              ? (names.get(speaker.id) ?? speaker.id)
-              : "unknown",
+        speaker.kind === "user"
+          ? {
+              ...speaker,
+              displayName: names.get(speaker.id) ?? speaker.id,
+            }
+          : speaker,
       text: message.text.trim().slice(0, THREAD_CONTEXT_MESSAGE_MAX_LENGTH),
     };
   });

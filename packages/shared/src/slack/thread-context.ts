@@ -60,7 +60,8 @@ export function selectThreadWindow(
     return true;
   });
 
-  if (limit <= 0 || eligible.length <= limit) return eligible;
+  if (limit <= 0) return [];
+  if (eligible.length <= limit) return eligible;
 
   const tail = eligible.slice(-limit);
   const root = keepRootTs ? eligible.find((message) => message.ts === keepRootTs) : undefined;

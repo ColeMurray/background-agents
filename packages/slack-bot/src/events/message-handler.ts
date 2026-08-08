@@ -88,10 +88,13 @@ async function fetchThreadHistory(
       excludeBots: !includeBotMessages,
     });
     if (relevant.length === 0) return [];
-    const uniqueUserIds = [...new Set(relevant.map((m) => m.user).filter(Boolean))] as string[];
+    const speakers = relevant.map((message) => classifyThreadSpeaker(message));
+    const uniqueUserIds = [
+      ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
+    ];
     const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-    return relevant.map((m) => {
-      const speaker = classifyThreadSpeaker(m);
+    return relevant.map((m, index) => {
+      const speaker = speakers[index]!;
       if (speaker.kind === "app") return `[Bot]: ${m.text}`;
       const name = speaker.kind === "user" ? (userNames.get(speaker.id) ?? speaker.id) : "Unknown";
       return `[${name}]: ${m.text}`;

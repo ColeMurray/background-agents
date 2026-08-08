@@ -310,10 +310,11 @@ run has actually been admitted — never for messages that match no automation, 
 continue an existing session, or for firings dropped as concurrent or duplicate — and once per
 message however many automations match it. Top-level messages have no thread to read.
 
-The context is the most recent 20 messages plus the thread's opening message, each truncated to
-1,024 characters, with speakers shown by display name and the bot's own earlier turns marked as its
-own. It is passed as JSON and labelled untrusted: Slack text is written by people who may not be
-asking the agent anything, so it is presented as a record of the conversation rather than as
+The context contains up to 20 earlier messages total; on long threads, the opening message is
+preserved alongside the most recent replies. Each message is truncated to 1,024 characters, and its
+speaker record identifies people, apps, and the bot's own earlier turns without relying on a display
+name alone. It is passed as JSON and labelled untrusted: Slack text is written by people who may not
+be asking the agent anything, so it is presented as a record of the conversation rather than as
 instructions. If Slack cannot be read, the run starts with no thread history rather than failing.
 
 ### Slack app setup

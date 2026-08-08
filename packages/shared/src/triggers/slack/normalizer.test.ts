@@ -99,7 +99,11 @@ describe("normalizeSlackEvent", () => {
         text: "can we do it?",
         threadContext: "<thread_context>[]</thread_context>",
       });
-      expect(block.indexOf("<thread_context>")).toBeLessThan(block.indexOf("<user_content>"));
+      const threadContextIndex = block.indexOf("<thread_context>");
+      const userContentIndex = block.indexOf("<user_content>");
+      expect(threadContextIndex).toBeGreaterThanOrEqual(0);
+      expect(userContentIndex).toBeGreaterThanOrEqual(0);
+      expect(threadContextIndex).toBeLessThan(userContentIndex);
     });
 
     it("reproduces the ingress layout when no thread context is supplied", () => {
