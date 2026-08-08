@@ -33,7 +33,6 @@ interface FenceState {
 }
 
 const CLOSED_FENCE: FenceState = { open: false, info: "" };
-const OPEN_FENCE: FenceState = { open: true, info: "" };
 
 /**
  * Cap on the retained fence info string. An info string is a language token
@@ -167,21 +166,26 @@ class SlackSectionAccumulator {
 
   private takeHardSlice(text: string): string {
     const start = this.sectionEnd;
-    // Reserve the closing fence whenever this slice could end inside one.
-    const reserveClose = start.open || advanceFence(start, text).open;
-    const budget =
-      this.maxChars -
-      reopenPrefix(start).length -
-      (reserveClose ? closeSuffix(OPEN_FENCE).length : 0);
-    const taken = sliceAtCodePointBoundary(text, Math.max(1, budget));
-    if (!taken) {
-      throw new RangeError("Section budget is too small to fit the next Unicode code point");
+    let budget = this.maxChars - reopenPrefix(start).length;
+    while (budget > 0) {
+      const taken = sliceAtCodePointBoundary(text, budget);
+      if (!taken) break;
+
+      const end = advanceFence(start, taken);
+      const renderedLength = reopenPrefix(start).length + taken.length + closeSuffix(end).length;
+      if (renderedLength <= this.maxChars) {
+        this.sectionStart = start;
+        this.body = taken;
+        this.sectionEnd = end;
+        return taken;
+      }
+
+      // Fence state must be measured at the actual cut: a token can close a
+      // fence after this slice, while this section still needs a closing repair.
+      budget -= renderedLength - this.maxChars;
     }
 
-    this.sectionStart = start;
-    this.body = taken;
-    this.sectionEnd = advanceFence(start, taken);
-    return taken;
+    throw new RangeError("Section budget is too small to fit the next Unicode code point");
   }
 
   private flush(): void {

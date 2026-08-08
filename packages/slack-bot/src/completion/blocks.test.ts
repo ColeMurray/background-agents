@@ -333,6 +333,16 @@ describe("long response handling", () => {
     }
   });
 
+  it("respects the section cap when one oversized token opens and closes a fence", () => {
+    const sections = splitIntoSlackSections(`\`\`\`${"x".repeat(4000)}\`\`\``);
+
+    expect(sections.length).toBeGreaterThan(1);
+    for (const section of sections) {
+      expect(section.length).toBeLessThanOrEqual(3000);
+      expect((section.match(/```/g) ?? []).length % 2).toBe(0);
+    }
+  });
+
   it("loses no characters when hard-slicing inside a fence", () => {
     const payload = "b".repeat(7000);
     const sections = splitIntoSlackSections(`\`\`\`js\n${payload}\n\`\`\``);
