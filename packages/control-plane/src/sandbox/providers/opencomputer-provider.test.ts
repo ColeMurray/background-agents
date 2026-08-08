@@ -168,6 +168,64 @@ describe("OpenComputerSandboxProvider", () => {
     });
   });
 
+  it("returns VNC access across create, restore, and resume without a generic VNC tunnel", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+    const vncConfig = {
+      vncEnabled: true,
+      sandboxSettings: { vncPort: 6099, tunnelPorts: [6099, 5173] },
+    };
+
+    const created = await provider.createSandbox({ ...baseConfig, ...vncConfig });
+    const restored = await provider.restoreFromSnapshot({
+      ...baseConfig,
+      ...vncConfig,
+      snapshotImageId: "checkpoint-session-1",
+    });
+    const resumed = await provider.resumeSandbox({
+      providerObjectId: "oc-sandbox-1",
+      sessionId: "session-1",
+      sandboxId: "sandbox-acme-repo-1",
+      ...vncConfig,
+    });
+
+    for (const result of [created, restored, resumed]) {
+      expect(result).toMatchObject({
+        vncUrl: expect.stringContaining("6099"),
+        vncPassword: expect.any(String),
+        tunnelUrls: { "5173": expect.stringContaining("5173") },
+      });
+      expect(result.tunnelUrls).not.toHaveProperty("6099");
+    }
+    const createEnv = vi.mocked(client.createSandbox).mock.calls[0][0].env;
+    const restoreEnv = vi.mocked(client.forkFromCheckpoint).mock.calls[0][0].env;
+    expect(createEnv).toMatchObject({ NOVNC_PORT: "6099", VNC_PASSWORD: expect.any(String) });
+    expect(restoreEnv).toMatchObject({ NOVNC_PORT: "6099", VNC_PASSWORD: expect.any(String) });
+  });
+
+  it("scrubs user-supplied VNC system env when VNC is disabled", async () => {
+    const client = createMockClient();
+    const provider = new OpenComputerSandboxProvider(client, {
+      scmProvider: "github",
+      codeServerPasswordSecret: "secret",
+    });
+
+    await provider.createSandbox({
+      ...baseConfig,
+      userEnvVars: { VNC_PASSWORD: "user-password", NOVNC_PORT: "6099" },
+    });
+
+    const env = vi.mocked(client.createSandbox).mock.calls[0][0].env;
+    expect(env).not.toHaveProperty("VNC_PASSWORD");
+    expect(env).not.toHaveProperty("NOVNC_PORT");
+    expect(client.setSecret).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "VNC_PASSWORD" })
+    );
+  });
+
   it("rejects sandbox creation before mutation when no template is configured", async () => {
     const client = createMockClient();
     Object.assign(client.config, { template: undefined });

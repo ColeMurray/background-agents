@@ -174,6 +174,7 @@ async def api_create_sandbox(
     try:
         from .sandbox.manager import (
             DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            DEFAULT_VNC_ENABLED,
             SandboxConfig,
             SandboxManager,
         )
@@ -201,6 +202,7 @@ async def api_create_sandbox(
             repo_image_id=repo_image_id,
             repo_image_sha=request.get("repo_image_sha") or None,
             code_server_enabled=bool(request.get("code_server_enabled", False)),
+            vnc_enabled=bool(request.get("vnc_enabled", DEFAULT_VNC_ENABLED)),
             agent_slack_notify_enabled=bool(request.get("agent_slack_notify_enabled", False)),
             settings=request.get("sandbox_settings") or None,
             timeout_seconds=_timeout_seconds_from_request(request, DEFAULT_SANDBOX_TIMEOUT_SECONDS),
@@ -217,6 +219,8 @@ async def api_create_sandbox(
                 "created_at": handle.created_at,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
+                "vnc_url": handle.vnc_url,
+                "vnc_password": handle.vnc_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
             },
@@ -473,7 +477,11 @@ async def api_restore_sandbox(
         raise HTTPException(status_code=400, detail="snapshot_image_id is required")
 
     try:
-        from .sandbox.manager import DEFAULT_SANDBOX_TIMEOUT_SECONDS, SandboxManager
+        from .sandbox.manager import (
+            DEFAULT_SANDBOX_TIMEOUT_SECONDS,
+            DEFAULT_VNC_ENABLED,
+            SandboxManager,
+        )
 
         session_config = request.get("session_config", {})
         sandbox_id = request.get("sandbox_id")
@@ -495,6 +503,7 @@ async def api_restore_sandbox(
         clone_token = resolve_clone_token() if repo_owner and repo_name else None
 
         code_server_enabled = bool(request.get("code_server_enabled", False))
+        vnc_enabled = bool(request.get("vnc_enabled", DEFAULT_VNC_ENABLED))
         agent_slack_notify_enabled = bool(request.get("agent_slack_notify_enabled", False))
         sandbox_settings = request.get("sandbox_settings") or None
 
@@ -509,6 +518,7 @@ async def api_restore_sandbox(
             user_env_vars=user_env_vars,
             timeout_seconds=timeout_seconds,
             code_server_enabled=code_server_enabled,
+            vnc_enabled=vnc_enabled,
             agent_slack_notify_enabled=agent_slack_notify_enabled,
             settings=sandbox_settings,
         )
@@ -521,6 +531,8 @@ async def api_restore_sandbox(
                 "status": handle.status.value,
                 "code_server_url": handle.code_server_url,
                 "code_server_password": handle.code_server_password,
+                "vnc_url": handle.vnc_url,
+                "vnc_password": handle.vnc_password,
                 "ttyd_url": handle.ttyd_url,
                 "tunnel_urls": handle.tunnel_urls,
             },

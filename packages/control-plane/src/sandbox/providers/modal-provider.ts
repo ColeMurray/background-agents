@@ -116,6 +116,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           timeoutSeconds: config.timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          vncEnabled: config.vncEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
@@ -131,6 +132,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         createdAt: result.createdAt,
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
+        vncUrl: result.vncUrl,
+        vncPassword: result.vncPassword,
         ttydUrl: result.ttydUrl,
         tunnelUrls: result.tunnelUrls,
       };
@@ -159,6 +162,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          vncEnabled: config.vncEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
@@ -174,6 +178,8 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           providerObjectId: result.modalObjectId,
           codeServerUrl: result.codeServerUrl,
           codeServerPassword: result.codeServerPassword,
+          vncUrl: result.vncUrl,
+          vncPassword: result.vncPassword,
           ttydUrl: result.ttydUrl,
           tunnelUrls: result.tunnelUrls,
         };

@@ -81,11 +81,17 @@ export interface ImageBuildCallbackBuild {
  * Compatibility floor for prebuilt-image runtimes.
  *
  * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
- * bumps. v56 is the managed-provider runtime — the first that consumes
- * provider-availability markers instead of durable OAuth credentials — so no
- * image baked by an earlier runtime may ever be selected for a session.
+ * bumps. v56 is the managed-provider runtime and remains compatible for
+ * sessions that do not require newer optional runtime features.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = 56;
+
+/** v57 adds the VNC/noVNC toolchain required by VNC-enabled sessions. */
+export const MIN_VNC_COMPATIBLE_RUNTIME_VERSION = 57;
+
+export function getMinimumCompatibleRuntimeVersion(vncEnabled: boolean): number {
+  return vncEnabled ? MIN_VNC_COMPATIBLE_RUNTIME_VERSION : MIN_COMPATIBLE_RUNTIME_VERSION;
+}
 
 /**
  * Parse the numeric prefix of a SANDBOX_VERSION ("v53-list-native-runtime"

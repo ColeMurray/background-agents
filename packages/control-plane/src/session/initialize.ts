@@ -44,6 +44,7 @@ export interface SessionInitInput {
   model: string;
   reasoningEffort: string | null;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   sandboxSettings?: SandboxSettings;
 
   // Identity
@@ -187,6 +188,7 @@ export async function initializeSession(
           scmTokenExpiresAt: input.scmTokenExpiresAt,
           scmUserId: input.scmUserId,
           codeServerEnabled: input.codeServerEnabled,
+          vncEnabled: input.vncEnabled,
           sandboxSettings: input.sandboxSettings,
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,

@@ -8,18 +8,21 @@
 import {
   DEFAULT_CODE_SERVER_PORT,
   DEFAULT_TERMINAL_PORT,
+  DEFAULT_VNC_PORT,
   MAX_TUNNEL_PORTS,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 
-/** Effective code-server / terminal ports from settings, with shared defaults. */
+/** Effective service ports from settings, with shared defaults. */
 export function resolveServicePorts(sandboxSettings: SandboxSettings | undefined): {
   codeServerPort: number;
   terminalPort: number;
+  vncPort: number;
 } {
   return {
     codeServerPort: sandboxSettings?.codeServerPort ?? DEFAULT_CODE_SERVER_PORT,
     terminalPort: sandboxSettings?.terminalPort ?? DEFAULT_TERMINAL_PORT,
+    vncPort: sandboxSettings?.vncPort ?? DEFAULT_VNC_PORT,
   };
 }
 

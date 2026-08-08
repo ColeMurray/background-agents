@@ -7,6 +7,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import { deriveVncPassword } from "../sandbox-env";
 import { DaytonaSandboxProvider, type DaytonaProviderConfig } from "./daytona-provider";
 import { SandboxProviderError } from "../provider";
 import type { CreateSandboxConfig, ResumeConfig, StopConfig } from "../provider";
@@ -409,6 +410,28 @@ describe("DaytonaSandboxProvider", () => {
       const envVars = (client.createSandbox as ReturnType<typeof vi.fn>).mock.calls[0][0].env;
       expect(envVars.CODE_SERVER_PASSWORD).toBeUndefined();
     });
+
+    it("injects and returns VNC access without including its port in generic tunnels", async () => {
+      const client = createMockClient({
+        getSignedPreviewUrl: async (_id, port) => ({ url: `https://preview.test/${port}` }),
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.createSandbox({
+        ...baseCreateConfig,
+        vncEnabled: true,
+        sandboxSettings: { vncPort: 6099, tunnelPorts: [6099, 3000] },
+      });
+      const envVars = vi.mocked(client.createSandbox).mock.calls[0][0].env;
+      const expected = await deriveVncPassword("sandbox-456", "test-secret-key");
+
+      expect(envVars).toMatchObject({ VNC_PASSWORD: expected, NOVNC_PORT: "6099" });
+      expect(result).toMatchObject({
+        vncUrl: "https://preview.test/6099",
+        vncPassword: expected,
+        tunnelUrls: { "3000": "https://preview.test/3000" },
+      });
+    });
   });
 
   describe("resumeSandbox", () => {
@@ -497,6 +520,18 @@ describe("DaytonaSandboxProvider", () => {
       expect(result.success).toBe(true);
       expect(client.startSandbox).not.toHaveBeenCalled();
       expect(client.recoverSandbox).not.toHaveBeenCalled();
+    });
+
+    it("returns VNC access after resume", async () => {
+      const client = createMockClient({
+        getSignedPreviewUrl: async (_id, port) => ({ url: `https://preview.test/${port}` }),
+      });
+      const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+
+      const result = await provider.resumeSandbox({ ...baseResumeConfig, vncEnabled: true });
+
+      expect(result.vncUrl).toBe("https://preview.test/6080");
+      expect(result.vncPassword).toMatch(/^[A-Za-z0-9]{8}$/);
     });
 
     it("tunnel URL failure does not fail the resume", async () => {

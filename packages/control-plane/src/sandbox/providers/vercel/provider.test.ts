@@ -232,6 +232,40 @@ describe("VercelSandboxProvider", () => {
     );
   });
 
+  it("exposes and returns VNC access without adding its port to generic tunnels", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () =>
+        createSessionResponse("vercel-session-1", [
+          { port: 6099, subdomain: "vnc", url: "https://vnc.test" },
+          { port: 3000, subdomain: "app", url: "https://app.test" },
+        ])
+      ),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    const result = await provider.createSandbox({
+      ...baseCreateConfig,
+      vncEnabled: true,
+      sandboxSettings: { vncPort: 6099, tunnelPorts: [6099, 3000] },
+    });
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+
+    expect(createCall.ports).toEqual([6099, 3000]);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({
+        NOVNC_PORT: "6099",
+        VNC_PASSWORD: expect.any(String),
+        EXPECTED_TUNNEL_PORTS: "3000",
+      })
+    );
+    expect(result).toMatchObject({
+      vncUrl: "https://vnc.test",
+      vncPassword: expect.any(String),
+      tunnelUrls: { "3000": "https://app.test" },
+    });
+    expect(result.tunnelUrls).not.toHaveProperty("6099");
+  });
+
   it("maps bitbucket to its own clone identity", async () => {
     // Locked in so the shared env assembly can't silently change it.
     const client = createMockClient();
@@ -491,12 +525,19 @@ describe("VercelSandboxProvider", () => {
   });
 
   it("restores from a session snapshot and sets restore mode env vars", async () => {
-    const client = createMockClient();
+    const client = createMockClient({
+      createSandbox: vi.fn(async () =>
+        createSessionResponse("vercel-session-1", [
+          { port: 6080, subdomain: "vnc", url: "https://vnc.test" },
+        ])
+      ),
+    });
     const provider = new VercelSandboxProvider(client, providerConfig);
 
     const result = await provider.restoreFromSnapshot({
       ...baseRestoreConfig,
       codeServerEnabled: true,
+      vncEnabled: true,
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -507,7 +548,8 @@ describe("VercelSandboxProvider", () => {
         success: true,
         sandboxId: "sandbox-456",
         providerObjectId: "vercel-session-1",
-        codeServerUrl: "https://code.test",
+        vncUrl: "https://vnc.test",
+        vncPassword: expect.any(String),
       })
     );
   });

@@ -1,6 +1,6 @@
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
+  MIN_VNC_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
   type ImageBuildProvider,
 } from "./model";
@@ -31,7 +31,9 @@ export function evaluateImageBuildRebuildPolicy(
   if (!ready) return { type: "rebuild", reason: "missing_image" };
 
   const runtimeVersion = parseRuntimeVersionNumber(ready.runtime_version);
-  if (runtimeVersion === null || runtimeVersion < MIN_COMPATIBLE_RUNTIME_VERSION) {
+  // Rebuild old images to the latest required toolchain, while spawn selection
+  // may continue using them for sessions that do not enable newer features.
+  if (runtimeVersion === null || runtimeVersion < MIN_VNC_COMPATIBLE_RUNTIME_VERSION) {
     return { type: "rebuild", reason: "runtime_incompatible" };
   }
 

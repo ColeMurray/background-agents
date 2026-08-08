@@ -22,6 +22,7 @@ import { initializeSession, type SessionInitInput } from "../session/initialize"
 import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
+  resolveVncEnabled,
 } from "../session/integration-settings-resolution";
 import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
@@ -179,6 +180,12 @@ async function handleSpawnChild(
     spawnContext.repoName,
     parentEnvironmentId
   );
+  const childVncEnabled = await resolveVncEnabled(
+    ctx.db,
+    spawnContext.repoOwner,
+    spawnContext.repoName,
+    parentEnvironmentId
+  );
 
   const input: SessionInitInput = {
     sessionId: childId,
@@ -201,6 +208,7 @@ async function handleSpawnChild(
     scmRefreshTokenEncrypted: spawnContext.owner.scmRefreshTokenEncrypted,
     scmTokenExpiresAt: spawnContext.owner.scmTokenExpiresAt,
     codeServerEnabled: childCodeServerEnabled,
+    vncEnabled: childVncEnabled,
     sandboxSettings: childSandboxSettings,
     parentSessionId: parentId,
     spawnSource: "agent",

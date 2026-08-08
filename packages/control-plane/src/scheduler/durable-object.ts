@@ -1399,7 +1399,7 @@ export class SchedulerDO extends DurableObject<Env> {
       (target.repoOwner && target.repoName
         ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
         : []);
-    const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+    const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.db,
       scopeMembers,
       target.environmentId
@@ -1418,6 +1418,7 @@ export class SchedulerDO extends DurableObject<Env> {
         scmTokenEncrypted: null,
         scmRefreshTokenEncrypted: null,
         codeServerEnabled,
+        vncEnabled,
         sandboxSettings,
         spawnSource: "automation",
         spawnDepth: 0,
