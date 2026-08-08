@@ -639,8 +639,8 @@ async function handleNewSession(
   // ─── Build and send prompt ────────────────────────────────────────────
 
   // Prefer Linear's promptContext (includes issue, comments, guidance)
-  let prompt = webhook.agentSession.promptContext
-    ? buildPromptContextPrompt(webhook.agentSession.promptContext)
+  let prompt = webhook.promptContext
+    ? buildPromptContextPrompt(webhook.promptContext)
     : buildPrompt(issue, issueDetails, comment);
 
   if (integrationConfig.issueSessionInstructions) {

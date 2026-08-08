@@ -30,6 +30,17 @@ import { getProjectRepoMapping, getTeamRepoMapping } from "./kv-store";
 import { createLogger } from "./logger";
 
 const log = createLogger("target-resolution");
+const REPO_PATH_CHAR = /[\w/-]/;
+
+function extendsRepositoryPath(text: string, index: number, direction: -1 | 1): boolean {
+  const neighbor = text[index] ?? "";
+  if (REPO_PATH_CHAR.test(neighbor)) return true;
+  if (neighbor !== ".") return false;
+
+  let cursor = index + direction;
+  while (text[cursor] === ".") cursor += direction;
+  return REPO_PATH_CHAR.test(text[cursor] ?? "");
+}
 
 /**
  * Find the single available repository a comment names explicitly.
@@ -41,21 +52,16 @@ const log = createLogger("target-resolution");
  */
 export function matchExplicitRepo(text: string, repos: RepoConfig[]): RepoConfig | null {
   const haystack = text.toLowerCase();
-  const pathChar = /[\w/-]/;
   const named = repos.filter((repo) => {
     const needle = repo.fullName.toLowerCase();
     for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
       const end = at + needle.length;
-      const before = haystack[at - 1] ?? "";
-      const after = haystack[end] ?? "";
       // A neighbor extends the repository path when it is a path character,
-      // or a period connecting to one (`not.acme/api`, `acme/api.docs`). A
-      // period followed by nothing path-like is ordinary terminal
-      // punctuation (`use acme/api.`).
-      const beforeExtends =
-        pathChar.test(before) || (before === "." && pathChar.test(haystack[at - 2] ?? ""));
-      const afterExtends =
-        pathChar.test(after) || (after === "." && pathChar.test(haystack[end + 1] ?? ""));
+      // or a run of periods connecting to one (`not..acme/api`,
+      // `acme/api..docs`). Periods followed by nothing path-like are ordinary
+      // terminal punctuation (`use acme/api...`).
+      const beforeExtends = extendsRepositoryPath(haystack, at - 1, -1);
+      const afterExtends = extendsRepositoryPath(haystack, end, 1);
       if (!beforeExtends && !afterExtends) return true;
     }
     return false;

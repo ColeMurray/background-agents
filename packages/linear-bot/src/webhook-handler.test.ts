@@ -506,6 +506,27 @@ describe("handleAgentSessionEvent environment targets", () => {
     expect(issueSession).not.toHaveProperty("environmentId");
   });
 
+  it("sends a created event's top-level prompt context to the session", async () => {
+    const { kv } = createFakeKV({
+      "oauth:client-credentials:org-1": validToken(),
+      "config:project-repos": JSON.stringify({
+        "project-1": { owner: "acme", name: "backend" },
+      }),
+    });
+    const env = makeLinearBotEnv(kv);
+    const fetchMock = stubControlPlane(env);
+    const webhook = {
+      ...makeWebhook(),
+      promptContext: "Use the parent issue's migration constraints.",
+    };
+
+    await handleAgentSessionEvent(webhook, env, "trace-prompt-context");
+
+    expect(promptBody(fetchMock)?.content).toContain(
+      '<user_content source="linear_prompt_context" author="linear">\nUse the parent issue\'s migration constraints.'
+    );
+  });
+
   it("omits actor identity and issue transition for an automation-created session", async () => {
     const { kv } = createFakeKV({
       "oauth:client-credentials:org-1": validToken(),
@@ -617,7 +638,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     webhook.action = "prompted";
     webhook.agentActivity = {
       userId: "human-user-1",
-      content: { type: "prompt", body: "acme/backend" },
+      content: { type: "prompt", body: "Use acme/backend and preserve the migration." },
     };
 
     await handleAgentSessionEvent(webhook, env, "trace-clarification-reply");
@@ -633,6 +654,9 @@ describe("handleAgentSessionEvent environment targets", () => {
       repoOwner: "acme",
       repoName: "backend",
     });
+    expect(promptBody(fetchMock)?.content).toContain(
+      "Use acme/backend and preserve the migration."
+    );
   });
 
   it("attributes the clarification-reply session to the replier, not the elicitation creator", async () => {
