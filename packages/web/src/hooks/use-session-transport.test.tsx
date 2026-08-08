@@ -248,8 +248,7 @@ describe("useSessionTransport", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // Never open the sockets: a successful open resets the attempt counter,
-    // so exhaustion only happens on repeated failed connection attempts.
+    // Never mark the sockets healthy, so repeated failures exhaust the budget.
     for (let attempt = 0; attempt < 6; attempt++) {
       const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
       act(() => {
@@ -265,6 +264,44 @@ describe("useSessionTransport", () => {
       "Connection lost. Please check your network and try reconnecting."
     );
 
+    rendered.unmount();
+  });
+
+  it("resets retry backoff only after synchronization is healthy", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    act(() => {
+      FakeWebSocket.instances[1].open();
+      FakeWebSocket.instances[1].serverClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(3);
+
+    act(() => {
+      FakeWebSocket.instances[2].open();
+      rendered.result.current.markHealthy();
+      FakeWebSocket.instances[2].serverClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(4);
     rendered.unmount();
   });
 

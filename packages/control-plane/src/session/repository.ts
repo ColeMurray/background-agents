@@ -339,10 +339,14 @@ export class SessionRepository {
       return revision;
     });
     if (revision % SESSION_VIEW_RETENTION_INTERVAL === 0) {
-      this.pruneSessionViewDeltas({
-        maxRetainedRevisions: DEFAULT_SESSION_VIEW_RETENTION_REVISIONS,
-        createdBefore: Math.max(0, createdAt - DEFAULT_SESSION_VIEW_RETENTION_AGE_MS),
-      });
+      try {
+        this.pruneSessionViewDeltas({
+          maxRetainedRevisions: DEFAULT_SESSION_VIEW_RETENTION_REVISIONS,
+          createdBefore: Math.max(0, createdAt - DEFAULT_SESSION_VIEW_RETENTION_AGE_MS),
+        });
+      } catch {
+        // Retention is best-effort after the canonical mutation has committed.
+      }
     }
     return revision;
   }
@@ -637,15 +641,15 @@ export class SessionRepository {
     });
   }
 
-  private getSessionRepositoryStateProjection(): SessionRepositoryState[] {
+  getSessionRepositoryStateProjection(): SessionRepositoryState[] {
     const session = this.getSession();
     if (!session) return [];
-    const artifacts = this.listArtifacts();
+    const artifacts = this.listArtifacts().filter((artifact) => artifact.url !== null);
     return this.getSessionRepositories().map((member) => ({
       position: member.position,
       repoOwner: member.repoOwner,
       repoName: member.repoName,
-      repoId: member.row?.repo_id ?? (member.isPrimary ? session.repo_id : null),
+      repoId: member.row ? member.row.repo_id : member.isPrimary ? session.repo_id : null,
       baseBranch: member.baseBranch ?? "main",
       branchName:
         member.row?.branch_name ?? (member.isPrimary ? (session.branch_name ?? null) : null),
@@ -1654,7 +1658,7 @@ export class SessionRepository {
   updateWsClientViewRevision(wsId: string, revision: number): void {
     requireViewRevision(revision, "Applied client view revision");
     this.sql.exec(
-      `UPDATE ws_client_mapping SET applied_view_revision = ? WHERE ws_id = ?`,
+      `UPDATE ws_client_mapping SET applied_view_revision = MAX(applied_view_revision, ?) WHERE ws_id = ?`,
       revision,
       wsId
     );
@@ -1694,7 +1698,12 @@ export class SessionRepository {
 
 function parseArtifactMetadata(metadata: string | null): Record<string, unknown> | null {
   if (!metadata) return null;
-  const parsed: unknown = JSON.parse(metadata);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(metadata);
+  } catch {
+    return null;
+  }
   return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
     ? (parsed as Record<string, unknown>)
     : null;

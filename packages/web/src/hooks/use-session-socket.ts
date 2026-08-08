@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useReducer, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
 import { useSessionAccess } from "@/hooks/use-session-access";
@@ -24,6 +24,8 @@ import type { ServerMessage, SessionBootstrap } from "@open-inspect/shared/types
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
 const HISTORY_PAGE_SIZE = 200;
+const MAX_PROTOCOL_RECOVERY_ATTEMPTS = 3;
+const PROTOCOL_RECOVERY_BASE_DELAY_MS = 250;
 
 interface Message {
   id: string;
@@ -84,6 +86,9 @@ export function useSessionSocket(
   const subscribedRef = useRef(false);
   const revisionRef = useRef(initialBootstrap?.viewRevision ?? null);
   const handledRecoveryNonceRef = useRef(0);
+  const protocolRecoveryAttemptsRef = useRef(0);
+  const protocolRecoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [protocolRecoveryError, setProtocolRecoveryError] = useState<string | null>(null);
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
@@ -203,7 +208,14 @@ export function useSessionSocket(
     getResumeRevision: () => revisionRef.current,
     onProtocolError: () => dispatch({ type: "protocol_error" }),
   });
-  const { isOpen, send, reconnect } = transport;
+  const { isOpen, send, reconnect, markHealthy } = transport;
+
+  useEffect(() => {
+    if (!state.ready) return;
+    protocolRecoveryAttemptsRef.current = 0;
+    setProtocolRecoveryError(null);
+    markHealthy();
+  }, [markHealthy, state.ready]);
 
   useEffect(() => {
     if (state.recoveryNonce === handledRecoveryNonceRef.current) return;
@@ -211,11 +223,34 @@ export function useSessionSocket(
     subscribedRef.current = false;
     settleSubscriptionWaiters(false);
     settlePendingPrompt(false);
-    reconnect(true);
+    if (protocolRecoveryAttemptsRef.current >= MAX_PROTOCOL_RECOVERY_ATTEMPTS) {
+      setProtocolRecoveryError("Session synchronization failed. Please reconnect.");
+      return;
+    }
+    const delayMs =
+      PROTOCOL_RECOVERY_BASE_DELAY_MS * Math.pow(2, protocolRecoveryAttemptsRef.current);
+    protocolRecoveryAttemptsRef.current += 1;
+    protocolRecoveryTimeoutRef.current = setTimeout(() => {
+      protocolRecoveryTimeoutRef.current = null;
+      reconnect(true);
+    }, delayMs);
   }, [state.recoveryNonce, reconnect, settlePendingPrompt, settleSubscriptionWaiters]);
+
+  const reconnectManually = useCallback(() => {
+    if (protocolRecoveryTimeoutRef.current) {
+      clearTimeout(protocolRecoveryTimeoutRef.current);
+      protocolRecoveryTimeoutRef.current = null;
+    }
+    protocolRecoveryAttemptsRef.current = 0;
+    setProtocolRecoveryError(null);
+    reconnect(false);
+  }, [reconnect]);
 
   useEffect(
     () => () => {
+      if (protocolRecoveryTimeoutRef.current) {
+        clearTimeout(protocolRecoveryTimeoutRef.current);
+      }
       settleSubscriptionWaiters(false);
       settlePendingPrompt(false);
     },
@@ -336,7 +371,7 @@ export function useSessionSocket(
     ready: state.ready,
     replaying: state.replaying,
     authError: transport.authError,
-    connectionError: transport.connectionError,
+    connectionError: protocolRecoveryError ?? transport.connectionError,
     sessionState: state.sessionState,
     messages: NO_MESSAGES,
     events: state.events,
@@ -349,7 +384,7 @@ export function useSessionSocket(
     sendPrompt,
     stopExecution,
     sendTyping,
-    reconnect,
+    reconnect: reconnectManually,
     loadOlderEvents,
   };
 }

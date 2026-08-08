@@ -19,12 +19,15 @@ function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const mockData: Map<string, unknown[]> = new Map();
   const rowsWrittenByQuery: Map<string, number> = new Map();
+  const errorsByQuery: Map<string, Error> = new Map();
   let defaultRowsWritten = 0;
   let oneValue: unknown = null;
 
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
+      const error = errorsByQuery.get(query);
+      if (error) throw error;
       const data = mockData.get(query) ?? [];
       let consumed = false;
       return {
@@ -55,6 +58,9 @@ function createMockSql() {
     setDefaultRowsWritten(rowsWritten: number) {
       defaultRowsWritten = rowsWritten;
     },
+    setError(query: string, error: Error) {
+      errorsByQuery.set(query, error);
+    },
     setOne(value: unknown) {
       oneValue = value;
     },
@@ -62,6 +68,7 @@ function createMockSql() {
       calls.length = 0;
       mockData.clear();
       rowsWrittenByQuery.clear();
+      errorsByQuery.clear();
       defaultRowsWritten = 0;
       oneValue = null;
     },
@@ -173,6 +180,26 @@ describe("SessionRepository", () => {
       );
       const deleteCall = mock.calls.find((call) => call.query.startsWith("DELETE FROM"));
       expect(deleteCall?.params).toEqual([5]);
+    });
+
+    it("does not report a committed mutation as failed when periodic retention fails", () => {
+      mock.setData(currentRevisionQuery, [{ current_revision: 99 }]);
+      mock.setDefaultRowsWritten(1);
+      mock.setError(ageCutoffQuery, new Error("retention unavailable"));
+
+      expect(repo.updateSessionTitleWithViewDelta("sess-1", "Committed", 1_000)).toBe(100);
+      expect(
+        mock.calls.some((call) => call.query.includes("INSERT INTO session_view_deltas"))
+      ).toBe(true);
+    });
+
+    it("uses a monotonic SQL update for applied client revisions", () => {
+      repo.updateWsClientViewRevision("ws-1", 5);
+      expect(mock.calls[0]).toEqual({
+        query:
+          "UPDATE ws_client_mapping SET applied_view_revision = MAX(applied_view_revision, ?) WHERE ws_id = ?",
+        params: [5, "ws-1"],
+      });
     });
   });
 
@@ -1237,6 +1264,41 @@ describe("SessionRepository", () => {
         1000,
         1000,
       ]);
+    });
+
+    it("tolerates malformed metadata in canonical artifact deltas", () => {
+      mock.setData("SELECT current_revision FROM session_view_metadata WHERE singleton = 1", [
+        { current_revision: 0 },
+      ]);
+
+      expect(() =>
+        repo.createArtifactWithViewDelta({
+          id: "art-invalid",
+          type: "screenshot",
+          url: null,
+          metadata: "{invalid",
+          createdAt: 1_000,
+        })
+      ).not.toThrow();
+
+      const insert = mock.calls.find((call) =>
+        call.query.includes("INSERT INTO session_view_deltas")
+      );
+      expect(JSON.parse(insert!.params[1] as string)).toEqual({
+        operations: [
+          {
+            type: "artifact_upsert",
+            artifact: {
+              id: "art-invalid",
+              type: "screenshot",
+              url: null,
+              metadata: null,
+              createdAt: 1_000,
+              updatedAt: 1_000,
+            },
+          },
+        ],
+      });
     });
   });
 

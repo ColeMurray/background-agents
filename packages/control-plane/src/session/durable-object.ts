@@ -54,14 +54,7 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import type {
-  Env,
-  ClientInfo,
-  ServerMessage,
-  SessionRepositoryState,
-  SessionState,
-  SandboxStatus,
-} from "../types";
+import type { Env, ClientInfo, ServerMessage, SessionState, SandboxStatus } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -73,7 +66,6 @@ import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./web
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
-import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
@@ -149,6 +141,7 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_VIEW_CATCH_UP_REVISIONS = 500;
 const MAX_VIEW_CATCH_UP_BYTES = 1024 * 1024;
+const VIEW_CATCH_UP_ENCODER = new TextEncoder();
 
 type BoundarySchema<T> = {
   safeParse(
@@ -1466,7 +1459,12 @@ export class SessionDO extends DurableObject<Env> {
     let appliedRevision: number | null = null;
     try {
       if (data.viewProtocol === 2) {
-        appliedRevision = this.sendV2Synchronization(ws, data, participant.id, participantSummary);
+        appliedRevision = await this.sendV2Synchronization(
+          ws,
+          data,
+          participant.id,
+          participantSummary
+        );
       } else {
         const sandbox = this.getSandbox();
         const state = await this.getSessionState(sandbox);
@@ -1524,12 +1522,12 @@ export class SessionDO extends DurableObject<Env> {
     this.schedulePullRequestRefresh("open");
   }
 
-  private sendV2Synchronization(
+  private async sendV2Synchronization(
     ws: WebSocket,
     data: { resumeRevision?: number; forceSnapshot?: boolean },
     participantId: string,
     participant: { participantId: string; userId: string; name: string; avatar?: string }
-  ): number | null {
+  ): Promise<number | null> {
     if (!data.forceSnapshot && data.resumeRevision !== undefined) {
       const targetRevision = this.repository.getCurrentViewRevision();
       const deltas = this.readBoundedViewCatchUp(data.resumeRevision, targetRevision);
@@ -1545,7 +1543,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const bootstrap = this.getSessionBootstrap();
+      const bootstrap = await this.getSessionBootstrap();
       if (!bootstrap) return null;
       const targetRevision = this.repository.getCurrentViewRevision();
       const deltas = this.readBoundedViewCatchUp(bootstrap.viewRevision, targetRevision);
@@ -1566,7 +1564,11 @@ export class SessionDO extends DurableObject<Env> {
     if (throughRevision - afterRevision > MAX_VIEW_CATCH_UP_REVISIONS) return null;
     const deltas = this.repository.readContiguousSessionViewDeltas(afterRevision, throughRevision);
     if (!deltas) return null;
-    const bytes = deltas.reduce((total, record) => total + JSON.stringify(record.delta).length, 0);
+    const bytes = deltas.reduce(
+      (total, record) =>
+        total + VIEW_CATCH_UP_ENCODER.encode(JSON.stringify(record.delta)).byteLength,
+      0
+    );
     return bytes <= MAX_VIEW_CATCH_UP_BYTES ? deltas : null;
   }
 
@@ -1924,21 +1926,21 @@ export class SessionDO extends DurableObject<Env> {
       ttydUrl: sandbox?.ttyd_url ?? null,
       ttydToken,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
-      repositories: this.getSessionRepositoryStates(session),
+      repositories: this.repository.getSessionRepositoryStateProjection(),
       environmentId,
       environmentName,
     };
   }
 
-  private handleBootstrap(): Response {
-    const bootstrap = this.getSessionBootstrap();
+  private async handleBootstrap(): Promise<Response> {
+    const bootstrap = await this.getSessionBootstrap();
     if (!bootstrap) return Response.json({ error: "Session not found" }, { status: 404 });
     return Response.json(bootstrap, {
       headers: { "Cache-Control": "private, no-store" },
     });
   }
 
-  private getSessionBootstrap(): SessionBootstrap | null {
+  private async getSessionBootstrap(): Promise<SessionBootstrap | null> {
     const local = this.ctx.storage.transactionSync(() => {
       const session = this.getSession();
       if (!session) return null;
@@ -1963,7 +1965,7 @@ export class SessionDO extends DurableObject<Env> {
         tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
         ttydUrl: sandbox?.ttyd_url ?? null,
         sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
-        repositories: this.getSessionRepositoryStates(session),
+        repositories: this.repository.getSessionRepositoryStateProjection(),
         environmentId: session.environment_id ?? null,
         environmentName: null,
       };
@@ -1977,7 +1979,11 @@ export class SessionDO extends DurableObject<Env> {
     });
     if (!local) return null;
 
-    return sessionBootstrapSchema.parse(local);
+    const environmentName = await this.resolveEnvironmentName(local.state.environmentId ?? null);
+    return sessionBootstrapSchema.parse({
+      ...local,
+      state: { ...local.state, environmentName },
+    });
   }
 
   private async handleSessionAccess(): Promise<Response> {
@@ -2037,41 +2043,6 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
-  }
-
-  /**
-   * Member repositories for SessionState, in position order (see
-   * buildSessionRepositories for the scalar-mirror fallback). Members synthesized
-   * from the scalars — and member rows written before per-repo git state
-   * existed, whose git columns are null while the scalars are set — have the
-   * primary entry overlaid with the session scalars.
-   */
-  private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
-    const prUrlForRepo = this.getPrUrlLookup();
-    return this.repository.getSessionRepositories().map((member) => ({
-      position: member.position,
-      repoOwner: member.repoOwner,
-      repoName: member.repoName,
-      repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
-      baseBranch: member.baseBranch ?? "main",
-      branchName:
-        member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
-      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),
-      currentSha:
-        member.row?.current_sha ?? (member.isPrimary ? (session?.current_sha ?? null) : null),
-      prUrl: prUrlForRepo(member.repoOwner, member.repoName, member.isPrimary),
-    }));
-  }
-
-  /** Per-repo PR URL lookup over the session's PR artifacts. */
-  private getPrUrlLookup(): (
-    repoOwner: string,
-    repoName: string,
-    isPrimary: boolean
-  ) => string | null {
-    const artifacts = this.repository.listArtifacts().filter((artifact) => artifact.url !== null);
-    return (repoOwner, repoName, isPrimary) =>
-      findPrArtifactForRepo(artifacts, { repoOwner, repoName }, isPrimary)?.url ?? null;
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {

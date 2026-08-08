@@ -61,6 +61,23 @@ describe("session runtime proxy routes", () => {
     expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.bootstrap);
   });
 
+  it("keeps bootstrap client-only", async () => {
+    const fetch = vi.fn(async () => Response.json({ sessionId: "session-1" }));
+    const { handler, match } = getHandler("GET", "/sessions/session-1/bootstrap");
+    const serviceCtx = createCtx();
+    serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/bootstrap"),
+      createEnv(fetch),
+      match,
+      serviceCtx
+    );
+
+    expect(response.status).toBe(403);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("keeps session access client-only", async () => {
     const fetch = vi.fn(async () => Response.json({ codeServer: null, ttyd: null }));
     const { handler, match } = getHandler("GET", "/sessions/session-1/access");

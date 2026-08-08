@@ -285,10 +285,10 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   advanceClientViewRevision(ws: WebSocket, revision: number): void {
     const state = this.getClientViewState(ws);
-    if (!state) return;
+    if (!state || revision <= state.appliedViewRevision) return;
+    this.repository.updateWsClientViewRevision(state.wsId, revision);
     const client = this.clients.get(ws);
     if (client) client.appliedViewRevision = revision;
-    this.repository.updateWsClientViewRevision(state.wsId, revision);
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {

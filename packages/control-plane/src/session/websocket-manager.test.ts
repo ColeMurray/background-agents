@@ -99,6 +99,7 @@ function createMockRepository() {
     clientId: string;
     createdAt: number;
   }> = [];
+  const revisionCalls: Array<{ wsId: string; revision: number }> = [];
 
   const repo = {
     getSandbox: () => sandboxRow,
@@ -120,12 +121,16 @@ function createMockRepository() {
         scm_login: null,
       });
     },
+    updateWsClientViewRevision: (wsId: string, revision: number) => {
+      revisionCalls.push({ wsId, revision });
+    },
   } as unknown as SessionRepository;
 
   return {
     repo,
     mappings,
     upsertCalls,
+    revisionCalls,
     setSandbox: (row: SandboxRow | null) => {
       sandboxRow = row;
     },
@@ -537,6 +542,35 @@ describe("SessionWebSocketManagerImpl", () => {
         participantId: "part-1",
         clientId: "client-1",
       });
+    });
+  });
+
+  describe("advanceClientViewRevision", () => {
+    it("persists newer revisions before updating in-memory state", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+      const info = createClientInfo({ ws, viewProtocol: 2, appliedViewRevision: 5 });
+      manager.setClient(ws, info);
+
+      manager.advanceClientViewRevision(ws, 6);
+
+      expect(mockRepo.revisionCalls).toEqual([{ wsId: "ws-1", revision: 6 }]);
+      expect(info.appliedViewRevision).toBe(6);
+    });
+
+    it("ignores duplicate and stale revisions", () => {
+      const { manager, sockets, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      sockets.set(ws, ["wsid:ws-1"]);
+      const info = createClientInfo({ ws, viewProtocol: 2, appliedViewRevision: 5 });
+      manager.setClient(ws, info);
+
+      manager.advanceClientViewRevision(ws, 5);
+      manager.advanceClientViewRevision(ws, 4);
+
+      expect(mockRepo.revisionCalls).toEqual([]);
+      expect(info.appliedViewRevision).toBe(5);
     });
   });
 

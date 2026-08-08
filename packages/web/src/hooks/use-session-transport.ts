@@ -76,6 +76,8 @@ export interface UseSessionTransportReturn {
   send: (payload: Record<string, unknown>) => void;
   /** Drop the connection and token, then connect fresh. */
   reconnect: (forceSnapshot?: boolean) => void;
+  /** Mark synchronization complete so future network retries start fresh. */
+  markHealthy: () => void;
 }
 
 /**
@@ -177,7 +179,6 @@ export function useSessionTransport(
     connectingEpochRef.current = null;
     setConnected(true);
     setConnecting(false);
-    reconnectAttempts.current = 0;
 
     const forceSnapshot = forceSnapshotRef.current;
     forceSnapshotRef.current = false;
@@ -260,6 +261,7 @@ export function useSessionTransport(
           `Reconnecting in ${directive.delayMs}ms (attempt ${reconnectAttempts.current})`
         );
         reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectTimeoutRef.current = null;
           if (mountedRef.current) {
             retry();
           }
@@ -346,6 +348,10 @@ export function useSessionTransport(
       // A connect() still awaiting its token must not open a second socket
       // alongside the one this call creates.
       invalidateInFlightConnect();
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       const discarded = wsRef.current;
       if (discarded) {
         wsRef.current = null;
@@ -358,7 +364,7 @@ export function useSessionTransport(
         handlersRef.current.onClose?.();
         setConnected(false);
       }
-      reconnectAttempts.current = 0;
+      if (!forceSnapshot) reconnectAttempts.current = 0;
       forceSnapshotRef.current = forceSnapshot;
       wsTokenRef.current = null; // Clear token to fetch fresh one
       setAuthError(null);
@@ -367,6 +373,10 @@ export function useSessionTransport(
     },
     [connect, invalidateInFlightConnect]
   );
+
+  const markHealthy = useCallback(() => {
+    reconnectAttempts.current = 0;
+  }, []);
 
   // Connect on mount
   useEffect(() => {
@@ -398,5 +408,14 @@ export function useSessionTransport(
     return () => clearInterval(pingInterval);
   }, []);
 
-  return { connected, connecting, authError, connectionError, isOpen, send, reconnect };
+  return {
+    connected,
+    connecting,
+    authError,
+    connectionError,
+    isOpen,
+    send,
+    reconnect,
+    markHealthy,
+  };
 }

@@ -323,6 +323,40 @@ describe("sessionSocketReducer", () => {
       expect(snapshot.sessionState?.title).toBe("Snapshot");
       expect(snapshot.events).toEqual([]);
     });
+
+    it("accepts a snapshot as the initial canonical state", () => {
+      const ready = reduce(
+        initialSessionSocketState,
+        serverMessage({ type: "session_sync_started", mode: "snapshot", targetRevision: 8 }),
+        serverMessage({
+          type: "session_snapshot",
+          bootstrap: createBootstrap({
+            viewRevision: 8,
+            state: createSessionState({ title: "Initial snapshot" }),
+          }),
+        }),
+        serverMessage({
+          type: "session_ready",
+          sessionId: "session-1",
+          participantId: "participant-1",
+          appliedRevision: 8,
+        })
+      );
+
+      expect(ready.ready).toBe(true);
+      expect(ready.sessionState?.title).toBe("Initial snapshot");
+      expect(ready.lastAppliedRevision).toBe(8);
+    });
+
+    it("rejects resume synchronization without canonical state", () => {
+      const state = reduce(
+        initialSessionSocketState,
+        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 1 })
+      );
+
+      expect(state.recoveryNonce).toBe(1);
+      expect(state.sync).toBeNull();
+    });
   });
 
   describe("subscribed", () => {

@@ -75,6 +75,7 @@ describe("swrKeysToRevalidate", () => {
   });
 
   it("revalidates missed client-only data when V2 synchronization becomes ready", () => {
+    const encodedSessionId = "session%2Fone";
     expect(
       swrKeysToRevalidate(
         {
@@ -93,6 +94,9 @@ describe("swrKeysToRevalidate", () => {
     ]);
     expect(swrKeysToRevalidate({ type: "session_access_changed" }, SESSION_ID)).toEqual([
       `/api/sessions/${SESSION_ID}/access`,
+    ]);
+    expect(swrKeysToRevalidate({ type: "session_access_changed" }, "session/one")).toEqual([
+      `/api/sessions/${encodedSessionId}/access`,
     ]);
   });
 

@@ -309,7 +309,11 @@ function reduceServerMessage(
       };
 
     case "session_sync_started":
-      if (state.sync || message.targetRevision < (state.lastAppliedRevision ?? 0)) {
+      if (
+        state.sync ||
+        (message.mode === "resume" && state.lastAppliedRevision === null) ||
+        message.targetRevision < (state.lastAppliedRevision ?? 0)
+      ) {
         return protocolError(state);
       }
       return {
@@ -329,7 +333,7 @@ function reduceServerMessage(
         !state.sync ||
         state.sync.mode !== "snapshot" ||
         state.sync.snapshotReceived ||
-        message.bootstrap.state.id !== state.sessionState?.id ||
+        (state.sessionState !== null && message.bootstrap.state.id !== state.sessionState.id) ||
         message.bootstrap.viewRevision > state.sync.targetRevision
       ) {
         return protocolError(state);

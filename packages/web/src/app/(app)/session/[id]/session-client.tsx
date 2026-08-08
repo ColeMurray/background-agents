@@ -62,6 +62,7 @@ import type { SessionBootstrap } from "@open-inspect/shared/types/server-message
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
 const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
+const TYPING_DEBOUNCE_MS = 300;
 
 export function SessionClient({
   sessionId,
@@ -721,7 +722,7 @@ function usePromptInput(
     clearTypingTimeout();
     typingTimeoutRef.current = setTimeout(() => {
       sendTyping();
-    }, 300);
+    }, TYPING_DEBOUNCE_MS);
   };
 
   return {

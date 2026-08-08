@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { env } from "cloudflare:test";
+import { beforeEach, describe, expect, it } from "vitest";
+import { EnvironmentStore } from "../../src/db/environments";
+import { cleanD1Tables } from "./cleanup";
 import {
   collectMessages,
   queryDO,
@@ -9,6 +12,46 @@ import {
 } from "./helpers";
 
 describe("session bootstrap and V2 synchronization", () => {
+  beforeEach(cleanD1Tables);
+
+  it("resolves the live environment name in bootstrap snapshots", async () => {
+    const now = Date.now();
+    await new EnvironmentStore(env.DB).create(
+      {
+        id: "env-bootstrap",
+        name: "Bootstrap environment",
+        description: null,
+        prebuild_enabled: 0,
+        channel_associations: null,
+        created_at: now,
+        updated_at: now,
+      },
+      []
+    );
+    const name = `bootstrap-environment-${now}`;
+    const { stub } = await initNamedSession(name, { environmentId: "env-bootstrap" });
+
+    const bootstrap = await (
+      await stub.fetch("http://internal/internal/bootstrap")
+    ).json<Record<string, any>>();
+    expect(bootstrap.state).toMatchObject({
+      environmentId: "env-bootstrap",
+      environmentName: "Bootstrap environment",
+    });
+
+    const snapshot = await openClientWs(name, {
+      subscribe: true,
+      viewProtocol: 2,
+      forceSnapshot: true,
+    });
+    expect(snapshot.messages![1].bootstrap).toMatchObject({
+      state: {
+        environmentId: "env-bootstrap",
+        environmentName: "Bootstrap environment",
+      },
+    });
+    snapshot.ws.close();
+  });
   it("returns an atomic secret-free bootstrap with stable event identities", async () => {
     const name = `bootstrap-${Date.now()}`;
     const { stub } = await initNamedSession(name, { title: "Bootstrap session" });
