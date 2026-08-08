@@ -19,15 +19,12 @@ function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const mockData: Map<string, unknown[]> = new Map();
   const rowsWrittenByQuery: Map<string, number> = new Map();
-  const errorsByQuery: Map<string, Error> = new Map();
   let defaultRowsWritten = 0;
   let oneValue: unknown = null;
 
   const sql: SqlStorage = {
     exec(query: string, ...params: unknown[]): SqlResult {
       calls.push({ query, params });
-      const error = errorsByQuery.get(query);
-      if (error) throw error;
       const data = mockData.get(query) ?? [];
       let consumed = false;
       return {
@@ -58,9 +55,6 @@ function createMockSql() {
     setDefaultRowsWritten(rowsWritten: number) {
       defaultRowsWritten = rowsWritten;
     },
-    setError(query: string, error: Error) {
-      errorsByQuery.set(query, error);
-    },
     setOne(value: unknown) {
       oneValue = value;
     },
@@ -68,7 +62,6 @@ function createMockSql() {
       calls.length = 0;
       mockData.clear();
       rowsWrittenByQuery.clear();
-      errorsByQuery.clear();
       defaultRowsWritten = 0;
       oneValue = null;
     },

@@ -75,7 +75,6 @@ describe("swrKeysToRevalidate", () => {
   });
 
   it("revalidates client-only data when the authoritative snapshot arrives", () => {
-    const encodedSessionId = "session%2Fone";
     expect(
       swrKeysToRevalidate(
         {
@@ -104,13 +103,6 @@ describe("swrKeysToRevalidate", () => {
       `/api/sessions/${SESSION_ID}/diff`,
       `/api/sessions/${SESSION_ID}/children`,
       `/api/sessions/${SESSION_ID}/participant-profiles`,
-      `/api/sessions/${SESSION_ID}/access`,
-    ]);
-    expect(swrKeysToRevalidate({ type: "session_access_changed" }, SESSION_ID)).toEqual([
-      `/api/sessions/${SESSION_ID}/access`,
-    ]);
-    expect(swrKeysToRevalidate({ type: "session_access_changed" }, "session/one")).toEqual([
-      `/api/sessions/${encodedSessionId}/access`,
     ]);
   });
 

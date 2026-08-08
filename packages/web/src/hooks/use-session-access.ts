@@ -4,9 +4,6 @@ import useSWR from "swr";
 import { z } from "zod";
 import { useCallback } from "react";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
-import { sessionAccessKey } from "@/lib/session-access";
-
-export { sessionAccessKey } from "@/lib/session-access";
 
 const sessionAccessSchema = z
   .object({
@@ -23,7 +20,7 @@ const sessionAccessSchema = z
 export type SessionAccess = z.infer<typeof sessionAccessSchema>;
 
 export function useSessionAccess(sessionId: string) {
-  const key = sessionAccessKey(sessionId);
+  const key: BrowserApiPath = `/api/sessions/${encodeURIComponent(sessionId)}/access`;
   const result = useSWR<SessionAccess | null>(key, async (url: BrowserApiPath) => {
     const response = await browserApiFetch(url, { cache: "no-store" });
     if (response.status === 404 || response.status === 409) return null;

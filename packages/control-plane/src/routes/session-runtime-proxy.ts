@@ -23,6 +23,7 @@ type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
+  userOnly?: boolean;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -42,44 +43,23 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
     method: config.method,
     pattern: parsePattern(config.routePath),
     handler: async (request, _env, match, ctx) => {
-      const sessionId = getSessionId(match);
-      if (sessionId instanceof Response) return sessionId;
-
-      const response = await ctx.sessionRuntime.fetch(
-        sessionId,
-        config.internalPath,
-        config.runtimeMethod ? { method: config.runtimeMethod } : undefined,
-        config.forwardSearch ? new URL(request.url).search : undefined
-      );
-
-      if (config.notFoundMessage && response.status === 404) {
-        return error(config.notFoundMessage, 404);
-      }
-
-      return response;
-    },
-  });
-}
-
-function clientOnlyProxyRoute(config: SimpleProxyRouteConfig): Route {
-  return sessionRoute({
-    method: config.method,
-    pattern: parsePattern(config.routePath),
-    handler: async (request, _env, match, ctx) => {
-      if (ctx.principal?.kind !== "user") {
+      if (config.userOnly && ctx.principal?.kind !== "user") {
         return error("Human user authentication required", 403);
       }
       const sessionId = getSessionId(match);
       if (sessionId instanceof Response) return sessionId;
+
       const response = await ctx.sessionRuntime.fetch(
         sessionId,
         config.internalPath,
         config.runtimeMethod ? { method: config.runtimeMethod } : undefined,
         config.forwardSearch ? new URL(request.url).search : undefined
       );
+
       if (config.notFoundMessage && response.status === 404) {
         return error(config.notFoundMessage, 404);
       }
+
       return response;
     },
   });
@@ -249,16 +229,18 @@ function lifecycleProxyRoute(
 }
 
 export const sessionRuntimeProxyRoutes: Route[] = [
-  clientOnlyProxyRoute({
+  simpleProxyRoute({
     method: "GET",
     routePath: "/sessions/:id/bootstrap",
     internalPath: SessionInternalPaths.bootstrap,
     notFoundMessage: "Session not found",
+    userOnly: true,
   }),
-  clientOnlyProxyRoute({
+  simpleProxyRoute({
     method: "GET",
     routePath: "/sessions/:id/access",
     internalPath: SessionInternalPaths.access,
+    userOnly: true,
   }),
   simpleProxyRoute({
     method: "GET",

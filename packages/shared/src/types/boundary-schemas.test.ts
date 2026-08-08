@@ -559,16 +559,6 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("parses a complete subscribe message", () => {
-      expect(
-        clientMessageSchema.safeParse({
-          type: "subscribe",
-          token: "ws-token",
-          clientId: "client-1",
-        }).success
-      ).toBe(true);
-    });
-
     it("parses presence messages with an omitted cursor", () => {
       const result = clientMessageSchema.safeParse({
         type: "presence",

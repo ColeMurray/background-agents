@@ -29,12 +29,6 @@ import type {
   updateEnvironmentInputSchema,
 } from ".";
 import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
-import type {
-  SessionBootstrap,
-  SessionTimelineEvent,
-  sessionBootstrapSchema,
-  sessionTimelineEventSchema,
-} from "./server-messages";
 
 it("preserves public Zod input and output relationships", () => {
   expectTypeOf<RepositoryInput>().toEqualTypeOf<z.input<typeof repositoryInputSchema>>();
@@ -48,8 +42,6 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<CreateSessionInput>().toEqualTypeOf<z.output<typeof createSessionInputSchema>>();
   expectTypeOf<SandboxEvent>().toEqualTypeOf<z.output<typeof sandboxEventSchema>>();
   expectTypeOf<ServerMessage>().toEqualTypeOf<z.output<typeof serverMessageSchema>>();
-  expectTypeOf<SessionBootstrap>().toEqualTypeOf<z.output<typeof sessionBootstrapSchema>>();
-  expectTypeOf<SessionTimelineEvent>().toEqualTypeOf<z.output<typeof sessionTimelineEventSchema>>();
   expectTypeOf<AutomationRepositoryInput>().toEqualTypeOf<RepositoryInput>();
 });
 

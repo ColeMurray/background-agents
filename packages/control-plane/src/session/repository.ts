@@ -26,21 +26,18 @@ import type {
   SpawnSource,
   ArtifactType,
 } from "../types";
-import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
 import {
   eventTimelineCursorFromRow,
   type EventListCursor,
   type EventTimelineCursor,
 } from "./event-cursor";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
-import { findPrArtifactForRepo } from "./pr-artifacts";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
-type GitSyncEvent = Extract<SandboxEvent, { type: "git_sync" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
@@ -431,30 +428,6 @@ export class SessionRepository {
     );
   }
 
-  getSessionRepositoryStateProjection(): SessionRepositoryState[] {
-    const session = this.getSession();
-    if (!session) return [];
-    const artifacts = this.listArtifacts().filter((artifact) => artifact.url !== null);
-    return this.getSessionRepositories().map((member) => ({
-      position: member.position,
-      repoOwner: member.repoOwner,
-      repoName: member.repoName,
-      repoId: member.row ? member.row.repo_id : member.isPrimary ? session.repo_id : null,
-      baseBranch: member.baseBranch ?? "main",
-      branchName:
-        member.row?.branch_name ?? (member.isPrimary ? (session.branch_name ?? null) : null),
-      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session.base_sha ?? null) : null),
-      currentSha:
-        member.row?.current_sha ?? (member.isPrimary ? (session.current_sha ?? null) : null),
-      prUrl:
-        findPrArtifactForRepo(
-          artifacts,
-          { repoOwner: member.repoOwner, repoName: member.repoName },
-          member.isPrimary
-        )?.url ?? null,
-    }));
-  }
-
   setSessionDiffBaselines(
     repositories: Array<{
       position: number;
@@ -464,43 +437,33 @@ export class SessionRepository {
       isPrimary: boolean;
     }>
   ): void {
-    this.transactionSync(() => this.setSessionDiffBaselineRows(repositories));
-  }
-
-  private setSessionDiffBaselineRows(
-    repositories: Array<{
-      position: number;
-      repoOwner: string;
-      repoName: string;
-      baseSha: string;
-      isPrimary: boolean;
-    }>
-  ): void {
-    for (const repository of repositories) {
-      this.sql.exec(
-        `UPDATE session_repositories
+    this.transactionSync(() => {
+      for (const repository of repositories) {
+        this.sql.exec(
+          `UPDATE session_repositories
            SET base_sha = ?
            WHERE position = ?
              AND repo_owner = ? COLLATE NOCASE
              AND repo_name = ? COLLATE NOCASE
              AND base_sha IS NULL`,
-        repository.baseSha,
-        repository.position,
-        repository.repoOwner,
-        repository.repoName
-      );
-      if (repository.isPrimary) {
-        this.sql.exec(
-          `UPDATE session SET base_sha = ?
-             WHERE repo_owner = ? COLLATE NOCASE
-               AND repo_name = ? COLLATE NOCASE
-               AND base_sha IS NULL`,
           repository.baseSha,
+          repository.position,
           repository.repoOwner,
           repository.repoName
         );
+        if (repository.isPrimary) {
+          this.sql.exec(
+            `UPDATE session SET base_sha = ?
+             WHERE repo_owner = ? COLLATE NOCASE
+               AND repo_name = ? COLLATE NOCASE
+               AND base_sha IS NULL`,
+            repository.baseSha,
+            repository.repoOwner,
+            repository.repoName
+          );
+        }
       }
-    }
+    });
   }
 
   // === SANDBOX ===
@@ -941,14 +904,6 @@ export class SessionRepository {
     );
   }
 
-  createGitSyncEvent(data: CreateEventData, event: GitSyncEvent): void {
-    this.transactionSync(() => {
-      this.createEvent(data);
-      this.updateSandboxGitSyncStatus(event.status);
-      if (event.sha) this.updateSessionCurrentSha(event.sha);
-    });
-  }
-
   private upsertEventByMessageId<TType extends UpsertableEventType>(
     type: TType,
     messageId: string,
@@ -1090,13 +1045,6 @@ export class SessionRepository {
     );
   }
 
-  createArtifactAndEvent(artifactData: CreateArtifactData, eventData: CreateEventData): void {
-    this.transactionSync(() => {
-      this.createArtifact(artifactData);
-      this.createEvent(eventData);
-    });
-  }
-
   updateArtifact(artifactId: string, data: UpdateArtifactData): void {
     this.sql.exec(
       `UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?`,
@@ -1122,8 +1070,7 @@ export class SessionRepository {
 
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO ws_client_mapping
-         (ws_id, participant_id, client_id, created_at)
+      `INSERT OR REPLACE INTO ws_client_mapping (ws_id, participant_id, client_id, created_at)
        VALUES (?, ?, ?, ?)`,
       data.wsId,
       data.participantId,
@@ -1134,8 +1081,7 @@ export class SessionRepository {
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id,
-              p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+      `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,

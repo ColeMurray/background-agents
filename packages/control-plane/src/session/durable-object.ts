@@ -54,7 +54,13 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import type { Env, ClientInfo, ServerMessage, SessionState, SandboxStatus } from "../types";
+import type {
+  Env,
+  ClientInfo,
+  ServerMessage,
+  SessionRepositoryState,
+  SandboxStatus,
+} from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -90,6 +96,7 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
+import { findPrArtifactForRepo } from "./pr-artifacts";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
 import {
@@ -1729,11 +1736,11 @@ export class SessionDO extends DurableObject<Env> {
 
   private readSessionState(
     enrichment: SessionSnapshotEnrichment
-  ): { state: SessionState; sandbox: SandboxRow | null } | null {
+  ): { state: SessionBootstrapState; sandbox: SandboxRow | null } | null {
     const session = this.getSession();
     if (!session) return null;
     const sandbox = this.getSandbox();
-    const state: SessionState = {
+    const state: SessionBootstrapState = {
       id: this.getPublicSessionId(session),
       title: session.title,
       repoOwner: session.repo_owner,
@@ -1753,7 +1760,7 @@ export class SessionDO extends DurableObject<Env> {
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
-      repositories: this.repository.getSessionRepositoryStateProjection(),
+      repositories: this.getSessionRepositoryStates(session),
       environmentId: session.environment_id ?? null,
       environmentName:
         session.environment_id === enrichment.environmentId ? enrichment.environmentName : null,
@@ -1790,7 +1797,7 @@ export class SessionDO extends DurableObject<Env> {
     const local = this.ctx.storage.transactionSync(() => {
       const snapshot = this.readSessionState(enrichment);
       if (!snapshot) return null;
-      const state: SessionBootstrapState = snapshot.state;
+      const state = snapshot.state;
       return {
         sessionId: state.id,
         state,
@@ -1863,6 +1870,41 @@ export class SessionDO extends DurableObject<Env> {
       });
       return null;
     }
+  }
+
+  /**
+   * Member repositories for SessionState, in position order (see
+   * buildSessionRepositories for the scalar-mirror fallback). Members synthesized
+   * from the scalars — and member rows written before per-repo git state
+   * existed, whose git columns are null while the scalars are set — have the
+   * primary entry overlaid with the session scalars.
+   */
+  private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
+    const prUrlForRepo = this.getPrUrlLookup();
+    return this.repository.getSessionRepositories().map((member) => ({
+      position: member.position,
+      repoOwner: member.repoOwner,
+      repoName: member.repoName,
+      repoId: member.row ? member.row.repo_id : (session?.repo_id ?? null),
+      baseBranch: member.baseBranch ?? "main",
+      branchName:
+        member.row?.branch_name ?? (member.isPrimary ? (session?.branch_name ?? null) : null),
+      baseSha: member.row?.base_sha ?? (member.isPrimary ? (session?.base_sha ?? null) : null),
+      currentSha:
+        member.row?.current_sha ?? (member.isPrimary ? (session?.current_sha ?? null) : null),
+      prUrl: prUrlForRepo(member.repoOwner, member.repoName, member.isPrimary),
+    }));
+  }
+
+  /** Per-repo PR URL lookup over the session's PR artifacts. */
+  private getPrUrlLookup(): (
+    repoOwner: string,
+    repoName: string,
+    isPrimary: boolean
+  ) => string | null {
+    const artifacts = this.repository.listArtifacts().filter((artifact) => artifact.url !== null);
+    return (repoOwner, repoName, isPrimary) =>
+      findPrArtifactForRepo(artifacts, { repoOwner, repoName }, isPrimary)?.url ?? null;
   }
 
   private getSandboxDashboardUrl(providerObjectId: string | null | undefined): string | null {

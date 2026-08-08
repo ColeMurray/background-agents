@@ -1,5 +1,4 @@
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-import { sessionAccessKey } from "@/lib/session-access";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 
 /** An SWR cache key or key matcher to pass to `mutate`. */
@@ -39,15 +38,11 @@ export function swrKeysToRevalidate(
     case "diff_state_changed":
       return [`/api/sessions/${sessionId}/diff`];
 
-    case "session_access_changed":
-      return [sessionAccessKey(sessionId)];
-
     case "subscribed":
       return [
         `/api/sessions/${sessionId}/diff`,
         `/api/sessions/${sessionId}/children`,
         `/api/sessions/${sessionId}/participant-profiles`,
-        sessionAccessKey(sessionId),
       ];
 
     default:

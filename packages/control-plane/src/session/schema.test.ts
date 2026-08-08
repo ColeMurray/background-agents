@@ -243,15 +243,6 @@ describe("applyMigrations", () => {
     expect(backfill).toBeDefined();
   });
 
-  it("does not retain session view deltas or per-socket revisions", () => {
-    expect(SCHEMA_SQL).not.toContain("session_view_metadata");
-    expect(SCHEMA_SQL).not.toContain("session_view_deltas");
-    expect(SCHEMA_SQL).not.toContain("view_protocol");
-    expect(SCHEMA_SQL).not.toContain("applied_view_revision");
-    expect(MIGRATIONS.find((entry) => entry.id === 39)).toBeUndefined();
-    expect(MIGRATIONS.find((entry) => entry.id === 40)).toBeUndefined();
-  });
-
   it("creates the final attachments schema in its single unshipped migration", () => {
     const migration = MIGRATIONS.find((entry) => entry.id === 35);
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS attachments");

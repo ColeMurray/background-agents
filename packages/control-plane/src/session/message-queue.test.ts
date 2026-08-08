@@ -111,6 +111,7 @@ function buildQueue() {
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
   };
+
   const attachmentRepository = {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };

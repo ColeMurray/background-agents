@@ -111,22 +111,20 @@ export class SessionSandboxEventProcessor {
         updatedAt: now,
       };
 
-      this.repository.createArtifactAndEvent(
-        {
-          id: artifact.id,
-          type: artifact.type,
-          url: artifact.url,
-          metadata: artifact.metadata ? JSON.stringify(artifact.metadata) : null,
-          createdAt: now,
-        },
-        {
-          id: generateId(),
-          type: event.type,
-          data: JSON.stringify(augmentedEvent),
-          messageId,
-          createdAt: now,
-        }
-      );
+      this.repository.createArtifact({
+        id: artifact.id,
+        type: artifact.type,
+        url: artifact.url,
+        metadata: artifact.metadata ? JSON.stringify(artifact.metadata) : null,
+        createdAt: now,
+      });
+      this.repository.createEvent({
+        id: generateId(),
+        type: event.type,
+        data: JSON.stringify(augmentedEvent),
+        messageId,
+        createdAt: now,
+      });
 
       this.messenger.broadcast({ type: "artifact_created", artifact });
       this.messenger.broadcast({ type: "sandbox_event", event: augmentedEvent });
@@ -256,18 +254,20 @@ export class SessionSandboxEventProcessor {
       return;
     }
 
-    const persistedEvent = {
+    this.repository.createEvent({
       id: generateId(),
       type: event.type,
       data: JSON.stringify(event),
       messageId,
       createdAt: now,
-    };
+    });
 
     if (event.type === "git_sync") {
-      this.repository.createGitSyncEvent(persistedEvent, event);
-    } else {
-      this.repository.createEvent(persistedEvent);
+      this.repository.updateSandboxGitSyncStatus(event.status);
+
+      if (event.sha) {
+        this.repository.updateSessionCurrentSha(event.sha);
+      }
     }
 
     if (event.type === "push_complete" || event.type === "push_error") {
