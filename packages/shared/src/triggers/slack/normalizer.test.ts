@@ -24,6 +24,7 @@ describe("normalizeSlackEvent", () => {
     expect(event!.eventType).toBe("message.posted");
     expect(event!.channelId).toBe("C123");
     expect(event!.channelName).toBe("ops");
+    expect(event!.permalink).toBe("https://example.slack.com/archives/C123/p1700000000000100");
     expect(event!.actorUserId).toBe("U999");
     expect(event!.ts).toBe("1700000000.000100");
     expect(event!.text).toBe("please deploy the api");

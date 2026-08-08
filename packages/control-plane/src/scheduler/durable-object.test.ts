@@ -388,6 +388,9 @@ const sampleSlackAutomation = {
   }),
 };
 
+const sampleSlackPermalink = "https://example.slack.com/archives/C1/p1700000000000200";
+const sampleSlackContextBlock = `A message was posted in #ops.\nPermalink: ${sampleSlackPermalink}`;
+
 function makeSlackEvent(overrides?: Record<string, unknown>) {
   const ts = "1700000000.000200";
   return {
@@ -395,9 +398,10 @@ function makeSlackEvent(overrides?: Record<string, unknown>) {
     eventType: "message.posted",
     triggerKey: `slack:msg:C1:${ts}`,
     concurrencyKey: "slack:C1:thread-root",
-    contextBlock: "A message was posted in #ops.",
+    contextBlock: sampleSlackContextBlock,
     meta: {},
     channelId: "C1",
+    permalink: sampleSlackPermalink,
     threadTs: "1700000000.000100",
     ts,
     actorUserId: "U1",
@@ -2350,6 +2354,7 @@ describe("SchedulerDO", () => {
         expect(userIndex).toBeGreaterThanOrEqual(0);
         expect(threadIndex).toBeLessThan(userIndex);
         expect(content).toContain("please deploy the api");
+        expect(content).toContain(sampleSlackPermalink);
       });
 
       it("reuses one context result across several matching automations", async () => {
@@ -2403,6 +2408,30 @@ describe("SchedulerDO", () => {
         const prompt = await getPromptBody(vi.mocked(stub.fetch));
         expect(String(prompt.content)).toContain("A message was posted in #ops.");
         expect(String(prompt.content)).not.toContain("<thread_context>");
+      });
+
+      it("uses the baseline prompt when lazy prompt construction rejects", async () => {
+        mockGetSlackAutomationsForChannel.mockResolvedValue([sampleSlackAutomation]);
+        mockStore.getLatestSteerableRunForThread.mockResolvedValue(null);
+        const { env } = threadContextEnv();
+        const stub = env.SESSION.get(env.SESSION.idFromName("any"));
+        const scheduler = createSchedulerDO(env);
+        const promptBuilder = scheduler as unknown as {
+          buildSlackContextWithThread: () => Promise<string>;
+        };
+        vi.spyOn(promptBuilder, "buildSlackContextWithThread").mockRejectedValue(
+          new Error("prompt provider failed")
+        );
+
+        await scheduler.fetch(slackEventRequest());
+
+        const prompt = await getPromptBody(vi.mocked(stub.fetch));
+        expect(String(prompt.content)).toContain("A message was posted in #ops.");
+        expect(String(prompt.content)).not.toContain("<thread_context>");
+        expect(mockStore.updateRun).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ status: "running" })
+        );
       });
 
       it("skips the request entirely for a top-level message", async () => {
@@ -2600,7 +2629,7 @@ describe("SchedulerDO", () => {
       expect(response.status).toBe(200);
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
       expect(prompt.content).toBe(
-        "A message was posted in #ops.\n---\n\nRun tests\n\n" +
+        `${sampleSlackContextBlock}\n---\n\nRun tests\n\n` +
           "## Additional Instructions\n\nAlways run tests."
       );
     });
@@ -2617,7 +2646,7 @@ describe("SchedulerDO", () => {
       await scheduler.fetch(slackEventRequest());
 
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
-      expect(prompt.content).toBe("A message was posted in #ops.\n---\n\nRun tests");
+      expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
     });
 
     it("launches without workspace instructions when the settings read fails", async () => {
@@ -2634,7 +2663,7 @@ describe("SchedulerDO", () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ triggered: 1, skipped: 0, steered: 0 });
       const prompt = await getPromptBody(vi.mocked(stub.fetch));
-      expect(prompt.content).toBe("A message was posted in #ops.\n---\n\nRun tests");
+      expect(prompt.content).toBe(`${sampleSlackContextBlock}\n---\n\nRun tests`);
     });
 
     it("posts the already-active notice for a reply racing the initial trigger (no session yet)", async () => {

@@ -86,6 +86,7 @@ export function normalizeSlackEvent(
     concurrencyKey: `slack:${input.channel}:${input.thread_ts ?? input.ts}`,
     channelId: input.channel,
     channelName: channelMeta?.channelName,
+    permalink: channelMeta?.permalink,
     threadTs: input.thread_ts,
     ts: input.ts,
     actorUserId: input.user,

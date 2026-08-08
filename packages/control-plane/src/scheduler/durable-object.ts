@@ -176,13 +176,14 @@ interface StartInvocationParams {
   repositories?: AutomationRepositoryInsert[];
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
+  /** Complete prompt to use directly, or as the fallback for a lazy override. */
   instructionsOverride?: string;
   /**
    * Lazy alternative to `instructionsOverride`, resolved only after the
    * invocation is admitted. Slack runs use it so thread history is fetched for
    * runs that actually start — never for unmatched events, steers, concurrency
-   * skips or deduplicated firings. Resolution failures are the factory's
-   * problem; it must fall back rather than throw.
+   * skips or deduplicated firings. If resolution fails, startInvocation uses
+   * `instructionsOverride` so admitted children cannot be stranded.
    */
   instructionsOverrideFactory?: () => Promise<string>;
 }
@@ -402,9 +403,21 @@ export class SchedulerDO extends DurableObject<Env> {
     }
 
     // Admitted. Only now is it worth paying for anything the prompt needs.
-    const instructionsOverride = params.instructionsOverrideFactory
-      ? await params.instructionsOverrideFactory()
-      : params.instructionsOverride;
+    // Contain provider failures here: children already exist in `starting`, so
+    // a rejected lazy override must not escape and strand persisted state.
+    let instructionsOverride = params.instructionsOverride;
+    if (params.instructionsOverrideFactory) {
+      try {
+        instructionsOverride = await params.instructionsOverrideFactory();
+      } catch (error) {
+        this.log.warn("Failed to resolve lazy instructions; using fallback", {
+          event: "scheduler.instructions_override_failed",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
 
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
@@ -947,12 +960,17 @@ export class SchedulerDO extends DurableObject<Env> {
       // window before a run has created its session (no steerable row yet), so
       // a reply racing the initial trigger gets the "already active" notice
       // instead of a second session.
+      const instructionsOverride = appendSlackSessionInstructions(
+        `${event.contextBlock}\n---\n\n${automation.instructions}`,
+        slackSessionInstructions
+      );
       const result = await this.startInvocation(store, {
         automation,
         source: "event",
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
+        instructionsOverride,
         ...(event.source === "slack"
           ? {
               instructionsOverrideFactory: async () =>
@@ -961,12 +979,7 @@ export class SchedulerDO extends DurableObject<Env> {
                   slackSessionInstructions
                 ),
             }
-          : {
-              instructionsOverride: appendSlackSessionInstructions(
-                `${event.contextBlock}\n---\n\n${automation.instructions}`,
-                slackSessionInstructions
-              ),
-            }),
+          : {}),
       });
 
       switch (result.outcome) {
@@ -1267,8 +1280,7 @@ export class SchedulerDO extends DurableObject<Env> {
       return buildSlackContextBlock({
         channelLabel: slackChannelLabel(event.channelId, event.channelName),
         actorUserId: event.actorUserId,
-        // `meta` is deliberately untyped (logging payload), so narrow here.
-        permalink: typeof event.meta?.permalink === "string" ? event.meta.permalink : undefined,
+        permalink: event.permalink,
         text: event.text,
         threadContext,
       });
