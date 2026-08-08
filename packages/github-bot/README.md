@@ -86,10 +86,10 @@ particular, it requires:
 
 **Permissions**: `Pull requests: Read & write`, `Issues: Read & write`
 
-`Issues: Read & write` is also required outside the bot when the control plane applies labels to
-session-created pull requests. See the
+The control plane does not need Issues permission to label session-created pull requests; the
+required `Pull requests: Read & write` permission authorizes those label operations. See the
 [GitHub App setup](../../docs/GETTING_STARTED.md#step-3-create-github-app) for the complete
-permission list and existing-installation upgrade steps.
+permission list.
 
 **Event subscriptions**: `Pull request`, `Issue comment`, `Pull request review comment`
 

@@ -68,11 +68,9 @@ sign-in with that App:
 Required repository permissions for the GitHub App:
 
 - **Contents: Read & write** - for repository operations
-- **Pull requests: Read & write** - for session pull request creation
+- **Pull requests: Read & write** - for session pull request creation and labeling
 - **Metadata: Read-only**
-- **Issues: Read & write** - when a pull request label is configured under **Settings > Source
-  Control**, or when the GitHub bot is enabled. Existing installations must republish the App
-  settings and request/approve the installation update after adding this permission.
+- **Issues: Read & write** - only when the GitHub bot is enabled
 
 When GitHub sign-in uses email/domain admission, also grant **Account permissions: Email addresses
 (read-only)**.
