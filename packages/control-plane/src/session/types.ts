@@ -6,14 +6,13 @@ import type {
   ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
   ArtifactType,
-  EventType,
 } from "../types";
+import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
@@ -125,6 +124,7 @@ export interface EventRow {
   data: string; // JSON
   message_id: string | null;
   created_at: number;
+  timeline_sequence?: number;
 }
 
 export interface ArtifactRow {

@@ -1,4 +1,4 @@
-import { spawnChildSessionRequestSchema, spawnContextSchema } from "@open-inspect/shared";
+import { spawnChildSessionRequestSchema } from "@open-inspect/shared";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
@@ -23,6 +23,7 @@ import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
 } from "../session/integration-settings-resolution";
+import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";

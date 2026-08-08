@@ -1,4 +1,4 @@
-import { childFollowUpPromptRequestSchema, type SpawnContext } from "@open-inspect/shared";
+import { childFollowUpPromptRequestSchema } from "@open-inspect/shared";
 import { z } from "zod";
 import type { SessionStatus } from "../../../types";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
@@ -9,6 +9,7 @@ import {
   type ChildFollowUpErrorReason,
   type ChildFollowUpService,
 } from "../../services/child-follow-up.service";
+import type { SpawnContext } from "../../spawn-context";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,

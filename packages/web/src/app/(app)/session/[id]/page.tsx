@@ -1,9 +1,9 @@
 "use client";
 
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -57,26 +57,19 @@ import {
   reconcileSessionReadState,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
+import { useSessionSnapshot } from "./session-snapshot-provider";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
+const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
+
 export default function SessionPage() {
-  return (
-    <Suspense>
-      <SessionPageContent />
-    </Suspense>
-  );
-}
-
-function SessionPageContent() {
-  const params = useParams();
-  const searchParams = useSearchParams();
-  const sessionId = params.id as string;
-
+  const initialSnapshot = useSessionSnapshot();
+  const sessionId = initialSnapshot.session.id;
   const {
     connected,
     connecting,
-    replaying,
+    ready,
     authError,
     connectionError,
     sessionState,
@@ -91,21 +84,18 @@ function SessionPageContent() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId);
+  } = useSessionSocket(sessionId, initialSnapshot);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
     sessionId,
     participants,
     events
   );
 
-  const fallbackSessionInfo = useMemo(
-    () => ({
-      repoOwner: searchParams.get("repoOwner") || null,
-      repoName: searchParams.get("repoName") || null,
-      title: searchParams.get("title") || null,
-    }),
-    [searchParams]
-  );
+  const fallbackSessionInfo = {
+    repoOwner: initialSnapshot.session.repoOwner,
+    repoName: initialSnapshot.session.repoName,
+    title: initialSnapshot.session.title,
+  };
 
   const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);
   const {
@@ -146,20 +136,30 @@ function SessionPageContent() {
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Terminal panel state
-  const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("terminal-visible") === "true";
-  });
-  const toggleTerminal = useCallback(() => {
-    const next = !terminalOpen;
-    localStorage.setItem("terminal-visible", String(next));
-    setTerminalOpen(next);
-  }, [terminalOpen]);
-  const closeTerminal = useCallback(() => {
-    setTerminalOpen(false);
-    localStorage.setItem("terminal-visible", "false");
+  // Terminal panel state. Starts closed so the server and the client render the
+  // same markup, then adopts the stored preference after hydration.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setTerminalOpen(localStorage.getItem(TERMINAL_VISIBLE_STORAGE_KEY) === "true");
+    } catch {
+      // Storage is optional; the terminal stays closed when it is unavailable.
+    }
   }, []);
+  const applyTerminalOpen = useCallback((next: boolean) => {
+    setTerminalOpen(next);
+    try {
+      localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, String(next));
+    } catch {
+      // Continue with the in-memory preference when storage is unavailable.
+    }
+  }, []);
+  const toggleTerminal = useCallback(() => {
+    applyTerminalOpen(!terminalOpen);
+  }, [applyTerminalOpen, terminalOpen]);
+  const closeTerminal = useCallback(() => {
+    applyTerminalOpen(false);
+  }, [applyTerminalOpen]);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
@@ -195,7 +195,6 @@ function SessionPageContent() {
       ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
       : null);
 
-  const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
   const resolvedDiff = useMemo(
     () =>
       selectedDiff && diffState?.current
@@ -269,11 +268,10 @@ function SessionPageContent() {
             participantProfiles={profiles}
             isProcessing={isProcessing}
             loadingHistory={loadingHistory}
-            showSkeleton={showTimelineSkeleton}
+            showSkeleton={false}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
             terminalMessageReadObservationEnabled={
-              !replaying &&
               !loadingHistory &&
               !isDetailsOpen &&
               selectedMediaArtifactId === null &&
@@ -299,8 +297,8 @@ function SessionPageContent() {
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
-        connected={connected}
-        connecting={connecting}
+        connected={connected && ready}
+        connecting={connecting || (connected && !ready)}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
@@ -451,8 +449,8 @@ function SessionPageContent() {
         }}
         prompt={{
           value: prompt,
-          isProcessing,
-          draftLocked: isSubmitting || sessionAttachments.isUploading,
+          isProcessing: ready && isProcessing,
+          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,

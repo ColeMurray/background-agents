@@ -23,7 +23,7 @@ import { UserMenu } from "@/components/sidebar-user-menu";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
-export { buildSessionHref, MOBILE_LONG_PRESS_MS } from "@/components/session-list-item";
+export { MOBILE_LONG_PRESS_MS } from "@/components/session-list-item";
 
 interface SidebarActionButtonProps {
   onClick?: () => void;
@@ -179,7 +179,7 @@ export function SessionSidebar({
       <div className="px-3 py-2">
         <ToggleGroup
           type="single"
-          value={sessionCreatorFilter}
+          value={sessionCreatorFilter ?? ""}
           onValueChange={(value) => {
             if (value === "all" || value === "mine") {
               setSessionCreatorFilter(value);

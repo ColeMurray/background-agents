@@ -1,7 +1,9 @@
 // Integration settings types
 
 import { escapeRegExp } from "../regex";
+import { z } from "zod";
 
+/** Third-party integrations, each surfaced as a card in the Integrations settings list. */
 export type IntegrationId = "github" | "linear" | "code-server" | "sandbox" | "slack";
 
 /** Enforces the common shape for all integration configurations. */
@@ -25,6 +27,21 @@ export interface GitHubBotSettings {
   codeReviewInstructions?: string;
   commentActionInstructions?: string;
 }
+
+/**
+ * Source-control (SCM) behavior settings.
+ *
+ * Provider-agnostic: applies to both GitHub and GitLab.
+ */
+export interface ScmSettings {
+  /** Always open pull/merge requests created by sessions as drafts. */
+  alwaysUseDraftMode?: boolean;
+  /** Label applied to pull/merge requests created by sessions. */
+  pullRequestLabel?: string;
+}
+
+/** Repository SCM settings are field-level overrides; omitted fields inherit globally. */
+export type ScmRepoSettings = ScmSettings;
 
 /** Overridable behavior settings for the Linear bot. Used at both global (defaults) and per-repo (overrides) levels. */
 export interface LinearBotSettings {
@@ -213,24 +230,45 @@ export type SlackMentionsPolicy = "allow" | "escape" | "strip";
 /** What a Slack routing rule points at: a repository or a saved environment. */
 export type SlackRoutingTargetType = "repository" | "environment";
 
+export const slackRoutingTargetTypeSchema = z.enum(["repository", "environment"]);
+
 /**
  * A workspace-wide keyword→target routing rule for Slack. When a Slack
  * message contains the keyword, the bot routes the agent to the target
  * repository or environment deterministically, before falling back to LLM
  * classification.
  */
-export interface SlackRoutingRule {
+export const slackRoutingRuleSchema = z.object({
   /** Case-insensitive keyword or phrase. Matched as a whole token in the message. */
-  keyword: string;
+  keyword: z.string(),
   /**
    * Canonical "owner/name" (lowercase) of the target repository, or — when
    * `targetType` is `"environment"` — the stable environment id (`env_…`),
    * never the rename-able display name.
    */
-  target: string;
+  target: z.string(),
   /** Absent means "repository" (every rule stored before environments existed). */
-  targetType?: SlackRoutingTargetType;
-}
+  targetType: slackRoutingTargetTypeSchema.optional(),
+});
+
+export type SlackRoutingRule = z.infer<typeof slackRoutingRuleSchema>;
+
+export const slackIntegrationSettingsRoutingResponseSchema = z.object({
+  settings: z
+    .object({
+      defaults: z
+        .object({
+          routingRules: z.array(slackRoutingRuleSchema).optional(),
+        })
+        .optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
+export type SlackIntegrationSettingsRoutingResponse = z.infer<
+  typeof slackIntegrationSettingsRoutingResponseSchema
+>;
 
 /** Maximum number of routing rules a workspace can configure (bounds the settings blob). */
 export const MAX_SLACK_ROUTING_RULES = 100;
@@ -331,6 +369,7 @@ export interface IntegrationSettingsMap {
   "code-server": IntegrationEntry<CodeServerSettings>;
   sandbox: IntegrationEntry<SandboxSettings>;
   slack: IntegrationEntry<SlackRepoSettings, SlackGlobalSettings>;
+  scm: IntegrationEntry<ScmSettings>;
 }
 
 /** Derived type for the GitHub bot global config. */
@@ -338,6 +377,7 @@ export type GitHubGlobalConfig = IntegrationSettingsMap["github"]["global"];
 export type LinearGlobalConfig = IntegrationSettingsMap["linear"]["global"];
 export type CodeServerGlobalConfig = IntegrationSettingsMap["code-server"]["global"];
 export type SandboxGlobalConfig = IntegrationSettingsMap["sandbox"]["global"];
+export type ScmGlobalConfig = IntegrationSettingsMap["scm"]["global"];
 export type SlackGlobalConfig = IntegrationSettingsMap["slack"]["global"];
 
 /** Full MCP server config with decrypted credentials. Internal use only. */

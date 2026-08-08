@@ -111,21 +111,27 @@ describe("SchedulerDO /internal/event (integration)", () => {
           next_run_at: null,
         })
       );
+      // Keep this matching test independent of SessionDO and sandbox startup.
+      // A deleted environment still produces one child, which fails locally
+      // during target resolution after the invocation is persisted.
+      await env.DB.batch(store.bindReplaceEnvironments(automationId, ["env-deleted"], Date.now()));
 
       const event = makeSentryEvent(automationId);
       const res = await sendEvent(event);
 
       expect(res.status).toBe(200);
-      const body = await res.json<{ triggered: number; skipped: number }>();
-      // Session creation will fail in test env, but the run is still created.
-      // triggered may be 0 if session creation fails, but the row exists.
-      expect(body.triggered + body.skipped).toBeLessThanOrEqual(1);
+      const body = await res.json<{ triggered: number; skipped: number; steered: number }>();
+      expect(body).toEqual({ triggered: 0, skipped: 0, steered: 0 });
 
       const runs = await fetchRuns(automationId);
-      expect(runs.length).toBeGreaterThanOrEqual(1);
+      expect(runs).toHaveLength(1);
 
       const run = runs[0]!;
-      expect(run.automation_id).toBe(automationId);
+      expect(run).toMatchObject({
+        automation_id: automationId,
+        environment_id: "env-deleted",
+        status: "failed",
+      });
       // Firing keys live on the invocation, not the child run.
       expect(run.invocation_id).not.toBeNull();
       const invocation = await store.getInvocationById(run.invocation_id!);
@@ -134,6 +140,8 @@ describe("SchedulerDO /internal/event (integration)", () => {
         trigger_key: event.triggerKey,
         concurrency_key: event.concurrencyKey,
       });
+      const { total } = await store.listInvocations(automationId, { limit: 10, offset: 0 });
+      expect(total).toBe(1);
     });
   });
 

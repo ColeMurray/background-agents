@@ -1,19 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { memoryAdapter } from "better-auth/adapters/memory";
+import type { SqlDatabase, SqlStatement } from "../../db/sql-database";
 import { createUserAuth } from "./better-auth";
 
 const PUBLIC_WEB_ORIGIN = "https://web.test.local";
 const SECRET = "test-only-better-auth-secret-with-at-least-32-characters";
 const UNUSED_PROFILE_RESOLVER = async () => null;
-const UNUSED_USER_PROJECTION = { project: async () => {} };
+
+/** Provider rejection happens before any query executes. */
+const UNREACHED_DATABASE: SqlDatabase = {
+  prepare(): SqlStatement {
+    throw new Error("Database access is not expected in this test");
+  },
+  batch(): never {
+    throw new Error("Database access is not expected in this test");
+  },
+};
 
 describe("Better Auth provider execution", () => {
   it("rejects a provider that is disabled before sign-in executes", async () => {
     const auth = createUserAuth({
-      database: memoryAdapter({}) as unknown as D1Database,
+      database: UNREACHED_DATABASE,
       publicWebOrigin: PUBLIC_WEB_ORIGIN,
       secret: SECRET,
-      userProjection: UNUSED_USER_PROJECTION,
       google: {
         clientId: "google-client-id",
         clientSecret: "google-client-secret",

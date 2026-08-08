@@ -42,6 +42,40 @@ function getHandler(method: string, path: string) {
 }
 
 describe("session runtime proxy routes", () => {
+  it.each([
+    ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
+    ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
+  ])("forwards %s for users and rejects service principals", async (_name, path, internalPath) => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ sessionId: "session-1" });
+    });
+    const { handler, match } = getHandler("GET", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(new URL(requests[0].url).pathname).toBe(internalPath);
+    const serviceCtx = createCtx();
+    serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
+
+    const rejected = await handler(
+      new Request(`https://test.local${path}`),
+      createEnv(fetch),
+      match,
+      serviceCtx
+    );
+
+    expect(rejected.status).toBe(403);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("forwards event query strings through the session runtime dependency", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
@@ -71,6 +105,7 @@ describe("session runtime proxy routes", () => {
           { id: "p-2", userId: "user-1" },
           { id: "p-3", userId: "deleted-user" },
           { id: "p-4", userId: "slack:U123", canonicalUserId: "user-bot" },
+          { id: "p-5", userId: "user-2", canonicalUserId: null },
         ],
       })
     );
@@ -95,6 +130,14 @@ describe("session runtime proxy routes", () => {
               display_name: "Build Bot",
               email: null,
               avatar_url: "https://avatars.example/bot",
+              created_at: 1,
+              updated_at: 2,
+            },
+            {
+              id: "user-2",
+              display_name: "Grace Hopper",
+              email: null,
+              avatar_url: null,
               created_at: 1,
               updated_at: 2,
             },
@@ -125,10 +168,51 @@ describe("session runtime proxy routes", () => {
           displayName: "Build Bot",
           avatarUrl: "https://avatars.example/bot",
         },
+        "user-2": {
+          userId: "user-2",
+          displayName: "Grace Hopper",
+          avatarUrl: null,
+        },
       },
     });
-    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user", "user-bot");
+    expect(bind).toHaveBeenCalledWith("user-1", "deleted-user", "user-bot", "user-2");
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("returns a bad-gateway error for malformed participant responses", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({ participants: [{ canonicalUserId: "user-1" }] })
+    );
+    const db = { prepare: vi.fn(), batch: vi.fn() } as unknown as SqlDatabase;
+    const { handler, match } = getHandler("GET", "/sessions/session-1/participant-profiles");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participant-profiles"),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid participant response" });
+    expect(db.prepare).not.toHaveBeenCalled();
+  });
+
+  it("returns a bad-gateway error when the participant response is not JSON", async () => {
+    const fetch = vi.fn(async () => new Response("not json", { status: 200 }));
+    const db = { prepare: vi.fn(), batch: vi.fn() } as unknown as SqlDatabase;
+    const { handler, match } = getHandler("GET", "/sessions/session-1/participant-profiles");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/participant-profiles"),
+      createEnv(fetch),
+      match,
+      createCtx(db)
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid participant response" });
+    expect(db.prepare).not.toHaveBeenCalled();
   });
 
   it("preserves participant runtime errors without querying profiles", async () => {
@@ -245,6 +329,51 @@ describe("session runtime proxy routes", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("forwards the draft flag through the create-PR contract", async () => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ prNumber: 1, prUrl: "https://example/pr/1", state: "draft" });
+    });
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "T", body: "B", draft: true }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.createPr);
+    await expect(requests[0].json()).resolves.toMatchObject({ title: "T", body: "B", draft: true });
+  });
+
+  it("rejects a non-boolean draft without forwarding to the runtime", async () => {
+    const fetch = vi.fn(async () => Response.json({ status: "ok" }));
+    const { handler, match } = getHandler("POST", "/sessions/session-1/pr");
+
+    const response = await handler(
+      new Request("https://test.local/sessions/session-1/pr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "T", body: "B", draft: "yes" }),
+      }),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "draft must be a boolean" });
     expect(fetch).not.toHaveBeenCalled();
   });
 

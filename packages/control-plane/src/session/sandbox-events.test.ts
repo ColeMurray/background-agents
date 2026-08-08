@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import type { GitPushSpec } from "../source-control";
-import type { SandboxEvent, ServerMessage } from "../types";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { ServerMessage } from "../types";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionRepository } from "./repository";
@@ -26,6 +27,7 @@ function createProcessor() {
     updateSandboxHeartbeat: vi.fn(),
     getProcessingMessage,
     upsertTokenEvent: vi.fn(),
+    upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
     addSessionCost: vi.fn(),
@@ -103,6 +105,7 @@ function createProcessor() {
     applySessionTitleUpdate,
     waitUntil,
     recordTerminalMessage,
+    log,
   };
 }
 
@@ -122,6 +125,28 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
+  });
+
+  it("logs when the post-completion snapshot fails", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageTimestamps.mockReturnValue({ created_at: 1000, started_at: 1100 });
+    h.triggerSnapshot.mockRejectedValue(new Error("snapshot backend down"));
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    const settled = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+    expect(settled.every(({ status }) => status === "fulfilled")).toBe(true);
+    expect(h.log.error).toHaveBeenCalledWith("snapshot.trigger.background_error", {
+      reason: "execution_complete",
+      error: expect.any(Error),
+    });
   });
 
   it("updates heartbeat without broadcasting", async () => {
@@ -185,6 +210,34 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.repository.upsertTokenEvent).toHaveBeenCalledWith("msg-1", event, expect.any(Number));
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("persists each context compaction marker and broadcasts it", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "context_compacted",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+    };
+
+    await h.processor.processSandboxEvent(event);
+    await h.processor.processSandboxEvent({ ...event, timestamp: 1001 });
+
+    expect(h.repository.createEvent).toHaveBeenCalledTimes(2);
+    expect(h.repository.createEvent).toHaveBeenNthCalledWith(1, {
+      id: expect.any(String),
+      type: "context_compacted",
+      data: JSON.stringify(event),
+      messageId: "msg-1",
+      createdAt: expect.any(Number),
+    });
+    expect(h.broadcast).toHaveBeenNthCalledWith(1, { type: "sandbox_event", event });
+    expect(h.broadcast).toHaveBeenNthCalledWith(2, {
+      type: "sandbox_event",
+      event: { ...event, timestamp: 1001 },
+    });
+    expect(h.updateLastActivity).not.toHaveBeenCalled();
   });
 
   it("persists artifact events into artifacts and broadcasts both channels", async () => {
@@ -584,6 +637,11 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
+      expect(h.repository.upsertToolCallEvent).toHaveBeenCalledWith(
+        "msg-1",
+        expect.objectContaining({ callId: "call-1", status: "running" }),
+        expect.any(Number)
+      );
     });
 
     it("notifies tool_call regardless of status (provider-agnostic)", async () => {

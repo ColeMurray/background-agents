@@ -19,17 +19,16 @@ import type {
   CreateSessionRequest,
   ListAutomationsResponse,
   RepositoryInput,
-  SandboxEvent,
   ServerMessage,
   UpdateEnvironmentInput,
   createEnvironmentInputSchema,
   createSessionInputSchema,
   createSessionRequestSchema,
   repositoryInputSchema,
-  sandboxEventSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
 } from ".";
+import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
 
 it("preserves public Zod input and output relationships", () => {
   expectTypeOf<RepositoryInput>().toEqualTypeOf<z.input<typeof repositoryInputSchema>>();

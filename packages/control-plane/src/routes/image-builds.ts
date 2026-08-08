@@ -8,18 +8,20 @@
  * - Enabled-scope and status queries
  */
 
-import type {
-  ImageBuildRecordView,
-  RepositoryShaEntry,
-} from "@open-inspect/shared/types/image-builds";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { z } from "zod";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
 import { createLogger } from "../logger";
 import { getImageBuildCallbackBearerToken } from "../image-builds/callback-auth";
 import { ImageBuildError } from "../image-builds/errors";
-import { repoImageBuildScope, type ImageBuildScope } from "../image-builds/model";
+import {
+  parseRuntimeVersionNumber,
+  repoImageBuildScope,
+  type ImageBuildScope,
+} from "../image-builds/model";
 import { getImageBuildsUnsupportedMessage } from "../image-builds/provider-policy";
-import { decodeRepositoryShas } from "../image-builds/provenance";
+import { repositoryShaEntrySchema } from "../image-builds/provenance";
 import { scheduleImageBuildOnSave } from "../image-builds/save-hooks";
 import {
   listEnabledScopes,
@@ -46,22 +48,36 @@ import {
 } from "./shared";
 
 const logger = createLogger("router:image-builds");
-const MS_PER_SECOND = 1000;
 const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 
-interface ImageBuildCompleteBody {
-  build_id?: unknown;
-  provider_session_id?: unknown;
-  repository_shas?: unknown;
-  runtime_version?: unknown;
-  build_duration_seconds?: unknown;
-}
+/**
+ * Build-complete callback body. Every field is required: all providers bind a
+ * provider session before the runtime launches, and the runtime always
+ * reports repository_shas and runtime_version — an unversioned image must
+ * never be registered, or it could pass spawn selection's floor check.
+ */
+const buildCompleteBodySchema = z.object({
+  build_id: z.string().min(1),
+  provider_session_id: z.string().min(1),
+  repository_shas: z.array(repositoryShaEntrySchema).min(1),
+  runtime_version: z.string().refine((value) => parseRuntimeVersionNumber(value) !== null, {
+    message: "must start with v<number>",
+  }),
+  // Must stay finite: Infinity would be canonicalized to null by
+  // JSON.stringify inside the completion hash and the persisted row. Capped
+  // at MAX_SAFE_INTEGER so an absurd duration cannot lose integer precision
+  // in the persisted row or the completion-hash canonicalization.
+  build_duration_seconds: z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),
+});
 
-interface ImageBuildFailedBody {
-  build_id?: unknown;
-  provider_session_id?: unknown;
-  error?: unknown;
-}
+const buildFailedBodySchema = z.object({
+  build_id: z.string().min(1),
+  provider_session_id: z.string().min(1),
+  // Deliberately tolerant: a malformed error report must never 400 the one
+  // callback that moves a wedged build out of `building` — anything that is
+  // not a non-empty string falls back to "Unknown error" at the handler.
+  error: z.unknown().optional(),
+});
 
 function requireImageBuilds(env: Env): Response | null {
   const message = getImageBuildsUnsupportedMessage(env);
@@ -94,8 +110,6 @@ function imageBuildErrorToResponse(errorValue: unknown): Response {
   switch (errorValue.code) {
     case "scope_not_found":
       return error(errorValue.message, 404);
-    case "invalid_callback":
-      return error(errorValue.message, 400);
     case "callback_auth_rejected":
       return error(errorValue.message, 401);
     case "completion_not_accepted":
@@ -115,7 +129,12 @@ function imageBuildErrorToResponse(errorValue: unknown): Response {
   }
 }
 
-async function parseCallbackBody<T>(request: Request): Promise<T | Response> {
+/**
+ * Read and JSON-parse a size-bounded callback body. Schema validation is the
+ * caller's — this only guards transport-level failure modes (oversized or
+ * non-JSON payloads).
+ */
+async function readCallbackBody(request: Request): Promise<{ body: unknown } | Response> {
   const contentLength = Number.parseInt(request.headers.get("content-length") ?? "", 10);
   if (Number.isFinite(contentLength) && contentLength > MAX_CALLBACK_BODY_BYTES) {
     return error("Payload too large", 413);
@@ -134,80 +153,26 @@ async function parseCallbackBody<T>(request: Request): Promise<T | Response> {
   }
 
   try {
-    const parsed: unknown = JSON.parse(bodyText);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return error("Invalid JSON body", 400);
-    }
-    return parsed as T;
+    return { body: JSON.parse(bodyText) };
   } catch {
     return error("Invalid JSON body", 400);
   }
 }
 
-function requireStringField(value: unknown, field: string): string | Response {
-  return typeof value === "string" && value.length > 0 ? value : error(`${field} is required`, 400);
-}
-
-function optionalStringField(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.length > 0 ? value : fallback;
-}
-
 /**
- * Parse the repository_shas document ([{repoOwner, repoName, baseSha}], the
- * single cross-language shape produced by the runtime). Malformed entries are
- * a 400 — deeper requirements (non-empty) are the workflow's fail-close.
+ * Parse a callback body against its schema. Missing or invalid fields are a
+ * 400 before auth — field presence leaks nothing about any build row.
  */
-function parseRepositoryShas(value: unknown): RepositoryShaEntry[] | undefined | Response {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) return error("repository_shas must be an array", 400);
-  return (
-    decodeRepositoryShas(value) ??
-    error("repository_shas entries require repoOwner, repoName, and baseSha", 400)
-  );
-}
+function parseCallbackBody<Schema extends z.ZodType>(
+  schema: Schema,
+  body: unknown
+): z.infer<Schema> | Response {
+  const parsed = schema.safeParse(body);
+  if (parsed.success) return parsed.data;
 
-function buildCompleteCommand(body: ImageBuildCompleteBody): CompleteImageBuildCallback | Response {
-  const buildId = requireStringField(body.build_id, "build_id");
-  if (buildId instanceof Response) return buildId;
-
-  let buildDurationMs: number | undefined;
-  if (body.build_duration_seconds !== undefined) {
-    if (typeof body.build_duration_seconds !== "number") {
-      return error("build_duration_seconds must be a number", 400);
-    }
-    buildDurationMs = body.build_duration_seconds * MS_PER_SECOND;
-  }
-
-  const repositoryShas = parseRepositoryShas(body.repository_shas);
-  if (repositoryShas instanceof Response) return repositoryShas;
-
-  return {
-    buildId,
-    providerSessionId:
-      typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
-        ? body.provider_session_id
-        : undefined,
-    repositoryShas,
-    runtimeVersion:
-      typeof body.runtime_version === "string" && body.runtime_version.length > 0
-        ? body.runtime_version
-        : undefined,
-    buildDurationMs,
-  };
-}
-
-function buildFailedCommand(body: ImageBuildFailedBody): FailImageBuildCallback | Response {
-  const buildId = requireStringField(body.build_id, "build_id");
-  if (buildId instanceof Response) return buildId;
-
-  return {
-    buildId,
-    providerSessionId:
-      typeof body.provider_session_id === "string" && body.provider_session_id.length > 0
-        ? body.provider_session_id
-        : undefined,
-    errorMessage: optionalStringField(body.error, "Unknown error"),
-  };
+  const issue = parsed.error.issues[0];
+  const path = issue.path.join(".");
+  return error(path ? `${path}: ${issue.message}` : issue.message, 400);
 }
 
 /**
@@ -220,11 +185,19 @@ async function handleBuildComplete(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseCallbackBody<ImageBuildCompleteBody>(request);
+  const body = await readCallbackBody(request);
   if (body instanceof Response) return body;
 
-  const completion = buildCompleteCommand(body);
-  if (completion instanceof Response) return completion;
+  const parsed = parseCallbackBody(buildCompleteBodySchema, body.body);
+  if (parsed instanceof Response) return parsed;
+
+  const completion: CompleteImageBuildCallback = {
+    buildId: parsed.build_id,
+    providerSessionId: parsed.provider_session_id,
+    repositoryShas: parsed.repository_shas,
+    runtimeVersion: parsed.runtime_version,
+    buildDurationSeconds: parsed.build_duration_seconds,
+  };
 
   try {
     const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildComplete({
@@ -248,11 +221,18 @@ async function handleBuildFailed(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseCallbackBody<ImageBuildFailedBody>(request);
+  const body = await readCallbackBody(request);
   if (body instanceof Response) return body;
 
-  const failure = buildFailedCommand(body);
-  if (failure instanceof Response) return failure;
+  const parsed = parseCallbackBody(buildFailedBodySchema, body.body);
+  if (parsed instanceof Response) return parsed;
+
+  const failure: FailImageBuildCallback = {
+    buildId: parsed.build_id,
+    providerSessionId: parsed.provider_session_id,
+    errorMessage:
+      typeof parsed.error === "string" && parsed.error.length > 0 ? parsed.error : "Unknown error",
+  };
 
   try {
     const result = await createImageBuildWorkflowFromEnv(env, ctx.db).acceptBuildFailed({

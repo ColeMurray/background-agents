@@ -3,8 +3,8 @@ import {
   type ChildSessionDetail,
   type ChildSessionFinalResponse,
   type ChildSessionTrajectory,
-  type EventResponse,
 } from "@open-inspect/shared";
+import type { EventResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   buildAgentResponseFromEvents,
   getArtifactLabelFromArtifact,

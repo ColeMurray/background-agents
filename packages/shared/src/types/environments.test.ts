@@ -5,6 +5,7 @@ import {
   updateEnvironmentInputSchema,
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
+  listEnvironmentsResponseSchema,
 } from "./index";
 
 describe("isEnvironmentId", () => {
@@ -134,5 +135,42 @@ describe("updateEnvironmentInputSchema", () => {
     expect(updateEnvironmentInputSchema.parse({ channelAssociations: [] })).toEqual({
       channelAssociations: [],
     });
+  });
+});
+
+describe("listEnvironmentsResponseSchema", () => {
+  it("parses a valid environments response with nullable fields", () => {
+    const result = listEnvironmentsResponseSchema.safeParse({
+      environments: [
+        {
+          id: "env_abc",
+          name: "Production",
+          description: null,
+          prebuildEnabled: true,
+          createdAt: 123,
+          updatedAt: 456,
+          repositories: [
+            {
+              repoOwner: "open-inspect",
+              repoName: "background-agents",
+              repoId: null,
+              baseBranch: "main",
+            },
+          ],
+        },
+      ],
+      total: 1,
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects malformed environment entries", () => {
+    const result = listEnvironmentsResponseSchema.safeParse({
+      environments: [{ id: "env_abc", name: "Production" }],
+      total: 1,
+    });
+
+    expect(result.success).toBe(false);
   });
 });

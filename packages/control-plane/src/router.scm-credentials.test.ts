@@ -101,6 +101,11 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
   });
 
+  it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
+    expect(isScmAgnosticRoute("GET", "/scm-settings")).toBe(true);
+    expect(isScmAgnosticRoute("GET", "/scm-settings/repos")).toBe(true);
+  });
+
   it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
     const { env, fetch } = createEnv();
 
@@ -184,5 +189,13 @@ describe("SCM credentials router provider gate", () => {
 
   it("allows GitLab deployments to reach the SCM-independent read-state route", async () => {
     expect(isScmAgnosticRoute("PATCH", "/sessions/session-1/read-state")).toBe(true);
+  });
+
+  it("allows GitLab deployments to read the canonical session resource", () => {
+    expect(isScmAgnosticRoute("GET", "/sessions/session-1")).toBe(true);
+  });
+
+  it("allows GitLab deployments to read sandbox access", () => {
+    expect(isScmAgnosticRoute("GET", "/sessions/session-1/sandbox-access")).toBe(true);
   });
 });

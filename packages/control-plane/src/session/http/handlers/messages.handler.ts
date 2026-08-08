@@ -1,4 +1,5 @@
 import type { Logger } from "../../../logger";
+import { eventTypeSchema } from "@open-inspect/shared/types/sandbox-events";
 import {
   enqueuePromptRequestSchema,
   type EnqueuePromptRequest,
@@ -7,27 +8,6 @@ import type { MessageService } from "../../services/message.service";
 import { parseEventListCursor } from "../../event-cursor";
 import { SessionAttachmentError } from "../../session-attachment-resolver";
 import { SessionNotPromptableError } from "../../message-queue";
-
-/**
- * Valid event types for filtering.
- * Includes both external types (from types.ts) and internal types used by the sandbox.
- */
-const VALID_EVENT_TYPES = [
-  "tool_call",
-  "tool_result",
-  "token",
-  "error",
-  "warning",
-  "git_sync",
-  "step_start",
-  "step_finish",
-  "execution_complete",
-  "heartbeat",
-  "push_complete",
-  "push_error",
-  "artifact",
-  "user_message",
-] as const;
 
 /**
  * Valid message statuses for filtering.
@@ -82,7 +62,7 @@ export function createMessagesHandler(deps: MessagesHandlerDeps): MessagesHandle
       const type = url.searchParams.get("type");
       const messageId = url.searchParams.get("message_id");
 
-      if (type && !VALID_EVENT_TYPES.includes(type as (typeof VALID_EVENT_TYPES)[number])) {
+      if (type && !eventTypeSchema.safeParse(type).success) {
         return Response.json({ error: `Invalid event type: ${type}` }, { status: 400 });
       }
 

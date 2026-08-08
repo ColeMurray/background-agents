@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { runInDurableObject } from "cloudflare:test";
+import type { SessionDO } from "../../src/session/durable-object";
 import {
   collectMessages,
   initNamedSession,
@@ -141,6 +143,55 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     }
   );
 
+  it("refreshes heartbeat on reconnect before an old disconnect alarm runs", async () => {
+    const name = `ws-sandbox-reconnect-heartbeat-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "ready",
+    });
+
+    const { ws: firstWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(firstWs).not.toBeNull();
+    firstWs!.accept();
+
+    const closed = new Promise<void>((resolve) => {
+      firstWs!.addEventListener("close", () => resolve());
+    });
+    firstWs!.close(1001, "Going away");
+    await closed;
+
+    const oldHeartbeat = Date.now() - 10 * 60 * 1000;
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec("UPDATE sandbox SET last_heartbeat = ?", oldHeartbeat);
+    });
+
+    const { ws: reconnectedWs, response } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(response.status).toBe(101);
+    expect(reconnectedWs).not.toBeNull();
+    reconnectedWs!.accept();
+
+    const sandboxAfterReconnect = await queryDO<{ last_heartbeat: number; status: string }>(
+      stub,
+      "SELECT last_heartbeat, status FROM sandbox"
+    );
+    expect(sandboxAfterReconnect[0].last_heartbeat).toBeGreaterThan(oldHeartbeat);
+
+    await runInDurableObject(stub, (instance: SessionDO) => instance.alarm());
+
+    const sandboxAfterAlarm = await queryDO<{ status: string }>(stub, "SELECT status FROM sandbox");
+    expect(sandboxAfterAlarm[0].status).toBe("ready");
+
+    reconnectedWs!.close();
+  });
+
   it("failed sandbox can reconnect and self-heal to ready", async () => {
     const name = `ws-sandbox-selfheal-${Date.now()}`;
     const { stub } = await initNamedSession(name);
@@ -204,6 +255,48 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     expect(matching.length).toBeGreaterThanOrEqual(1);
 
     ws!.close();
+  });
+
+  it("stores and broadcasts context compaction events", async () => {
+    const name = `ws-sandbox-compaction-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const collector = collectMessages(clientWs, {
+      until: (message) =>
+        message.type === "sandbox_event" && message.event.type === "context_compacted",
+    });
+    const event = {
+      type: "context_compacted",
+      messageId: "msg-compaction-1",
+      sandboxId: SANDBOX_ID,
+      timestamp: Date.now() / 1000,
+    } as const;
+    sandboxWs!.send(JSON.stringify(event));
+
+    const messages = await collector;
+    expect(messages).toContainEqual({ type: "sandbox_event", event });
+    const events = await queryDO<{ type: string; data: string; message_id: string }>(
+      stub,
+      "SELECT type, data, message_id FROM events WHERE type = ?",
+      "context_compacted"
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "context_compacted",
+      message_id: "msg-compaction-1",
+    });
+    expect(JSON.parse(events[0].data)).toEqual(event);
+
+    sandboxWs!.close();
+    clientWs.close();
   });
 
   it("accepts step_finish messages with structured token usage", async () => {
