@@ -33,8 +33,10 @@ complexity and correctness cost of maintaining a second mutation log applies to 
    - No session-view revision, retained delta table, or per-socket applied revision is stored.
 
 4. **Sandbox credentials stay outside the canonical snapshot contract**
-   - Clients fetch credentials from the authenticated session-access endpoint.
-   - `session_access_changed` invalidates that access query.
+   - Clients fetch credentials from authenticated `GET /sessions/:id/sandbox-access`.
+   - `sandbox_access_changed` invalidates that access query.
+   - The resource is limited to interactive sandbox services; integration credentials remain in
+     their own domain-specific flows.
    - Credentials are never sent in snapshots or semantic WebSocket messages.
 
 ## Consequences

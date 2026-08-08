@@ -12,7 +12,7 @@ describe("createSessionInternalRoutes", () => {
       init: noopHandler(),
       state: noopHandler(),
       snapshot: noopHandler(),
-      access: noopHandler(),
+      sandboxAccess: noopHandler(),
       prompt: noopHandler(),
       stop: noopHandler(),
       sandboxEvent: noopHandler(),
@@ -52,7 +52,7 @@ describe("createSessionInternalRoutes", () => {
       new Set([
         `POST ${SessionInternalPaths.init}`,
         `GET ${SessionInternalPaths.snapshot}`,
-        `GET ${SessionInternalPaths.access}`,
+        `GET ${SessionInternalPaths.sandboxAccess}`,
         `GET ${SessionInternalPaths.state}`,
         `POST ${SessionInternalPaths.prompt}`,
         `POST ${SessionInternalPaths.stop}`,

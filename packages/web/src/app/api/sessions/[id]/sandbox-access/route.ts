@@ -12,9 +12,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
 
   const { id } = await params;
-  const response = await controlPlaneUserFetch(`/sessions/${encodeURIComponent(id)}/access`, {
-    cache: "no-store",
-  });
+  const response = await controlPlaneUserFetch(
+    `/sessions/${encodeURIComponent(id)}/sandbox-access`,
+    { cache: "no-store" }
+  );
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,

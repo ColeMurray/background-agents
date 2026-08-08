@@ -44,7 +44,7 @@ function getHandler(method: string, path: string) {
 describe("session runtime proxy routes", () => {
   it.each([
     ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
-    ["access", "/sessions/session-1/access", SessionInternalPaths.access],
+    ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
   ])("forwards %s for users and rejects service principals", async (_name, path, internalPath) => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {

@@ -226,7 +226,7 @@ export class SessionDO extends DurableObject<Env> {
     init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
     snapshot: () => this.handleSnapshot(),
-    access: () => this.handleSessionAccess(),
+    sandboxAccess: () => this.handleSandboxAccess(),
     prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
@@ -1786,7 +1786,7 @@ export class SessionDO extends DurableObject<Env> {
     return Response.json(sessionSnapshotSchema.parse(snapshot), { headers });
   }
 
-  private async handleSessionAccess(): Promise<Response> {
+  private async handleSandboxAccess(): Promise<Response> {
     const headers = { "Cache-Control": "private, no-store" };
     if (!this.getSession()) {
       return Response.json({ error: "Session not found" }, { status: 404, headers });

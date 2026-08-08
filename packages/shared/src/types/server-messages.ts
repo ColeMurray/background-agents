@@ -164,7 +164,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("tunnel_urls"), urls: z.record(z.string(), z.string()) }),
   z.object({ type: z.literal("sandbox_dashboard_url"), url: z.string() }),
-  z.object({ type: z.literal("session_access_changed") }),
+  z.object({ type: z.literal("sandbox_access_changed") }),
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
 ]);
 

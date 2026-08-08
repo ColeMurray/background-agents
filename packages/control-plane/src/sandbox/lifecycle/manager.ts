@@ -1042,14 +1042,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.clearSandboxCodeServerUrl();
       this.storage.clearSandboxTunnelUrls();
       this.storage.clearSandboxTtyd();
-      this.broadcaster.broadcast({ type: "session_access_changed" });
+      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       return;
     }
 
     this.storage.clearSandboxCodeServer();
     this.storage.clearSandboxTunnelUrls();
     this.storage.clearSandboxTtyd();
-    this.broadcaster.broadcast({ type: "session_access_changed" });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
@@ -1362,7 +1362,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
     this.log.info("Storing code-server info", { url });
     await this.storage.updateSandboxCodeServer(url, password);
-    this.broadcaster.broadcast({ type: "session_access_changed" });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
@@ -1416,7 +1416,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     this.log.info("Storing ttyd info", { url });
     await this.storage.updateSandboxTtyd(url, token);
-    this.broadcaster.broadcast({ type: "session_access_changed" });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**

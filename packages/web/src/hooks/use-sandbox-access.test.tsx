@@ -7,7 +7,7 @@ import { SWRConfig } from "swr";
 const mocks = vi.hoisted(() => ({ browserApiFetch: vi.fn() }));
 vi.mock("@/lib/browser-api-fetch", () => ({ browserApiFetch: mocks.browserApiFetch }));
 
-import { useSessionAccess } from "./use-session-access";
+import { useSandboxAccess } from "./use-sandbox-access";
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return (
@@ -15,7 +15,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
   );
 }
 
-describe("useSessionAccess", () => {
+describe("useSandboxAccess", () => {
   beforeEach(() => vi.resetAllMocks());
 
   it("fetches credentials only through the client BFF with no-store", async () => {
@@ -25,21 +25,22 @@ describe("useSessionAccess", () => {
         ttyd: null,
       })
     );
-    const { result } = renderHook(() => useSessionAccess("session/one"), { wrapper });
+    const { result } = renderHook(() => useSandboxAccess("session/one"), { wrapper });
 
     await waitFor(() =>
-      expect(result.current.access).toEqual(
+      expect(result.current.sandboxAccess).toEqual(
         expect.objectContaining({ codeServerPassword: "secret" })
       )
     );
-    expect(mocks.browserApiFetch).toHaveBeenCalledWith("/api/sessions/session%2Fone/access", {
-      cache: "no-store",
-    });
+    expect(mocks.browserApiFetch).toHaveBeenCalledWith(
+      "/api/sessions/session%2Fone/sandbox-access",
+      { cache: "no-store" }
+    );
   });
 
   it.each([404, 409])("authoritatively clears credentials on status %s", async (status) => {
     mocks.browserApiFetch.mockResolvedValue(new Response(null, { status }));
-    const { result } = renderHook(() => useSessionAccess("session-1"), { wrapper });
-    await waitFor(() => expect(result.current.access).toBeNull());
+    const { result } = renderHook(() => useSandboxAccess("session-1"), { wrapper });
+    await waitFor(() => expect(result.current.sandboxAccess).toBeNull());
   });
 });

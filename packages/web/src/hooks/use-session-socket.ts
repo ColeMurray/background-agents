@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import { mutate } from "swr";
 import { useSessionTransport } from "@/hooks/use-session-transport";
-import { useSessionAccess } from "@/hooks/use-session-access";
+import { useSandboxAccess } from "@/hooks/use-sandbox-access";
 import {
   ingestLiveSandboxEvent,
   pendingToTokenEvent,
@@ -87,7 +87,11 @@ export function useSessionSocket(
     resolve: (accepted: boolean) => void;
     timeout: ReturnType<typeof setTimeout>;
   } | null>(null);
-  const { access, clear: clearAccess, refresh: refreshAccess } = useSessionAccess(sessionId);
+  const {
+    sandboxAccess,
+    clear: clearSandboxAccess,
+    refresh: refreshSandboxAccess,
+  } = useSandboxAccess(sessionId);
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -127,12 +131,12 @@ export function useSessionSocket(
       if (message.type === "subscribed") {
         console.log("WebSocket subscribed to session");
         pendingTextRef.current = null;
-        void refreshAccess();
+        void refreshSandboxAccess();
         if (message.spawnError && message.session.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
         }
-      } else if (message.type === "session_access_changed") {
-        void refreshAccess();
+      } else if (message.type === "sandbox_access_changed") {
+        void refreshSandboxAccess();
       } else if (message.type === "sandbox_error") {
         console.error("Sandbox error:", message.error);
       } else if (message.type === "error") {
@@ -142,19 +146,19 @@ export function useSessionSocket(
         settlePendingPrompt(true);
       }
 
-      const clearsAccess =
+      const clearsSandboxAccess =
         message.type === "sandbox_spawning" ||
         message.type === "sandbox_error" ||
         (message.type === "sandbox_status" &&
           ["spawning", "stale", "stopped", "failed"].includes(message.status));
-      if (clearsAccess) void clearAccess();
+      if (clearsSandboxAccess) void clearSandboxAccess();
 
       dispatch({ type: "server_message", message });
       for (const key of swrKeysToRevalidate(message, sessionId)) {
         mutate(key);
       }
     },
-    [clearAccess, refreshAccess, sessionId, settlePendingPrompt]
+    [clearSandboxAccess, refreshSandboxAccess, sessionId, settlePendingPrompt]
   );
 
   const handleClose = useCallback(() => {
@@ -293,7 +297,7 @@ export function useSessionSocket(
   const sessionState = state.sessionState
     ? {
         ...state.sessionState,
-        ...(access ?? {}),
+        ...(sandboxAccess ?? {}),
       }
     : null;
 

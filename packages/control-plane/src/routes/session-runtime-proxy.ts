@@ -231,8 +231,8 @@ function lifecycleProxyRoute(
 export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
     method: "GET",
-    routePath: "/sessions/:id/access",
-    internalPath: SessionInternalPaths.access,
+    routePath: "/sessions/:id/sandbox-access",
+    internalPath: SessionInternalPaths.sandboxAccess,
     userOnly: true,
   }),
   simpleProxyRoute({

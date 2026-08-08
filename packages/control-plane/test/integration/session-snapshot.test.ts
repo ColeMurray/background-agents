@@ -60,10 +60,10 @@ describe("session snapshot synchronization", () => {
       event: expect.objectContaining({ type: "git_sync", status: "completed" }),
     });
 
-    const accessResponse = await stub.fetch("http://internal/internal/access");
-    expect(accessResponse.status).toBe(200);
-    expect(accessResponse.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(await accessResponse.json()).toEqual({
+    const sandboxAccessResponse = await stub.fetch("http://internal/internal/sandbox-access");
+    expect(sandboxAccessResponse.status).toBe(200);
+    expect(sandboxAccessResponse.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(await sandboxAccessResponse.json()).toEqual({
       codeServer: { url: "https://code.example.test", password: "code-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
     });
@@ -85,9 +85,9 @@ describe("session snapshot synchronization", () => {
     ws.close();
 
     await queryDO(stub, "UPDATE sandbox SET status = 'failed'");
-    const unavailableAccess = await stub.fetch("http://internal/internal/access");
-    expect(unavailableAccess.status).toBe(409);
-    expect(unavailableAccess.headers.get("Cache-Control")).toBe("private, no-store");
+    const unavailableSandboxAccess = await stub.fetch("http://internal/internal/sandbox-access");
+    expect(unavailableSandboxAccess.status).toBe(409);
+    expect(unavailableSandboxAccess.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
   it("rejects a second subscribe on the same socket", async () => {

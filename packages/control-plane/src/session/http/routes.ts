@@ -23,7 +23,7 @@ export interface SessionInternalRouteHandlers {
   init: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;
   snapshot: SessionInternalRouteHandler;
-  access: SessionInternalRouteHandler;
+  sandboxAccess: SessionInternalRouteHandler;
   prompt: SessionInternalRouteHandler;
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
@@ -68,7 +68,11 @@ export function createSessionInternalRoutes(
     { method: "POST", path: SessionInternalPaths.init, handler: handlers.init },
     { method: "GET", path: SessionInternalPaths.state, handler: handlers.state },
     { method: "GET", path: SessionInternalPaths.snapshot, handler: handlers.snapshot },
-    { method: "GET", path: SessionInternalPaths.access, handler: handlers.access },
+    {
+      method: "GET",
+      path: SessionInternalPaths.sandboxAccess,
+      handler: handlers.sandboxAccess,
+    },
     { method: "POST", path: SessionInternalPaths.prompt, handler: handlers.prompt },
     { method: "POST", path: SessionInternalPaths.stop, handler: handlers.stop },
     { method: "POST", path: SessionInternalPaths.sandboxEvent, handler: handlers.sandboxEvent },
