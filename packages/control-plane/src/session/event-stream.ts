@@ -38,12 +38,14 @@ export class SessionEventStream {
   constructor(private readonly repository: SessionEventStreamRepository) {}
 
   getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionTimeline {
-    const rows = this.repository.getEventsForReplay(limit);
-    const cursor = rows.length > 0 ? cursorFromRow(rows[0]) : null;
+    const rows = this.repository.getEventsForReplay(limit + 1);
+    const hasMore = rows.length > limit;
+    const replayRows = hasMore ? rows.slice(1) : rows;
+    const cursor = replayRows.length > 0 ? cursorFromRow(replayRows[0]) : null;
 
     return {
-      events: parseSessionTimelineEvents(rows),
-      hasMore: rows.length >= limit,
+      events: parseSessionTimelineEvents(replayRows),
+      hasMore,
       cursor,
     };
   }

@@ -38,13 +38,13 @@ function gitSyncEvent(status: "in_progress" | "completed", timestamp: number) {
 
 describe("SessionEventStream", () => {
   describe("getReplay", () => {
-    it("loads replay rows with the default replay limit", () => {
+    it("loads one extra replay row to determine whether history remains", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([]);
 
       stream.getReplay();
 
-      expect(repository.getEventsForReplay).toHaveBeenCalledWith(500);
+      expect(repository.getEventsForReplay).toHaveBeenCalledWith(501);
     });
 
     it("returns parsed replay events and the oldest cursor from the loaded window", () => {
@@ -66,9 +66,10 @@ describe("SessionEventStream", () => {
       });
     });
 
-    it("marks replay as having more when the loaded window reaches the limit", () => {
+    it("marks replay as having more and removes the oldest lookahead row", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
+        eventRow("e0", "git_sync", gitSyncEvent("in_progress", 0), 500, 0),
         eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 1),
         eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 2),
       ]);
@@ -76,6 +77,8 @@ describe("SessionEventStream", () => {
       const replay = stream.getReplay(2);
 
       expect(replay.hasMore).toBe(true);
+      expect(replay.events.map((event) => event.eventId)).toEqual(["e1", "e2"]);
+      expect(replay.cursor).toEqual({ timestamp: 1000, id: "e1", sequence: 1 });
     });
 
     it("skips malformed replay event JSON", () => {
