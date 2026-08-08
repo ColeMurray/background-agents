@@ -2275,9 +2275,11 @@ describe("SchedulerDO", () => {
       }
 
       function threadContextCalls(slackFetch: ReturnType<typeof vi.fn>) {
-        return slackFetch.mock.calls.filter((call) =>
-          String(call[0]).includes("/internal/thread-context")
-        );
+        return slackFetch.mock.calls.filter((call) => {
+          const input = call[0];
+          const url = input instanceof Request ? input.url : String(input);
+          return url.includes("/internal/thread-context");
+        });
       }
 
       it("does not request context for an unmatched reply", async () => {
