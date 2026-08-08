@@ -5,7 +5,7 @@ import { Image, Snapshots } from "@opencomputer/sdk/node";
 import release from "../../sandbox-runtime/src/sandbox_runtime/release.json";
 
 const OPENCODE_VERSION = release.opencode_version;
-const SANDBOX_VERSION = `v${release.managed_runtime_version}-opencode-${OPENCODE_VERSION.replaceAll(".", "-")}`;
+const SANDBOX_VERSION = release.managed_sandbox_version;
 const CODE_SERVER_VERSION = "4.109.5";
 const PYTHON_VERSION = "3.12";
 const AGENT_BROWSER_VERSION = "0.21.2";

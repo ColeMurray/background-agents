@@ -3,11 +3,11 @@
  *
  * Used by CI when building the managed Vercel base-runtime snapshot.
  */
-import { MANAGED_SANDBOX_VERSION, OPENCODE_VERSION } from "../../../runtime-release";
+import release from "../../../../../sandbox-runtime/src/sandbox_runtime/release.json";
 
 export const VERCEL_PYTHON_BIN = "/usr/bin/python3.12";
 export const DEFAULT_VERCEL_RUNTIME = "node24";
-export const VERCEL_SANDBOX_VERSION = MANAGED_SANDBOX_VERSION;
+export const VERCEL_SANDBOX_VERSION = release.managed_sandbox_version;
 export const VERCEL_RUNTIME_WORKDIR = "/tmp/open-inspect-runtime";
 export const VERCEL_LOCAL_RUNTIME_EXTRACT_DIR = `${VERCEL_RUNTIME_WORKDIR}/packages`;
 
@@ -17,7 +17,7 @@ export function buildVercelBootstrapScript(params: { runtimeExtractDir?: string 
   return `
 set -euo pipefail
 
-OPENCODE_VERSION=${shellQuote(OPENCODE_VERSION)}
+OPENCODE_VERSION=${shellQuote(release.opencode_version)}
 CODE_SERVER_VERSION="4.109.5"
 AGENT_BROWSER_VERSION="0.21.2"
 TTYD_VERSION="1.7.7"

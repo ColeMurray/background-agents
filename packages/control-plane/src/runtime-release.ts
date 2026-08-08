@@ -11,4 +11,4 @@ export const MANAGED_RUNTIME_VERSION = release.managed_runtime_version;
  * availability markers instead of durable OAuth credentials.
  */
 export const MIN_COMPATIBLE_RUNTIME_VERSION = release.minimum_compatible_runtime_version;
-export const MANAGED_SANDBOX_VERSION = `v${MANAGED_RUNTIME_VERSION}-opencode-${OPENCODE_VERSION.replaceAll(".", "-")}`;
+export const MANAGED_SANDBOX_VERSION = release.managed_sandbox_version;

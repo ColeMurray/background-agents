@@ -16,7 +16,12 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
-from sandbox_runtime.release import OPENCODE_VERSION as OPENCODE_VERSION
+from sandbox_runtime.release import (
+    MANAGED_RUNTIME_VERSION,
+)
+from sandbox_runtime.release import (
+    OPENCODE_VERSION as OPENCODE_VERSION,
+)
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
@@ -34,6 +39,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # Cache buster - change this to force Modal image rebuild
 # v57: run Modal image builds through the gated main-process entrypoint
 CACHE_BUSTER = "v57-image-build-stdin-launch"
+SANDBOX_VERSION = f"v{MANAGED_RUNTIME_VERSION}-modal-{CACHE_BUSTER}"
 
 # Base image with all development tools
 base_image = (
@@ -195,7 +201,7 @@ base_image = (
             "PNPM_HOME": "/root/.local/share/pnpm",
             "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
             "PYTHONPATH": "/app",
-            "SANDBOX_VERSION": CACHE_BUSTER,
+            "SANDBOX_VERSION": SANDBOX_VERSION,
             # NODE_PATH for globally installed modules (used by custom tools)
             "NODE_PATH": "/usr/lib/node_modules",
         }
