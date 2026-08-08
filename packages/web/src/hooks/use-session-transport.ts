@@ -11,6 +11,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
 // WebSocket close codes
 const WS_CLOSE_AUTH_REQUIRED = 4001;
 const WS_CLOSE_SESSION_EXPIRED = 4002;
+const WS_CLOSE_INVALID_MESSAGE = 4004;
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -44,13 +45,12 @@ function closeDirective(
   if (event.code === WS_CLOSE_SESSION_EXPIRED) {
     return { action: "session_expired" };
   }
-  if (event.wasClean) {
-    return { action: "none" };
+  if (!event.wasClean || event.code === WS_CLOSE_INVALID_MESSAGE) {
+    return attemptsSoFar < MAX_RECONNECT_ATTEMPTS
+      ? { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) }
+      : { action: "give_up" };
   }
-  if (attemptsSoFar < MAX_RECONNECT_ATTEMPTS) {
-    return { action: "retry", delayMs: reconnectDelayMs(attemptsSoFar) };
-  }
-  return { action: "give_up" };
+  return { action: "none" };
 }
 
 export interface SessionTransportHandlers {
@@ -188,10 +188,15 @@ export function useSessionTransport(
     try {
       const raw: unknown = JSON.parse(event.data);
       const data = parseWsMessage(raw);
-      if (!data) return;
+      if (!data) {
+        console.error("Received invalid WebSocket message");
+        ws.close(WS_CLOSE_INVALID_MESSAGE, "Invalid server message");
+        return;
+      }
       handlersRef.current.onMessage(data);
     } catch (error) {
       console.error("Failed to parse WebSocket message:", error);
+      ws.close(WS_CLOSE_INVALID_MESSAGE, "Invalid server message");
     }
   }, []);
 

@@ -103,6 +103,19 @@ describe("session view contracts", () => {
     ).toBe(false);
   });
 
+  it("rejects a subscribed snapshot for a different session", () => {
+    expect(
+      serverMessageSchema.safeParse({
+        type: "subscribed",
+        sessionId: "different-session",
+        state: bootstrapState,
+        artifacts: [],
+        participantId: "participant-1",
+        replay: { events: [], hasMore: false, cursor: null },
+      }).success
+    ).toBe(false);
+  });
+
   it.each([
     {
       type: "subscribed",

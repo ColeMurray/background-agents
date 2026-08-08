@@ -9,7 +9,7 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
 
   try {
     const bootstrap = await getSessionBootstrap(id);
-    return <SessionClient sessionId={id} initialBootstrap={bootstrap} />;
+    return <SessionClient key={id} sessionId={id} initialBootstrap={bootstrap} />;
   } catch (error) {
     if (error instanceof SessionBootstrapError) {
       if (error.status === 401) redirect("/login");

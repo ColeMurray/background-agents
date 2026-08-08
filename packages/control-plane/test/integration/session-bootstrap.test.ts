@@ -67,6 +67,7 @@ describe("session snapshot synchronization", () => {
 
     const accessResponse = await stub.fetch("http://internal/internal/access");
     expect(accessResponse.status).toBe(200);
+    expect(accessResponse.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await accessResponse.json()).toEqual({
       codeServer: { url: "https://code.example.test", password: "code-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
@@ -83,6 +84,10 @@ describe("session snapshot synchronization", () => {
       await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
       await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY)
     );
+
+    const unavailableAccess = await stub.fetch("http://internal/internal/access");
+    expect(unavailableAccess.status).toBe(409);
+    expect(unavailableAccess.headers.get("Cache-Control")).toBe("private, no-store");
 
     const { ws, messages } = await openClientWs(name, { subscribe: true });
 

@@ -1719,7 +1719,10 @@ export class SessionDO extends DurableObject<Env> {
     if (!this.env.REPO_SECRETS_ENCRYPTION_KEY) return value;
     try {
       return await decryptToken(value, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-    } catch {
+    } catch (error) {
+      this.log.warn("Failed to decrypt stored sandbox access value", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -1800,15 +1803,16 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private async handleSessionAccess(): Promise<Response> {
+    const headers = { "Cache-Control": "private, no-store" };
     if (!this.getSession()) {
-      return Response.json({ error: "Session not found" }, { status: 404 });
+      return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
     const sandbox = this.getSandbox();
     if (!sandbox) {
-      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409 });
+      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
     if (sandbox.status !== "ready" && sandbox.status !== "running") {
-      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409 });
+      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
 
     const [codeServerPassword, ttydToken] = await Promise.all([
@@ -1825,10 +1829,7 @@ export class SessionDO extends DurableObject<Env> {
       current.ttyd_url !== sandbox.ttyd_url ||
       current.ttyd_token !== sandbox.ttyd_token
     ) {
-      return Response.json(
-        { error: "Sandbox access changed; retry" },
-        { status: 409, headers: { "Cache-Control": "private, no-store" } }
-      );
+      return Response.json({ error: "Sandbox access changed; retry" }, { status: 409, headers });
     }
     return Response.json(
       {
@@ -1838,7 +1839,7 @@ export class SessionDO extends DurableObject<Env> {
             : null,
         ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
       },
-      { headers: { "Cache-Control": "private, no-store" } }
+      { headers }
     );
   }
 

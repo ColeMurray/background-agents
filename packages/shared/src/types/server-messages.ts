@@ -114,7 +114,7 @@ export const sessionBootstrapSchema = z
   });
 export type SessionBootstrap = z.infer<typeof sessionBootstrapSchema>;
 
-export const serverMessageSchema = z.discriminatedUnion("type", [
+const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
   z.object({
     type: z.literal("subscribed"),
@@ -132,7 +132,10 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("prompt_queued"), messageId: z.string(), position: z.number() }),
   z.object({ type: z.literal("sandbox_event"), event: sandboxEventSchema }),
-  z.object({ type: z.literal("presence_sync"), participants: z.array(participantPresenceSchema) }),
+  z.object({
+    type: z.literal("presence_sync"),
+    participants: z.array(participantPresenceSchema),
+  }),
   z.object({
     type: z.literal("presence_update"),
     participants: z.array(participantPresenceSchema),
@@ -184,5 +187,13 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("session_access_changed") }),
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
 ]);
+
+export const serverMessageSchema = serverMessageUnionSchema.refine(
+  (message) => message.type !== "subscribed" || message.sessionId === message.state.id,
+  {
+    message: "Subscribed sessionId must match state.id",
+    path: ["sessionId"],
+  }
+);
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;

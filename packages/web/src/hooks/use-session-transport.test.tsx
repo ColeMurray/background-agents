@@ -110,18 +110,40 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
-  it("forwards schema-valid messages to onMessage and drops the rest", async () => {
+  it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 
     act(() => {
       socket.receive({ type: "pong", timestamp: 5 });
-      socket.receiveRaw(JSON.stringify({ type: "not_a_message" }));
-      socket.receiveRaw("not json");
     });
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith({ type: "pong", timestamp: 5 });
   });
+
+  it.each([JSON.stringify({ type: "not_a_message" }), "not json"])(
+    "reconnects after an invalid server message: %s",
+    async (payload) => {
+      vi.useFakeTimers();
+      const rendered = renderTransport();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const socket = FakeWebSocket.instances[0];
+      act(() => {
+        socket.open();
+        socket.receiveRaw(payload);
+      });
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      rendered.unmount();
+    }
+  );
 
   it("surfaces an auth error when the token endpoint returns 401 and opens no socket", async () => {
     fetchMock.mockResolvedValue(new Response("unauthorized", { status: 401 }));

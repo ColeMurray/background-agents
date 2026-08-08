@@ -78,6 +78,10 @@ function sortedTimelineEvents(items: SessionTimelineEvent[]): SessionTimelineEve
   );
 }
 
+function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
+  return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
+}
+
 export function createSessionSocketState(bootstrap: SessionBootstrap): SessionSocketState {
   const timelineEvents = sortedTimelineEvents(bootstrap.replay.events);
   return {
@@ -89,7 +93,7 @@ export function createSessionSocketState(bootstrap: SessionBootstrap): SessionSo
     },
     artifacts: bootstrap.artifacts.map(toUiArtifact),
     timelineEvents,
-    events: timelineEvents.map((item) => toUiSandboxEvent(item.event)),
+    events: renderTimelineEvents(timelineEvents),
     hasMoreHistory: bootstrap.replay.hasMore,
     cursor: bootstrap.replay.cursor,
   };
@@ -179,9 +183,7 @@ function reduceServerMessage(
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
-        events: collapseReplayTokenEvents(
-          timelineEvents.map((item) => toUiSandboxEvent(item.event))
-        ),
+        events: renderTimelineEvents(timelineEvents),
         timelineEvents,
         hasMoreHistory: message.replay.hasMore,
         cursor: message.replay.cursor,
@@ -199,7 +201,7 @@ function reduceServerMessage(
       return {
         ...state,
         timelineEvents: sortedTimelineEvents([...state.timelineEvents, ...olderItems]),
-        events: [...olderItems.map((item) => toUiSandboxEvent(item.event)), ...state.events],
+        events: [...renderTimelineEvents(olderItems), ...state.events],
         hasMoreHistory: message.hasMore,
         cursor: message.cursor,
         loadingHistory: false,

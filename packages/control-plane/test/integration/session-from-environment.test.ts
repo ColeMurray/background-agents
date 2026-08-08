@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
 import type { SessionState } from "@open-inspect/shared";
+import { sessionBootstrapSchema } from "@open-inspect/shared/types/server-messages";
 import type { SessionDO } from "../../src/session/durable-object";
 import { EnvironmentStore } from "../../src/db/environments";
 import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";
@@ -62,7 +63,8 @@ function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string>
 
 async function getSessionState(stub: DurableObjectStub): Promise<SessionState> {
   const response = await stub.fetch("http://internal/internal/bootstrap");
-  const bootstrap = await response.json<{ state: SessionState }>();
+  expect(response.ok).toBe(true);
+  const bootstrap = sessionBootstrapSchema.parse(await response.json());
   return bootstrap.state;
 }
 

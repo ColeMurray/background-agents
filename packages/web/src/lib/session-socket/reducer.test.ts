@@ -91,6 +91,55 @@ describe("sessionSocketReducer", () => {
       expect(state.events).toHaveLength(1);
       expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
     });
+
+    it("collapses bootstrap token snapshots to the final text", () => {
+      const state = createSessionSocketState(
+        createBootstrap({
+          replay: {
+            events: [
+              {
+                eventId: "token-1",
+                timelineSequence: 1,
+                event: {
+                  type: "token",
+                  content: "Partial",
+                  messageId: "msg-1",
+                  sandboxId: "sb-1",
+                  timestamp: 1,
+                },
+              },
+              {
+                eventId: "token-2",
+                timelineSequence: 2,
+                event: {
+                  type: "token",
+                  content: "Final",
+                  messageId: "msg-1",
+                  sandboxId: "sb-1",
+                  timestamp: 2,
+                },
+              },
+              {
+                eventId: "complete-1",
+                timelineSequence: 3,
+                event: {
+                  type: "execution_complete",
+                  messageId: "msg-1",
+                  success: true,
+                  sandboxId: "sb-1",
+                  timestamp: 3,
+                },
+              },
+            ],
+            hasMore: false,
+            cursor: null,
+          },
+        })
+      );
+
+      expect(state.events.map((event) => event.type)).toEqual(["token", "execution_complete"]);
+      expect(state.events[0]).toEqual(expect.objectContaining({ content: "Final" }));
+    });
   });
 
   describe("subscribed", () => {
@@ -311,6 +360,55 @@ describe("sessionSocketReducer", () => {
       expect(state.hasMoreHistory).toBe(false);
       expect(state.cursor).toBeNull();
       expect(state.events.map((event) => event.timestamp)).toEqual([5, 10, 11]);
+    });
+
+    it("collapses token snapshots within a history page", () => {
+      const state = reduce(
+        subscribedState(),
+        serverMessage({
+          type: "history_page",
+          items: [
+            {
+              eventId: "token-1",
+              timelineSequence: 1,
+              event: {
+                type: "token",
+                content: "Partial",
+                messageId: "msg-1",
+                sandboxId: "sb-1",
+                timestamp: 1,
+              },
+            },
+            {
+              eventId: "token-2",
+              timelineSequence: 2,
+              event: {
+                type: "token",
+                content: "Final",
+                messageId: "msg-1",
+                sandboxId: "sb-1",
+                timestamp: 2,
+              },
+            },
+            {
+              eventId: "complete-1",
+              timelineSequence: 3,
+              event: {
+                type: "execution_complete",
+                messageId: "msg-1",
+                success: true,
+                sandboxId: "sb-1",
+                timestamp: 3,
+              },
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        })
+      );
+
+      expect(state.events.map((event) => event.type)).toEqual(["token", "execution_complete"]);
+      expect(state.events[0]).toEqual(expect.objectContaining({ content: "Final" }));
     });
 
     it("clears a stuck loadingHistory when a new subscribed snapshot arrives", () => {
