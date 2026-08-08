@@ -29,8 +29,9 @@ function createProcessor() {
     upsertTokenEvent: vi.fn(),
     upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
-    createArtifactAndEventWithViewDelta: vi.fn(),
+    createArtifactAndEvent: vi.fn(),
     createEvent: vi.fn(),
+    createGitSyncEvent: vi.fn(),
     addSessionCost: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
     // The real repository stops reporting a processing message once it is
@@ -44,17 +45,6 @@ function createProcessor() {
     updateSandboxGitSyncStatus: vi.fn(),
     updateSessionCurrentSha: vi.fn(),
   };
-  Object.assign(repository, {
-    upsertTokenEventWithViewDelta: repository.upsertTokenEvent,
-    upsertToolCallEventWithViewDelta: repository.upsertToolCallEvent,
-    createArtifactWithViewDelta: repository.createArtifact,
-    createEventWithViewDelta: repository.createEvent,
-    createGitSyncEventWithViewDelta: repository.createEvent,
-    addSessionCostWithViewDelta: repository.addSessionCost,
-    upsertExecutionCompleteEventWithViewDelta: repository.upsertExecutionCompleteEvent,
-    updateMessageCompletionWithViewDelta: repository.updateMessageCompletion,
-  });
-
   const callbackService = {
     notifyToolCall: vi.fn(async () => {}),
     notifyComplete: vi.fn(async () => {}),
@@ -241,7 +231,7 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.createArtifactAndEventWithViewDelta).toHaveBeenCalledWith(
+    expect(h.repository.createArtifactAndEvent).toHaveBeenCalledWith(
       {
         id: expect.any(String),
         type: "screenshot",

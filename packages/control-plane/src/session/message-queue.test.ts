@@ -87,8 +87,6 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
     status: "active",
     lastSeen: 1000,
     clientId: "client-1",
-    viewProtocol: 1,
-    appliedViewRevision: 0,
     ws: {} as WebSocket,
     ...overrides,
   };
@@ -113,14 +111,6 @@ function buildQueue() {
     updateMessageCompletion: vi.fn(),
     upsertExecutionCompleteEvent: vi.fn(),
   };
-  Object.assign(repository, {
-    createMessageWithAttachmentsWithViewDelta: repository.createMessageWithAttachments,
-    createEventWithViewDelta: repository.createEvent,
-    updateMessageToProcessingWithViewDelta: repository.updateMessageToProcessing,
-    updateMessageCompletionWithViewDelta: repository.updateMessageCompletion,
-    upsertExecutionCompleteEventWithViewDelta: repository.upsertExecutionCompleteEvent,
-  });
-
   const attachmentRepository = {
     getUnreferenced: vi.fn((): SessionAttachmentRow[] => []),
   };

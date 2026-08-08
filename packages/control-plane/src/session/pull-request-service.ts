@@ -99,18 +99,7 @@ export interface PullRequestRepository {
   getSession(): SessionRow | null;
   getSessionRepositories(): SessionRepositoryEntry[];
   updateSessionBranch(sessionId: string, branchName: string): void;
-  updateSessionBranchWithViewDelta?(
-    sessionId: string,
-    branchName: string,
-    updatedAt: number
-  ): number;
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
-  updateSessionRepositoryBranchWithViewDelta?(
-    repoOwner: string,
-    repoName: string,
-    branchName: string,
-    updatedAt: number
-  ): number;
   listArtifacts(): ArtifactRow[];
   createArtifact(data: {
     id: string;
@@ -119,13 +108,6 @@ export interface PullRequestRepository {
     metadata: string | null;
     createdAt: number;
   }): void;
-  createArtifactWithViewDelta?(data: {
-    id: string;
-    type: "pr" | "branch";
-    url: string | null;
-    metadata: string | null;
-    createdAt: number;
-  }): number;
 }
 
 /**
@@ -299,31 +281,14 @@ export class SessionPullRequestService {
       }
 
       if (memberRow && memberRow.branch_name !== sanitizedHeadBranch) {
-        if (this.deps.repository.updateSessionRepositoryBranchWithViewDelta) {
-          this.deps.repository.updateSessionRepositoryBranchWithViewDelta(
-            memberRow.repo_owner,
-            memberRow.repo_name,
-            sanitizedHeadBranch,
-            Date.now()
-          );
-        } else {
-          this.deps.repository.updateSessionRepositoryBranch(
-            memberRow.repo_owner,
-            memberRow.repo_name,
-            sanitizedHeadBranch
-          );
-        }
+        this.deps.repository.updateSessionRepositoryBranch(
+          memberRow.repo_owner,
+          memberRow.repo_name,
+          sanitizedHeadBranch
+        );
       }
       if (isPrimary && session.branch_name !== sanitizedHeadBranch) {
-        if (this.deps.repository.updateSessionBranchWithViewDelta) {
-          this.deps.repository.updateSessionBranchWithViewDelta(
-            session.id,
-            sanitizedHeadBranch,
-            Date.now()
-          );
-        } else {
-          this.deps.repository.updateSessionBranch(session.id, sanitizedHeadBranch);
-        }
+        this.deps.repository.updateSessionBranch(session.id, sanitizedHeadBranch);
       }
       // Broadcast even when the stored branch is already current so connected clients converge
       // after missed or out-of-order updates.
@@ -370,10 +335,7 @@ export class SessionPullRequestService {
         providerUpdatedAt: prResult.providerUpdatedAt,
       };
       const artifactMetadata = mergeSnapshotMetadata({}, snapshot);
-      const createArtifact =
-        this.deps.repository.createArtifactWithViewDelta?.bind(this.deps.repository) ??
-        this.deps.repository.createArtifact.bind(this.deps.repository);
-      createArtifact({
+      this.deps.repository.createArtifact({
         id: artifactId,
         type: "pr",
         url: prResult.webUrl,

@@ -64,19 +64,11 @@ export interface SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
 
   /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(
-    wsId: string,
-    participantId: string,
-    clientId: string,
-    viewProtocol?: 1 | 2,
-    appliedViewRevision?: number
-  ): void;
+  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
 
-  getClientViewState(
-    ws: WebSocket
-  ): { wsId: string; viewProtocol: 1 | 2; appliedViewRevision: number } | null;
-  advanceClientViewRevision(ws: WebSocket, revision: number): void;
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
+  isClientSynchronizing(ws: WebSocket): boolean;
+  isClientAuthenticated(ws: WebSocket): boolean;
 
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
   hasPersistedMapping(wsId: string): boolean;
@@ -244,56 +236,26 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return this.repository.getWsClientMapping(parsed.wsId);
   }
 
-  persistClientMapping(
-    wsId: string,
-    participantId: string,
-    clientId: string,
-    viewProtocol: 1 | 2 = 1,
-    appliedViewRevision = 0
-  ): void {
+  persistClientMapping(wsId: string, participantId: string, clientId: string): void {
     this.repository.upsertWsClientMapping({
       wsId,
       participantId,
       clientId,
-      viewProtocol,
-      appliedViewRevision,
       createdAt: Date.now(),
     });
-  }
-
-  getClientViewState(
-    ws: WebSocket
-  ): { wsId: string; viewProtocol: 1 | 2; appliedViewRevision: number } | null {
-    const parsed = this.classify(ws);
-    if (parsed.kind !== "client" || !parsed.wsId) return null;
-    const client = this.clients.get(ws);
-    if (client) {
-      return {
-        wsId: parsed.wsId,
-        viewProtocol: client.viewProtocol,
-        appliedViewRevision: client.appliedViewRevision,
-      };
-    }
-    const mapping = this.repository.getWsClientMapping(parsed.wsId);
-    if (!mapping) return null;
-    return {
-      wsId: parsed.wsId,
-      viewProtocol: mapping.view_protocol ?? 1,
-      appliedViewRevision: mapping.applied_view_revision ?? 0,
-    };
-  }
-
-  advanceClientViewRevision(ws: WebSocket, revision: number): void {
-    const state = this.getClientViewState(ws);
-    if (!state || revision <= state.appliedViewRevision) return;
-    this.repository.updateWsClientViewRevision(state.wsId, revision);
-    const client = this.clients.get(ws);
-    if (client) client.appliedViewRevision = revision;
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
     if (synchronizing) this.synchronizingClients.add(ws);
     else this.synchronizingClients.delete(ws);
+  }
+
+  isClientSynchronizing(ws: WebSocket): boolean {
+    return this.synchronizingClients.has(ws);
+  }
+
+  isClientAuthenticated(ws: WebSocket): boolean {
+    return this.isAuthenticated(ws, this.classify(ws));
   }
 
   hasPersistedMapping(wsId: string): boolean {

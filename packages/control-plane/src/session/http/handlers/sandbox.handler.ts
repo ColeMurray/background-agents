@@ -30,7 +30,7 @@ type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 export interface SandboxHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "createParticipant" | "createArtifactAndEventWithViewDelta" | "getProcessingMessage"
+    "createParticipant" | "createArtifactAndEvent" | "getProcessingMessage"
   >;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
@@ -128,7 +128,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         timestamp: timestampSeconds,
       };
 
-      deps.repository.createArtifactAndEventWithViewDelta(
+      deps.repository.createArtifactAndEvent(
         {
           id: artifact.id,
           type: artifact.type,

@@ -41,7 +41,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
 
   const repository = {
     getSession: vi.fn(() => session),
-    updateSessionStatusWithViewDelta: vi.fn(),
+    updateSessionStatus: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 3),
     getActiveDurationMs: vi.fn(() => 4500),
@@ -106,7 +106,7 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("active")).toBe(false);
 
-    expect(h.repository.updateSessionStatusWithViewDelta).not.toHaveBeenCalled();
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
     expect(h.sessionIndex!.updateStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
   });
@@ -116,12 +116,12 @@ describe("SessionStatusService.transition", () => {
 
     expect(await h.service.transition("active")).toBe(true);
 
-    expect(h.repository.updateSessionStatusWithViewDelta).toHaveBeenCalledWith(
+    expect(h.repository.updateSessionStatus).toHaveBeenCalledWith(
       "session-1",
       "active",
       expect.any(Number)
     );
-    const updatedAt = h.repository.updateSessionStatusWithViewDelta.mock.calls[0][2] as number;
+    const updatedAt = h.repository.updateSessionStatus.mock.calls[0][2] as number;
     expect(updatedAt).toBeGreaterThan(2000);
     expect(h.sessionIndex!.updateStatus).toHaveBeenCalledWith(
       "public-session-1",
@@ -137,7 +137,7 @@ describe("SessionStatusService.transition", () => {
     expect(await h.service.transition("active")).toBe(false);
 
     expect(h.sessionIndex!.updateStatus).toHaveBeenCalledWith("public-session-1", "active", 2000);
-    expect(h.repository.updateSessionStatusWithViewDelta).not.toHaveBeenCalled();
+    expect(h.repository.updateSessionStatus).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.parentFetch).not.toHaveBeenCalled();
   });

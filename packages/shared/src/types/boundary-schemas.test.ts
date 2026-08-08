@@ -559,54 +559,15 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("parses legacy and V2 subscribe messages", () => {
+    it("parses a complete subscribe message", () => {
       expect(
         clientMessageSchema.safeParse({
           type: "subscribe",
           token: "ws-token",
           clientId: "client-1",
-        }).success
-      ).toBe(true);
-      expect(
-        clientMessageSchema.safeParse({
-          type: "subscribe",
-          token: "ws-token",
-          clientId: "client-1",
-          viewProtocol: 2,
-          resumeRevision: 7,
-          forceSnapshot: false,
         }).success
       ).toBe(true);
     });
-
-    it.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
-      "rejects invalid V2 resume revision %s",
-      (resumeRevision) => {
-        expect(
-          clientMessageSchema.safeParse({
-            type: "subscribe",
-            token: "ws-token",
-            clientId: "client-1",
-            viewProtocol: 2,
-            resumeRevision,
-          }).success
-        ).toBe(false);
-      }
-    );
-
-    it.each([{ resumeRevision: 1 }, { forceSnapshot: true }])(
-      "rejects V2 fields without viewProtocol: %o",
-      (fields) => {
-        expect(
-          clientMessageSchema.safeParse({
-            type: "subscribe",
-            token: "ws-token",
-            clientId: "client-1",
-            ...fields,
-          }).success
-        ).toBe(false);
-      }
-    );
 
     it("parses presence messages with an omitted cursor", () => {
       const result = clientMessageSchema.safeParse({
@@ -688,9 +649,23 @@ describe("boundary schemas", () => {
         participantId: "participant-1",
         replay: {
           events: [
-            { type: "ready", sandboxId: "sandbox-1", opencodeSessionId: null, timestamp: 1 },
-            { type: "some_future_event", foo: "bar", timestamp: 2 },
-            { type: "token", content: "hi", messageId: "m1", sandboxId: "sandbox-1", timestamp: 3 },
+            {
+              eventId: "event-1",
+              timelineSequence: 1,
+              event: { type: "ready", sandboxId: "sandbox-1", timestamp: 1 },
+            },
+            { eventId: "event-2", timelineSequence: 2, event: { type: "future" } },
+            {
+              eventId: "event-3",
+              timelineSequence: 3,
+              event: {
+                type: "token",
+                content: "hi",
+                messageId: "m1",
+                sandboxId: "sandbox-1",
+                timestamp: 3,
+              },
+            },
           ],
           hasMore: false,
           cursor: null,
@@ -700,7 +675,10 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.replay?.events.map((event) => event.type)).toEqual(["ready", "token"]);
+        expect(result.data.replay.events.map((item) => item.event.type)).toEqual([
+          "ready",
+          "token",
+        ]);
       }
     });
 
@@ -708,8 +686,17 @@ describe("boundary schemas", () => {
       const result = serverMessageSchema.safeParse({
         type: "history_page",
         items: [
-          { type: "some_legacy_event", foo: "bar", timestamp: 1 },
-          { type: "git_sync", status: "completed", sandboxId: "sandbox-1", timestamp: 2 },
+          { eventId: "event-1", timelineSequence: 1, event: { type: "future" } },
+          {
+            eventId: "event-2",
+            timelineSequence: 2,
+            event: {
+              type: "git_sync",
+              status: "completed",
+              sandboxId: "sandbox-1",
+              timestamp: 2,
+            },
+          },
         ],
         hasMore: false,
         cursor: null,
@@ -717,7 +704,7 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success && result.data.type === "history_page") {
-        expect(result.data.items.map((item) => item.type)).toEqual(["git_sync"]);
+        expect(result.data.items.map((item) => item.event.type)).toEqual(["git_sync"]);
       }
     });
 

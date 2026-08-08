@@ -4,22 +4,7 @@ import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
 
-/**
- * Sandbox event arrays for session hydration — both the initial `subscribed`
- * replay and paginated `history_page` items, which read from the same event
- * store. Resilient to unknown/legacy event shapes: each event is validated
- * individually and dropped if it doesn't match, instead of failing the whole
- * message. A single unrecognized event must never wedge session hydration and
- * strand the client on "loading session" forever.
- */
-const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
-  events.flatMap((event) => {
-    const result = sandboxEventSchema.safeParse(event);
-    return result.success ? [result.data] : [];
-  })
-);
-
-export const viewRevisionSchema = z.number().int().nonnegative().safe();
+const timelineSequenceSchema = z.number().int().nonnegative().safe();
 
 const sessionStateSchema = z.object({
   id: z.string(),
@@ -85,38 +70,39 @@ const historyCursorSchema = z.object({
   sequence: z.number().int().nonnegative().optional(),
 });
 
-export const sessionViewEventSchema = z
+export const sessionTimelineEventSchema = z
   .object({
     eventId: z.string().min(1),
-    timelineSequence: viewRevisionSchema,
+    timelineSequence: timelineSequenceSchema,
     event: sandboxEventSchema,
   })
   .strict();
-export type SessionViewEvent = z.infer<typeof sessionViewEventSchema>;
+export type SessionTimelineEvent = z.infer<typeof sessionTimelineEventSchema>;
 
-const sessionViewEventEnvelopeSchema = z
+const sessionTimelineEventEnvelopeSchema = z
   .object({
     eventId: z.string().min(1),
-    timelineSequence: viewRevisionSchema,
+    timelineSequence: timelineSequenceSchema,
     event: z.unknown(),
   })
   .strict();
 
-const tolerantSessionViewEventsSchema = z.array(sessionViewEventEnvelopeSchema).transform((items) =>
-  items.flatMap((item) => {
-    const event = sandboxEventSchema.safeParse(item.event);
-    return event.success ? [{ ...item, event: event.data }] : [];
-  })
-);
+const tolerantSessionTimelineEventsSchema = z
+  .array(sessionTimelineEventEnvelopeSchema)
+  .transform((items) =>
+    items.flatMap((item) => {
+      const event = sandboxEventSchema.safeParse(item.event);
+      return event.success ? [{ ...item, event: event.data }] : [];
+    })
+  );
 
 export const sessionBootstrapSchema = z
   .object({
     sessionId: z.string(),
-    viewRevision: viewRevisionSchema,
     state: sessionBootstrapStateSchema,
     artifacts: z.array(sessionArtifactSchema),
     replay: z.object({
-      events: tolerantSessionViewEventsSchema,
+      events: tolerantSessionTimelineEventsSchema,
       hasMore: z.boolean(),
       cursor: historyCursorSchema.nullable(),
     }),
@@ -128,55 +114,20 @@ export const sessionBootstrapSchema = z
   });
 export type SessionBootstrap = z.infer<typeof sessionBootstrapSchema>;
 
-export const sessionStatePatchSchema = z
-  .object({
-    title: z.string().nullable().optional(),
-    branchName: z.string().nullable().optional(),
-    status: sessionStatusSchema.optional(),
-    sandboxStatus: sandboxStatusSchema.optional(),
-    messageCount: z.number().int().nonnegative().optional(),
-    isProcessing: z.boolean().optional(),
-    totalCost: z.number().nonnegative().optional(),
-    codeServerUrl: z.string().nullable().optional(),
-    tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
-    ttydUrl: z.string().nullable().optional(),
-    sandboxDashboardUrl: z.string().nullable().optional(),
-    repositories: z.array(sessionRepositoryStateSchema).optional(),
-  })
-  .strict()
-  .refine((patch) => Object.keys(patch).length > 0, {
-    message: "Session state patch must contain at least one field",
-  });
-export type SessionStatePatch = z.infer<typeof sessionStatePatchSchema>;
-
-export const sessionViewOperationSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("state_patch"), patch: sessionStatePatchSchema }).strict(),
-  z.object({ type: z.literal("event_upsert"), item: sessionViewEventSchema }).strict(),
-  z.object({ type: z.literal("artifact_upsert"), artifact: sessionArtifactSchema }).strict(),
-]);
-export type SessionViewOperation = z.infer<typeof sessionViewOperationSchema>;
-
-export const sessionDeltaSchema = z.object({
-  operations: z.array(sessionViewOperationSchema).min(1),
-});
-export type SessionDelta = z.infer<typeof sessionDeltaSchema>;
-
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
   z.object({
     type: z.literal("subscribed"),
     sessionId: z.string(),
-    state: sessionStateSchema,
+    state: sessionBootstrapStateSchema,
     artifacts: z.array(sessionArtifactSchema),
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
-    replay: z
-      .object({
-        events: tolerantSandboxEventsSchema,
-        hasMore: z.boolean(),
-        cursor: historyCursorSchema.nullable(),
-      })
-      .optional(),
+    replay: z.object({
+      events: tolerantSessionTimelineEventsSchema,
+      hasMore: z.boolean(),
+      cursor: historyCursorSchema.nullable(),
+    }),
     spawnError: z.string().nullable().optional(),
   }),
   z.object({ type: z.literal("prompt_queued"), messageId: z.string(), position: z.number() }),
@@ -216,7 +167,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("history_page"),
-    items: tolerantSandboxEventsSchema,
+    items: tolerantSessionTimelineEventsSchema,
     hasMore: z.boolean(),
     cursor: historyCursorSchema.nullable(),
   }),
@@ -228,34 +179,8 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     status: sessionStatusSchema,
     title: z.string().nullable(),
   }),
-  z.object({ type: z.literal("code_server_info"), url: z.string(), password: z.string() }),
-  z.object({ type: z.literal("ttyd_info"), url: z.string(), token: z.string() }),
   z.object({ type: z.literal("tunnel_urls"), urls: z.record(z.string(), z.string()) }),
   z.object({ type: z.literal("sandbox_dashboard_url"), url: z.string() }),
-  z.object({
-    type: z.literal("session_sync_started"),
-    mode: z.enum(["resume", "snapshot"]),
-    targetRevision: viewRevisionSchema,
-  }),
-  z.object({
-    type: z.literal("session_delta"),
-    revision: viewRevisionSchema,
-    delta: sessionDeltaSchema,
-  }),
-  z.object({ type: z.literal("session_snapshot"), bootstrap: sessionBootstrapSchema }),
-  z.object({
-    type: z.literal("session_history_page"),
-    items: tolerantSessionViewEventsSchema,
-    hasMore: z.boolean(),
-    cursor: historyCursorSchema.nullable(),
-  }),
-  z.object({
-    type: z.literal("session_ready"),
-    sessionId: z.string(),
-    participantId: z.string(),
-    participant: participantSummarySchema.optional(),
-    appliedRevision: viewRevisionSchema,
-  }),
   z.object({ type: z.literal("session_access_changed") }),
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
 ]);

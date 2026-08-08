@@ -1,24 +1,9 @@
 import { z } from "zod";
 import { sessionAttachmentReferencesSchema } from "./session-attachments";
-import { viewRevisionSchema } from "./server-messages";
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
-  z
-    .object({
-      type: z.literal("subscribe"),
-      token: z.string(),
-      clientId: z.string(),
-      viewProtocol: z.literal(2).optional(),
-      resumeRevision: viewRevisionSchema.optional(),
-      forceSnapshot: z.boolean().optional(),
-    })
-    .refine(
-      (message) =>
-        message.viewProtocol === 2 ||
-        (message.resumeRevision === undefined && message.forceSnapshot === undefined),
-      { message: "V2 subscription fields require viewProtocol 2", path: ["viewProtocol"] }
-    ),
+  z.object({ type: z.literal("subscribe"), token: z.string(), clientId: z.string() }),
   z.object({
     type: z.literal("prompt"),
     content: z.string(),

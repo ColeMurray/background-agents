@@ -137,12 +137,6 @@ export interface ArtifactRow {
   updated_at: number;
 }
 
-export interface SessionViewDeltaRow {
-  revision: number;
-  payload: string;
-  created_at: number;
-}
-
 export interface SandboxRow {
   id: string;
   modal_sandbox_id: string | null; // Our generated sandbox ID

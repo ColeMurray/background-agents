@@ -45,7 +45,6 @@ function createSubscribedMessage(overrides: Partial<SubscribedMessage> = {}): Su
 function createBootstrap(overrides: Partial<SessionBootstrap> = {}): SessionBootstrap {
   return {
     sessionId: "session-1",
-    viewRevision: 3,
     state: createSessionState(),
     artifacts: [],
     replay: {
@@ -84,291 +83,30 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
-  describe("V2 bootstrap and reconciliation", () => {
-    it("initializes rendered state and revision from the server bootstrap", () => {
+  describe("bootstrap", () => {
+    it("initializes the rendered state before the socket connects", () => {
       const state = createSessionSocketState(createBootstrap());
 
-      expect(state.replaying).toBe(false);
       expect(state.ready).toBe(false);
-      expect(state.lastAppliedRevision).toBe(3);
       expect(state.events).toHaveLength(1);
       expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
-    });
-
-    it("applies contiguous deltas, ignores duplicates, and enables actions only at ready", () => {
-      const started = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 4 })
-      );
-      const applied = reduce(
-        started,
-        serverMessage({
-          type: "session_delta",
-          revision: 4,
-          delta: { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
-        })
-      );
-      const duplicate = reduce(
-        applied,
-        serverMessage({
-          type: "session_delta",
-          revision: 4,
-          delta: { operations: [{ type: "state_patch", patch: { title: "Ignored" } }] },
-        })
-      );
-      const ready = reduce(
-        duplicate,
-        serverMessage({
-          type: "session_ready",
-          sessionId: "session-1",
-          participantId: "participant-1",
-          appliedRevision: 4,
-        })
-      );
-
-      expect(applied.ready).toBe(false);
-      expect(duplicate.sessionState?.title).toBe("Updated");
-      expect(ready.ready).toBe(true);
-      expect(ready.lastAppliedRevision).toBe(4);
-    });
-
-    it("continues applying contiguous live deltas after session_ready", () => {
-      const ready = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 3 }),
-        serverMessage({
-          type: "session_ready",
-          sessionId: "session-1",
-          participantId: "participant-1",
-          appliedRevision: 3,
-        })
-      );
-      const updated = reduce(
-        ready,
-        serverMessage({
-          type: "session_delta",
-          revision: 4,
-          delta: { operations: [{ type: "state_patch", patch: { title: "Live update" } }] },
-        })
-      );
-
-      expect(updated.ready).toBe(true);
-      expect(updated.lastAppliedRevision).toBe(4);
-      expect(updated.sessionState?.title).toBe("Live update");
-    });
-
-    it("does not double-count V2 step cost after the canonical total patch", () => {
-      const ready = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 4 }),
-        serverMessage({
-          type: "session_delta",
-          revision: 4,
-          delta: { operations: [{ type: "state_patch", patch: { totalCost: 2 } }] },
-        }),
-        serverMessage({
-          type: "session_ready",
-          sessionId: "session-1",
-          participantId: "participant-1",
-          appliedRevision: 4,
-        })
-      );
-      const withStep = reduce(ready, {
-        type: "events_appended",
-        events: [
-          {
-            type: "step_finish",
-            sandboxId: "sb-1",
-            messageId: "message-1",
-            timestamp: 2,
-            cost: 2,
-          },
-        ],
-      });
-
-      expect(withStep.sessionState?.totalCost).toBe(2);
-    });
-
-    it("forces recovery when a legacy canonical message bypasses V2 revisions", () => {
-      const ready = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 3 }),
-        serverMessage({
-          type: "session_ready",
-          sessionId: "session-1",
-          participantId: "participant-1",
-          appliedRevision: 3,
-        })
-      );
-      const invalid = reduce(ready, serverMessage({ type: "session_title", title: "Out of band" }));
-
-      expect(invalid.ready).toBe(false);
-      expect(invalid.recoveryNonce).toBe(1);
-      expect(invalid.sessionState?.title).toBe("Session 1");
-    });
-
-    it("upserts events by stable identity and keeps timeline sequence order", () => {
-      const base = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 5 })
-      );
-      const withNewEvent = reduce(
-        base,
-        serverMessage({
-          type: "session_delta",
-          revision: 4,
-          delta: {
-            operations: [
-              {
-                type: "event_upsert",
-                item: {
-                  eventId: "event-2",
-                  timelineSequence: 2,
-                  event: {
-                    type: "token",
-                    content: "new",
-                    messageId: "message-1",
-                    sandboxId: "sb-1",
-                    timestamp: 2,
-                  },
-                },
-              },
-            ],
-          },
-        })
-      );
-      const replaced = reduce(
-        withNewEvent,
-        serverMessage({
-          type: "session_delta",
-          revision: 5,
-          delta: {
-            operations: [
-              {
-                type: "event_upsert",
-                item: {
-                  eventId: "event-1",
-                  timelineSequence: 1,
-                  event: {
-                    type: "git_sync",
-                    status: "failed",
-                    sandboxId: "sb-1",
-                    timestamp: 3,
-                  },
-                },
-              },
-            ],
-          },
-        })
-      );
-
-      expect(replaced.viewEvents.map((item) => item.eventId)).toEqual(["event-1", "event-2"]);
-      expect(replaced.events).toHaveLength(2);
-      expect(replaced.events[0]).toEqual(expect.objectContaining({ status: "failed" }));
-    });
-
-    it("requests one snapshot recovery on a revision gap and preserves rendered state", () => {
-      const started = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 5 })
-      );
-      const failed = reduce(
-        started,
-        serverMessage({
-          type: "session_delta",
-          revision: 5,
-          delta: { operations: [{ type: "state_patch", patch: { title: "Gap" } }] },
-        })
-      );
-      const repeated = reduce(
-        failed,
-        serverMessage({
-          type: "session_delta",
-          revision: 6,
-          delta: { operations: [{ type: "state_patch", patch: { title: "Later" } }] },
-        })
-      );
-
-      expect(failed.recoveryNonce).toBe(1);
-      expect(repeated.recoveryNonce).toBe(1);
-      expect(repeated.sessionState?.title).toBe("Session 1");
-      expect(repeated.events).toHaveLength(1);
-    });
-
-    it("replaces canonical state from a snapshot and keeps it after disconnect", () => {
-      const started = reduce(
-        createSessionSocketState(createBootstrap()),
-        serverMessage({ type: "session_sync_started", mode: "snapshot", targetRevision: 8 })
-      );
-      const snapshot = reduce(
-        started,
-        serverMessage({
-          type: "session_snapshot",
-          bootstrap: createBootstrap({
-            viewRevision: 8,
-            state: createSessionState({ title: "Snapshot" }),
-            replay: { events: [], hasMore: false, cursor: null },
-          }),
-        }),
-        serverMessage({
-          type: "session_ready",
-          sessionId: "session-1",
-          participantId: "participant-1",
-          appliedRevision: 8,
-        }),
-        { type: "socket_closed" }
-      );
-
-      expect(snapshot.ready).toBe(false);
-      expect(snapshot.sessionState?.title).toBe("Snapshot");
-      expect(snapshot.events).toEqual([]);
-    });
-
-    it("accepts a snapshot as the initial canonical state", () => {
-      const ready = reduce(
-        initialSessionSocketState,
-        serverMessage({ type: "session_sync_started", mode: "snapshot", targetRevision: 8 }),
-        serverMessage({
-          type: "session_snapshot",
-          bootstrap: createBootstrap({
-            viewRevision: 8,
-            state: createSessionState({ title: "Initial snapshot" }),
-          }),
-        }),
-        serverMessage({
-          type: "session_ready",
-          sessionId: "session-1",
-          participantId: "participant-1",
-          appliedRevision: 8,
-        })
-      );
-
-      expect(ready.ready).toBe(true);
-      expect(ready.sessionState?.title).toBe("Initial snapshot");
-      expect(ready.lastAppliedRevision).toBe(8);
-    });
-
-    it("rejects resume synchronization without canonical state", () => {
-      const state = reduce(
-        initialSessionSocketState,
-        serverMessage({ type: "session_sync_started", mode: "resume", targetRevision: 1 })
-      );
-
-      expect(state.recoveryNonce).toBe(1);
-      expect(state.sync).toBeNull();
     });
   });
 
   describe("subscribed", () => {
-    it("hydrates the projection and ends replay", () => {
+    it("hydrates the authoritative projection", () => {
       const state = subscribedState({
         replay: {
           events: [
             {
-              type: "git_sync",
-              status: "in_progress",
-              sandboxId: "sb-1",
-              timestamp: 1,
+              eventId: "evt-1",
+              timelineSequence: 1,
+              event: {
+                type: "git_sync",
+                status: "in_progress",
+                sandboxId: "sb-1",
+                timestamp: 1,
+              },
             },
           ],
           hasMore: true,
@@ -376,7 +114,6 @@ describe("sessionSocketReducer", () => {
         },
       });
 
-      expect(state.replaying).toBe(false);
       expect(state.sessionState).toEqual(
         expect.objectContaining({ id: "session-1", isProcessing: false, totalCost: 0 })
       );
@@ -391,18 +128,26 @@ describe("sessionSocketReducer", () => {
         replay: {
           events: [
             {
-              type: "execution_complete",
-              messageId: "msg-1",
-              success: true,
-              sandboxId: "sb-1",
-              timestamp: 2,
+              eventId: "event-2",
+              timelineSequence: 2,
+              event: {
+                type: "execution_complete",
+                messageId: "msg-1",
+                success: true,
+                sandboxId: "sb-1",
+                timestamp: 2,
+              },
             },
             {
-              type: "token",
-              content: "Final",
-              messageId: "msg-1",
-              sandboxId: "sb-1",
-              timestamp: 1,
+              eventId: "event-1",
+              timelineSequence: 1,
+              event: {
+                type: "token",
+                content: "Final",
+                messageId: "msg-1",
+                sandboxId: "sb-1",
+                timestamp: 1,
+              },
             },
           ],
           hasMore: false,
@@ -438,6 +183,32 @@ describe("sessionSocketReducer", () => {
       });
       expect(state.sessionState?.isProcessing).toBe(true);
       expect(state.sessionState?.totalCost).toBe(1.25);
+    });
+
+    it("hydrates stable replay envelopes", () => {
+      const state = subscribedState({
+        replay: {
+          events: [
+            {
+              eventId: "event-1",
+              timelineSequence: 1,
+              event: {
+                type: "git_sync",
+                status: "completed",
+                sandboxId: "sb-1",
+                timestamp: 1,
+              },
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      });
+
+      expect(state.timelineEvents).toEqual([
+        expect.objectContaining({ eventId: "event-1", timelineSequence: 1 }),
+      ]);
+      expect(state.events[0]).toEqual(expect.objectContaining({ status: "completed" }));
     });
   });
 
@@ -488,7 +259,18 @@ describe("sessionSocketReducer", () => {
       const base = reduce(
         subscribedState({
           replay: {
-            events: [{ type: "git_sync", status: "completed", sandboxId: "sb-1", timestamp: 10 }],
+            events: [
+              {
+                eventId: "evt-10",
+                timelineSequence: 10,
+                event: {
+                  type: "git_sync",
+                  status: "completed",
+                  sandboxId: "sb-1",
+                  timestamp: 10,
+                },
+              },
+            ],
             hasMore: true,
             cursor: { timestamp: 10, id: "evt-10", sequence: 10 },
           },
@@ -498,11 +280,29 @@ describe("sessionSocketReducer", () => {
       expect(base.loadingHistory).toBe(true);
       expect(base.cursor).toEqual({ timestamp: 10, id: "evt-10", sequence: 10 });
 
+      const withLiveEvent = reduce(base, {
+        type: "events_appended",
+        events: [
+          { type: "token", content: "live", messageId: "msg-1", sandboxId: "sb-1", timestamp: 11 },
+        ],
+      });
+
       const state = reduce(
-        base,
+        withLiveEvent,
         serverMessage({
           type: "history_page",
-          items: [{ type: "git_sync", status: "in_progress", sandboxId: "sb-1", timestamp: 5 }],
+          items: [
+            {
+              eventId: "evt-5",
+              timelineSequence: 5,
+              event: {
+                type: "git_sync",
+                status: "in_progress",
+                sandboxId: "sb-1",
+                timestamp: 5,
+              },
+            },
+          ],
           hasMore: false,
           cursor: null,
         })
@@ -510,7 +310,7 @@ describe("sessionSocketReducer", () => {
       expect(state.loadingHistory).toBe(false);
       expect(state.hasMoreHistory).toBe(false);
       expect(state.cursor).toBeNull();
-      expect(state.events.map((event) => event.timestamp)).toEqual([5, 10]);
+      expect(state.events.map((event) => event.timestamp)).toEqual([5, 10, 11]);
     });
 
     it("clears a stuck loadingHistory when a new subscribed snapshot arrives", () => {
@@ -565,21 +365,22 @@ describe("sessionSocketReducer", () => {
   describe("sandbox lifecycle", () => {
     const withAccessState = () =>
       reduce(
-        subscribedState(),
-        serverMessage({ type: "code_server_info", url: "https://code.example", password: "pw" }),
-        serverMessage({ type: "ttyd_info", url: "https://ttyd.example", token: "tok" }),
+        subscribedState({
+          state: createSessionState({
+            codeServerUrl: "https://code.example",
+            ttydUrl: "https://ttyd.example",
+          }),
+        }),
         serverMessage({ type: "tunnel_urls", urls: { "3000": "https://tunnel.example" } }),
         serverMessage({ type: "sandbox_dashboard_url", url: "https://provider.example" })
       );
 
-    it("stores access info messages on the session state", () => {
+    it("stores non-secret runtime info on the session state", () => {
       const state = withAccessState();
       expect(state.sessionState).toEqual(
         expect.objectContaining({
           codeServerUrl: "https://code.example",
-          codeServerPassword: "pw",
           ttydUrl: "https://ttyd.example",
-          ttydToken: "tok",
           tunnelUrls: { "3000": "https://tunnel.example" },
           sandboxDashboardUrl: "https://provider.example",
         })
@@ -761,9 +562,9 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.isProcessing).toBe(true);
     });
 
-    it("ends replay when the socket closes", () => {
+    it("keeps the socket unready when it closes", () => {
       const state = reduce(initialSessionSocketState, { type: "socket_closed" });
-      expect(state.replaying).toBe(false);
+      expect(state.ready).toBe(false);
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {

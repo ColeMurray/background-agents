@@ -52,7 +52,7 @@ export class SessionStatusService {
     }
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
-    this.repository.updateSessionStatusWithViewDelta(session.id, status, updatedAt);
+    this.repository.updateSessionStatus(session.id, status, updatedAt);
     await this.syncSessionIndexStatus(publicSessionId, status, updatedAt).catch((error) =>
       this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
     );

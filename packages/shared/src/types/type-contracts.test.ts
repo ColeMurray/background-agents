@@ -33,12 +33,12 @@ import type {
   SessionBootstrap,
   SessionDelta,
   SessionStatePatch,
-  SessionViewEvent,
+  SessionTimelineEvent,
   SessionViewOperation,
   sessionBootstrapSchema,
   sessionDeltaSchema,
   sessionStatePatchSchema,
-  sessionViewEventSchema,
+  sessionTimelineEventSchema,
   sessionViewOperationSchema,
 } from "./server-messages";
 
@@ -57,7 +57,7 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<SessionBootstrap>().toEqualTypeOf<z.output<typeof sessionBootstrapSchema>>();
   expectTypeOf<SessionDelta>().toEqualTypeOf<z.output<typeof sessionDeltaSchema>>();
   expectTypeOf<SessionStatePatch>().toEqualTypeOf<z.output<typeof sessionStatePatchSchema>>();
-  expectTypeOf<SessionViewEvent>().toEqualTypeOf<z.output<typeof sessionViewEventSchema>>();
+  expectTypeOf<SessionTimelineEvent>().toEqualTypeOf<z.output<typeof sessionTimelineEventSchema>>();
   expectTypeOf<SessionViewOperation>().toEqualTypeOf<z.output<typeof sessionViewOperationSchema>>();
   expectTypeOf<AutomationRepositoryInput>().toEqualTypeOf<RepositoryInput>();
 });

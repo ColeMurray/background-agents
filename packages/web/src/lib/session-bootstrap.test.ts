@@ -9,7 +9,6 @@ import { getSessionBootstrap, SessionBootstrapError } from "./session-bootstrap"
 
 const bootstrap = {
   sessionId: "session/one",
-  viewRevision: 2,
   state: {
     id: "session/one",
     title: "Session",
@@ -44,9 +43,9 @@ describe("getSessionBootstrap", () => {
     await expect(getSessionBootstrap("missing")).rejects.toEqual(new SessionBootstrapError(404));
   });
 
-  it("rejects malformed payloads", async () => {
+  it("rejects a snapshot for a different session", async () => {
     mocks.controlPlaneUserFetch.mockResolvedValue(
-      Response.json({ ...bootstrap, viewRevision: -1 })
+      Response.json({ ...bootstrap, sessionId: "session/two" })
     );
     await expect(getSessionBootstrap("session/one")).rejects.toThrow();
   });

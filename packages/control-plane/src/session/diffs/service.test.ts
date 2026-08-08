@@ -97,7 +97,6 @@ function harness() {
       },
     ],
     setSessionDiffBaselines: vi.fn(),
-    setSessionDiffBaselinesWithViewDelta: vi.fn(),
   } as unknown as SessionRepository;
   const messenger: SessionMessenger = {
     broadcast: vi.fn(),

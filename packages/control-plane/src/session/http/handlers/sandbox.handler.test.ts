@@ -6,9 +6,7 @@ import { createSandboxHandler } from "./sandbox.handler";
 function createHandler() {
   const repository = {
     createParticipant: vi.fn(),
-    createArtifactWithViewDelta: vi.fn(),
-    createEventWithViewDelta: vi.fn(),
-    createArtifactAndEventWithViewDelta: vi.fn(),
+    createArtifactAndEvent: vi.fn(),
     getProcessingMessage: vi.fn(),
   };
   const processSandboxEvent = vi.fn();
@@ -221,7 +219,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok", artifactId: "artifact-1" });
-    expect(repository.createArtifactAndEventWithViewDelta).toHaveBeenCalledWith(
+    expect(repository.createArtifactAndEvent).toHaveBeenCalledWith(
       {
         id: "artifact-1",
         type: "screenshot",
@@ -301,7 +299,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid media artifact body" });
-    expect(repository.createArtifactAndEventWithViewDelta).not.toHaveBeenCalled();
+    expect(repository.createArtifactAndEvent).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
   });
 
@@ -327,7 +325,7 @@ describe("createSandboxHandler", () => {
 
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "No active prompt" });
-    expect(repository.createArtifactAndEventWithViewDelta).not.toHaveBeenCalled();
+    expect(repository.createArtifactAndEvent).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
   });
 

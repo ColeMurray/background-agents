@@ -60,11 +60,10 @@ function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string>
   );
 }
 
-/** Invoke the DO's real (private) getSessionState. */
-function getSessionState(stub: DurableObjectStub): Promise<SessionState> {
-  return runInDurableObject(stub, (instance: SessionDO) =>
-    (instance as unknown as { getSessionState(): Promise<SessionState> }).getSessionState()
-  );
+async function getSessionState(stub: DurableObjectStub): Promise<SessionState> {
+  const response = await stub.fetch("http://internal/internal/bootstrap");
+  const bootstrap = await response.json<{ state: SessionState }>();
+  return bootstrap.state;
 }
 
 const WEB: RepoSpec = { repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" };

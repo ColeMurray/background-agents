@@ -75,7 +75,6 @@ export function SessionClient({
     connected,
     connecting,
     ready,
-    replaying,
     authError,
     connectionError,
     sessionState,
@@ -201,7 +200,6 @@ export function SessionClient({
       ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
       : null);
 
-  const showTimelineSkeleton = events.length === 0 && replaying;
   const resolvedDiff = useMemo(
     () =>
       selectedDiff && diffState?.current
@@ -275,11 +273,10 @@ export function SessionClient({
             participantProfiles={profiles}
             isProcessing={isProcessing}
             loadingHistory={loadingHistory}
-            showSkeleton={showTimelineSkeleton}
+            showSkeleton={false}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
             terminalMessageReadObservationEnabled={
-              !replaying &&
               !loadingHistory &&
               !isDetailsOpen &&
               selectedMediaArtifactId === null &&

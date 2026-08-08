@@ -117,22 +117,15 @@ export {
   serverMessageSchema,
   sessionBootstrapSchema,
   sessionBootstrapStateSchema,
-  sessionDeltaSchema,
-  sessionStatePatchSchema,
-  sessionViewEventSchema,
-  sessionViewOperationSchema,
-  viewRevisionSchema,
+  sessionTimelineEventSchema,
 } from "./server-messages";
 export type {
   ParticipantPresence,
   ServerMessage,
   SessionBootstrap,
   SessionBootstrapState,
-  SessionDelta,
   SessionState,
-  SessionStatePatch,
-  SessionViewEvent,
-  SessionViewOperation,
+  SessionTimelineEvent,
 } from "./server-messages";
 
 export {

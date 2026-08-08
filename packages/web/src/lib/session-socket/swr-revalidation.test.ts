@@ -74,15 +74,29 @@ describe("swrKeysToRevalidate", () => {
     ).toEqual([`/api/sessions/${SESSION_ID}/diff`]);
   });
 
-  it("revalidates missed client-only data when V2 synchronization becomes ready", () => {
+  it("revalidates client-only data when the authoritative snapshot arrives", () => {
     const encodedSessionId = "session%2Fone";
     expect(
       swrKeysToRevalidate(
         {
-          type: "session_ready",
+          type: "subscribed",
           sessionId: SESSION_ID,
+          state: {
+            id: SESSION_ID,
+            title: null,
+            repoOwner: null,
+            repoName: null,
+            baseBranch: null,
+            branchName: null,
+            status: "active",
+            sandboxStatus: "ready",
+            messageCount: 0,
+            createdAt: 1,
+          },
+          artifacts: [],
           participantId: "participant-1",
-          appliedRevision: 4,
+          participant: { participantId: "participant-1", name: "User" },
+          replay: { events: [], hasMore: false, cursor: null },
         },
         SESSION_ID
       )
@@ -98,19 +112,6 @@ describe("swrKeysToRevalidate", () => {
     expect(swrKeysToRevalidate({ type: "session_access_changed" }, "session/one")).toEqual([
       `/api/sessions/${encodedSessionId}/access`,
     ]);
-  });
-
-  it("revalidates the session list for relevant V2 state deltas", () => {
-    expect(
-      swrKeysToRevalidate(
-        {
-          type: "session_delta",
-          revision: 4,
-          delta: { operations: [{ type: "state_patch", patch: { title: "Updated" } }] },
-        },
-        SESSION_ID
-      )
-    ).toEqual([isUnarchivedSessionListKey]);
   });
 
   it("returns nothing for view-only messages", () => {

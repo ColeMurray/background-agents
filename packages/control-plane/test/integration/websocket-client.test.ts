@@ -243,13 +243,28 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       {
         id: "ev-1",
         type: "tool_call",
-        data: JSON.stringify({ type: "tool_call", tool: "read_file" }),
+        data: JSON.stringify({
+          type: "tool_call",
+          tool: "read_file",
+          args: {},
+          callId: "call-1",
+          messageId: "message-1",
+          sandboxId: "sandbox-1",
+          timestamp: now - 2000,
+        }),
         createdAt: now - 2000,
       },
       {
         id: "ev-2",
         type: "tool_result",
-        data: JSON.stringify({ type: "tool_result", result: "ok" }),
+        data: JSON.stringify({
+          type: "tool_result",
+          result: "ok",
+          callId: "call-1",
+          messageId: "message-1",
+          sandboxId: "sandbox-1",
+          timestamp: now - 1000,
+        }),
         createdAt: now - 1000,
       },
     ]);
@@ -261,8 +276,8 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const replay = subscribed.replay as { events: Record<string, unknown>[]; hasMore: boolean };
     expect(replay).toBeDefined();
     expect(replay.events).toHaveLength(2);
-    expect(replay.events[0].type).toBe("tool_call");
-    expect(replay.events[1].type).toBe("tool_result");
+    expect(replay.events[0]).toMatchObject({ eventId: "ev-1", event: { type: "tool_call" } });
+    expect(replay.events[1]).toMatchObject({ eventId: "ev-2", event: { type: "tool_result" } });
 
     ws.close();
   });

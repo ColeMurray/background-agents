@@ -68,9 +68,8 @@ export class SessionDiffService {
     }
 
     this.logBaselineConflicts(advertised, sessionRepositories);
-    this.repository.setSessionDiffBaselinesWithViewDelta(
-      this.toBaselineUpdates(advertised, sessionRepositories),
-      this.now()
+    this.repository.setSessionDiffBaselines(
+      this.toBaselineUpdates(advertised, sessionRepositories)
     );
   }
 
