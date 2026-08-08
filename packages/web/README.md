@@ -65,9 +65,14 @@ sign-in with that App:
 > setting should allow users outside the organization to authenticate, but this has not been
 > extensively tested. Please verify this works for your use case.
 
-Always-required repository permission for the GitHub App:
+Required repository permissions for the GitHub App:
 
-- **Repository permissions**: Contents (read & write) - for repo operations
+- **Contents: Read & write** - for repository operations
+- **Pull requests: Read & write** - for session pull request creation
+- **Metadata: Read-only**
+- **Issues: Read & write** - when a pull request label is configured under **Settings > Source
+  Control**, or when the GitHub bot is enabled. Existing installations must republish the App
+  settings and request/approve the installation update after adding this permission.
 
 When GitHub sign-in uses email/domain admission, also grant **Account permissions: Email addresses
 (read-only)**.

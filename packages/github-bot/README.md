@@ -81,9 +81,15 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 
 ### GitHub App Configuration
 
-The existing GitHub App needs these additions:
+The GitHub bot uses the same repository permissions configured for the main GitHub App setup. In
+particular, it requires:
 
 **Permissions**: `Pull requests: Read & write`, `Issues: Read & write`
+
+`Issues: Read & write` is also required outside the bot when the control plane applies labels to
+session-created pull requests. See the
+[GitHub App setup](../../docs/GETTING_STARTED.md#step-3-create-github-app) for the complete
+permission list and existing-installation upgrade steps.
 
 **Event subscriptions**: `Pull request`, `Issue comment`, `Pull request review comment`
 

@@ -308,9 +308,13 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
 
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
-   - Issues: **Read & Write** _(required if enabling GitHub bot)_
+   - Issues: **Read & Write** _(required for labels on session-created pull requests and for the
+     GitHub bot)_
    - Pull requests: **Read & Write**
    - Metadata: **Read-only**
+   - Existing installations that add Issues permission must republish the App settings and
+     request/approve the installation update. This applies even when `enable_github_bot = false` if
+     a pull request label is configured under **Settings > Source Control**.
 6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
    - Members: **Read-only**
    - For existing GitHub Apps, republish the permission change and request/approve installation

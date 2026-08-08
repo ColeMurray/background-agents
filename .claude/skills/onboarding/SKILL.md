@@ -135,7 +135,9 @@ user selected GitHub:
    users"): `{deployed-web-app-url}/api/auth/callback/github`
    - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
 6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
-   Write), Metadata (Read-only)
+   Write), Metadata (Read-only). Issues permission is needed for labels on session-created pull
+   requests even when the GitHub bot is disabled. For an existing App, republish the settings and
+   request/approve the installation update after adding the permission.
 7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
    (Read-only)
 8. Create app, note **App ID**
