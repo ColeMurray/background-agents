@@ -1,6 +1,10 @@
 import type { ClientMessage, ServerMessage } from "../types";
 import type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
-import { encodeEventTimelineCursor, type EventListCursor } from "./event-cursor";
+import {
+  encodeEventTimelineCursor,
+  type EventListCursor,
+  type EventTimelineCursor,
+} from "./event-cursor";
 import type { EventRow } from "./types";
 import type { SessionRepository } from "./repository";
 import {
@@ -24,7 +28,7 @@ export type SessionHistoryPage = Omit<Extract<ServerMessage, { type: "history_pa
 
 export type SessionEventStreamRepository = Pick<
   SessionRepository,
-  "getEventsForReplay" | "getEventTimelinePage" | "listEventPage"
+  "getEventTimelinePage" | "listEventPage"
 >;
 
 export interface SessionEventListRequest {
@@ -38,15 +42,15 @@ export class SessionEventStream {
   constructor(private readonly repository: SessionEventStreamRepository) {}
 
   getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionTimeline {
-    const rows = this.repository.getEventsForReplay(limit + 1);
-    const hasMore = rows.length > limit;
-    const replayRows = hasMore ? rows.slice(1) : rows;
-    const cursor = replayRows.length > 0 ? cursorFromRow(replayRows[0]) : null;
+    const page = this.repository.getEventTimelinePage({
+      excludeTypes: HISTORY_EXCLUDED_TYPES,
+      limit,
+    });
 
     return {
-      events: parseSessionTimelineEvents(replayRows),
-      hasMore,
-      cursor,
+      events: parseSessionTimelineEvents(page.events),
+      hasMore: page.hasMore,
+      cursor: page.nextCursor ? toEventStreamCursor(page.nextCursor) : null,
     };
   }
 
@@ -65,15 +69,7 @@ export class SessionEventStream {
     return {
       items: parseSessionTimelineEvents(page.events),
       hasMore: page.hasMore,
-      cursor: page.nextCursor
-        ? {
-            timestamp: page.nextCursor.createdAt,
-            id: page.nextCursor.id,
-            ...(page.nextCursor.sequence === undefined
-              ? {}
-              : { sequence: page.nextCursor.sequence }),
-          }
-        : null,
+      cursor: page.nextCursor ? toEventStreamCursor(page.nextCursor) : null,
     };
   }
 
@@ -110,13 +106,11 @@ function parseSessionTimelineEvents(rows: EventRow[]): SessionTimelineEvent[] {
   return events;
 }
 
-function cursorFromRow(
-  row: Pick<EventRow, "created_at" | "id" | "timeline_sequence">
-): EventStreamCursor {
+function toEventStreamCursor(cursor: EventTimelineCursor): EventStreamCursor {
   return {
-    timestamp: row.created_at,
-    id: row.id,
-    ...(row.timeline_sequence === undefined ? {} : { sequence: row.timeline_sequence }),
+    timestamp: cursor.createdAt,
+    id: cursor.id,
+    ...(cursor.sequence === undefined ? {} : { sequence: cursor.sequence }),
   };
 }
 

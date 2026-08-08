@@ -1018,17 +1018,6 @@ export class SessionRepository {
     return { events: pageEvents, hasMore, nextCursor };
   }
 
-  getEventsForReplay(limit: number): EventRow[] {
-    const result = this.sql.exec(
-      `SELECT * FROM (
-         SELECT * FROM events WHERE type != 'heartbeat'
-         ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?
-       ) sub ORDER BY created_at ASC, timeline_sequence ASC`,
-      limit
-    );
-    return this.rows<EventRow>(result);
-  }
-
   // === ARTIFACTS ===
 
   createArtifact(data: CreateArtifactData): void {

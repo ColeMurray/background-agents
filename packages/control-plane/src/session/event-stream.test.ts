@@ -4,7 +4,6 @@ import type { EventRow } from "./types";
 
 function createStream() {
   const repository = {
-    getEventsForReplay: vi.fn(),
     getEventTimelinePage: vi.fn(),
     listEventPage: vi.fn(),
   } as unknown as SessionEventStreamRepository;
@@ -38,21 +37,32 @@ function gitSyncEvent(status: "in_progress" | "completed", timestamp: number) {
 
 describe("SessionEventStream", () => {
   describe("getReplay", () => {
-    it("loads one extra replay row to determine whether history remains", () => {
+    it("loads replay through the canonical timeline pager", () => {
       const { stream, repository } = createStream();
-      vi.mocked(repository.getEventsForReplay).mockReturnValue([]);
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [],
+        hasMore: false,
+        nextCursor: null,
+      });
 
       stream.getReplay();
 
-      expect(repository.getEventsForReplay).toHaveBeenCalledWith(501);
+      expect(repository.getEventTimelinePage).toHaveBeenCalledWith({
+        excludeTypes: ["heartbeat"],
+        limit: 500,
+      });
     });
 
     it("returns parsed replay events and the oldest cursor from the loaded window", () => {
       const { stream, repository } = createStream();
-      vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 41),
-        eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
-      ]);
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [
+          eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 41),
+          eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
+        ],
+        hasMore: false,
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "e1", sequence: 41 },
+      });
 
       const replay = stream.getReplay();
 
@@ -66,13 +76,16 @@ describe("SessionEventStream", () => {
       });
     });
 
-    it("marks replay as having more and removes the oldest lookahead row", () => {
+    it("returns the canonical page's pagination state", () => {
       const { stream, repository } = createStream();
-      vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow("e0", "git_sync", gitSyncEvent("in_progress", 0), 500, 0),
-        eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 1),
-        eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 2),
-      ]);
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [
+          eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 1),
+          eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 2),
+        ],
+        hasMore: true,
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "e1", sequence: 1 },
+      });
 
       const replay = stream.getReplay(2);
 
@@ -83,10 +96,14 @@ describe("SessionEventStream", () => {
 
     it("skips malformed replay event JSON", () => {
       const { stream, repository } = createStream();
-      vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow("bad", "tool_call", "{bad", 1000),
-        eventRow("good", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
-      ]);
+      vi.mocked(repository.getEventTimelinePage).mockReturnValue({
+        events: [
+          eventRow("bad", "tool_call", "{bad", 1000),
+          eventRow("good", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
+        ],
+        hasMore: false,
+        nextCursor: { kind: "timeline", createdAt: 1000, id: "bad" },
+      });
 
       const replay = stream.getReplay();
 
