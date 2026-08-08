@@ -173,8 +173,9 @@ export function isScmAgnosticRoute(method: string, path: string): boolean {
     isWebServiceAuthRoute(method, path) ||
     /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
+    (method === "GET" && /^\/sessions\/[^/]+$/.test(path)) ||
     (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
-    /^\/sessions\/[^/]+\/(tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
+    /^\/sessions\/[^/]+\/(sandbox-access|tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
       path
     ) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)

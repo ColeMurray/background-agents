@@ -510,7 +510,12 @@ export class SessionRepository {
          auth_token_hash = ?,
          auth_token = NULL,
          modal_sandbox_id = ?,
-         modal_object_id = NULL
+         modal_object_id = NULL,
+         code_server_url = NULL,
+         code_server_password = NULL,
+         tunnel_urls = NULL,
+         ttyd_url = NULL,
+         ttyd_token = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,

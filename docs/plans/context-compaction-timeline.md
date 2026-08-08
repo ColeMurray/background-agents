@@ -12,14 +12,15 @@ The sandbox runtime currently consumes OpenCode's `session.compacted` event in
 `OpenCodePromptStream._apply_sse_event`. It sets `compaction_occurred`, clears a pending context
 overflow, and permits the changed post-compaction message chain. The runtime also intentionally
 suppresses the generated summary message. No corresponding sandbox event is emitted, so the fact of
-successful compaction never reaches control-plane persistence, WebSocket clients, replay, or the
-timeline renderer.
+successful compaction never reaches control-plane persistence, WebSocket clients, timeline
+hydration, or the timeline renderer.
 
 ## Goals
 
 - Show a concise marker at the chronological point where the active parent session successfully
   compacted context.
-- Show the same marker for live activity, initial replay, and paginated history.
+- Show the same marker for live activity, initial snapshot/subscription hydration, and paginated
+  history.
 - Persist the marker so it remains visible after reconnecting or reopening the session.
 - Keep the event contract independent of OpenCode and the selected model provider.
 - Preserve existing compaction recovery, summary suppression, and assistant output behavior.
@@ -117,7 +118,7 @@ Contract decisions:
   protocol describes Open-Inspect semantics rather than upstream wire names.
 - Use past tense because the event represents confirmed successful completion.
 - Require `messageId`; compaction occurs while handling a specific prompt and should remain
-  filterable and attributable after replay.
+  filterable and attributable after timeline hydration.
 - Use the standard runtime-added `sandboxId` and seconds-based `timestamp` fields.
 - Do not include summary text. It is internal model context, can be large, and is deliberately
   hidden from user-visible assistant output.
@@ -130,7 +131,7 @@ Contract decisions:
   per-message upsert.
 
 Adding the variant automatically extends the derived `SandboxEvent`, `EventType`, `eventTypeSchema`,
-event-list response schema, and live/replay server message types.
+event-list response schema, and live/timeline server message types.
 
 ## Sandbox Runtime
 
@@ -165,7 +166,7 @@ Do not emit the marker from these weaker signals:
 
 Keep `context_compacted` non-critical for the first release. It receives the same bounded reconnect
 buffering and at-most-once live delivery as ordinary tool and status activity. Once accepted by the
-control plane, it is durably stored and available to replay.
+control plane, it is durably stored and available to timeline hydration.
 
 Do not add it to `CRITICAL_EVENT_TYPES` in either the runtime or control plane without first
 designing a unique acknowledgement identity. Current critical IDs use `{type}:{messageId}`; two
@@ -174,8 +175,8 @@ one. Exactly-once compaction markers can be considered separately by adding a st
 idempotent persistence, and acknowledgement after insertion.
 
 This tradeoff is appropriate for an informational timeline marker and avoids broadening the first
-release into a transport reliability change. Tests should still cover ordinary forwarding and replay
-after successful persistence.
+release into a transport reliability change. Tests should still cover ordinary forwarding and
+timeline hydration after successful persistence.
 
 ## Control Plane
 
@@ -204,7 +205,7 @@ Add `context_compacted` to `VALID_EVENT_TYPES` in
 could be derived from `eventTypeSchema`, but that unrelated refactor is not required for this
 feature.
 
-`SessionEventStream` excludes only heartbeats, so no replay or history filtering change is needed.
+`SessionEventStream` excludes only heartbeats, so no timeline or history filtering change is needed.
 The existing `timeline_sequence` ordering remains authoritative when storage timestamps tie.
 
 ## Web Timeline
@@ -230,27 +231,28 @@ No special timeline grouping logic is required:
 - The marker naturally flushes an adjacent tool group, visually preserving the compaction boundary.
 - The ordinary event key includes event type, message or sandbox identity, and timestamp.
 - Multiple markers in one prompt remain separate when their occurrence timestamps differ.
-- Replay and live ingestion both pass non-token events through unchanged.
+- Snapshot/subscription hydration and live ingestion both pass non-token events through unchanged.
 
 The web client intentionally buffers cumulative assistant token events until execution completes and
-collapses replay to the final token for each message. Consequently, a marker can appear during live
-processing before the final assistant card and retain its persisted position during replay, but it
-cannot divide visible prose into before/after sections. That limitation is acceptable because the
-marker communicates an execution transition rather than exposing internal summary boundaries.
+collapses hydrated timeline entries to the final token for each message. Consequently, a marker can
+appear during live processing before the final assistant card and retain its persisted position
+during later hydration, but it cannot divide visible prose into before/after sections. That
+limitation is acceptable because the marker communicates an execution transition rather than
+exposing internal summary boundaries.
 
 ## Compatibility
 
 The control-plane sandbox ingress and live web `sandbox_event` messages strictly validate the event
-union. Replay and history are more tolerant: unknown event variants are dropped individually so an
-old event cannot wedge hydration.
+union. Snapshot/subscription timelines and history are more tolerant: unknown event variants are
+dropped individually so an old event cannot wedge hydration.
 
 Compatibility behavior is therefore:
 
 - Old runtime with new control plane/web: no marker is emitted; all existing behavior continues.
 - New runtime with old control plane: the event is rejected at sandbox ingress and is not stored.
-- New control plane with old web client: replay drops the unknown marker, but a live `sandbox_event`
-  containing it fails that client's server-message parse.
-- New runtime, control plane, and web: marker is stored, broadcast, and replayed.
+- New control plane with old web client: timeline hydration drops the unknown marker, but a live
+  `sandbox_event` containing it fails that client's server-message parse.
+- New runtime, control plane, and web: marker is stored, broadcast, and hydrated.
 - Historical sessions: no marker is synthesized for prior compactions.
 
 Deploying the producer last avoids temporary marker loss. If the runtime becomes available first,
@@ -283,8 +285,8 @@ Extend `packages/shared/src/types/boundary-schemas.test.ts` to verify:
 - A complete `context_compacted` event parses and retains all fields.
 - Missing `messageId`, `sandboxId`, or `timestamp` is rejected.
 - A live server `sandbox_event` containing the marker parses.
-- Initial replay and `history_page` retain the recognized marker.
-- Existing tolerance still drops unknown replay events without dropping recognized neighbors.
+- Initial snapshot/subscription timelines and `history_page` retain the recognized marker envelope.
+- Existing tolerance still drops unknown timeline events without dropping recognized neighbors.
 
 ### Sandbox Runtime
 
@@ -322,7 +324,7 @@ the authenticated sandbox WebSocket and verify both its event-row persistence an
 
 Extend `packages/control-plane/src/session/event-stream.test.ts` or
 `packages/control-plane/test/integration/websocket-client.test.ts` to verify the marker appears in
-initial replay and paginated history in chronological order.
+initial timeline hydration and paginated history in chronological order.
 
 Extend `packages/control-plane/test/integration/events-messages-list.test.ts` to verify filtering by
 `type=context_compacted` returns the stored marker and no longer responds with `400`.
@@ -333,7 +335,7 @@ Extend `packages/web/src/lib/session-socket/event-log.test.ts` to verify a live 
 through without clearing or flushing pending assistant text.
 
 Extend `packages/web/src/lib/session-socket/reducer.test.ts` to verify markers survive initial
-replay, live append, and history prepend without deduplication.
+snapshot/subscription hydration, live append, and history prepend without deduplication.
 
 Extend `packages/web/src/components/session-timeline.test.tsx` to verify:
 
@@ -376,7 +378,7 @@ The full test suite remains the final CI backstop.
    filtering before the runtime producer.
 3. Prefer deploying the web client with live parsing and the timeline renderer before the runtime
    producer.
-4. Confirm a synthetic or test marker is accepted, stored, broadcast, replayed, and rendered.
+4. Confirm a synthetic or test marker is accepted, stored, broadcast, hydrated, and rendered.
 5. Rebuild and deploy sandbox runtime artifacts for each enabled execution provider. If deployment
    order cannot be guaranteed, accept temporary marker loss or split producer deployment when
    complete rollout coverage is required.
@@ -419,8 +421,8 @@ add a count of received compaction events grouped by sandbox provider/runtime ve
   event for that occurrence.
 - Failed or unconfirmed compaction produces no success marker.
 - Child-session compaction does not create a parent marker.
-- The control plane accepts, stores, message-associates, broadcasts, filters, replays, and paginates
-  the event without a database migration.
+- The control plane accepts, stores, message-associates, broadcasts, filters, hydrates, and
+  paginates the event without a database migration.
 - The session timeline displays `Context compacted to continue` at the event's chronological
   position with a visible timestamp and neutral styling.
 - The marker remains visible after reconnecting, reopening the session, and loading older history.
@@ -433,8 +435,8 @@ add a count of received compaction events grouped by sandbox provider/runtime ve
 ## Implementation Order
 
 1. Add and test the shared `context_compacted` event variant.
-2. Add control-plane filtering and persistence/broadcast/replay tests using synthetic events.
-3. Add the web renderer and live/replay/history tests.
+2. Add control-plane filtering and persistence/broadcast/hydration tests using synthetic events.
+3. Add the web renderer and live/hydration/history tests.
 4. Emit the event from the existing parent `session.compacted` runtime branch and extend bridge
    compaction tests.
 5. Run focused verification and full static checks.

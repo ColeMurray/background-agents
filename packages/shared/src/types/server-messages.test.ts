@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { serverMessageSchema } from "./server-messages";
+import { serverMessageSchema, sessionSnapshotSchema } from "./server-messages";
 import type { PullRequestSummary, Session } from "./sessions";
 
 describe("artifact_updated server message", () => {
@@ -36,5 +36,65 @@ describe("Session.pullRequestSummary contract", () => {
     expectTypeOf<Session["pullRequestSummary"]>().toEqualTypeOf<PullRequestSummary | undefined>();
     const summary: PullRequestSummary = { total: 2, open: 1, draft: 0, merged: 1, closed: 0 };
     expect(summary.total).toBe(2);
+  });
+});
+
+const snapshotState = {
+  id: "session-1",
+  title: "Inspect session",
+  repoOwner: "acme",
+  repoName: "web",
+  baseBranch: "main",
+  branchName: "inspect/session-1",
+  status: "active",
+  sandboxStatus: "ready",
+  messageCount: 1,
+  createdAt: 1_700_000_000_000,
+};
+
+describe("session view contracts", () => {
+  it("parses a snapshot and removes access credentials", () => {
+    const parsed = sessionSnapshotSchema.parse({
+      session: {
+        ...snapshotState,
+        codeServerPassword: "secret",
+        ttydToken: "secret",
+      },
+      artifacts: [],
+      timeline: {
+        events: [
+          {
+            eventId: "event-1",
+            timelineSequence: 1,
+            event: { type: "ready", sandboxId: "sandbox-1", timestamp: 1 },
+          },
+          { eventId: "future-event", timelineSequence: 2, event: { type: "future" } },
+        ],
+        hasMore: false,
+        cursor: null,
+      },
+    });
+
+    expect(parsed.session).not.toHaveProperty("codeServerPassword");
+    expect(parsed.session).not.toHaveProperty("ttydToken");
+    expect(parsed.timeline.events.map((item) => item.eventId)).toEqual(["event-1"]);
+  });
+
+  it("rejects malformed stable event envelopes", () => {
+    const snapshot = {
+      session: snapshotState,
+      artifacts: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    };
+    expect(
+      sessionSnapshotSchema.safeParse({
+        ...snapshot,
+        timeline: {
+          events: [{ timelineSequence: 1, event: { type: "future" } }],
+          hasMore: false,
+          cursor: null,
+        },
+      }).success
+    ).toBe(false);
   });
 });

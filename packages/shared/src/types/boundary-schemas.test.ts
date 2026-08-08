@@ -595,8 +595,7 @@ describe("boundary schemas", () => {
     it("parses a valid subscribed message with nullable fields", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -620,7 +619,7 @@ describe("boundary schemas", () => {
           },
         ],
         participantId: "participant-1",
-        replay: {
+        timeline: {
           events: [],
           hasMore: false,
           cursor: null,
@@ -631,11 +630,10 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("keeps recognized replay events and drops unknown ones without failing", () => {
+    it("keeps recognized timeline events and drops unknown ones without failing", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -651,11 +649,25 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
-        replay: {
+        timeline: {
           events: [
-            { type: "ready", sandboxId: "sandbox-1", opencodeSessionId: null, timestamp: 1 },
-            { type: "some_future_event", foo: "bar", timestamp: 2 },
-            { type: "token", content: "hi", messageId: "m1", sandboxId: "sandbox-1", timestamp: 3 },
+            {
+              eventId: "event-1",
+              timelineSequence: 1,
+              event: { type: "ready", sandboxId: "sandbox-1", timestamp: 1 },
+            },
+            { eventId: "event-2", timelineSequence: 2, event: { type: "future" } },
+            {
+              eventId: "event-3",
+              timelineSequence: 3,
+              event: {
+                type: "token",
+                content: "hi",
+                messageId: "m1",
+                sandboxId: "sandbox-1",
+                timestamp: 3,
+              },
+            },
           ],
           hasMore: false,
           cursor: null,
@@ -665,7 +677,10 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.replay?.events.map((event) => event.type)).toEqual(["ready", "token"]);
+        expect(result.data.timeline.events.map((item) => item.event.type)).toEqual([
+          "ready",
+          "token",
+        ]);
       }
     });
 
@@ -673,8 +688,17 @@ describe("boundary schemas", () => {
       const result = serverMessageSchema.safeParse({
         type: "history_page",
         items: [
-          { type: "some_legacy_event", foo: "bar", timestamp: 1 },
-          { type: "git_sync", status: "completed", sandboxId: "sandbox-1", timestamp: 2 },
+          { eventId: "event-1", timelineSequence: 1, event: { type: "future" } },
+          {
+            eventId: "event-2",
+            timelineSequence: 2,
+            event: {
+              type: "git_sync",
+              status: "completed",
+              sandboxId: "sandbox-1",
+              timestamp: 2,
+            },
+          },
         ],
         hasMore: false,
         cursor: null,
@@ -682,7 +706,7 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success && result.data.type === "history_page") {
-        expect(result.data.items.map((item) => item.type)).toEqual(["git_sync"]);
+        expect(result.data.items.map((item) => item.event.type)).toEqual(["git_sync"]);
       }
     });
 
@@ -700,7 +724,7 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
-    it("accepts context compaction events in live messages and replay", () => {
+    it("accepts context compaction events in live messages and timeline hydration", () => {
       const event = {
         type: "context_compacted",
         messageId: "message-1",
@@ -712,19 +736,18 @@ describe("boundary schemas", () => {
 
       const history = serverMessageSchema.safeParse({
         type: "history_page",
-        items: [event],
+        items: [{ eventId: "event-1", timelineSequence: 1, event }],
         hasMore: false,
         cursor: null,
       });
       expect(history.success).toBe(true);
       if (history.success && history.data.type === "history_page") {
-        expect(history.data.items).toEqual([event]);
+        expect(history.data.items).toEqual([{ eventId: "event-1", timelineSequence: 1, event }]);
       }
 
       const subscribed = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -738,11 +761,17 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
-        replay: { events: [event], hasMore: false, cursor: null },
+        timeline: {
+          events: [{ eventId: "event-1", timelineSequence: 1, event }],
+          hasMore: false,
+          cursor: null,
+        },
       });
       expect(subscribed.success).toBe(true);
       if (subscribed.success && subscribed.data.type === "subscribed") {
-        expect(subscribed.data.replay?.events).toEqual([event]);
+        expect(subscribed.data.timeline.events).toEqual([
+          { eventId: "event-1", timelineSequence: 1, event },
+        ]);
       }
     });
 
