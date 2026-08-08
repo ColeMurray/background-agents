@@ -2660,6 +2660,9 @@ class TestCompactionHandling:
             "Before compaction",
             "After compaction",
         ]
+        assert [event for event in events if event["type"] == "context_compacted"] == [
+            {"type": "context_compacted", "messageId": "cp-msg-1"}
+        ]
         assert [event for event in events if event["type"] == "error"] == []
         assert events[-1] == {
             "type": "execution_complete",

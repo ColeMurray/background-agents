@@ -257,6 +257,48 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ws!.close();
   });
 
+  it("stores and broadcasts context compaction events", async () => {
+    const name = `ws-sandbox-compaction-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    await seedSandboxAuth(stub, { authToken: SANDBOX_TOKEN, sandboxId: SANDBOX_ID });
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const collector = collectMessages(clientWs, {
+      until: (message) =>
+        message.type === "sandbox_event" && message.event.type === "context_compacted",
+    });
+    const event = {
+      type: "context_compacted",
+      messageId: "msg-compaction-1",
+      sandboxId: SANDBOX_ID,
+      timestamp: Date.now() / 1000,
+    } as const;
+    sandboxWs!.send(JSON.stringify(event));
+
+    const messages = await collector;
+    expect(messages).toContainEqual({ type: "sandbox_event", event });
+    const events = await queryDO<{ type: string; data: string; message_id: string }>(
+      stub,
+      "SELECT type, data, message_id FROM events WHERE type = ?",
+      "context_compacted"
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "context_compacted",
+      message_id: "msg-compaction-1",
+    });
+    expect(JSON.parse(events[0].data)).toEqual(event);
+
+    sandboxWs!.close();
+    clientWs.close();
+  });
+
   it("accepts step_finish messages with structured token usage", async () => {
     const name = `ws-sandbox-step-finish-${Date.now()}`;
     const { stub } = await initNamedSession(name);

@@ -578,6 +578,16 @@ function ExecutionCompleteEvent({ event }: EventRendererProps) {
   );
 }
 
+function ContextCompactedEvent({ event }: EventRendererProps) {
+  if (event.type !== "context_compacted") return null;
+
+  return (
+    <StatusRow tone="muted" time={formatEventTime(event)}>
+      Context compacted to continue
+    </StatusRow>
+  );
+}
+
 function formatEventTime(event: SandboxEvent): string {
   return new Date(event.timestamp * 1000).toLocaleTimeString();
 }
@@ -593,6 +603,7 @@ const eventRenderers: Partial<
   error: ErrorEvent,
   warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
+  context_compacted: ContextCompactedEvent,
 };
 
 export const EventItem = memo(function EventItem({

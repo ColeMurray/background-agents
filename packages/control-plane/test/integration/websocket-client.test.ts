@@ -252,6 +252,18 @@ describe("Client WebSocket (via SELF.fetch)", () => {
         data: JSON.stringify({ type: "tool_result", result: "ok" }),
         createdAt: now - 1000,
       },
+      {
+        id: "ev-3",
+        type: "context_compacted",
+        data: JSON.stringify({
+          type: "context_compacted",
+          messageId: "message-1",
+          sandboxId: "sandbox-1",
+          timestamp: now / 1000,
+        }),
+        messageId: "message-1",
+        createdAt: now,
+      },
     ]);
 
     const { ws, messages } = await openClientWs(name, { subscribe: true });
@@ -260,9 +272,10 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(subscribed).toBeDefined();
     const replay = subscribed.replay as { events: Record<string, unknown>[]; hasMore: boolean };
     expect(replay).toBeDefined();
-    expect(replay.events).toHaveLength(2);
+    expect(replay.events).toHaveLength(3);
     expect(replay.events[0].type).toBe("tool_call");
     expect(replay.events[1].type).toBe("tool_result");
+    expect(replay.events[2].type).toBe("context_compacted");
 
     ws.close();
   });

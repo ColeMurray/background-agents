@@ -110,6 +110,9 @@ export const sandboxEventSchema = z.discriminatedUnion("type", [
     success: z.boolean(),
     error: z.string().optional(),
   }),
+  messageSandboxEventBaseSchema.extend({
+    type: z.literal("context_compacted"),
+  }),
   sandboxEventBaseSchema.extend({
     type: z.literal("artifact"),
     artifactType: z.string(),

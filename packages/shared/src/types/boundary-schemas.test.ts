@@ -488,6 +488,20 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
     });
+
+    it("parses context compaction events with required message association", () => {
+      const event = {
+        type: "context_compacted",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      };
+
+      expect(sandboxEventSchema.safeParse(event)).toEqual(
+        expect.objectContaining({ success: true, data: event })
+      );
+      expect(sandboxEventSchema.safeParse({ ...event, messageId: undefined }).success).toBe(false);
+    });
   });
 
   describe("clientMessageSchema", () => {
@@ -684,6 +698,52 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(false);
+    });
+
+    it("accepts context compaction events in live messages and replay", () => {
+      const event = {
+        type: "context_compacted",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      };
+
+      expect(serverMessageSchema.safeParse({ type: "sandbox_event", event }).success).toBe(true);
+
+      const history = serverMessageSchema.safeParse({
+        type: "history_page",
+        items: [event],
+        hasMore: false,
+        cursor: null,
+      });
+      expect(history.success).toBe(true);
+      if (history.success && history.data.type === "history_page") {
+        expect(history.data.items).toEqual([event]);
+      }
+
+      const subscribed = serverMessageSchema.safeParse({
+        type: "subscribed",
+        sessionId: "session-1",
+        state: {
+          id: "session-1",
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "completed",
+          sandboxStatus: "stopped",
+          messageCount: 1,
+          createdAt: 123,
+        },
+        artifacts: [],
+        participantId: "participant-1",
+        replay: { events: [event], hasMore: false, cursor: null },
+      });
+      expect(subscribed.success).toBe(true);
+      if (subscribed.success && subscribed.data.type === "subscribed") {
+        expect(subscribed.data.replay?.events).toEqual([event]);
+      }
     });
 
     it("rejects an unknown message type", () => {

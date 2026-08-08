@@ -62,8 +62,8 @@ describe("sessionSocketReducer", () => {
         replay: {
           events: [
             {
-              type: "git_sync",
-              status: "in_progress",
+              type: "context_compacted",
+              messageId: "msg-1",
               sandboxId: "sb-1",
               timestamp: 1,
             },
@@ -141,6 +141,12 @@ describe("sessionSocketReducer", () => {
   describe("events_appended", () => {
     it("appends events in order", () => {
       const events: SandboxEvent[] = [
+        {
+          type: "context_compacted",
+          messageId: "msg-1",
+          sandboxId: "sb-1",
+          timestamp: 0,
+        },
         { type: "token", content: "final", messageId: "msg-1", sandboxId: "sb-1", timestamp: 1 },
         {
           type: "execution_complete",
@@ -199,7 +205,14 @@ describe("sessionSocketReducer", () => {
         base,
         serverMessage({
           type: "history_page",
-          items: [{ type: "git_sync", status: "in_progress", sandboxId: "sb-1", timestamp: 5 }],
+          items: [
+            {
+              type: "context_compacted",
+              messageId: "msg-1",
+              sandboxId: "sb-1",
+              timestamp: 5,
+            },
+          ],
           hasMore: false,
           cursor: null,
         })
