@@ -155,4 +155,8 @@ describe("SCM credentials router provider gate", () => {
   it("allows GitLab deployments to reach the SCM-independent read-state route", async () => {
     expect(isScmAgnosticRoute("PATCH", "/sessions/session-1/read-state")).toBe(true);
   });
+
+  it("allows GitLab deployments to read the canonical session resource", () => {
+    expect(isScmAgnosticRoute("GET", "/sessions/session-1")).toBe(true);
+  });
 });

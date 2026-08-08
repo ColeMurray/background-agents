@@ -66,6 +66,10 @@ export interface SessionWebSocketManager {
   /** Persist ws-to-participant mapping for hibernation survival. */
   persistClientMapping(wsId: string, participantId: string, clientId: string): void;
 
+  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
+  isClientSynchronizing(ws: WebSocket): boolean;
+  isClientAuthenticated(ws: WebSocket): boolean;
+
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
   hasPersistedMapping(wsId: string): boolean;
 
@@ -89,6 +93,7 @@ export interface SessionWebSocketManager {
 
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private clients = new Map<WebSocket, ClientInfo>();
+  private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
 
   constructor(
@@ -240,6 +245,19 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     });
   }
 
+  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
+    if (synchronizing) this.synchronizingClients.add(ws);
+    else this.synchronizingClients.delete(ws);
+  }
+
+  isClientSynchronizing(ws: WebSocket): boolean {
+    return this.synchronizingClients.has(ws);
+  }
+
+  isClientAuthenticated(ws: WebSocket): boolean {
+    return this.isAuthenticated(ws, this.classify(ws));
+  }
+
   hasPersistedMapping(wsId: string): boolean {
     return this.repository.hasWsClientMapping(wsId);
   }
@@ -312,6 +330,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
     if (ws.readyState !== WebSocket.OPEN) return;
     if (this.clients.has(ws)) return;
+    if (this.synchronizingClients.has(ws)) return;
     if (this.hasPersistedMapping(wsId)) return;
 
     this.log.warn("ws.connect", {

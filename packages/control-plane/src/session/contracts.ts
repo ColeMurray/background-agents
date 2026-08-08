@@ -6,6 +6,8 @@
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
+  snapshot: "/internal/snapshot",
+  access: "/internal/access",
   prompt: "/internal/prompt",
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
