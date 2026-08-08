@@ -8,6 +8,7 @@ import {
   queryDO,
   waitForSandboxStatus,
 } from "./helpers";
+import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("upgrade returns 101 with webSocket", async () => {
@@ -236,6 +237,49 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     ws.close();
   });
+
+  it.each([
+    { eventCount: DEFAULT_REPLAY_LIMIT, expectedHasMore: false },
+    { eventCount: DEFAULT_REPLAY_LIMIT + 1, expectedHasMore: true },
+  ])(
+    "subscribe reports hasMore=$expectedHasMore for $eventCount replay events",
+    async ({ eventCount, expectedHasMore }) => {
+      const name = `ws-client-replay-limit-${eventCount}-${Date.now()}`;
+      const { stub } = await initNamedSession(name);
+      const now = Date.now();
+
+      await seedEvents(
+        stub,
+        Array.from({ length: eventCount }, (_, index) => ({
+          id: `ev-${index}`,
+          type: "git_sync",
+          data: JSON.stringify({
+            type: "git_sync",
+            status: "completed",
+            sandboxId: "sandbox-1",
+            timestamp: now - (eventCount - index),
+          }),
+          createdAt: now - (eventCount - index),
+        }))
+      );
+
+      const { ws, messages } = await openClientWs(name, { subscribe: true });
+
+      const subscribed = messages!.find((message) => message.type === "subscribed") as Record<
+        string,
+        unknown
+      >;
+      const timeline = subscribed.timeline as {
+        events: unknown[];
+        hasMore: boolean;
+      };
+
+      expect(timeline.events).toHaveLength(DEFAULT_REPLAY_LIMIT);
+      expect(timeline.hasMore).toBe(expectedHasMore);
+
+      ws.close();
+    }
+  );
 
   it("subscribe includes historical events in batched replay", async () => {
     const name = `ws-client-replay-events-${Date.now()}`;

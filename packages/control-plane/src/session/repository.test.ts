@@ -1104,21 +1104,6 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("getEventsForReplay", () => {
-    it("returns newest events in ascending order via DESC subquery", () => {
-      repo.getEventsForReplay(500);
-
-      expect(mock.calls.length).toBe(1);
-      // Inner subquery selects newest events via DESC
-      expect(mock.calls[0].query).toContain(
-        "ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
-      );
-      // Outer query re-sorts to chronological ASC for replay
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, timeline_sequence ASC");
-      expect(mock.calls[0].params).toEqual([500]);
-    });
-  });
-
   // === ARTIFACTS ===
 
   describe("createArtifact", () => {
