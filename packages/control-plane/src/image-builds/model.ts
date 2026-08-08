@@ -17,6 +17,7 @@ import type {
   ImageBuildScopeKind,
   ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
+export { MIN_COMPATIBLE_RUNTIME_VERSION } from "../runtime-release";
 
 /**
  * Providers with image-build support: Modal images, Vercel snapshots,
@@ -76,16 +77,6 @@ export interface ImageBuildCallbackBuild {
   providerSessionId: string | null;
   status: ImageBuildStatus;
 }
-
-/**
- * Compatibility floor for prebuilt-image runtimes.
- *
- * Bumped ONLY on breaking runtime changes, never on routine CACHE_BUSTER
- * bumps. v56 is the managed-provider runtime — the first that consumes
- * provider-availability markers instead of durable OAuth credentials — so no
- * image baked by an earlier runtime may ever be selected for a session.
- */
-export const MIN_COMPATIBLE_RUNTIME_VERSION = 56;
 
 /**
  * Parse the numeric prefix of a SANDBOX_VERSION ("v53-list-native-runtime"

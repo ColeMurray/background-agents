@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImageBuildStore } from "../db/image-builds";
 import type { Env } from "../types";
+import { MANAGED_SANDBOX_VERSION } from "../runtime-release";
 import {
   ImageBuildCallbackAuthRejectedError,
   ImageBuildCompletionNotAcceptedError,
@@ -161,7 +162,7 @@ function validCompletion(overrides: Record<string, unknown> = {}) {
     buildId: "imgb-env_1-1-abcd",
     providerSessionId: "vercel-session-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
-    runtimeVersion: "v56-managed-provider-runtime",
+    runtimeVersion: MANAGED_SANDBOX_VERSION,
     buildDurationSeconds: 12.5,
     ...overrides,
   };

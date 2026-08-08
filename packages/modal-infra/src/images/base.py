@@ -16,15 +16,10 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
+from sandbox_runtime.release import OPENCODE_VERSION as OPENCODE_VERSION
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
-
-# OpenCode version to install.
-#
-# OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
-# eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"

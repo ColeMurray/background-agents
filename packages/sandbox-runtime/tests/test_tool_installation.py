@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.release import OPENCODE_VERSION
 
 
 def _make_supervisor() -> SandboxSupervisor:
@@ -509,7 +510,9 @@ def _make_opencode_deps_staging(tmp_path: Path) -> Path:
     """Build a fake /app/opencode-deps staging tree (plugin-only, in sync)."""
     deps_cache = tmp_path / "opencode-deps"
     deps_cache.mkdir()
-    (deps_cache / "package.json").write_text('{"dependencies": {"@opencode-ai/plugin": "1.18.11"}}')
+    (deps_cache / "package.json").write_text(
+        json.dumps({"dependencies": {"@opencode-ai/plugin": OPENCODE_VERSION}})
+    )
     (deps_cache / "package-lock.json").write_text('{"lockfileVersion": 3}')
     plugin = deps_cache / "node_modules" / "@opencode-ai" / "plugin"
     plugin.mkdir(parents=True)

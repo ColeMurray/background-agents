@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { OpenComputerRestClient } from "./opencomputer-rest-client";
+import { MANAGED_SANDBOX_VERSION } from "../runtime-release";
 
 const config = {
   apiUrl: "https://api.opencomputer.dev",
@@ -39,7 +40,7 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain("/sandboxes/sb-1/exec/run");
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.args[1]).toContain("SANDBOX_VERSION=v56-opencode-1-18-11");
+    expect(body.args[1]).toContain(`SANDBOX_VERSION=${MANAGED_SANDBOX_VERSION}`);
   });
 
   it("runRuntimeForeground (image build path) exports SANDBOX_VERSION", async () => {
@@ -49,7 +50,7 @@ describe("OpenComputerRestClient runtime SANDBOX_VERSION export", () => {
     await client.runRuntimeForeground("sb-1", 60);
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1].body as string);
-    expect(body.args[1]).toContain("SANDBOX_VERSION=v56-opencode-1-18-11");
+    expect(body.args[1]).toContain(`SANDBOX_VERSION=${MANAGED_SANDBOX_VERSION}`);
   });
 });
 

@@ -11,11 +11,11 @@ data "external" "daytona_source_hash" {
     cd ${var.project_root}
     if command -v sha256sum &> /dev/null; then
       hash=$(find packages/daytona-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.json" \) \
         -exec sha256sum {} \; | sort | sha256sum | cut -d' ' -f1)
     else
       hash=$(find packages/daytona-infra/src packages/sandbox-runtime/src \
-        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) \
+        -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.json" \) \
         -exec shasum -a 256 {} \; | sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"
