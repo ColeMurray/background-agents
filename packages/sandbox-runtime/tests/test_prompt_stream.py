@@ -634,12 +634,14 @@ class TestApplySseEventDispositions:
     def test_child_compaction_does_not_emit_parent_marker(self):
         state = make_state()
         state.child_activity.track(CHILD_SESSION_ID)
+        state.pending_overflow_error = "parent overflow"
 
         step = make_stream()._apply_sse_event(
             state, sse("session.compacted", {"sessionID": CHILD_SESSION_ID})
         )
 
         assert state.compaction_occurred is False
+        assert state.pending_overflow_error == "parent overflow"
         assert step.events == []
 
     def test_session_created_tracks_direct_children_only(self):

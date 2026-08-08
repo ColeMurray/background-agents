@@ -199,11 +199,10 @@ Do not change session activity semantics solely for this marker. Compaction happ
 is already processing and surrounding step/tool activity updates last activity. The event should
 remain descriptive rather than becoming a new lifecycle signal.
 
-Add `context_compacted` to `VALID_EVENT_TYPES` in
-`packages/control-plane/src/session/http/handlers/messages.handler.ts` so
-`GET /internal/events?type=context_compacted` succeeds. As a follow-up cleanup, the manual list
-could be derived from `eventTypeSchema`, but that unrelated refactor is not required for this
-feature.
+Validate the optional event-list filter in
+`packages/control-plane/src/session/http/handlers/messages.handler.ts` with the canonical
+`eventTypeSchema` so `GET /internal/events?type=context_compacted` succeeds without maintaining a
+second event catalog.
 
 `SessionEventStream` excludes only heartbeats, so no timeline or history filtering change is needed.
 The existing `timeline_sequence` ordering remains authoritative when storage timestamps tie.
@@ -250,15 +249,17 @@ Compatibility behavior is therefore:
 
 - Old runtime with new control plane/web: no marker is emitted; all existing behavior continues.
 - New runtime with old control plane: the event is rejected at sandbox ingress and is not stored.
-- New control plane with old web client: timeline hydration drops the unknown marker, but a live
-  `sandbox_event` containing it fails that client's server-message parse.
+- New control plane with old web client: timeline hydration drops the unknown marker. A live
+  `sandbox_event` containing it fails strict server-message parsing, closes that client's WebSocket,
+  and loses the non-critical marker; the client can reconnect and continue because the marker is a
+  standalone event.
 - New runtime, control plane, and web: marker is stored, broadcast, and hydrated.
 - Historical sessions: no marker is synthesized for prior compactions.
 
-Deploying the producer last avoids temporary marker loss. If the runtime becomes available first,
-old consumers drop only the standalone non-critical marker; existing session events and execution
-continue normally. Environments that require complete marker coverage during rollout should split
-deployment into a consumer change followed by a runtime/image rebuild.
+Deploy the shared contract, control plane, and web client before enabling the runtime producer. This
+avoids both temporary marker loss at sandbox ingress and avoidable disconnects for old live web
+clients. If deployment order cannot be guaranteed, split deployment into a consumer change followed
+by a runtime/image rebuild.
 
 ## Runtime Distribution
 
@@ -374,14 +375,12 @@ The full test suite remains the final CI backstop.
 ## Rollout
 
 1. Build the shared event contract first.
-2. Prefer deploying the control plane with schema acceptance, persistence coverage, and event-list
-   filtering before the runtime producer.
-3. Prefer deploying the web client with live parsing and the timeline renderer before the runtime
-   producer.
+2. Deploy the control plane with schema acceptance, persistence coverage, and event-list filtering
+   before the runtime producer.
+3. Deploy the web client with live parsing and the timeline renderer before the runtime producer.
 4. Confirm a synthetic or test marker is accepted, stored, broadcast, hydrated, and rendered.
-5. Rebuild and deploy sandbox runtime artifacts for each enabled execution provider. If deployment
-   order cannot be guaranteed, accept temporary marker loss or split producer deployment when
-   complete rollout coverage is required.
+5. Rebuild and deploy sandbox runtime artifacts for each enabled execution provider. Split producer
+   deployment from the consumer change when infrastructure cannot guarantee this order.
 6. Start new sessions on each enabled provider and verify a forced/synthetic OpenCode compaction
    reaches the timeline.
 7. Monitor control-plane invalid sandbox-event logs during rollout for mixed-version rejection.

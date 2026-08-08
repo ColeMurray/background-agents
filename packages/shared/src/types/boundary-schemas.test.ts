@@ -501,6 +501,8 @@ describe("boundary schemas", () => {
         expect.objectContaining({ success: true, data: event })
       );
       expect(sandboxEventSchema.safeParse({ ...event, messageId: undefined }).success).toBe(false);
+      expect(sandboxEventSchema.safeParse({ ...event, sandboxId: undefined }).success).toBe(false);
+      expect(sandboxEventSchema.safeParse({ ...event, timestamp: undefined }).success).toBe(false);
     });
   });
 

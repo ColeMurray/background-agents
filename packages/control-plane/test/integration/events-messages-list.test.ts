@@ -252,6 +252,13 @@ describe("GET /internal/events", () => {
       expect.objectContaining({ id: "evt-context-compacted", type: "context_compacted" }),
     ]);
   });
+
+  it("accepts canonical event types omitted by the old manual filter catalog", async () => {
+    const { stub } = await initSession();
+    const res = await stub.fetch("http://internal/internal/events?type=ready");
+
+    expect(res.status).toBe(200);
+  });
 });
 
 describe("GET /internal/messages", () => {
