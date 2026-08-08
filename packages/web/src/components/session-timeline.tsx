@@ -582,9 +582,11 @@ function ContextCompactedEvent({ event }: EventRendererProps) {
   if (event.type !== "context_compacted") return null;
 
   return (
-    <StatusRow tone="muted" time={formatEventTime(event)}>
-      Context compacted to continue
-    </StatusRow>
+    <div className="flex items-center gap-3 py-1 text-xs text-muted-foreground">
+      <span aria-hidden="true" className="flex-1 border-t border-border-muted" />
+      <span className="shrink-0">Context compacted</span>
+      <span aria-hidden="true" className="flex-1 border-t border-border-muted" />
+    </div>
   );
 }
 

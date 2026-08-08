@@ -140,7 +140,7 @@ describe("context compaction", () => {
     };
   }
 
-  it("renders a neutral timeline marker", () => {
+  it("renders a muted divider marker", () => {
     render(
       <EventItem
         event={compaction(1)}
@@ -151,8 +151,9 @@ describe("context compaction", () => {
       />
     );
 
-    const marker = screen.getByText("Context compacted to continue");
+    const marker = screen.getByText("Context compacted");
     expect(marker.closest(".text-muted-foreground")).not.toBeNull();
+    expect(marker.parentElement?.querySelectorAll("[aria-hidden='true']")).toHaveLength(2);
   });
 
   it("keeps multiple markers and separates adjacent tool groups", () => {
