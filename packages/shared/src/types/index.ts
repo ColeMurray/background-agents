@@ -115,15 +115,15 @@ export {
 
 export {
   serverMessageSchema,
-  sessionBootstrapSchema,
-  sessionBootstrapStateSchema,
+  sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
 } from "./server-messages";
 export type {
   ParticipantPresence,
   ServerMessage,
-  SessionBootstrap,
-  SessionBootstrapState,
+  SessionSnapshot,
+  SessionSnapshotState,
   SessionState,
   SessionTimelineEvent,
 } from "./server-messages";

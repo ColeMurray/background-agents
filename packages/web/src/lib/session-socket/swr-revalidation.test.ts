@@ -79,8 +79,7 @@ describe("swrKeysToRevalidate", () => {
       swrKeysToRevalidate(
         {
           type: "subscribed",
-          sessionId: SESSION_ID,
-          state: {
+          session: {
             id: SESSION_ID,
             title: null,
             repoOwner: null,
@@ -95,7 +94,7 @@ describe("swrKeysToRevalidate", () => {
           artifacts: [],
           participantId: "participant-1",
           participant: { participantId: "participant-1", name: "User" },
-          replay: { events: [], hasMore: false, cursor: null },
+          timeline: { events: [], hasMore: false, cursor: null },
         },
         SESSION_ID
       )

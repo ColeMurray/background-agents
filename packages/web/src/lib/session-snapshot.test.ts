@@ -5,11 +5,10 @@ const mocks = vi.hoisted(() => ({ controlPlaneUserFetch: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("./control-plane", () => ({ controlPlaneUserFetch: mocks.controlPlaneUserFetch }));
 
-import { getSessionBootstrap, SessionBootstrapError } from "./session-bootstrap";
+import { getSessionSnapshot, SessionSnapshotError } from "./session-snapshot";
 
-const bootstrap = {
-  sessionId: "session/one",
-  state: {
+const snapshot = {
+  session: {
     id: "session/one",
     title: "Session",
     repoOwner: "group/subgroup",
@@ -22,31 +21,29 @@ const bootstrap = {
     createdAt: 1,
   },
   artifacts: [],
-  replay: { events: [], hasMore: false, cursor: null },
+  timeline: { events: [], hasMore: false, cursor: null },
 };
 
-describe("getSessionBootstrap", () => {
+describe("getSessionSnapshot", () => {
   beforeEach(() => vi.resetAllMocks());
 
-  it("fetches an uncached bootstrap and validates the shared contract", async () => {
-    mocks.controlPlaneUserFetch.mockResolvedValue(Response.json(bootstrap));
+  it("fetches the uncached canonical session resource and validates it", async () => {
+    mocks.controlPlaneUserFetch.mockResolvedValue(Response.json(snapshot));
 
-    await expect(getSessionBootstrap("session/one")).resolves.toEqual(bootstrap);
+    await expect(getSessionSnapshot("session/one")).resolves.toEqual(snapshot);
     expect(mocks.controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions/session%2Fone/bootstrap",
+      "/sessions/session%2Fone",
       expect.objectContaining({ cache: "no-store" })
     );
   });
 
   it("preserves the upstream status for route-level handling", async () => {
     mocks.controlPlaneUserFetch.mockResolvedValue(new Response(null, { status: 404 }));
-    await expect(getSessionBootstrap("missing")).rejects.toEqual(new SessionBootstrapError(404));
+    await expect(getSessionSnapshot("missing")).rejects.toEqual(new SessionSnapshotError(404));
   });
 
-  it("rejects a snapshot for a different session", async () => {
-    mocks.controlPlaneUserFetch.mockResolvedValue(
-      Response.json({ ...bootstrap, sessionId: "session/two" })
-    );
-    await expect(getSessionBootstrap("session/one")).rejects.toThrow();
+  it("rejects a malformed snapshot", async () => {
+    mocks.controlPlaneUserFetch.mockResolvedValue(Response.json({ artifacts: [] }));
+    await expect(getSessionSnapshot("session/one")).rejects.toThrow();
   });
 });

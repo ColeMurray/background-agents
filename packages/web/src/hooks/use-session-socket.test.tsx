@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { SessionArtifact, SessionState } from "@open-inspect/shared";
-import type { ServerMessage, SessionBootstrap } from "@open-inspect/shared/types/server-messages";
+import type { ServerMessage, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import type * as SwrModule from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";
@@ -81,15 +81,14 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedMessage {
   return {
     type: "subscribed",
-    sessionId: "session-1",
-    state: createSessionState(),
+    session: createSessionState(),
     artifacts,
     participantId: "participant-1",
     participant: {
       participantId: "participant-1",
       name: "Test User",
     },
-    replay: {
+    timeline: {
       events: [],
       hasMore: false,
       cursor: null,
@@ -98,12 +97,11 @@ function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedM
   };
 }
 
-function createBootstrap(): SessionBootstrap {
+function createSnapshot(): SessionSnapshot {
   return {
-    sessionId: "session-1",
-    state: createSessionState(),
+    session: createSessionState(),
     artifacts: [],
-    replay: { events: [], hasMore: false, cursor: null },
+    timeline: { events: [], hasMore: false, cursor: null },
     spawnError: null,
   };
 }
@@ -136,7 +134,7 @@ describe("useSessionSocket", () => {
   });
 
   it("keeps sendPrompt pending until the server acknowledges the queued prompt", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -176,7 +174,7 @@ describe("useSessionSocket", () => {
   });
 
   it("waits for subscription and reports when a prompt cannot be sent", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -207,7 +205,7 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates artifacts from the subscribed payload", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -256,7 +254,7 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates screenshot metadata from subscribed artifacts", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -313,7 +311,7 @@ describe("useSessionSocket", () => {
   });
 
   it("revalidates the sidebar session list on title updates", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -334,7 +332,7 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates replayed assistant text before completion when storage ordering is tied", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -342,7 +340,7 @@ describe("useSessionSocket", () => {
 
     const socket = FakeWebSocket.instances[0];
     const subscribed = createSubscribedMessage();
-    subscribed.replay = {
+    subscribed.timeline = {
       events: [
         {
           eventId: "event-1",
@@ -393,7 +391,7 @@ describe("useSessionSocket", () => {
   });
 
   it("hydrates video metadata from subscribed artifacts", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -458,7 +456,7 @@ describe("useSessionSocket", () => {
   });
 
   it("drops wrong-type metadata fields during narrowing", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -507,7 +505,7 @@ describe("useSessionSocket", () => {
   });
 
   it("replaces stale artifacts with the subscribed snapshot", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -543,7 +541,7 @@ describe("useSessionSocket", () => {
   });
 
   it("updates sessionState.branchName from session_branch without mutating the sidebar cache", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -567,7 +565,7 @@ describe("useSessionSocket", () => {
   });
 
   it("routes a repo-scoped session_branch to the matching member, mirroring the scalar only for the primary", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -604,7 +602,7 @@ describe("useSessionSocket", () => {
 
     act(() => {
       socket.open();
-      socket.receive({ ...createSubscribedMessage(), state: multiRepoState });
+      socket.receive({ ...createSubscribedMessage(), session: multiRepoState });
     });
 
     // Secondary push: update the member, leave the scalar (primary) branch alone.
@@ -646,7 +644,7 @@ describe("useSessionSocket", () => {
   });
 
   it("ignores an unscoped session_branch for a multi-repo session", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -683,7 +681,7 @@ describe("useSessionSocket", () => {
 
     act(() => {
       socket.open();
-      socket.receive({ ...createSubscribedMessage(), state: multiRepoState });
+      socket.receive({ ...createSubscribedMessage(), session: multiRepoState });
     });
 
     // An identity-less update on a multi-repo session is anomalous — it must not
@@ -703,7 +701,7 @@ describe("useSessionSocket", () => {
   });
 
   it("updates sessionState.sandboxDashboardUrl from sandbox_dashboard_url", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -730,7 +728,7 @@ describe("useSessionSocket", () => {
   });
 
   it("clears credentials on spawn and terminal statuses without dropping diagnostic links early", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -783,7 +781,7 @@ describe("useSessionSocket", () => {
   });
 
   it("clears dashboard URL only for replacement starts, not sandbox errors", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -835,7 +833,7 @@ describe("useSessionSocket", () => {
   });
 
   it("prepends new artifacts and replaces duplicates by id", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -921,7 +919,7 @@ describe("useSessionSocket", () => {
   });
 
   it("applies artifact_updated in place and revalidates the session list", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -985,7 +983,7 @@ describe("useSessionSocket", () => {
   });
 
   it("does not revalidate the session list for non-PR artifacts", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);
@@ -1020,7 +1018,7 @@ describe("useSessionSocket", () => {
   });
 
   it("derives prState from tracked lifecycle metadata over the legacy state key", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createBootstrap()));
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
 
     await waitFor(() => {
       expect(FakeWebSocket.instances).toHaveLength(1);

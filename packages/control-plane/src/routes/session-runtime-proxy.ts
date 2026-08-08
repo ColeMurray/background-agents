@@ -231,13 +231,6 @@ function lifecycleProxyRoute(
 export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
     method: "GET",
-    routePath: "/sessions/:id/bootstrap",
-    internalPath: SessionInternalPaths.bootstrap,
-    notFoundMessage: "Session not found",
-    userOnly: true,
-  }),
-  simpleProxyRoute({
-    method: "GET",
     routePath: "/sessions/:id/access",
     internalPath: SessionInternalPaths.access,
     userOnly: true,
@@ -245,8 +238,9 @@ export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
     method: "GET",
     routePath: "/sessions/:id",
-    internalPath: SessionInternalPaths.state,
+    internalPath: SessionInternalPaths.snapshot,
     notFoundMessage: "Session not found",
+    userOnly: true,
   }),
   simpleProxyRoute({
     method: "POST",

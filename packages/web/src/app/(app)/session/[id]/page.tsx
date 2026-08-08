@@ -57,15 +57,15 @@ import {
   reconcileSessionReadState,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
-import { useSessionBootstrap } from "./session-bootstrap-provider";
+import { useSessionSnapshot } from "./session-snapshot-provider";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
 const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 
 export default function SessionPage() {
-  const initialBootstrap = useSessionBootstrap();
-  const sessionId = initialBootstrap.sessionId;
+  const initialSnapshot = useSessionSnapshot();
+  const sessionId = initialSnapshot.session.id;
   const {
     connected,
     connecting,
@@ -84,7 +84,7 @@ export default function SessionPage() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId, initialBootstrap);
+  } = useSessionSocket(sessionId, initialSnapshot);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
     sessionId,
     participants,
@@ -92,9 +92,9 @@ export default function SessionPage() {
   );
 
   const fallbackSessionInfo = {
-    repoOwner: initialBootstrap.state.repoOwner,
-    repoName: initialBootstrap.state.repoName,
-    title: initialBootstrap.state.title,
+    repoOwner: initialSnapshot.session.repoOwner,
+    repoName: initialSnapshot.session.repoName,
+    title: initialSnapshot.session.title,
   };
 
   const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);

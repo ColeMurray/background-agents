@@ -581,8 +581,7 @@ describe("boundary schemas", () => {
     it("parses a valid subscribed message with nullable fields", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -606,7 +605,7 @@ describe("boundary schemas", () => {
           },
         ],
         participantId: "participant-1",
-        replay: {
+        timeline: {
           events: [],
           hasMore: false,
           cursor: null,
@@ -617,11 +616,10 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("keeps recognized replay events and drops unknown ones without failing", () => {
+    it("keeps recognized timeline events and drops unknown ones without failing", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -637,7 +635,7 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
-        replay: {
+        timeline: {
           events: [
             {
               eventId: "event-1",
@@ -665,7 +663,7 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.replay.events.map((item) => item.event.type)).toEqual([
+        expect(result.data.timeline.events.map((item) => item.event.type)).toEqual([
           "ready",
           "token",
         ]);

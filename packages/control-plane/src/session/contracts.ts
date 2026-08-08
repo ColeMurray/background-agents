@@ -6,7 +6,7 @@
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
-  bootstrap: "/internal/bootstrap",
+  snapshot: "/internal/snapshot",
   access: "/internal/access",
   prompt: "/internal/prompt",
   stop: "/internal/stop",

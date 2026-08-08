@@ -11,8 +11,8 @@ import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
 import {
-  sessionBootstrapSchema,
-  type SessionBootstrapState,
+  sessionSnapshotSchema,
+  type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
@@ -225,7 +225,7 @@ export class SessionDO extends DurableObject<Env> {
   private readonly routes = createSessionInternalRoutes({
     init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
-    bootstrap: () => this.handleBootstrap(),
+    snapshot: () => this.handleSnapshot(),
     access: () => this.handleSessionAccess(),
     prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
     stop: () => this.messagesHandler.stop(),
@@ -1461,9 +1461,7 @@ export class SessionDO extends DurableObject<Env> {
     if (
       !this.safeSend(ws, {
         type: "subscribed",
-        sessionId: snapshot.state.id,
-        state: snapshot.state,
-        artifacts: snapshot.artifacts,
+        ...snapshot,
         participantId: client.participantId,
         participant: {
           participantId: client.participantId,
@@ -1471,8 +1469,6 @@ export class SessionDO extends DurableObject<Env> {
           name: client.name,
           avatar: client.avatar,
         },
-        replay: snapshot.replay,
-        spawnError: snapshot.spawnError,
       } satisfies ServerMessage)
     ) {
       return false;
@@ -1735,11 +1731,11 @@ export class SessionDO extends DurableObject<Env> {
 
   private readSessionState(
     enrichment: SessionSnapshotEnrichment
-  ): { state: SessionBootstrapState; sandbox: SandboxRow | null } | null {
+  ): { session: SessionSnapshotState; sandbox: SandboxRow | null } | null {
     const session = this.getSession();
     if (!session) return null;
     const sandbox = this.getSandbox();
-    const state: SessionBootstrapState = {
+    const publicSession: SessionSnapshotState = {
       id: this.getPublicSessionId(session),
       title: session.title,
       repoOwner: session.repo_owner,
@@ -1764,7 +1760,7 @@ export class SessionDO extends DurableObject<Env> {
       environmentName:
         session.environment_id === enrichment.environmentId ? enrichment.environmentName : null,
     };
-    return { state, sandbox };
+    return { session: publicSession, sandbox };
   }
 
   private readSessionSnapshot(enrichment: SessionSnapshotEnrichment) {
@@ -1772,25 +1768,22 @@ export class SessionDO extends DurableObject<Env> {
       const local = this.readSessionState(enrichment);
       if (!local) return null;
       return {
-        state: local.state,
+        session: local.session,
         artifacts: this.messageService.listArtifacts().artifacts,
-        replay: this.eventStream.getReplay(),
+        timeline: this.eventStream.getReplay(),
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });
   }
 
-  private async handleBootstrap(): Promise<Response> {
+  private async handleSnapshot(): Promise<Response> {
     const headers = { "Cache-Control": "private, no-store" };
     const enrichment = await this.resolveSessionSnapshotEnrichment();
     const snapshot = this.readSessionSnapshot(enrichment);
     if (!snapshot) {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
-    return Response.json(
-      sessionBootstrapSchema.parse({ sessionId: snapshot.state.id, ...snapshot }),
-      { headers }
-    );
+    return Response.json(sessionSnapshotSchema.parse(snapshot), { headers });
   }
 
   private async handleSessionAccess(): Promise<Response> {

@@ -17,7 +17,9 @@ const HISTORY_EXCLUDED_TYPES = ["heartbeat"];
 export type EventStreamCursor = NonNullable<
   Extract<ClientMessage, { type: "fetch_history" }>["cursor"]
 >;
-export type SessionReplay = NonNullable<Extract<ServerMessage, { type: "subscribed" }>["replay"]>;
+export type SessionTimeline = NonNullable<
+  Extract<ServerMessage, { type: "subscribed" }>["timeline"]
+>;
 export type SessionHistoryPage = Omit<Extract<ServerMessage, { type: "history_page" }>, "type">;
 
 export type SessionEventStreamRepository = Pick<
@@ -35,7 +37,7 @@ export interface SessionEventListRequest {
 export class SessionEventStream {
   constructor(private readonly repository: SessionEventStreamRepository) {}
 
-  getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionReplay {
+  getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionTimeline {
     const rows = this.repository.getEventsForReplay(limit);
     const cursor = rows.length > 0 ? cursorFromRow(rows[0]) : null;
 

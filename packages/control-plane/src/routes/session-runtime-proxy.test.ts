@@ -43,18 +43,18 @@ function getHandler(method: string, path: string) {
 
 describe("session runtime proxy routes", () => {
   it.each([
-    ["bootstrap", SessionInternalPaths.bootstrap],
-    ["access", SessionInternalPaths.access],
-  ])("forwards %s for users and rejects service principals", async (route, internalPath) => {
+    ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
+    ["access", "/sessions/session-1/access", SessionInternalPaths.access],
+  ])("forwards %s for users and rejects service principals", async (_name, path, internalPath) => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
       return Response.json({ sessionId: "session-1" });
     });
-    const { handler, match } = getHandler("GET", `/sessions/session-1/${route}`);
+    const { handler, match } = getHandler("GET", path);
 
     const response = await handler(
-      new Request(`https://test.local/sessions/session-1/${route}`),
+      new Request(`https://test.local${path}`),
       createEnv(fetch),
       match,
       createCtx()
@@ -66,7 +66,7 @@ describe("session runtime proxy routes", () => {
     serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
 
     const rejected = await handler(
-      new Request(`https://test.local/sessions/session-1/${route}`),
+      new Request(`https://test.local${path}`),
       createEnv(fetch),
       match,
       serviceCtx

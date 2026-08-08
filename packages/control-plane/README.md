@@ -59,7 +59,7 @@ The control plane provides:
 | ------------------------------- | --------- | ------------------------------ |
 | `/sessions`                     | GET       | List user's sessions           |
 | `/sessions`                     | POST      | Create new session             |
-| `/sessions/:id`                 | GET       | Get session state              |
+| `/sessions/:id`                 | GET       | Get canonical session snapshot |
 | `/sessions/:id`                 | DELETE    | Delete session                 |
 | `/sessions/:id/prompt`          | POST      | Enqueue prompt                 |
 | `/sessions/:id/stop`            | POST      | Stop execution                 |

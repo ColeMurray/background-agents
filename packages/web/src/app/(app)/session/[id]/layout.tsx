@@ -1,8 +1,8 @@
 import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
-import { getSessionBootstrap, SessionBootstrapError } from "@/lib/session-bootstrap";
+import { getSessionSnapshot, SessionSnapshotError } from "@/lib/session-snapshot";
 import SessionLoading from "./loading";
-import { SessionBootstrapProvider } from "./session-bootstrap-provider";
+import { SessionSnapshotProvider } from "./session-snapshot-provider";
 
 export default function SessionLayout({
   children,
@@ -13,12 +13,12 @@ export default function SessionLayout({
 }) {
   return (
     <Suspense fallback={<SessionLoading />}>
-      <SessionBootstrapBoundary params={params}>{children}</SessionBootstrapBoundary>
+      <SessionSnapshotBoundary params={params}>{children}</SessionSnapshotBoundary>
     </Suspense>
   );
 }
 
-async function SessionBootstrapBoundary({
+async function SessionSnapshotBoundary({
   children,
   params,
 }: {
@@ -27,14 +27,14 @@ async function SessionBootstrapBoundary({
 }) {
   const { id } = await params;
   try {
-    const bootstrap = await getSessionBootstrap(id);
+    const snapshot = await getSessionSnapshot(id);
     return (
-      <SessionBootstrapProvider key={id} bootstrap={bootstrap}>
+      <SessionSnapshotProvider key={id} snapshot={snapshot}>
         {children}
-      </SessionBootstrapProvider>
+      </SessionSnapshotProvider>
     );
   } catch (error) {
-    if (error instanceof SessionBootstrapError) {
+    if (error instanceof SessionSnapshotError) {
       if (error.status === 401) redirect("/login");
       if (error.status === 404) notFound();
     }

@@ -41,11 +41,11 @@ const sessionStateSchema = z.object({
 });
 export type SessionState = z.infer<typeof sessionStateSchema>;
 
-export const sessionBootstrapStateSchema = sessionStateSchema.omit({
+export const sessionSnapshotStateSchema = sessionStateSchema.omit({
   codeServerPassword: true,
   ttydToken: true,
 });
-export type SessionBootstrapState = z.infer<typeof sessionBootstrapStateSchema>;
+export type SessionSnapshotState = z.infer<typeof sessionSnapshotStateSchema>;
 
 const participantPresenceSchema = z.object({
   participantId: z.string(),
@@ -92,34 +92,24 @@ const tolerantSessionTimelineEventsSchema = z
     })
   );
 
-const sessionReplaySchema = z.object({
+const sessionTimelineSchema = z.object({
   events: tolerantSessionTimelineEventsSchema,
   hasMore: z.boolean(),
   cursor: historyCursorSchema.nullable(),
 });
 
-const sessionSnapshotSchema = z.object({
-  state: sessionBootstrapStateSchema,
+export const sessionSnapshotSchema = z.object({
+  session: sessionSnapshotStateSchema,
   artifacts: z.array(sessionArtifactSchema),
-  replay: sessionReplaySchema,
+  timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
 });
-
-export const sessionBootstrapSchema = sessionSnapshotSchema
-  .extend({
-    sessionId: z.string(),
-  })
-  .refine((bootstrap) => bootstrap.sessionId === bootstrap.state.id, {
-    message: "Bootstrap sessionId must match state.id",
-    path: ["sessionId"],
-  });
-export type SessionBootstrap = z.infer<typeof sessionBootstrapSchema>;
+export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 
 const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
   sessionSnapshotSchema.extend({
     type: z.literal("subscribed"),
-    sessionId: z.string(),
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
   }),
@@ -178,12 +168,6 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
 ]);
 
-export const serverMessageSchema = serverMessageUnionSchema.refine(
-  (message) => message.type !== "subscribed" || message.sessionId === message.state.id,
-  {
-    message: "Subscribed sessionId must match state.id",
-    path: ["sessionId"],
-  }
-);
+export const serverMessageSchema = serverMessageUnionSchema;
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;

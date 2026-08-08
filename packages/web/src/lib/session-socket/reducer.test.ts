@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
 import type { SessionState } from "@open-inspect/shared";
-import type { ServerMessage, SessionBootstrap } from "@open-inspect/shared/types/server-messages";
+import type { ServerMessage, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 import {
   createSessionSocketState,
   initialSessionSocketState,
@@ -31,23 +31,21 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 function createSubscribedMessage(overrides: Partial<SubscribedMessage> = {}): SubscribedMessage {
   return {
     type: "subscribed",
-    sessionId: "session-1",
-    state: createSessionState(),
+    session: createSessionState(),
     artifacts: [],
     participantId: "participant-1",
     participant: { participantId: "participant-1", name: "Test User" },
-    replay: { events: [], hasMore: false, cursor: null },
+    timeline: { events: [], hasMore: false, cursor: null },
     spawnError: null,
     ...overrides,
   };
 }
 
-function createBootstrap(overrides: Partial<SessionBootstrap> = {}): SessionBootstrap {
+function createSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
   return {
-    sessionId: "session-1",
-    state: createSessionState(),
+    session: createSessionState(),
     artifacts: [],
-    replay: {
+    timeline: {
       events: [
         {
           eventId: "event-1",
@@ -83,19 +81,19 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
-  describe("bootstrap", () => {
+  describe("snapshot", () => {
     it("initializes the rendered state before the socket connects", () => {
-      const state = createSessionSocketState(createBootstrap());
+      const state = createSessionSocketState(createSnapshot());
 
       expect(state.ready).toBe(false);
       expect(state.events).toHaveLength(1);
       expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
     });
 
-    it("collapses bootstrap token snapshots to the final text", () => {
+    it("collapses snapshot token snapshots to the final text", () => {
       const state = createSessionSocketState(
-        createBootstrap({
-          replay: {
+        createSnapshot({
+          timeline: {
             events: [
               {
                 eventId: "token-1",
@@ -145,7 +143,7 @@ describe("sessionSocketReducer", () => {
   describe("subscribed", () => {
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({
-        replay: {
+        timeline: {
           events: [
             {
               eventId: "evt-1",
@@ -172,9 +170,9 @@ describe("sessionSocketReducer", () => {
       expect(state.cursor).toEqual({ timestamp: 1, id: "evt-1" });
     });
 
-    it("collapses replayed token events to one final token before its completion", () => {
+    it("collapses timeline token events to one final token before its completion", () => {
       const state = subscribedState({
-        replay: {
+        timeline: {
           events: [
             {
               eventId: "event-1",
@@ -228,7 +226,7 @@ describe("sessionSocketReducer", () => {
 
     it("preserves existing isProcessing and totalCost from the snapshot", () => {
       const state = subscribedState({
-        state: createSessionState({ isProcessing: true, totalCost: 1.25 }),
+        session: createSessionState({ isProcessing: true, totalCost: 1.25 }),
       });
       expect(state.sessionState?.isProcessing).toBe(true);
       expect(state.sessionState?.totalCost).toBe(1.25);
@@ -252,7 +250,7 @@ describe("sessionSocketReducer", () => {
     });
 
     it("accumulates step_finish cost onto the session total", () => {
-      const base = subscribedState({ state: createSessionState({ totalCost: 1 }) });
+      const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
         events: [
@@ -263,7 +261,7 @@ describe("sessionSocketReducer", () => {
     });
 
     it("ignores missing, non-finite, and non-positive costs", () => {
-      const base = subscribedState({ state: createSessionState({ totalCost: 1 }) });
+      const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
         events: [
@@ -281,7 +279,7 @@ describe("sessionSocketReducer", () => {
     it("marks loading on request and prepends the fetched page", () => {
       const base = reduce(
         subscribedState({
-          replay: {
+          timeline: {
             events: [
               {
                 eventId: "evt-10",
@@ -389,7 +387,7 @@ describe("sessionSocketReducer", () => {
     const withAccessState = () =>
       reduce(
         subscribedState({
-          state: createSessionState({
+          session: createSessionState({
             codeServerUrl: "https://code.example",
             ttydUrl: "https://ttyd.example",
           }),
@@ -541,7 +539,7 @@ describe("sessionSocketReducer", () => {
         },
       ];
       const base = subscribedState({
-        state: createSessionState({ branchName: "open-inspect/session-1", repositories }),
+        session: createSessionState({ branchName: "open-inspect/session-1", repositories }),
       });
 
       const secondary = reduce(

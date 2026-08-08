@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { serverMessageSchema, sessionBootstrapSchema } from "./server-messages";
+import { serverMessageSchema, sessionSnapshotSchema } from "./server-messages";
 import type { PullRequestSummary, Session } from "./sessions";
 
 describe("artifact_updated server message", () => {
@@ -39,7 +39,7 @@ describe("Session.pullRequestSummary contract", () => {
   });
 });
 
-const bootstrapState = {
+const snapshotState = {
   id: "session-1",
   title: "Inspect session",
   repoOwner: "acme",
@@ -53,16 +53,15 @@ const bootstrapState = {
 };
 
 describe("session view contracts", () => {
-  it("parses a bootstrap and removes access credentials", () => {
-    const parsed = sessionBootstrapSchema.parse({
-      sessionId: "session-1",
-      state: {
-        ...bootstrapState,
+  it("parses a snapshot and removes access credentials", () => {
+    const parsed = sessionSnapshotSchema.parse({
+      session: {
+        ...snapshotState,
         codeServerPassword: "secret",
         ttydToken: "secret",
       },
       artifacts: [],
-      replay: {
+      timeline: {
         events: [
           {
             eventId: "event-1",
@@ -76,42 +75,25 @@ describe("session view contracts", () => {
       },
     });
 
-    expect(parsed.state).not.toHaveProperty("codeServerPassword");
-    expect(parsed.state).not.toHaveProperty("ttydToken");
-    expect(parsed.replay.events.map((item) => item.eventId)).toEqual(["event-1"]);
+    expect(parsed.session).not.toHaveProperty("codeServerPassword");
+    expect(parsed.session).not.toHaveProperty("ttydToken");
+    expect(parsed.timeline.events.map((item) => item.eventId)).toEqual(["event-1"]);
   });
 
-  it("rejects mismatched bootstrap identity and malformed stable event envelopes", () => {
-    const bootstrap = {
-      sessionId: "session-1",
-      state: bootstrapState,
+  it("rejects malformed stable event envelopes", () => {
+    const snapshot = {
+      session: snapshotState,
       artifacts: [],
-      replay: { events: [], hasMore: false, cursor: null },
+      timeline: { events: [], hasMore: false, cursor: null },
     };
     expect(
-      sessionBootstrapSchema.safeParse({ ...bootstrap, sessionId: "different-session" }).success
-    ).toBe(false);
-    expect(
-      sessionBootstrapSchema.safeParse({
-        ...bootstrap,
-        replay: {
+      sessionSnapshotSchema.safeParse({
+        ...snapshot,
+        timeline: {
           events: [{ timelineSequence: 1, event: { type: "future" } }],
           hasMore: false,
           cursor: null,
         },
-      }).success
-    ).toBe(false);
-  });
-
-  it("rejects a subscribed snapshot for a different session", () => {
-    expect(
-      serverMessageSchema.safeParse({
-        type: "subscribed",
-        sessionId: "different-session",
-        state: bootstrapState,
-        artifacts: [],
-        participantId: "participant-1",
-        replay: { events: [], hasMore: false, cursor: null },
       }).success
     ).toBe(false);
   });

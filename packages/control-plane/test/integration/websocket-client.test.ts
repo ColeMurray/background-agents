@@ -57,7 +57,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     await expect(closed).resolves.toEqual({ code: 4002 });
   });
 
-  it("subscribe with valid token sends subscribed + state", async () => {
+  it("subscribe with valid token sends the canonical snapshot", async () => {
     const name = `ws-client-sub-${Date.now()}`;
     await initNamedSession(name, { repoOwner: "acme", repoName: "web-app" });
 
@@ -65,10 +65,9 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
     expect(subscribed).toBeDefined();
-    expect(subscribed.sessionId).toBe(name);
     expect(subscribed.participantId).toBe(participantId);
 
-    const state = subscribed.state as Record<string, unknown>;
+    const state = subscribed.session as Record<string, unknown>;
     expect(state.id).toBe(name);
     expect(state.repoOwner).toBe("acme");
 
@@ -120,7 +119,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
       const { ws, messages } = await openClientWs(name, { subscribe: true });
       const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
-      const state = subscribed.state as Record<string, unknown>;
+      const state = subscribed.session as Record<string, unknown>;
 
       expect(state.sandboxStatus).toBe(testCase.status);
       expect(state.sandboxDashboardUrl).toBe(testCase.expectedDashboardUrl);
@@ -225,11 +224,15 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
     expect(subscribed).toBeDefined();
     expect(subscribed.artifacts).toEqual([]);
-    const replay = subscribed.replay as { events: unknown[]; hasMore: boolean; cursor: unknown };
-    expect(replay).toBeDefined();
-    expect(replay.hasMore).toBe(false);
-    expect(replay.cursor).toBeNull();
-    expect(replay.events).toHaveLength(0);
+    const timeline = subscribed.timeline as {
+      events: unknown[];
+      hasMore: boolean;
+      cursor: unknown;
+    };
+    expect(timeline).toBeDefined();
+    expect(timeline.hasMore).toBe(false);
+    expect(timeline.cursor).toBeNull();
+    expect(timeline.events).toHaveLength(0);
 
     ws.close();
   });
@@ -268,11 +271,14 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
     expect(subscribed).toBeDefined();
-    const replay = subscribed.replay as { events: Record<string, unknown>[]; hasMore: boolean };
-    expect(replay).toBeDefined();
-    expect(replay.events).toHaveLength(2);
-    expect(replay.events[0]).toMatchObject({ eventId: "ev-1", event: { type: "git_sync" } });
-    expect(replay.events[1]).toMatchObject({ eventId: "ev-2", event: { type: "git_sync" } });
+    const timeline = subscribed.timeline as {
+      events: Record<string, unknown>[];
+      hasMore: boolean;
+    };
+    expect(timeline).toBeDefined();
+    expect(timeline.events).toHaveLength(2);
+    expect(timeline.events[0]).toMatchObject({ eventId: "ev-1", event: { type: "git_sync" } });
+    expect(timeline.events[1]).toMatchObject({ eventId: "ev-2", event: { type: "git_sync" } });
 
     ws.close();
   });

@@ -452,12 +452,12 @@ describe("POST /internal/create-pr", () => {
       expect(memberRows[1]?.branch_name).toBe(memberRows[0]?.branch_name);
 
       // The canonical session snapshot surfaces each member's own PR URL.
-      const bootstrap = await (
-        await stub.fetch("http://internal/internal/bootstrap")
+      const snapshot = await (
+        await stub.fetch("http://internal/internal/snapshot")
       ).json<{
-        state: { repositories: Array<{ repoName: string; prUrl: string | null }> };
+        session: { repositories: Array<{ repoName: string; prUrl: string | null }> };
       }>();
-      const state = bootstrap.state;
+      const state = snapshot.session;
       expect(state.repositories.map((repo) => repo.prUrl)).toEqual([
         "https://github.com/acme/web-app/pull/1",
         "https://github.com/acme/backend/pull/2",

@@ -13,9 +13,9 @@ import {
 describe("session snapshot synchronization", () => {
   beforeEach(cleanD1Tables);
 
-  it("returns a secret-free bootstrap with stable event identities", async () => {
-    const name = `bootstrap-${Date.now()}`;
-    const { stub } = await initNamedSession(name, { title: "Bootstrap session" });
+  it("returns a secret-free snapshot with stable event identities", async () => {
+    const name = `snapshot-${Date.now()}`;
+    const { stub } = await initNamedSession(name, { title: "Snapshot session" });
     await waitForSandboxStatus(stub, "failed");
     const createdAt = Date.now();
     await seedEvents(stub, [
@@ -41,21 +41,20 @@ describe("session snapshot synchronization", () => {
       await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY)
     );
 
-    const response = await stub.fetch("http://internal/internal/bootstrap");
+    const response = await stub.fetch("http://internal/internal/snapshot");
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    const bootstrap = await response.json<Record<string, any>>();
+    const snapshot = await response.json<Record<string, any>>();
 
-    expect(bootstrap.sessionId).toBe(name);
-    expect(bootstrap.state).toMatchObject({
+    expect(snapshot.session).toMatchObject({
       id: name,
       codeServerUrl: "https://code.example.test",
     });
-    expect(bootstrap.state).not.toHaveProperty("codeServerPassword");
-    expect(bootstrap.state).not.toHaveProperty("ttydToken");
-    expect(JSON.stringify(bootstrap)).not.toContain("code-secret");
-    expect(JSON.stringify(bootstrap)).not.toContain("terminal-secret");
-    expect(bootstrap.replay.events).toContainEqual({
+    expect(snapshot.session).not.toHaveProperty("codeServerPassword");
+    expect(snapshot.session).not.toHaveProperty("ttydToken");
+    expect(JSON.stringify(snapshot)).not.toContain("code-secret");
+    expect(JSON.stringify(snapshot)).not.toContain("terminal-secret");
+    expect(snapshot.timeline.events).toContainEqual({
       eventId: "stable-event-1",
       timelineSequence: expect.any(Number),
       event: expect.objectContaining({ type: "git_sync", status: "completed" }),
@@ -72,9 +71,9 @@ describe("session snapshot synchronization", () => {
     const { ws, messages } = await openClientWs(name, { subscribe: true });
 
     expect(messages!.map((message) => message.type)).toEqual(["subscribed"]);
-    expect(messages![0].state).not.toHaveProperty("codeServerPassword");
-    expect(messages![0].state).not.toHaveProperty("ttydToken");
-    expect(messages![0].replay).toHaveProperty("events");
+    expect(messages![0].session).not.toHaveProperty("codeServerPassword");
+    expect(messages![0].session).not.toHaveProperty("ttydToken");
+    expect(messages![0].timeline).toHaveProperty("events");
     expect(JSON.stringify(messages![0])).not.toContain("code-secret");
     expect(JSON.stringify(messages![0])).not.toContain("terminal-secret");
 

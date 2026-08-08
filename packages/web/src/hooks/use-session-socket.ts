@@ -15,7 +15,7 @@ import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { ServerMessage, SessionBootstrap } from "@open-inspect/shared/types/server-messages";
+import type { ServerMessage, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
 
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
@@ -71,11 +71,11 @@ interface UseSessionSocketReturn {
  */
 export function useSessionSocket(
   sessionId: string,
-  initialBootstrap: SessionBootstrap
+  initialSnapshot: SessionSnapshot
 ): UseSessionSocketReturn {
   const [state, dispatch] = useReducer(
     sessionSocketReducer,
-    initialBootstrap,
+    initialSnapshot,
     createSessionSocketState
   );
   const subscribedRef = useRef(false);
@@ -128,7 +128,7 @@ export function useSessionSocket(
         console.log("WebSocket subscribed to session");
         pendingTextRef.current = null;
         void refreshAccess();
-        if (message.spawnError && message.state.sandboxStatus === "failed") {
+        if (message.spawnError && message.session.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
         }
       } else if (message.type === "session_access_changed") {

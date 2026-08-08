@@ -2,7 +2,7 @@ import type { Artifact, SandboxEvent } from "@/types/session";
 import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type {
   ServerMessage,
-  SessionBootstrap,
+  SessionSnapshot,
   SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
@@ -74,19 +74,19 @@ function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
   return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
 }
 
-export function createSessionSocketState(bootstrap: SessionBootstrap): SessionSocketState {
-  const timelineEvents = bootstrap.replay.events;
+export function createSessionSocketState(snapshot: SessionSnapshot): SessionSocketState {
+  const timelineEvents = snapshot.timeline.events;
   return {
     ...initialSessionSocketState,
     sessionState: {
-      ...bootstrap.state,
-      isProcessing: bootstrap.state.isProcessing ?? false,
-      totalCost: bootstrap.state.totalCost ?? 0,
+      ...snapshot.session,
+      isProcessing: snapshot.session.isProcessing ?? false,
+      totalCost: snapshot.session.totalCost ?? 0,
     },
-    artifacts: bootstrap.artifacts.map(toUiArtifact),
+    artifacts: snapshot.artifacts.map(toUiArtifact),
     events: renderTimelineEvents(timelineEvents),
-    hasMoreHistory: bootstrap.replay.hasMore,
-    cursor: bootstrap.replay.cursor,
+    hasMoreHistory: snapshot.timeline.hasMore,
+    cursor: snapshot.timeline.cursor,
   };
 }
 
@@ -159,7 +159,7 @@ function reduceServerMessage(
 ): SessionSocketState {
   switch (message.type) {
     case "subscribed": {
-      const timelineEvents = message.replay.events;
+      const timelineEvents = message.timeline.events;
       // Replace local artifacts and events with the subscribed snapshot so
       // reconnects still clear stale state instead of merging stale client
       // data.
@@ -167,16 +167,16 @@ function reduceServerMessage(
         ...state,
         ready: true,
         sessionState: {
-          ...message.state,
+          ...message.session,
           // Normalize optional snapshot fields for the view.
-          isProcessing: message.state.isProcessing ?? false,
-          totalCost: message.state.totalCost ?? 0,
+          isProcessing: message.session.isProcessing ?? false,
+          totalCost: message.session.totalCost ?? 0,
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
         events: renderTimelineEvents(timelineEvents),
-        hasMoreHistory: message.replay.hasMore,
-        cursor: message.replay.cursor,
+        hasMoreHistory: message.timeline.hasMore,
+        cursor: message.timeline.cursor,
         // A fetch_history dropped by a disconnect would otherwise leave this
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,

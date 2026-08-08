@@ -17,7 +17,7 @@ complexity and correctness cost of maintaining a second mutation log applies to 
 ## Decision
 
 1. **The canonical database is the synchronization source of truth**
-   - SSR reads a secret-free bootstrap snapshot.
+   - `GET /sessions/:id` returns a secret-free canonical snapshot for SSR.
    - Every WebSocket subscribe or reconnect receives one authoritative `subscribed` snapshot.
    - After subscription, existing semantic messages update the live view.
 

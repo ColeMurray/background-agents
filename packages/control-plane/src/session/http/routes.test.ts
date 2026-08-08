@@ -11,7 +11,7 @@ describe("createSessionInternalRoutes", () => {
     const routes = createSessionInternalRoutes({
       init: noopHandler(),
       state: noopHandler(),
-      bootstrap: noopHandler(),
+      snapshot: noopHandler(),
       access: noopHandler(),
       prompt: noopHandler(),
       stop: noopHandler(),
@@ -51,7 +51,7 @@ describe("createSessionInternalRoutes", () => {
     expect(methodPathSet).toEqual(
       new Set([
         `POST ${SessionInternalPaths.init}`,
-        `GET ${SessionInternalPaths.bootstrap}`,
+        `GET ${SessionInternalPaths.snapshot}`,
         `GET ${SessionInternalPaths.access}`,
         `GET ${SessionInternalPaths.state}`,
         `POST ${SessionInternalPaths.prompt}`,
