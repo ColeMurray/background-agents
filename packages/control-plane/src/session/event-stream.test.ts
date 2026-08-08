@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionEventStream, type SessionEventStreamRepository } from "./event-stream";
+import {
+  DEFAULT_REPLAY_LIMIT,
+  SessionEventStream,
+  type SessionEventStreamRepository,
+} from "./event-stream";
 import type { EventRow } from "./types";
 
 function createStream() {
@@ -49,7 +53,7 @@ describe("SessionEventStream", () => {
 
       expect(repository.getEventTimelinePage).toHaveBeenCalledWith({
         excludeTypes: ["heartbeat"],
-        limit: 500,
+        limit: DEFAULT_REPLAY_LIMIT,
       });
     });
 

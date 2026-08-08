@@ -8,6 +8,7 @@ import {
   queryDO,
   waitForSandboxStatus,
 } from "./helpers";
+import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("upgrade returns 101 with webSocket", async () => {
@@ -238,8 +239,8 @@ describe("Client WebSocket (via SELF.fetch)", () => {
   });
 
   it.each([
-    { eventCount: 500, expectedHasMore: false },
-    { eventCount: 501, expectedHasMore: true },
+    { eventCount: DEFAULT_REPLAY_LIMIT, expectedHasMore: false },
+    { eventCount: DEFAULT_REPLAY_LIMIT + 1, expectedHasMore: true },
   ])(
     "subscribe reports hasMore=$expectedHasMore for $eventCount replay events",
     async ({ eventCount, expectedHasMore }) => {
@@ -273,7 +274,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
         hasMore: boolean;
       };
 
-      expect(timeline.events).toHaveLength(500);
+      expect(timeline.events).toHaveLength(DEFAULT_REPLAY_LIMIT);
       expect(timeline.hasMore).toBe(expectedHasMore);
 
       ws.close();
