@@ -52,13 +52,26 @@ describe("E2BRestClient", () => {
 
   it("createSandbox posts expected body", async () => {
     const client = new E2BRestClient(defaultConfig);
-    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-new", templateID: "tmpl-123" }));
-    await client.createSandbox({
+    fetchSpy.mockResolvedValue(
+      jsonResponse({
+        sandboxID: "sb-new",
+        templateID: "tmpl-123",
+        domain: null,
+        envdAccessToken: null,
+      })
+    );
+    const result = await client.createSandbox({
       templateID: "tmpl-123",
       envVars: { FOO: "bar" },
       metadata: { k: "v" },
       timeoutSeconds: 3300,
       autoPause: false,
+    });
+    expect(result).toEqual({
+      sandboxID: "sb-new",
+      templateID: "tmpl-123",
+      domain: null,
+      envdAccessToken: null,
     });
     const [, init] = fetchSpy.mock.calls[0];
     expect(JSON.parse(init.body)).toEqual({
@@ -105,14 +118,43 @@ describe("E2BRestClient", () => {
   it("connect + timeout endpoints", async () => {
     const client = new E2BRestClient(defaultConfig);
     fetchSpy.mockResolvedValue(
-      jsonResponse({ sandboxID: "sb-1", templateID: "tmpl", state: "running" })
+      jsonResponse({ sandboxID: "sb-1", templateID: "tmpl", state: "running", domain: null })
     );
-    await client.connectSandbox("sb-1", 3300);
+    await expect(client.connectSandbox("sb-1", 3300)).resolves.toEqual({
+      sandboxID: "sb-1",
+      templateID: "tmpl",
+      state: "running",
+      domain: null,
+    });
     expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ timeout: 3300 });
 
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
     await client.setSandboxTimeout("sb-1", 7200);
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ timeout: 7200 });
+  });
+
+  it("rejects malformed E2B success responses", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1" }));
+
+    await expect(client.getSandbox("sb-1")).rejects.toMatchObject({
+      name: "E2BApiError",
+      body: "invalid_response",
+    });
+  });
+
+  it("parses structured E2B error bodies and falls back for malformed ones", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ code: "bad_request", message: "Nope" }, 400));
+
+    await expect(client.getSandbox("x")).rejects.toMatchObject({
+      body: { code: "bad_request", message: "Nope" },
+    });
+
+    fetchSpy.mockResolvedValue(jsonResponse({ code: 123 }, 400));
+    await expect(client.getSandbox("x")).rejects.toMatchObject({
+      body: '{"code":123}',
+    });
   });
 
   it("classifies 404/409/429 errors", async () => {
