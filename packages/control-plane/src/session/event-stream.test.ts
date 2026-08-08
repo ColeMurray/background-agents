@@ -32,6 +32,10 @@ function eventRow(
   };
 }
 
+function gitSyncEvent(status: "in_progress" | "completed", timestamp: number) {
+  return { type: "git_sync", status, sandboxId: "sandbox-1", timestamp } as const;
+}
+
 describe("SessionEventStream", () => {
   describe("getReplay", () => {
     it("loads replay rows with the default replay limit", () => {
@@ -46,35 +50,8 @@ describe("SessionEventStream", () => {
     it("returns parsed replay events and the oldest cursor from the loaded window", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow(
-          "e1",
-          "tool_call",
-          {
-            type: "tool_call",
-            tool: "read_file",
-            args: {},
-            callId: "call-1",
-            messageId: "message-1",
-            sandboxId: "sandbox-1",
-            timestamp: 1,
-          },
-          1000,
-          41
-        ),
-        eventRow(
-          "e2",
-          "tool_result",
-          {
-            type: "tool_result",
-            result: "ok",
-            callId: "call-1",
-            messageId: "message-1",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-          },
-          2000,
-          42
-        ),
+        eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 41),
+        eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
       ]);
 
       const replay = stream.getReplay();
@@ -92,8 +69,8 @@ describe("SessionEventStream", () => {
     it("marks replay as having more when the loaded window reaches the limit", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
-        eventRow("e1", "token", { type: "token", content: "a" }, 1000),
-        eventRow("e2", "token", { type: "token", content: "b" }, 2000),
+        eventRow("e1", "git_sync", gitSyncEvent("in_progress", 1), 1000, 1),
+        eventRow("e2", "git_sync", gitSyncEvent("completed", 2), 2000, 2),
       ]);
 
       const replay = stream.getReplay(2);
@@ -105,20 +82,7 @@ describe("SessionEventStream", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventsForReplay).mockReturnValue([
         eventRow("bad", "tool_call", "{bad", 1000),
-        eventRow(
-          "good",
-          "tool_result",
-          {
-            type: "tool_result",
-            result: "ok",
-            callId: "call-1",
-            messageId: "message-1",
-            sandboxId: "sandbox-1",
-            timestamp: 2,
-          },
-          2000,
-          42
-        ),
+        eventRow("good", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
       ]);
 
       const replay = stream.getReplay();
@@ -126,7 +90,7 @@ describe("SessionEventStream", () => {
       expect(replay.events).toEqual([
         expect.objectContaining({
           eventId: "good",
-          event: expect.objectContaining({ result: "ok" }),
+          event: expect.objectContaining({ status: "completed" }),
         }),
       ]);
       expect(replay.cursor).toEqual({ timestamp: 1000, id: "bad" });
@@ -137,23 +101,7 @@ describe("SessionEventStream", () => {
     it("loads history after a client cursor while excluding heartbeats", () => {
       const { stream, repository } = createStream();
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
-        events: [
-          eventRow(
-            "e1",
-            "tool_call",
-            {
-              type: "tool_call",
-              tool: "write_file",
-              args: {},
-              callId: "call-1",
-              messageId: "message-1",
-              sandboxId: "sandbox-1",
-              timestamp: 1,
-            },
-            1000,
-            41
-          ),
-        ],
+        events: [eventRow("e1", "git_sync", gitSyncEvent("completed", 1), 1000, 41)],
         hasMore: false,
         nextCursor: { kind: "timeline", createdAt: 1000, id: "e1", sequence: 41 },
       });
@@ -209,20 +157,7 @@ describe("SessionEventStream", () => {
       vi.mocked(repository.getEventTimelinePage).mockReturnValue({
         events: [
           eventRow("bad", "tool_call", "{bad", 1000),
-          eventRow(
-            "good",
-            "tool_result",
-            {
-              type: "tool_result",
-              result: "ok",
-              callId: "call-1",
-              messageId: "message-1",
-              sandboxId: "sandbox-1",
-              timestamp: 2,
-            },
-            2000,
-            42
-          ),
+          eventRow("good", "git_sync", gitSyncEvent("completed", 2), 2000, 42),
         ],
         hasMore: true,
         nextCursor: { kind: "timeline", createdAt: 1000, id: "bad" },

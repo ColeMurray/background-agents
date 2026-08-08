@@ -16,10 +16,7 @@ export class SessionBootstrapError extends Error {
 export async function getSessionBootstrap(sessionId: string): Promise<SessionBootstrap> {
   const response = await controlPlaneUserFetch(
     `/sessions/${encodeURIComponent(sessionId)}/bootstrap`,
-    {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    }
+    { cache: "no-store" }
   );
   if (!response.ok) throw new SessionBootstrapError(response.status);
   return sessionBootstrapSchema.parse(await response.json());

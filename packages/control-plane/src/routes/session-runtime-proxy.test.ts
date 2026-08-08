@@ -42,64 +42,38 @@ function getHandler(method: string, path: string) {
 }
 
 describe("session runtime proxy routes", () => {
-  it("forwards bootstrap to the atomic internal endpoint", async () => {
+  it.each([
+    ["bootstrap", SessionInternalPaths.bootstrap],
+    ["access", SessionInternalPaths.access],
+  ])("forwards %s for users and rejects service principals", async (route, internalPath) => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
       return Response.json({ sessionId: "session-1" });
     });
-    const { handler, match } = getHandler("GET", "/sessions/session-1/bootstrap");
+    const { handler, match } = getHandler("GET", `/sessions/session-1/${route}`);
 
     const response = await handler(
-      new Request("https://test.local/sessions/session-1/bootstrap"),
+      new Request(`https://test.local/sessions/session-1/${route}`),
       createEnv(fetch),
       match,
       createCtx()
     );
 
     expect(response.status).toBe(200);
-    expect(new URL(requests[0].url).pathname).toBe(SessionInternalPaths.bootstrap);
-  });
-
-  it("keeps bootstrap client-only", async () => {
-    const fetch = vi.fn(async () => Response.json({ sessionId: "session-1" }));
-    const { handler, match } = getHandler("GET", "/sessions/session-1/bootstrap");
+    expect(new URL(requests[0].url).pathname).toBe(internalPath);
     const serviceCtx = createCtx();
     serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
 
-    const response = await handler(
-      new Request("https://test.local/sessions/session-1/bootstrap"),
-      createEnv(fetch),
-      match,
-      serviceCtx
-    );
-
-    expect(response.status).toBe(403);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("keeps session access client-only", async () => {
-    const fetch = vi.fn(async () => Response.json({ codeServer: null, ttyd: null }));
-    const { handler, match } = getHandler("GET", "/sessions/session-1/access");
-    const serviceCtx = createCtx();
-    serviceCtx.principal = { kind: "service", service: "web", actor: null };
-
     const rejected = await handler(
-      new Request("https://test.local/sessions/session-1/access"),
+      new Request(`https://test.local/sessions/session-1/${route}`),
       createEnv(fetch),
       match,
       serviceCtx
     );
-    expect(rejected.status).toBe(403);
-    expect(fetch).not.toHaveBeenCalled();
 
-    const accepted = await handler(
-      new Request("https://test.local/sessions/session-1/access"),
-      createEnv(fetch),
-      match,
-      createCtx()
-    );
-    expect(accepted.status).toBe(200);
+    expect(rejected.status).toBe(403);
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("forwards event query strings through the session runtime dependency", async () => {

@@ -528,11 +528,16 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
-        await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
+        await this.storeAndBroadcastTtyd(
+          result.ttydUrl,
+          sandboxAuthToken,
+          sessionId,
+          expectedSandboxId
+        );
       }
 
       this.storage.updateSandboxStatus("connecting");
@@ -776,11 +781,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
         if (result.codeServerUrl && result.codeServerPassword) {
-          await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+          await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
         await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
-          await this.storeTtyd(
+          await this.storeAndBroadcastTtyd(
             result.ttydUrl,
             sandboxAuthToken,
             session.session_name || session.id,
@@ -915,7 +920,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.broadcastSandboxDashboardUrl(finalProviderObjectId);
 
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
@@ -1037,11 +1042,13 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.clearSandboxCodeServerUrl();
       this.storage.clearSandboxTunnelUrls();
       this.storage.clearSandboxTtyd();
-    } else {
-      this.storage.clearSandboxCodeServer();
-      this.storage.clearSandboxTunnelUrls();
-      this.storage.clearSandboxTtyd();
+      this.broadcaster.broadcast({ type: "session_access_changed" });
+      return;
     }
+
+    this.storage.clearSandboxCodeServer();
+    this.storage.clearSandboxTunnelUrls();
+    this.storage.clearSandboxTtyd();
     this.broadcaster.broadcast({ type: "session_access_changed" });
   }
 
@@ -1352,7 +1359,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /** Store code-server details and invalidate cached authenticated access. */
-  private async storeCodeServer(url: string, password: string): Promise<void> {
+  private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
     this.log.info("Storing code-server info", { url });
     await this.storage.updateSandboxCodeServer(url, password);
     this.broadcaster.broadcast({ type: "session_access_changed" });
@@ -1391,7 +1398,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   }
 
   /** Mint and persist terminal access, then invalidate cached authenticated access. */
-  private async storeTtyd(
+  private async storeAndBroadcastTtyd(
     url: string,
     sandboxAuthToken: string,
     sessionId: string,

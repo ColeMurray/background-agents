@@ -12,7 +12,6 @@ import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
 import {
   sessionBootstrapSchema,
-  type SessionBootstrap,
   type SessionBootstrapState,
 } from "@open-inspect/shared/types/server-messages";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
@@ -72,6 +71,7 @@ import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./web
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
+import { findPrArtifactForRepo } from "./pr-artifacts";
 import { RepoSecretsStore } from "../db/repo-secrets";
 import { GlobalSecretsStore } from "../db/global-secrets";
 import { EnvironmentSecretsStore } from "../db/environment-secrets";
@@ -96,7 +96,6 @@ import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
-import { findPrArtifactForRepo } from "./pr-artifacts";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
 import {
@@ -1456,7 +1455,7 @@ export class SessionDO extends DurableObject<Env> {
     client: ClientInfo,
     enrichment: SessionSnapshotEnrichment
   ): boolean {
-    const snapshot = this.readSessionSubscriptionSnapshot(enrichment);
+    const snapshot = this.readSessionSnapshot(enrichment);
     if (!snapshot) return false;
 
     if (
@@ -1768,7 +1767,7 @@ export class SessionDO extends DurableObject<Env> {
     return { state, sandbox };
   }
 
-  private readSessionSubscriptionSnapshot(enrichment: SessionSnapshotEnrichment) {
+  private readSessionSnapshot(enrichment: SessionSnapshotEnrichment) {
     return this.ctx.storage.transactionSync(() => {
       const local = this.readSessionState(enrichment);
       if (!local) return null;
@@ -1782,31 +1781,16 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private async handleBootstrap(): Promise<Response> {
-    const bootstrap = await this.getSessionBootstrap();
     const headers = { "Cache-Control": "private, no-store" };
-    if (!bootstrap) {
+    const enrichment = await this.resolveSessionSnapshotEnrichment();
+    const snapshot = this.readSessionSnapshot(enrichment);
+    if (!snapshot) {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
-    return Response.json(bootstrap, {
-      headers,
-    });
-  }
-
-  private async getSessionBootstrap(): Promise<SessionBootstrap | null> {
-    const enrichment = await this.resolveSessionSnapshotEnrichment();
-    const local = this.ctx.storage.transactionSync(() => {
-      const snapshot = this.readSessionState(enrichment);
-      if (!snapshot) return null;
-      const state = snapshot.state;
-      return {
-        sessionId: state.id,
-        state,
-        artifacts: this.messageService.listArtifacts().artifacts,
-        replay: this.eventStream.getReplay(),
-        spawnError: snapshot.sandbox?.last_spawn_error ?? null,
-      };
-    });
-    return local ? sessionBootstrapSchema.parse(local) : null;
+    return Response.json(
+      sessionBootstrapSchema.parse({ sessionId: snapshot.state.id, ...snapshot }),
+      { headers }
+    );
   }
 
   private async handleSessionAccess(): Promise<Response> {
@@ -1815,10 +1799,7 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Session not found" }, { status: 404, headers });
     }
     const sandbox = this.getSandbox();
-    if (!sandbox) {
-      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
-    }
-    if (sandbox.status !== "ready" && sandbox.status !== "running") {
+    if (!sandbox || (sandbox.status !== "ready" && sandbox.status !== "running")) {
       return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
 

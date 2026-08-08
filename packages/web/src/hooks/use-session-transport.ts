@@ -239,7 +239,6 @@ export function useSessionTransport(
           `Reconnecting in ${directive.delayMs}ms (attempt ${reconnectAttempts.current})`
         );
         reconnectTimeoutRef.current = setTimeout(() => {
-          reconnectTimeoutRef.current = null;
           if (mountedRef.current) {
             retry();
           }

@@ -242,13 +242,10 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     await seedEvents(stub, [
       {
         id: "ev-1",
-        type: "tool_call",
+        type: "git_sync",
         data: JSON.stringify({
-          type: "tool_call",
-          tool: "read_file",
-          args: {},
-          callId: "call-1",
-          messageId: "message-1",
+          type: "git_sync",
+          status: "in_progress",
           sandboxId: "sandbox-1",
           timestamp: now - 2000,
         }),
@@ -256,12 +253,10 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       },
       {
         id: "ev-2",
-        type: "tool_result",
+        type: "git_sync",
         data: JSON.stringify({
-          type: "tool_result",
-          result: "ok",
-          callId: "call-1",
-          messageId: "message-1",
+          type: "git_sync",
+          status: "completed",
           sandboxId: "sandbox-1",
           timestamp: now - 1000,
         }),
@@ -276,8 +271,8 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const replay = subscribed.replay as { events: Record<string, unknown>[]; hasMore: boolean };
     expect(replay).toBeDefined();
     expect(replay.events).toHaveLength(2);
-    expect(replay.events[0]).toMatchObject({ eventId: "ev-1", event: { type: "tool_call" } });
-    expect(replay.events[1]).toMatchObject({ eventId: "ev-2", event: { type: "tool_result" } });
+    expect(replay.events[0]).toMatchObject({ eventId: "ev-1", event: { type: "git_sync" } });
+    expect(replay.events[1]).toMatchObject({ eventId: "ev-2", event: { type: "git_sync" } });
 
     ws.close();
   });

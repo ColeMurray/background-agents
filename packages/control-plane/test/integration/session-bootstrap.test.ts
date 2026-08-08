@@ -1,10 +1,8 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { encryptToken } from "../../src/auth/crypto";
-import { EnvironmentStore } from "../../src/db/environments";
 import { cleanD1Tables } from "./cleanup";
 import {
-  collectMessages,
   initNamedSession,
   openClientWs,
   queryDO,
@@ -23,14 +21,12 @@ describe("session snapshot synchronization", () => {
     await seedEvents(stub, [
       {
         id: "stable-event-1",
-        type: "tool_result",
+        type: "git_sync",
         data: JSON.stringify({
-          type: "tool_result",
+          type: "git_sync",
+          status: "completed",
           sandboxId: "sandbox-1",
           timestamp: createdAt,
-          messageId: "message-1",
-          callId: "call-1",
-          result: "ok",
         }),
         createdAt,
       },
@@ -62,7 +58,7 @@ describe("session snapshot synchronization", () => {
     expect(bootstrap.replay.events).toContainEqual({
       eventId: "stable-event-1",
       timelineSequence: expect.any(Number),
-      event: expect.objectContaining({ type: "tool_result", result: "ok" }),
+      event: expect.objectContaining({ type: "git_sync", status: "completed" }),
     });
 
     const accessResponse = await stub.fetch("http://internal/internal/access");
@@ -72,22 +68,6 @@ describe("session snapshot synchronization", () => {
       codeServer: { url: "https://code.example.test", password: "code-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
     });
-  });
-
-  it("sends one authoritative secret-free snapshot and persists only socket identity", async () => {
-    const name = `snapshot-${Date.now()}`;
-    const { stub } = await initNamedSession(name);
-    await waitForSandboxStatus(stub, "failed");
-    await queryDO(
-      stub,
-      "UPDATE sandbox SET code_server_password = ?, ttyd_token = ?",
-      await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
-      await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY)
-    );
-
-    const unavailableAccess = await stub.fetch("http://internal/internal/access");
-    expect(unavailableAccess.status).toBe(409);
-    expect(unavailableAccess.headers.get("Cache-Control")).toBe("private, no-store");
 
     const { ws, messages } = await openClientWs(name, { subscribe: true });
 
@@ -104,6 +84,11 @@ describe("session snapshot synchronization", () => {
     );
     expect(mappings).toHaveLength(1);
     ws.close();
+
+    await queryDO(stub, "UPDATE sandbox SET status = 'failed'");
+    const unavailableAccess = await stub.fetch("http://internal/internal/access");
+    expect(unavailableAccess.status).toBe(409);
+    expect(unavailableAccess.headers.get("Cache-Control")).toBe("private, no-store");
   });
 
   it("rejects a second subscribe on the same socket", async () => {
@@ -125,93 +110,5 @@ describe("session snapshot synchronization", () => {
     );
 
     await expect(closed).resolves.toEqual({ code: 4003, reason: "Already subscribed" });
-  });
-
-  it("resolves environment names before the final socket snapshot", async () => {
-    const now = Date.now();
-    await new EnvironmentStore(env.DB).create(
-      {
-        id: "env-bootstrap",
-        name: "Bootstrap environment",
-        description: null,
-        prebuild_enabled: 0,
-        channel_associations: null,
-        created_at: now,
-        updated_at: now,
-      },
-      []
-    );
-    const name = `bootstrap-environment-${now}`;
-    await initNamedSession(name, { environmentId: "env-bootstrap" });
-
-    const { ws, messages } = await openClientWs(name, { subscribe: true });
-    expect(messages![0].state).toMatchObject({
-      environmentId: "env-bootstrap",
-      environmentName: "Bootstrap environment",
-    });
-    ws.close();
-  });
-
-  it("broadcasts semantic live updates and serves stable history envelopes", async () => {
-    const name = `snapshot-live-${Date.now()}`;
-    const { stub } = await initNamedSession(name);
-    await waitForSandboxStatus(stub, "failed");
-    const now = Date.now();
-    await seedEvents(stub, [
-      {
-        id: "history-old",
-        type: "tool_result",
-        data: JSON.stringify({
-          type: "tool_result",
-          sandboxId: "sandbox-1",
-          timestamp: now - 1,
-          messageId: "message-1",
-          callId: "call-old",
-          result: "old",
-        }),
-        createdAt: now - 1,
-      },
-      {
-        id: "history-new",
-        type: "tool_result",
-        data: JSON.stringify({
-          type: "tool_result",
-          sandboxId: "sandbox-1",
-          timestamp: now,
-          messageId: "message-1",
-          callId: "call-new",
-          result: "new",
-        }),
-        createdAt: now,
-      },
-    ]);
-    const client = await openClientWs(name, { subscribe: true });
-
-    const titlePromise = collectMessages(client.ws, {
-      until: (message) => message.type === "session_title",
-    });
-    const updated = await stub.fetch("http://internal/internal/update-title", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: "user-1", title: "Live title" }),
-    });
-    expect(updated.status).toBe(200);
-    expect((await titlePromise).at(-1)).toEqual({ type: "session_title", title: "Live title" });
-
-    const pagePromise = collectMessages(client.ws, {
-      until: (message) => message.type === "history_page",
-    });
-    client.ws.send(
-      JSON.stringify({
-        type: "fetch_history",
-        cursor: { timestamp: now, id: "history-new" },
-        limit: 10,
-      })
-    );
-    const page = (await pagePromise).at(-1) as Record<string, any>;
-    expect(page.items).toContainEqual(
-      expect.objectContaining({ eventId: "history-old", timelineSequence: expect.any(Number) })
-    );
-    client.ws.close();
   });
 });

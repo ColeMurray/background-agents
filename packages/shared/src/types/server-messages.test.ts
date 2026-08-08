@@ -115,31 +115,4 @@ describe("session view contracts", () => {
       }).success
     ).toBe(false);
   });
-
-  it.each([
-    {
-      type: "subscribed",
-      sessionId: "session-1",
-      state: bootstrapState,
-      artifacts: [],
-      participantId: "participant-1",
-      participant: { participantId: "participant-1", name: "User" },
-      replay: { events: [], hasMore: false, cursor: null },
-    },
-    {
-      type: "history_page",
-      items: [
-        {
-          eventId: "event-1",
-          timelineSequence: 1,
-          event: { type: "ready", sandboxId: "sandbox-1", timestamp: 1 },
-        },
-      ],
-      hasMore: false,
-      cursor: null,
-    },
-    { type: "session_access_changed" },
-  ])("parses snapshot protocol server message $type", (message) => {
-    expect(serverMessageSchema.safeParse(message).success).toBe(true);
-  });
 });

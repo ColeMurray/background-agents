@@ -70,15 +70,6 @@ const historyCursorSchema = z.object({
   sequence: z.number().int().nonnegative().optional(),
 });
 
-export const sessionTimelineEventSchema = z
-  .object({
-    eventId: z.string().min(1),
-    timelineSequence: timelineSequenceSchema,
-    event: sandboxEventSchema,
-  })
-  .strict();
-export type SessionTimelineEvent = z.infer<typeof sessionTimelineEventSchema>;
-
 const sessionTimelineEventEnvelopeSchema = z
   .object({
     eventId: z.string().min(1),
@@ -86,6 +77,11 @@ const sessionTimelineEventEnvelopeSchema = z
     event: z.unknown(),
   })
   .strict();
+
+export const sessionTimelineEventSchema = sessionTimelineEventEnvelopeSchema.extend({
+  event: sandboxEventSchema,
+});
+export type SessionTimelineEvent = z.infer<typeof sessionTimelineEventSchema>;
 
 const tolerantSessionTimelineEventsSchema = z
   .array(sessionTimelineEventEnvelopeSchema)
@@ -96,17 +92,22 @@ const tolerantSessionTimelineEventsSchema = z
     })
   );
 
-export const sessionBootstrapSchema = z
-  .object({
+const sessionReplaySchema = z.object({
+  events: tolerantSessionTimelineEventsSchema,
+  hasMore: z.boolean(),
+  cursor: historyCursorSchema.nullable(),
+});
+
+const sessionSnapshotSchema = z.object({
+  state: sessionBootstrapStateSchema,
+  artifacts: z.array(sessionArtifactSchema),
+  replay: sessionReplaySchema,
+  spawnError: z.string().nullable().optional(),
+});
+
+export const sessionBootstrapSchema = sessionSnapshotSchema
+  .extend({
     sessionId: z.string(),
-    state: sessionBootstrapStateSchema,
-    artifacts: z.array(sessionArtifactSchema),
-    replay: z.object({
-      events: tolerantSessionTimelineEventsSchema,
-      hasMore: z.boolean(),
-      cursor: historyCursorSchema.nullable(),
-    }),
-    spawnError: z.string().nullable().optional(),
   })
   .refine((bootstrap) => bootstrap.sessionId === bootstrap.state.id, {
     message: "Bootstrap sessionId must match state.id",
@@ -116,26 +117,15 @@ export type SessionBootstrap = z.infer<typeof sessionBootstrapSchema>;
 
 const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
-  z.object({
+  sessionSnapshotSchema.extend({
     type: z.literal("subscribed"),
     sessionId: z.string(),
-    state: sessionBootstrapStateSchema,
-    artifacts: z.array(sessionArtifactSchema),
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
-    replay: z.object({
-      events: tolerantSessionTimelineEventsSchema,
-      hasMore: z.boolean(),
-      cursor: historyCursorSchema.nullable(),
-    }),
-    spawnError: z.string().nullable().optional(),
   }),
   z.object({ type: z.literal("prompt_queued"), messageId: z.string(), position: z.number() }),
   z.object({ type: z.literal("sandbox_event"), event: sandboxEventSchema }),
-  z.object({
-    type: z.literal("presence_sync"),
-    participants: z.array(participantPresenceSchema),
-  }),
+  z.object({ type: z.literal("presence_sync"), participants: z.array(participantPresenceSchema) }),
   z.object({
     type: z.literal("presence_update"),
     participants: z.array(participantPresenceSchema),

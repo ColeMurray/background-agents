@@ -21,19 +21,21 @@ export type SessionAccess = z.infer<typeof sessionAccessSchema>;
 
 export function useSessionAccess(sessionId: string) {
   const key: BrowserApiPath = `/api/sessions/${encodeURIComponent(sessionId)}/access`;
-  const result = useSWR<SessionAccess | null>(key, async (url: BrowserApiPath) => {
+  const { data, mutate } = useSWR<SessionAccess | null>(key, async (url: BrowserApiPath) => {
     const response = await browserApiFetch(url, { cache: "no-store" });
     if (response.status === 404 || response.status === 409) return null;
     if (!response.ok) throw new Error(`Session access failed with status ${response.status}`);
     return sessionAccessSchema.parse(await response.json());
   });
-  const { data, mutate } = result;
   const clear = useCallback(() => mutate(null, { revalidate: false }), [mutate]);
-  const refetch = useCallback(() => mutate(), [mutate]);
+  const refresh = useCallback(
+    () => mutate(null, { revalidate: false }).then(() => mutate()),
+    [mutate]
+  );
 
   return {
     access: data,
     clear,
-    refetch,
+    refresh,
   };
 }

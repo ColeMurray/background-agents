@@ -87,7 +87,7 @@ export function useSessionSocket(
     resolve: (accepted: boolean) => void;
     timeout: ReturnType<typeof setTimeout>;
   } | null>(null);
-  const { access, clear: clearAccess, refetch: refetchAccess } = useSessionAccess(sessionId);
+  const { access, clear: clearAccess, refresh: refreshAccess } = useSessionAccess(sessionId);
 
   const settleSubscriptionWaiters = useCallback((subscribed: boolean) => {
     for (const resolve of subscriptionWaitersRef.current) {
@@ -127,12 +127,12 @@ export function useSessionSocket(
       if (message.type === "subscribed") {
         console.log("WebSocket subscribed to session");
         pendingTextRef.current = null;
-        void refetchAccess();
+        void refreshAccess();
         if (message.spawnError && message.state.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
         }
       } else if (message.type === "session_access_changed") {
-        void clearAccess().then(() => refetchAccess());
+        void refreshAccess();
       } else if (message.type === "sandbox_error") {
         console.error("Sandbox error:", message.error);
       } else if (message.type === "error") {
@@ -154,7 +154,7 @@ export function useSessionSocket(
         mutate(key);
       }
     },
-    [clearAccess, refetchAccess, sessionId, settlePendingPrompt]
+    [clearAccess, refreshAccess, sessionId, settlePendingPrompt]
   );
 
   const handleClose = useCallback(() => {

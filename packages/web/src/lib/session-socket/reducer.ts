@@ -23,7 +23,6 @@ export interface SessionSocketState {
   ready: boolean;
   sessionState: SessionState | null;
   events: SandboxEvent[];
-  timelineEvents: SessionTimelineEvent[];
   participants: ParticipantPresence[];
   artifacts: Artifact[];
   currentParticipantId: string | null;
@@ -36,7 +35,6 @@ export const initialSessionSocketState: SessionSocketState = {
   ready: false,
   sessionState: null,
   events: [],
-  timelineEvents: [],
   participants: [],
   artifacts: [],
   currentParticipantId: null,
@@ -72,18 +70,12 @@ function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact
   return artifacts.map((artifact, index) => (index === existingIndex ? nextArtifact : artifact));
 }
 
-function sortedTimelineEvents(items: SessionTimelineEvent[]): SessionTimelineEvent[] {
-  return [...items].sort(
-    (a, b) => a.timelineSequence - b.timelineSequence || a.eventId.localeCompare(b.eventId)
-  );
-}
-
 function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
   return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
 }
 
 export function createSessionSocketState(bootstrap: SessionBootstrap): SessionSocketState {
-  const timelineEvents = sortedTimelineEvents(bootstrap.replay.events);
+  const timelineEvents = bootstrap.replay.events;
   return {
     ...initialSessionSocketState,
     sessionState: {
@@ -92,7 +84,6 @@ export function createSessionSocketState(bootstrap: SessionBootstrap): SessionSo
       totalCost: bootstrap.state.totalCost ?? 0,
     },
     artifacts: bootstrap.artifacts.map(toUiArtifact),
-    timelineEvents,
     events: renderTimelineEvents(timelineEvents),
     hasMoreHistory: bootstrap.replay.hasMore,
     cursor: bootstrap.replay.cursor,
@@ -168,7 +159,7 @@ function reduceServerMessage(
 ): SessionSocketState {
   switch (message.type) {
     case "subscribed": {
-      const timelineEvents = sortedTimelineEvents(message.replay.events);
+      const timelineEvents = message.replay.events;
       // Replace local artifacts and events with the subscribed snapshot so
       // reconnects still clear stale state instead of merging stale client
       // data.
@@ -177,14 +168,13 @@ function reduceServerMessage(
         ready: true,
         sessionState: {
           ...message.state,
-          // Backward-compatible defaults for older sessions that may omit these.
+          // Normalize optional snapshot fields for the view.
           isProcessing: message.state.isProcessing ?? false,
           totalCost: message.state.totalCost ?? 0,
         },
         artifacts: message.artifacts.map(toUiArtifact),
         currentParticipantId: message.participantId || state.currentParticipantId,
         events: renderTimelineEvents(timelineEvents),
-        timelineEvents,
         hasMoreHistory: message.replay.hasMore,
         cursor: message.replay.cursor,
         // A fetch_history dropped by a disconnect would otherwise leave this
@@ -194,14 +184,9 @@ function reduceServerMessage(
     }
 
     case "history_page": {
-      const knownIds = new Set(state.timelineEvents.map((item) => item.eventId));
-      const olderItems = sortedTimelineEvents(
-        message.items.filter((item) => !knownIds.has(item.eventId))
-      );
       return {
         ...state,
-        timelineEvents: sortedTimelineEvents([...state.timelineEvents, ...olderItems]),
-        events: [...renderTimelineEvents(olderItems), ...state.events],
+        events: [...message.items.map((item) => toUiSandboxEvent(item.event)), ...state.events],
         hasMoreHistory: message.hasMore,
         cursor: message.cursor,
         loadingHistory: false,

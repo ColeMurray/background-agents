@@ -345,17 +345,6 @@ describe("useSessionSocket", () => {
     subscribed.replay = {
       events: [
         {
-          eventId: "event-2",
-          timelineSequence: 2,
-          event: {
-            type: "execution_complete",
-            messageId: "msg-1",
-            success: true,
-            sandboxId: "sb-1",
-            timestamp: 2,
-          },
-        },
-        {
           eventId: "event-1",
           timelineSequence: 1,
           event: {
@@ -364,6 +353,17 @@ describe("useSessionSocket", () => {
             messageId: "msg-1",
             sandboxId: "sb-1",
             timestamp: 1,
+          },
+        },
+        {
+          eventId: "event-2",
+          timelineSequence: 2,
+          event: {
+            type: "execution_complete",
+            messageId: "msg-1",
+            success: true,
+            sandboxId: "sb-1",
+            timestamp: 2,
           },
         },
       ],
