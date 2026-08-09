@@ -11,10 +11,8 @@ import { useSessionSocket } from "./use-session-socket";
 
 type SubscribedMessage = Extract<ServerMessage, { type: "subscribed" }>;
 
-const { clearSandboxAccessMock, mutateMock, refreshSandboxAccessMock } = vi.hoisted(() => ({
-  clearSandboxAccessMock: vi.fn(),
+const { mutateMock } = vi.hoisted(() => ({
   mutateMock: vi.fn(),
-  refreshSandboxAccessMock: vi.fn(),
 }));
 
 vi.mock("swr", async () => {
@@ -24,14 +22,6 @@ vi.mock("swr", async () => {
     mutate: mutateMock,
   };
 });
-
-vi.mock("./use-sandbox-access", () => ({
-  useSandboxAccess: () => ({
-    sandboxAccess: null,
-    clear: clearSandboxAccessMock,
-    refresh: refreshSandboxAccessMock,
-  }),
-}));
 
 class FakeWebSocket {
   static CONNECTING = 0;
@@ -126,9 +116,7 @@ function sendSandboxDashboard(socket: FakeWebSocket, sandboxId: string) {
 describe("useSessionSocket", () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
-    clearSandboxAccessMock.mockReset();
     mutateMock.mockReset();
-    refreshSandboxAccessMock.mockReset();
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
     vi.stubGlobal(
       "fetch",
@@ -183,28 +171,6 @@ describe("useSessionSocket", () => {
       socket.receive({ type: "prompt_queued", messageId: "message-1", position: 1 });
     });
     await expect(acknowledgement).resolves.toBe(true);
-  });
-
-  it("refreshes sandbox access again when the sandbox becomes ready", async () => {
-    renderHook(() => useSessionSocket("session-1", createSnapshot()));
-
-    await waitFor(() => {
-      expect(FakeWebSocket.instances).toHaveLength(1);
-    });
-
-    const socket = FakeWebSocket.instances[0];
-    act(() => {
-      socket.open();
-      socket.receive(createSubscribedMessage());
-    });
-    refreshSandboxAccessMock.mockClear();
-
-    act(() => {
-      socket.receive({ type: "sandbox_access_changed" });
-      socket.receive({ type: "sandbox_status", status: "ready" });
-    });
-
-    expect(refreshSandboxAccessMock).toHaveBeenCalledTimes(2);
   });
 
   it("waits for subscription and reports when a prompt cannot be sent", async () => {

@@ -104,6 +104,38 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ws!.close();
   });
 
+  it("publishes sandbox access only after it becomes readable", async () => {
+    const name = `ws-sandbox-access-ready-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "connecting",
+    });
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    const collector = collectMessages(clientWs, {
+      until: (message) => message.type === "sandbox_access_changed",
+    });
+
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const messages = await collector;
+    expect(messages.slice(-2).map((message) => message.type)).toEqual([
+      "sandbox_status",
+      "sandbox_access_changed",
+    ]);
+    const accessResponse = await stub.fetch("http://internal/internal/sandbox-access");
+    expect(accessResponse.status).toBe(200);
+
+    sandboxWs!.close();
+    clientWs.close();
+  });
+
   it.each([1000, 1001])(
     "allows the active sandbox to reconnect after close code %s",
     async (closeCode) => {

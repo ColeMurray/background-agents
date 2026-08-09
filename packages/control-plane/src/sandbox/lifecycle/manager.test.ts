@@ -387,7 +387,7 @@ describe("SandboxLifecycleManager", () => {
       ).toBe(true);
     });
 
-    it("stores VNC access and invalidates authenticated access", async () => {
+    it("stores VNC access without publishing it before the sandbox is ready", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession({ vnc_enabled: 1 }), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -415,7 +415,7 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({ vncEnabled: true })
       );
       expect(storage.updateSandboxVnc).toHaveBeenCalledWith("https://vnc.test", "secret");
-      expect(broadcaster.messages).toContainEqual({ type: "sandbox_access_changed" });
+      expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
       expect(JSON.stringify(broadcaster.messages)).not.toContain("secret");
     });
 
@@ -1303,6 +1303,10 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
       ).toBe(true);
+      expect(broadcaster.messages.slice(-2)).toEqual([
+        { type: "sandbox_status", status: "ready" },
+        { type: "sandbox_access_changed" },
+      ]);
     });
 
     it("skips when provider does not support snapshots", async () => {

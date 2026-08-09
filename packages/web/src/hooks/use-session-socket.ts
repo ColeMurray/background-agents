@@ -135,10 +135,7 @@ export function useSessionSocket(
         if (message.spawnError && message.session.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
         }
-      } else if (
-        message.type === "sandbox_access_changed" ||
-        (message.type === "sandbox_status" && ["ready", "running"].includes(message.status))
-      ) {
+      } else if (message.type === "sandbox_access_changed") {
         void refreshSandboxAccess();
       } else if (message.type === "sandbox_error") {
         console.error("Sandbox error:", message.error);

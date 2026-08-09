@@ -1095,6 +1095,7 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
         this.broadcast({ type: "sandbox_status", status: "ready" });
+        this.broadcast({ type: "sandbox_access_changed" });
 
         // Set initial activity timestamp and schedule inactivity check
         // IMPORTANT: Must await to ensure alarm is scheduled before returning

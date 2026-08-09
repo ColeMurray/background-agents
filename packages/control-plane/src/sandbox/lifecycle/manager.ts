@@ -536,19 +536,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         this.storeAndBroadcastProviderObjectId(result.providerObjectId);
       }
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       if (result.vncAccess) {
-        await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
+        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
-        await this.storeAndBroadcastTtyd(
-          result.ttydUrl,
-          sandboxAuthToken,
-          sessionId,
-          expectedSandboxId
-        );
+        await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
       }
 
       this.storage.updateSandboxStatus("connecting");
@@ -794,14 +789,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           this.storeAndBroadcastProviderObjectId(result.providerObjectId);
         }
         if (result.codeServerUrl && result.codeServerPassword) {
-          await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+          await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
         if (result.vncAccess) {
-          await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
+          await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
         }
         await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
-          await this.storeAndBroadcastTtyd(
+          await this.storeTtyd(
             result.ttydUrl,
             sandboxAuthToken,
             session.session_name || session.id,
@@ -937,10 +932,10 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.broadcastSandboxDashboardUrl(finalProviderObjectId);
 
       if (result.codeServerUrl && result.codeServerPassword) {
-        await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+        await this.storeCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
       if (result.vncAccess) {
-        await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
+        await this.storeVnc(result.vncAccess.url, result.vncAccess.password);
       }
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
@@ -1033,6 +1028,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     if (!isTerminalState && reason !== "heartbeat_timeout") {
       this.storage.updateSandboxStatus(previousStatus as SandboxStatus);
       this.broadcaster.broadcast({ type: "sandbox_status", status: previousStatus });
+      if (previousStatus === "ready" || previousStatus === "running") {
+        this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      }
     }
   }
 
@@ -1384,17 +1382,14 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
-  /** Store code-server details and invalidate cached authenticated access. */
-  private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
+  private async storeCodeServer(url: string, password: string): Promise<void> {
     this.log.info("Storing code-server info", { url });
     await this.storage.updateSandboxCodeServer(url, password);
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
-  private async storeAndBroadcastVnc(url: string, password: string): Promise<void> {
+  private async storeVnc(url: string, password: string): Promise<void> {
     this.log.info("Storing VNC info", { url });
     await this.storage.updateSandboxVnc(url, password);
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
@@ -1429,8 +1424,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.broadcaster.broadcast({ type: "tunnel_urls", urls });
   }
 
-  /** Mint and persist terminal access, then invalidate cached authenticated access. */
-  private async storeAndBroadcastTtyd(
+  /** Mint and persist terminal access. */
+  private async storeTtyd(
     url: string,
     sandboxAuthToken: string,
     sessionId: string,
@@ -1448,7 +1443,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     this.log.info("Storing ttyd info", { url });
     await this.storage.updateSandboxTtyd(url, token);
-    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
