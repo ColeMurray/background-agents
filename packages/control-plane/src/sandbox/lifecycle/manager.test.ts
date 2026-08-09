@@ -387,7 +387,7 @@ describe("SandboxLifecycleManager", () => {
       ).toBe(true);
     });
 
-    it("stores and broadcasts VNC access returned by the provider", async () => {
+    it("stores VNC access and invalidates authenticated access", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession({ vnc_enabled: 1 }), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -416,11 +416,8 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({ vncEnabled: true })
       );
       expect(storage.updateSandboxVnc).toHaveBeenCalledWith("https://vnc.test", "secret");
-      expect(broadcaster.messages).toContainEqual({
-        type: "vnc_info",
-        url: "https://vnc.test",
-        password: "secret",
-      });
+      expect(broadcaster.messages).toContainEqual({ type: "sandbox_access_changed" });
+      expect(JSON.stringify(broadcaster.messages)).not.toContain("secret");
     });
 
     it("logs one terminal sandbox.spawn event for success", async () => {

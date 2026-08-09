@@ -20,6 +20,8 @@ export interface UserPreferences {
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
+export const MAX_CHILD_FOLLOW_UP_PROMPT_CHARS = 64_000;
+
 export const slackCallbackContextSchema = z.object({
   source: z.literal("slack"),
   channel: z.string(),
@@ -105,6 +107,17 @@ export const sendPromptRequestSchema = z.object({
 });
 
 export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
+
+/** Request body for POST /sessions/:parentId/children/:childId/prompt. */
+export const childFollowUpPromptRequestSchema = z.strictObject({
+  content: z
+    .string()
+    .min(1)
+    .max(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS)
+    .refine((content) => content.trim().length > 0, { message: "content must not be blank" }),
+});
+
+export type ChildFollowUpPromptRequest = z.infer<typeof childFollowUpPromptRequestSchema>;
 
 function hasRepositoryIdentifier(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -292,6 +305,7 @@ export interface ChildSessionDetail {
     updatedAt: number;
   };
   sandbox: { status: SandboxStatus } | null;
+  hasUnfinishedPrompt?: boolean;
   artifacts: Array<{ type: string; url: string; metadata: unknown }>;
   recentEvents: Array<{ type: string; data: unknown; createdAt: number }>;
   finalResponse?: ChildSessionFinalResponse | null;

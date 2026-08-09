@@ -23,6 +23,7 @@ type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
+  userOnly?: boolean;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -42,6 +43,9 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
     method: config.method,
     pattern: parsePattern(config.routePath),
     handler: async (request, _env, match, ctx) => {
+      if (config.userOnly && ctx.principal?.kind !== "user") {
+        return error("Human user authentication required", 403);
+      }
       const sessionId = getSessionId(match);
       if (sessionId instanceof Response) return sessionId;
 
@@ -227,9 +231,16 @@ function lifecycleProxyRoute(
 export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
     method: "GET",
+    routePath: "/sessions/:id/sandbox-access",
+    internalPath: SessionInternalPaths.sandboxAccess,
+    userOnly: true,
+  }),
+  simpleProxyRoute({
+    method: "GET",
     routePath: "/sessions/:id",
-    internalPath: SessionInternalPaths.state,
+    internalPath: SessionInternalPaths.snapshot,
     notFoundMessage: "Session not found",
+    userOnly: true,
   }),
   simpleProxyRoute({
     method: "POST",

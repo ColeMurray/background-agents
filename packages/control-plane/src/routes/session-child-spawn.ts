@@ -77,11 +77,6 @@ async function handleSpawnChild(
     return error(`Maximum spawn depth (${MAX_SPAWN_DEPTH}) exceeded`, 403);
   }
 
-  const activeCount = await sessionStore.countActiveChildren(parentId);
-  if (activeCount >= maxConcurrentChildren) {
-    return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
-  }
-
   const totalCount = await sessionStore.countTotalChildren(parentId);
   if (totalCount >= maxTotalChildren) {
     return error(`Maximum total children (${maxTotalChildren}) reached`, 429);
@@ -217,9 +212,19 @@ async function handleSpawnChild(
     automationRunId: parentSession?.automationRunId ?? null,
   };
 
+  const admissionLease = await sessionStore.acquireChildAdmissionLease(
+    parentId,
+    childId,
+    maxConcurrentChildren
+  );
+  if (!admissionLease) {
+    return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
+  }
+
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    await sessionStore.releaseChildAdmissionLease(admissionLease);
     logger.error("Failed to initialize child session", {
       error: e instanceof Error ? e.message : String(e),
       parent_id: parentId,
@@ -228,6 +233,7 @@ async function handleSpawnChild(
     });
     return error("Failed to create child session", 500);
   }
+  await sessionStore.releaseChildAdmissionLease(admissionLease);
 
   let promptResponse: Response;
   try {

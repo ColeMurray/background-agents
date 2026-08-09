@@ -309,7 +309,8 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
 5. Set **Repository permissions**:
    - Contents: **Read & Write**
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
-   - Pull requests: **Read & Write**
+   - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
+     session-created pull requests)_
    - Metadata: **Read-only**
 6. If using `ALLOWED_GITHUB_ORGS`/`allowed_github_orgs`, set **Organization permissions**:
    - Members: **Read-only**

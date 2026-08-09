@@ -1066,6 +1066,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       this.storage.clearSandboxVncUrl?.();
       this.storage.clearSandboxTunnelUrls();
       this.storage.clearSandboxTtyd();
+      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       return;
     }
 
@@ -1073,6 +1074,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.storage.clearSandboxVnc();
     this.storage.clearSandboxTunnelUrls();
     this.storage.clearSandboxTtyd();
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
@@ -1381,31 +1383,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
-  /**
-   * Store code-server details in the database and push to connected clients.
-   * Shared by doSpawn() and restoreFromSnapshot().
-   *
-   * The storage adapter may encrypt the password before persisting;
-   * the plaintext is broadcast over the already-authenticated WebSocket.
-   */
+  /** Store code-server details and invalidate cached authenticated access. */
   private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
-    this.log.info("Storing and broadcasting code-server info", { url });
+    this.log.info("Storing code-server info", { url });
     await this.storage.updateSandboxCodeServer(url, password);
-    this.broadcaster.broadcast({
-      type: "code_server_info",
-      url,
-      password,
-    });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   private async storeAndBroadcastVnc(url: string, password: string): Promise<void> {
-    this.log.info("Storing and broadcasting VNC info", { url });
+    this.log.info("Storing VNC info", { url });
     await this.storage.updateSandboxVnc(url, password);
-    this.broadcaster.broadcast({
-      type: "vnc_info",
-      url,
-      password,
-    });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
@@ -1440,10 +1428,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.broadcaster.broadcast({ type: "tunnel_urls", urls });
   }
 
-  /**
-   * Mint a terminal JWT, persist the ttyd proxy URL + token, and broadcast to clients.
-   * The storage adapter encrypts the token before persisting (same pattern as code-server).
-   */
+  /** Mint and persist terminal access, then invalidate cached authenticated access. */
   private async storeAndBroadcastTtyd(
     url: string,
     sandboxAuthToken: string,
@@ -1460,9 +1445,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       sandboxAuthToken
     );
 
-    this.log.info("Storing and broadcasting ttyd info", { url });
+    this.log.info("Storing ttyd info", { url });
     await this.storage.updateSandboxTtyd(url, token);
-    this.broadcaster.broadcast({ type: "ttyd_info", url, token });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**

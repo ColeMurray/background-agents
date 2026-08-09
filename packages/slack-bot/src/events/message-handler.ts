@@ -6,6 +6,8 @@ import {
   getThreadMessages,
   postMessage,
   resolveUserNames,
+  selectThreadWindow,
+  classifyThreadSpeaker,
   updateMessage,
 } from "@open-inspect/shared/slack";
 import type { CallbackContext } from "@open-inspect/shared";
@@ -76,22 +78,25 @@ async function fetchThreadHistory(
   try {
     const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, sinceTs);
     if (!threadResult.ok || !threadResult.messages) return undefined;
-    const relevant = threadResult.messages
-      .filter((m) => {
-        if (m.ts === excludeTs) return false;
-        if (!includeBotMessages && m.bot_id) return false;
-        // conversations.replies can still return the parent message when
-        // `oldest` is set, so re-check the boundary here.
-        if (sinceTs && parseFloat(m.ts) <= parseFloat(sinceTs)) return false;
-        return true;
-      })
-      .slice(-THREAD_HISTORY_MESSAGE_LIMIT);
+    // Window selection is shared with the channel-trigger path so the two do not
+    // drift again (`sinceTs` re-checks the boundary because conversations.replies
+    // can still return the parent message when `oldest` is set).
+    const relevant = selectThreadWindow(threadResult.messages, {
+      excludeTs,
+      sinceTs,
+      limit: THREAD_HISTORY_MESSAGE_LIMIT,
+      excludeBots: !includeBotMessages,
+    });
     if (relevant.length === 0) return [];
-    const uniqueUserIds = [...new Set(relevant.map((m) => m.user).filter(Boolean))] as string[];
+    const speakers = relevant.map((message) => classifyThreadSpeaker(message));
+    const uniqueUserIds = [
+      ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
+    ];
     const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-    return relevant.map((m) => {
-      if (m.bot_id) return `[Bot]: ${m.text}`;
-      const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+    return relevant.map((m, index) => {
+      const speaker = speakers[index]!;
+      if (speaker.kind === "app") return `[Bot]: ${m.text}`;
+      const name = speaker.kind === "user" ? (userNames.get(speaker.id) ?? speaker.id) : "Unknown";
       return `[${name}]: ${m.text}`;
     });
   } catch {

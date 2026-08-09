@@ -18,6 +18,14 @@ const TERMINAL_STATUSES = [
 ] satisfies SessionStatus[];
 const TERMINAL_STATUS_SQL = TERMINAL_STATUSES.map((status) => `'${status}'`).join(", ");
 
+const CHILD_ADMISSION_LEASE_TTL_MS = 5 * 60 * 1000;
+
+export interface ChildAdmissionLease {
+  token: string;
+  childSessionId: string;
+  expiresAt: number;
+}
+
 /**
  * Insurance against a corrupt parent_session_id cycle making the recursive
  * descendant CTE run away; spawn-time depth caps keep real trees far below it.
@@ -686,16 +694,71 @@ export class SessionIndexStore {
     return (result.results || []).map(({ id }) => id);
   }
 
-  /** Count active (non-terminal) children for concurrent cap enforcement. */
-  async countActiveChildren(parentSessionId: string): Promise<number> {
-    const result = await this.db
+  /** Atomically claim parent concurrency capacity for a child spawn or resume. */
+  async acquireChildAdmissionLease(
+    parentSessionId: string,
+    childSessionId: string,
+    maxConcurrentChildren: number
+  ): Promise<ChildAdmissionLease | null> {
+    const now = Date.now();
+    const lease: ChildAdmissionLease = {
+      token: crypto.randomUUID(),
+      childSessionId,
+      expiresAt: now + CHILD_ADMISSION_LEASE_TTL_MS,
+    };
+    await this.db
+      .prepare("DELETE FROM child_admission_leases WHERE expires_at <= ?")
+      .bind(now)
+      .run();
+    const inserted = await this.db
       .prepare(
-        `SELECT COUNT(*) as count FROM sessions
-         WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})`
+        `INSERT INTO child_admission_leases
+           (lease_token, parent_session_id, child_session_id, expires_at)
+         SELECT ?, ?, ?, ?
+         WHERE (
+           SELECT COUNT(*) FROM (
+             SELECT id AS child_session_id FROM sessions
+             WHERE parent_session_id = ? AND status NOT IN (${TERMINAL_STATUS_SQL})
+             UNION
+             SELECT child_session_id FROM child_admission_leases
+             WHERE parent_session_id = ? AND expires_at > ?
+           ) admitted_children
+         ) < ?
+         ON CONFLICT(child_session_id) DO UPDATE SET
+           lease_token = excluded.lease_token,
+           parent_session_id = excluded.parent_session_id,
+           expires_at = excluded.expires_at
+         WHERE child_admission_leases.expires_at <= ?`
       )
-      .bind(parentSessionId)
-      .first<{ count: number }>();
-    return result?.count ?? 0;
+      .bind(
+        lease.token,
+        parentSessionId,
+        childSessionId,
+        lease.expiresAt,
+        parentSessionId,
+        parentSessionId,
+        now,
+        maxConcurrentChildren,
+        now
+      )
+      .run();
+    return (inserted.meta?.changes ?? 0) > 0 ? lease : null;
+  }
+
+  /** Release only the lease owned by this caller. */
+  async releaseChildAdmissionLease(lease: ChildAdmissionLease): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM child_admission_leases WHERE child_session_id = ? AND lease_token = ?")
+      .bind(lease.childSessionId, lease.token)
+      .run();
+  }
+
+  /** Finalize capacity after the child-owned active projection succeeds. */
+  async finalizeChildAdmission(childSessionId: string): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM child_admission_leases WHERE child_session_id = ?")
+      .bind(childSessionId)
+      .run();
   }
 
   /** Count total children ever spawned for rate-limit enforcement. */

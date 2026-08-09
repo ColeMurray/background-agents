@@ -578,6 +578,18 @@ function ExecutionCompleteEvent({ event }: EventRendererProps) {
   );
 }
 
+function ContextCompactedEvent({ event }: EventRendererProps) {
+  if (event.type !== "context_compacted") return null;
+
+  return (
+    <div className="flex items-center gap-3 py-1 text-xs text-muted-foreground">
+      <span aria-hidden="true" className="flex-1 border-t border-border-muted" />
+      <span className="shrink-0">Context compacted</span>
+      <span aria-hidden="true" className="flex-1 border-t border-border-muted" />
+    </div>
+  );
+}
+
 function formatEventTime(event: SandboxEvent): string {
   return new Date(event.timestamp * 1000).toLocaleTimeString();
 }
@@ -593,6 +605,7 @@ const eventRenderers: Partial<
   error: ErrorEvent,
   warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
+  context_compacted: ContextCompactedEvent,
 };
 
 export const EventItem = memo(function EventItem({

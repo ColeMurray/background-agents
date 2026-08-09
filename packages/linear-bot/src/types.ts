@@ -268,12 +268,12 @@ export interface AgentSessionWebhook {
   organizationId: string;
   webhookId: string;
   appUserId: string;
+  promptContext?: string;
   agentSession: {
     id: string;
     creatorId?: string | null;
     issue?: AgentSessionWebhookIssue;
     comment?: { body: string; userId?: string };
-    promptContext?: string;
   };
   agentActivity?: {
     userId?: string;

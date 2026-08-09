@@ -512,7 +512,12 @@ export class SessionRepository {
          auth_token_hash = ?,
          auth_token = NULL,
          modal_sandbox_id = ?,
-         modal_object_id = NULL
+         modal_object_id = NULL,
+         code_server_url = NULL,
+         code_server_password = NULL,
+         tunnel_urls = NULL,
+         ttyd_url = NULL,
+         ttyd_token = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -799,7 +804,7 @@ export class SessionRepository {
 
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`
+      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
@@ -859,6 +864,13 @@ export class SessionRepository {
       completedAt,
       messageId
     );
+  }
+
+  listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
+    const result = this.sql.exec(
+      `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
+    );
+    return result.toArray() as Array<{ id: string; created_at: number }>;
   }
 
   getMessageTimestamps(
@@ -1031,17 +1043,6 @@ export class SessionRepository {
     const nextCursor =
       pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
     return { events: pageEvents, hasMore, nextCursor };
-  }
-
-  getEventsForReplay(limit: number): EventRow[] {
-    const result = this.sql.exec(
-      `SELECT * FROM (
-         SELECT * FROM events WHERE type != 'heartbeat'
-         ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?
-       ) sub ORDER BY created_at ASC, timeline_sequence ASC`,
-      limit
-    );
-    return this.rows<EventRow>(result);
   }
 
   // === ARTIFACTS ===

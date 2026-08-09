@@ -348,6 +348,7 @@ class OpenCodePromptStream:
                 state.compaction_occurred = True
                 state.pending_overflow_error = None
                 self._log.info("bridge.session_compacted", message_id=state.message_id)
+                events.append({"type": "context_compacted", "messageId": state.message_id})
 
         return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
 
