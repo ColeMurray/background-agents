@@ -466,11 +466,19 @@ describe("CallbackNotificationService", () => {
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
       // First call should go through
-      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "bash",
+        callId: "call-1",
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       // Second call within 3s should be throttled
-      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "read",
+        callId: "call-2",
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1); // still 1
     });
 
@@ -539,7 +547,11 @@ describe("CallbackNotificationService", () => {
     it("skips when no callback context", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue(null);
 
-      await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+      await harness.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "bash",
+        callId: "call-1",
+      });
 
       const fetchMock = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(fetchMock).not.toHaveBeenCalled();
@@ -557,7 +569,11 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      await h.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
+      await h.service.notifyToolCall("msg-1", {
+        type: "tool_call",
+        tool: "bash",
+        callId: "call-1",
+      });
 
       const fetchMock = (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(fetchMock).not.toHaveBeenCalled();
@@ -686,11 +702,7 @@ describe("CallbackNotificationService", () => {
         expect(fetchMock).toHaveBeenCalledTimes(502);
       });
 
-      it("falls back to throttle-only behavior when callId is missing", async () => {
-        vi.useFakeTimers();
-        const start = 1_700_000_000_000;
-        vi.setSystemTime(start);
-
+      it("skips a missing callId without consuming the throttle window", async () => {
         vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
           callback_context: JSON.stringify({ channel: "C123" }),
           source: "slack",
@@ -701,12 +713,18 @@ describe("CallbackNotificationService", () => {
         fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
         await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "bash" });
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(harness.log.warn).toHaveBeenCalledWith(
+          "callback.tool_call",
+          expect.objectContaining({ outcome: "skipped", skip_reason: "missing_call_id" })
+        );
 
-        // No callId on either event — second event past throttle should fire
-        vi.setSystemTime(start + 5_000);
-        await harness.service.notifyToolCall("msg-1", { type: "tool_call", tool: "read" });
-        expect(fetchMock).toHaveBeenCalledTimes(2);
+        await harness.service.notifyToolCall("msg-1", {
+          type: "tool_call",
+          tool: "read",
+          callId: "call-valid",
+        });
+        expect(fetchMock).toHaveBeenCalledOnce();
       });
 
       it("retries on a later event when the first delivery for a callId fails", async () => {

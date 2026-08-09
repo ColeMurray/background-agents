@@ -190,6 +190,10 @@ describe("isValidToolCallPayload", () => {
     expect(isValidToolCallPayload(rest)).toBe(false);
   });
 
+  it("rejects an empty callId", () => {
+    expect(isValidToolCallPayload({ ...valid, callId: "" })).toBe(false);
+  });
+
   it("rejects malformed callback context", () => {
     expect(isValidToolCallPayload({ ...valid, context: { source: "linear" } })).toBe(false);
   });

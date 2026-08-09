@@ -105,7 +105,7 @@ export const linearToolCallCallbackDataSchema = z.looseObject({
   sessionId: nonEmptyStringSchema,
   tool: z.string(),
   args: z.record(z.string(), z.unknown()),
-  callId: z.string(),
+  callId: nonEmptyStringSchema,
   status: z.string().optional(),
   timestamp: z.number().refine(Number.isFinite),
   context: linearCallbackContextSchema,
