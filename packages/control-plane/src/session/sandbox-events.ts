@@ -141,14 +141,11 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "context_compacted") {
       const eventId = generateId();
-      if (messageId) {
-        this.repository.sealTokenEvent(messageId, eventId);
-      }
-      this.repository.createEvent({
+      this.repository.createContextCompactionEvent({
         id: eventId,
         type: event.type,
         data: JSON.stringify(event),
-        messageId,
+        messageId: event.messageId,
         createdAt: now,
       });
       this.messenger.broadcast({ type: "sandbox_event", event });

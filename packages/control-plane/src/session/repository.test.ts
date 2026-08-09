@@ -71,12 +71,17 @@ function createMockSql() {
 describe("SessionRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
   let repo: SessionRepository;
+  let transactionSyncCalls: number;
 
   beforeEach(() => {
     mock = createMockSql();
+    transactionSyncCalls = 0;
     repo = new SessionRepository(
       mock.sql,
-      (closure) => closure(),
+      (closure) => {
+        transactionSyncCalls += 1;
+        return closure();
+      },
       new SessionAttachmentRepository(mock.sql)
     );
   });
@@ -934,13 +939,28 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("sealTokenEvent", () => {
-    it("moves the current token to a compaction-specific event ID", () => {
-      repo.sealTokenEvent("msg-1", "compaction-1");
+  describe("createContextCompactionEvent", () => {
+    it("atomically seals the current token and inserts the compaction marker", () => {
+      repo.createContextCompactionEvent({
+        id: "compaction-1",
+        type: "context_compacted",
+        data: '{"type":"context_compacted"}',
+        messageId: "msg-1",
+        createdAt: 1000,
+      });
 
-      expect(mock.calls).toHaveLength(1);
+      expect(transactionSyncCalls).toBe(1);
+      expect(mock.calls).toHaveLength(2);
       expect(mock.calls[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
       expect(mock.calls[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO events");
+      expect(mock.calls[1].params).toEqual([
+        "compaction-1",
+        "context_compacted",
+        '{"type":"context_compacted"}',
+        "msg-1",
+        1000,
+      ]);
     });
   });
 
