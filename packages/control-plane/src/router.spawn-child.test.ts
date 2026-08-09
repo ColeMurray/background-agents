@@ -7,6 +7,7 @@ import { SessionInternalPaths } from "./session/contracts";
 
 const integrationSettingsMocks = vi.hoisted(() => ({
   resolveCodeServerEnabled: vi.fn().mockResolvedValue(false),
+  resolveVncEnabled: vi.fn().mockResolvedValue(false),
   resolveSandboxSettings: vi.fn().mockResolvedValue({}),
 }));
 
@@ -89,6 +90,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.clearAllMocks();
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
+    integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
 

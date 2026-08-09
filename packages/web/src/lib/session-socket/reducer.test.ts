@@ -143,6 +143,9 @@ describe("sessionSocketReducer", () => {
   describe("subscribed", () => {
     it("hydrates the authoritative projection", () => {
       const state = subscribedState({
+        session: createSessionState({
+          vncUrl: "https://desktop.example",
+        }),
         timeline: {
           events: [
             {
@@ -162,7 +165,12 @@ describe("sessionSocketReducer", () => {
       });
 
       expect(state.sessionState).toEqual(
-        expect.objectContaining({ id: "session-1", isProcessing: false, totalCost: 0 })
+        expect.objectContaining({
+          id: "session-1",
+          isProcessing: false,
+          totalCost: 0,
+          vncUrl: "https://desktop.example",
+        })
       );
       expect(state.currentParticipantId).toBe("participant-1");
       expect(state.events).toHaveLength(1);
@@ -395,6 +403,7 @@ describe("sessionSocketReducer", () => {
         subscribedState({
           session: createSessionState({
             codeServerUrl: "https://code.example",
+            vncUrl: "https://desktop.example",
             ttydUrl: "https://ttyd.example",
           }),
         }),
@@ -407,6 +416,7 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState).toEqual(
         expect.objectContaining({
           codeServerUrl: "https://code.example",
+          vncUrl: "https://desktop.example",
           ttydUrl: "https://ttyd.example",
           tunnelUrls: { "3000": "https://tunnel.example" },
           sandboxDashboardUrl: "https://provider.example",
@@ -421,6 +431,7 @@ describe("sessionSocketReducer", () => {
       );
       expect(state.sessionState?.sandboxStatus).toBe("spawning");
       expect(state.sessionState?.codeServerUrl).toBeUndefined();
+      expect(state.sessionState?.vncUrl).toBeUndefined();
       expect(state.sessionState?.ttydUrl).toBeUndefined();
       expect(state.sessionState?.tunnelUrls).toBeUndefined();
       expect(state.sessionState?.sandboxDashboardUrl).toBeUndefined();
@@ -431,6 +442,7 @@ describe("sessionSocketReducer", () => {
         const state = reduce(withAccessState(), serverMessage({ type: "sandbox_status", status }));
         expect(state.sessionState?.sandboxStatus).toBe(status);
         expect(state.sessionState?.codeServerUrl).toBeUndefined();
+        expect(state.sessionState?.vncUrl).toBeUndefined();
         expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
       }
     });
@@ -441,6 +453,7 @@ describe("sessionSocketReducer", () => {
         serverMessage({ type: "sandbox_status", status: "ready" })
       );
       expect(state.sessionState?.codeServerUrl).toBe("https://code.example");
+      expect(state.sessionState?.vncUrl).toBe("https://desktop.example");
       expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
     });
 
@@ -451,6 +464,7 @@ describe("sessionSocketReducer", () => {
       );
       expect(state.sessionState?.sandboxStatus).toBe("failed");
       expect(state.sessionState?.codeServerUrl).toBeUndefined();
+      expect(state.sessionState?.vncUrl).toBeUndefined();
       expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
     });
 

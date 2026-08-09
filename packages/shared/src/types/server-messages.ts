@@ -24,6 +24,8 @@ const sessionStateSchema = z.object({
   totalCost: z.number().optional(),
   codeServerUrl: z.string().nullable().optional(),
   codeServerPassword: z.string().nullable().optional(),
+  vncUrl: z.string().nullable().optional(),
+  vncPassword: z.string().nullable().optional(),
   tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
   ttydUrl: z.string().nullable().optional(),
   ttydToken: z.string().nullable().optional(),
@@ -43,6 +45,7 @@ export type SessionState = z.infer<typeof sessionStateSchema>;
 
 export const sessionSnapshotStateSchema = sessionStateSchema.omit({
   codeServerPassword: true,
+  vncPassword: true,
   ttydToken: true,
 });
 export type SessionSnapshotState = z.infer<typeof sessionSnapshotStateSchema>;

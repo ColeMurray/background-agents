@@ -57,6 +57,7 @@ export type SessionSocketAction =
 
 const CLEARED_SANDBOX_RUNTIME_STATE = {
   codeServerUrl: undefined,
+  vncUrl: undefined,
   tunnelUrls: undefined,
   ttydUrl: undefined,
 } satisfies Partial<SessionState>;

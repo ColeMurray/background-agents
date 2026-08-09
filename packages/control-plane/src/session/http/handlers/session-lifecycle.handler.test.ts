@@ -25,6 +25,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -51,6 +52,8 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
@@ -235,6 +238,7 @@ describe("createSessionLifecycleHandler", () => {
           parentSessionId: "parent-1",
           spawnSource: "agent",
           spawnDepth: 1,
+          vncEnabled: true,
         }),
       })
     );
@@ -256,6 +260,7 @@ describe("createSessionLifecycleHandler", () => {
       spawnSource: "agent",
       spawnDepth: 1,
       codeServerEnabled: false,
+      vncEnabled: true,
       sandboxSettings: null,
       environmentId: null,
       createdAt: 1234,

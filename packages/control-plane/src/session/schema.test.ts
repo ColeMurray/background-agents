@@ -2,6 +2,7 @@
  * Unit tests for schema migration tracking.
  */
 
+import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { applyMigrations, MIGRATIONS, SCHEMA_SQL } from "./schema";
 import type { SqlResult, SqlStorage } from "./sql-storage";
@@ -241,6 +242,55 @@ describe("applyMigrations", () => {
         c.query.includes("updated_at IS NULL")
     );
     expect(backfill).toBeDefined();
+  });
+
+  it("adds VNC session and sandbox fields for fresh and migrated DOs", () => {
+    expect(SCHEMA_SQL).toContain("vnc_enabled INTEGER NOT NULL DEFAULT 0");
+    expect(SCHEMA_SQL).toContain("vnc_url TEXT");
+    expect(SCHEMA_SQL).toContain("vnc_password TEXT");
+
+    const migration = MIGRATIONS.find((migration) => migration.id === 39);
+    expect(typeof migration?.run).toBe("function");
+
+    const db = new DatabaseSync(":memory:");
+    const sql: SqlStorage = {
+      exec(query: string): SqlResult {
+        if (/^PRAGMA\s/i.test(query.trim())) {
+          const rows = db.prepare(query).all();
+          return { toArray: () => rows, one: () => rows[0] ?? null };
+        }
+        db.exec(query);
+        return { toArray: () => [], one: () => null };
+      },
+    };
+
+    try {
+      db.exec(
+        "CREATE TABLE session (id TEXT PRIMARY KEY); CREATE TABLE sandbox (id TEXT PRIMARY KEY)"
+      );
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+
+      expect(db.prepare("PRAGMA table_info(sandbox)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "vnc_url", type: "TEXT", notnull: 0 }),
+          expect.objectContaining({ name: "vnc_password", type: "TEXT", notnull: 0 }),
+        ])
+      );
+      expect(db.prepare("PRAGMA table_info(session)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "vnc_enabled",
+            type: "INTEGER",
+            notnull: 1,
+            dflt_value: "0",
+          }),
+        ])
+      );
+    } finally {
+      db.close();
+    }
   });
 
   it("creates the final attachments schema in its single unshipped migration", () => {

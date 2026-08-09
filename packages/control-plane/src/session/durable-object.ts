@@ -784,6 +784,14 @@ export class SessionDO extends DurableObject<Env> {
       },
       clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
       clearSandboxCodeServerUrl: () => this.repository.clearSandboxCodeServerUrl(),
+      updateSandboxVnc: async (url, password) => {
+        const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
+          ? await encryptToken(password, this.env.REPO_SECRETS_ENCRYPTION_KEY)
+          : password;
+        this.repository.updateSandboxVnc(url, encrypted);
+      },
+      clearSandboxVnc: () => this.repository.clearSandboxVnc(),
+      clearSandboxVncUrl: () => this.repository.clearSandboxVncUrl(),
       updateSandboxTunnelUrls: (urls) => this.repository.updateSandboxTunnelUrls(urls),
       clearSandboxTunnelUrls: () => this.repository.clearSandboxTunnelUrls(),
       updateSandboxTtyd: async (url, token) => {
@@ -1714,10 +1722,7 @@ export class SessionDO extends DurableObject<Env> {
     const session = this.getSession();
     const environmentId = session?.environment_id ?? null;
     const environmentName = await this.resolveEnvironmentName(environmentId);
-    return {
-      environmentId,
-      environmentName,
-    };
+    return { environmentId, environmentName };
   }
 
   private async decryptStoredAccessValue(value: string | null): Promise<string | null> {
@@ -1756,6 +1761,7 @@ export class SessionDO extends DurableObject<Env> {
       parentSessionId: session.parent_session_id,
       totalCost: session.total_cost ?? 0,
       codeServerUrl: sandbox?.code_server_url ?? null,
+      vncUrl: sandbox?.vnc_url ?? null,
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
@@ -1800,8 +1806,9 @@ export class SessionDO extends DurableObject<Env> {
       return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
     }
 
-    const [codeServerPassword, ttydToken] = await Promise.all([
+    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
       this.decryptStoredAccessValue(sandbox.code_server_password),
+      this.decryptStoredAccessValue(sandbox.vnc_password),
       this.decryptStoredAccessValue(sandbox.ttyd_token),
     ]);
     const current = this.getSandbox();
@@ -1811,6 +1818,8 @@ export class SessionDO extends DurableObject<Env> {
       (current.status !== "ready" && current.status !== "running") ||
       current.code_server_url !== sandbox.code_server_url ||
       current.code_server_password !== sandbox.code_server_password ||
+      current.vnc_url !== sandbox.vnc_url ||
+      current.vnc_password !== sandbox.vnc_password ||
       current.ttyd_url !== sandbox.ttyd_url ||
       current.ttyd_token !== sandbox.ttyd_token
     ) {
@@ -1822,6 +1831,8 @@ export class SessionDO extends DurableObject<Env> {
           current.code_server_url && codeServerPassword
             ? { url: current.code_server_url, password: codeServerPassword }
             : null,
+        vnc:
+          current.vnc_url && vncPassword ? { url: current.vnc_url, password: vncPassword } : null,
         ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
       },
       { headers }

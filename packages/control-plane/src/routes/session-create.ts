@@ -174,7 +174,7 @@ async function handleCreateSession(
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
-  const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+  const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     ctx.db,
     scopeMembers,
     environmentId
@@ -204,6 +204,7 @@ async function handleCreateSession(
     scmRefreshTokenEncrypted,
     scmTokenExpiresAt,
     codeServerEnabled,
+    vncEnabled,
     sandboxSettings,
     spawnSource,
   };

@@ -86,6 +86,7 @@ export interface UpsertSessionData {
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   sandboxSettings?: string | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
@@ -290,8 +291,8 @@ export class SessionRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, environment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -306,6 +307,7 @@ export class SessionRepository {
       data.spawnSource ?? "user",
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
+      data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
       data.createdAt,
@@ -513,6 +515,8 @@ export class SessionRepository {
          modal_object_id = NULL,
          code_server_url = NULL,
          code_server_password = NULL,
+         vnc_url = NULL,
+         vnc_password = NULL,
          tunnel_urls = NULL,
          ttyd_url = NULL,
          ttyd_token = NULL
@@ -594,6 +598,24 @@ export class SessionRepository {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
+  }
+
+  updateSandboxVnc(url: string, password: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = ?, vnc_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url,
+      password
+    );
+  }
+
+  clearSandboxVnc(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = NULL, vnc_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
+  clearSandboxVncUrl(): void {
+    this.sql.exec(`UPDATE sandbox SET vnc_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`);
   }
 
   updateSandboxTunnelUrls(urls: Record<string, string>): void {

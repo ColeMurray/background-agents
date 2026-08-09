@@ -8,11 +8,14 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 const sandboxAccessSchema = z
   .object({
     codeServer: z.object({ url: z.string(), password: z.string() }).nullable(),
+    vnc: z.object({ url: z.string(), password: z.string() }).nullable(),
     ttyd: z.object({ url: z.string(), token: z.string() }).nullable(),
   })
-  .transform(({ codeServer, ttyd }) => ({
+  .transform(({ codeServer, vnc, ttyd }) => ({
     codeServerUrl: codeServer?.url ?? null,
     codeServerPassword: codeServer?.password ?? null,
+    vncUrl: vnc?.url ?? null,
+    vncPassword: vnc?.password ?? null,
     ttydUrl: ttyd?.url ?? null,
     ttydToken: ttyd?.token ?? null,
   }));

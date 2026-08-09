@@ -22,6 +22,7 @@ describe("useSandboxAccess", () => {
     mocks.browserApiFetch.mockResolvedValue(
       Response.json({
         codeServer: { url: "https://code.example", password: "secret" },
+        vnc: { url: "https://desktop.example", password: "desktop-secret" },
         ttyd: null,
       })
     );
@@ -29,7 +30,11 @@ describe("useSandboxAccess", () => {
 
     await waitFor(() =>
       expect(result.current.sandboxAccess).toEqual(
-        expect.objectContaining({ codeServerPassword: "secret" })
+        expect.objectContaining({
+          codeServerPassword: "secret",
+          vncUrl: "https://desktop.example",
+          vncPassword: "desktop-secret",
+        })
       )
     );
     expect(mocks.browserApiFetch).toHaveBeenCalledWith(

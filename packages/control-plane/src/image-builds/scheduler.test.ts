@@ -232,7 +232,7 @@ describe("ImageBuildScheduler", () => {
               baseSha: "abc123",
             }))
           ),
-          runtime_version: "v56-managed-provider-runtime",
+          runtime_version: "v57-vnc-runtime",
           build_duration_seconds: 1,
           error_message: null,
           created_at: 1,

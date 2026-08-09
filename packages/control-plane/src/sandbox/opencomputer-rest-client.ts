@@ -192,7 +192,7 @@ const RUNTIME_HOSTS_BOOTSTRAP =
 // runtime reports an empty version and the build-complete callback is rejected
 // (runtime-version floor check). Keep in sync with the value baked in
 // packages/opencomputer-infra/src/build-template.ts (SANDBOX_VERSION).
-const OPENCOMPUTER_SANDBOX_VERSION = "v56-opencode-1-18-11";
+const OPENCOMPUTER_SANDBOX_VERSION = "v57-vnc-opencode-1-18-11";
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
   `VIRTUAL_ENV=${PYTHON_VENV} ` +

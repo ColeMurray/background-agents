@@ -50,7 +50,7 @@ class TestCreateSandboxResources:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None)),
+            AsyncMock(return_value=(None, None, None, None)),
         )
 
         manager = SandboxManager()
@@ -79,7 +79,7 @@ class TestCreateSandboxResources:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None)),
+            AsyncMock(return_value=(None, None, None, None)),
         )
 
         manager = SandboxManager()

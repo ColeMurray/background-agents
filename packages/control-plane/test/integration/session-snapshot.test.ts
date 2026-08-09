@@ -34,9 +34,12 @@ describe("session snapshot synchronization", () => {
     await queryDO(
       stub,
       `UPDATE sandbox
-       SET status = 'ready', code_server_url = ?, code_server_password = ?, ttyd_url = ?, ttyd_token = ?`,
+       SET status = 'ready', code_server_url = ?, code_server_password = ?,
+           vnc_url = ?, vnc_password = ?, ttyd_url = ?, ttyd_token = ?`,
       "https://code.example.test",
       await encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      "https://desktop.example.test",
+      await encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
       "https://terminal.example.test",
       await encryptToken("terminal-secret", env.REPO_SECRETS_ENCRYPTION_KEY)
     );
@@ -49,10 +52,13 @@ describe("session snapshot synchronization", () => {
     expect(snapshot.session).toMatchObject({
       id: name,
       codeServerUrl: "https://code.example.test",
+      vncUrl: "https://desktop.example.test",
     });
     expect(snapshot.session).not.toHaveProperty("codeServerPassword");
+    expect(snapshot.session).not.toHaveProperty("vncPassword");
     expect(snapshot.session).not.toHaveProperty("ttydToken");
     expect(JSON.stringify(snapshot)).not.toContain("code-secret");
+    expect(JSON.stringify(snapshot)).not.toContain("vnc-secret");
     expect(JSON.stringify(snapshot)).not.toContain("terminal-secret");
     expect(snapshot.timeline.events).toContainEqual({
       eventId: "stable-event-1",
@@ -65,6 +71,7 @@ describe("session snapshot synchronization", () => {
     expect(sandboxAccessResponse.headers.get("Cache-Control")).toBe("private, no-store");
     expect(await sandboxAccessResponse.json()).toEqual({
       codeServer: { url: "https://code.example.test", password: "code-secret" },
+      vnc: { url: "https://desktop.example.test", password: "vnc-secret" },
       ttyd: { url: "https://terminal.example.test", token: "terminal-secret" },
     });
 
@@ -72,9 +79,11 @@ describe("session snapshot synchronization", () => {
 
     expect(messages!.map((message) => message.type)).toEqual(["subscribed"]);
     expect(messages![0].session).not.toHaveProperty("codeServerPassword");
+    expect(messages![0].session).not.toHaveProperty("vncPassword");
     expect(messages![0].session).not.toHaveProperty("ttydToken");
     expect(messages![0].timeline).toHaveProperty("events");
     expect(JSON.stringify(messages![0])).not.toContain("code-secret");
+    expect(JSON.stringify(messages![0])).not.toContain("vnc-secret");
     expect(JSON.stringify(messages![0])).not.toContain("terminal-secret");
 
     const mappings = await queryDO<{ participant_id: string; client_id: string }>(

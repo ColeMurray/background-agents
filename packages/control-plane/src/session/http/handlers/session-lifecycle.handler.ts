@@ -52,6 +52,7 @@ interface InitRequest {
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   sandboxSettings?: SandboxSettings;
 }
 
@@ -207,6 +208,7 @@ export function createSessionLifecycleHandler(
         spawnSource: body.spawnSource ?? "user",
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
+        vncEnabled: body.vncEnabled ?? false,
         sandboxSettings: body.sandboxSettings ? JSON.stringify(body.sandboxSettings) : null,
         environmentId: body.environmentId ?? null,
         createdAt: now,
