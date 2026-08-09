@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sandbox_runtime import entrypoint
-from sandbox_runtime.entrypoint import GH_WRAPPER_BODY, SandboxSupervisor
+from sandbox_runtime import repository_boot as entrypoint
+from sandbox_runtime.repository_boot import GH_WRAPPER_BODY, RepositoryBootstrapper
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -119,7 +119,7 @@ def test_runtime_installs_canonical_wrapper(
     monkeypatch.setattr(entrypoint, "GH_WRAPPER_REAL_PATH", str(real_gh))
     monkeypatch.setattr(entrypoint, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
-    supervisor = object.__new__(SandboxSupervisor)
+    supervisor = object.__new__(RepositoryBootstrapper)
     supervisor._install_gh_wrapper()
 
     assert wrapper.read_text() == GH_WRAPPER_BODY
@@ -137,5 +137,5 @@ def test_runtime_fails_when_wrapper_cannot_be_installed(
     monkeypatch.setattr(entrypoint, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
     with pytest.raises(RuntimeError, match="Cannot install authenticated gh wrapper"):
-        supervisor = object.__new__(SandboxSupervisor)
+        supervisor = object.__new__(RepositoryBootstrapper)
         supervisor._install_gh_wrapper()

@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.access_services import AccessServices, _port_from_env
 from sandbox_runtime.constants import CODE_SERVER_PORT, TTYD_PORT
-from sandbox_runtime.entrypoint import SandboxSupervisor, _port_from_env
+from tests.runtime_helpers import make_access_services
 
 
 class TestPortFromEnv:
@@ -26,7 +27,7 @@ class TestPortFromEnv:
             assert _port_from_env("X_TEST_PORT", 1234) == 1234
 
 
-def _make_supervisor() -> SandboxSupervisor:
+def _make_access_services() -> AccessServices:
     with patch.dict(
         "os.environ",
         {
@@ -37,13 +38,13 @@ def _make_supervisor() -> SandboxSupervisor:
             "REPO_NAME": "app",
         },
     ):
-        return SandboxSupervisor()
+        return make_access_services()
 
 
 class TestStartCodeServerPort:
     @pytest.mark.asyncio
     async def test_binds_to_env_port(self):
-        sup = _make_supervisor()
+        sup = _make_access_services()
         sup._forward_code_server_logs = AsyncMock()
         proc = MagicMock()
         proc.stdout = None
@@ -54,7 +55,7 @@ class TestStartCodeServerPort:
                 clear=True,
             ),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=proc,
             ) as mock_exec,
@@ -65,14 +66,14 @@ class TestStartCodeServerPort:
 
     @pytest.mark.asyncio
     async def test_binds_to_default_when_unset(self):
-        sup = _make_supervisor()
+        sup = _make_access_services()
         sup._forward_code_server_logs = AsyncMock()
         proc = MagicMock()
         proc.stdout = None
         with (
             patch.dict("os.environ", {"CODE_SERVER_PASSWORD": "pw"}, clear=True),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=proc,
             ) as mock_exec,
@@ -85,14 +86,14 @@ class TestStartCodeServerPort:
 class TestStartTtydPort:
     @pytest.mark.asyncio
     async def test_binds_internal_ttyd_to_default(self):
-        sup = _make_supervisor()
+        sup = _make_access_services()
         sup._forward_ttyd_logs = AsyncMock()
         proc = MagicMock()
         proc.stdout = None
         with (
             patch.dict("os.environ", {"TERMINAL_ENABLED": "true"}, clear=True),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=proc,
             ) as mock_exec,
@@ -104,7 +105,7 @@ class TestStartTtydPort:
     @pytest.mark.asyncio
     async def test_ignores_ttyd_port_env_override(self):
         """The internal ttyd port is fixed — a TTYD_PORT env var must not move it."""
-        sup = _make_supervisor()
+        sup = _make_access_services()
         sup._forward_ttyd_logs = AsyncMock()
         proc = MagicMock()
         proc.stdout = None
@@ -115,7 +116,7 @@ class TestStartTtydPort:
                 clear=True,
             ),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 return_value=proc,
             ) as mock_exec,

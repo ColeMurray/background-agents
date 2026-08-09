@@ -1,0 +1,419 @@
+"""Sandbox lifecycle ordering, restart policy, and coordinated shutdown."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, TypeVar
+
+import httpx
+
+from .constants import BOOT_WARNINGS_FILE_PATH, IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR
+from .repo_image_callback import RepoImageBuildCallback
+from .runtime_config import BootMode, RuntimeConfig
+
+if TYPE_CHECKING:
+    import signal
+    from collections.abc import Awaitable
+
+    from .access_services import AccessServices
+    from .core_services import CoreAgentServices
+    from .repository_boot import BootstrapResult, RepositoryBootstrapper
+
+_ResultT = TypeVar("_ResultT")
+
+
+class ImageBuildExecutionCancelled(Exception):
+    """A handled process signal interrupted image-build work."""
+
+
+class SandboxSupervisor:
+    """Apply lifecycle policy to the composed runtime services."""
+
+    MAX_RESTARTS = 5
+    BACKOFF_BASE = 2.0
+    BACKOFF_MAX = 60.0
+
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        repository_bootstrapper: RepositoryBootstrapper,
+        core_services: CoreAgentServices,
+        access_services: AccessServices,
+        shutdown_event: asyncio.Event,
+        log: Any,
+    ) -> None:
+        self.config = config
+        self.repository_bootstrapper = repository_bootstrapper
+        self.core_services = core_services
+        self.access_services = access_services
+        self.shutdown_event = shutdown_event
+        self.log = log
+        self.boot_mode = BootMode.FRESH
+        self._vnc_restart_task: asyncio.Task[bool] | None = None
+
+    async def _report_fatal_error(self, message: str) -> None:
+        self.log.error("supervisor.fatal", error_message=message)
+        if not self.config.control_plane_url:
+            return
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{self.config.control_plane_url}/sandbox/{self.config.sandbox_id}/error",
+                    json={"error": message, "fatal": True},
+                    headers={"Authorization": f"Bearer {self.config.sandbox_token}"},
+                    timeout=5.0,
+                )
+        except Exception as error:
+            self.log.error("supervisor.report_error_failed", exc=error)
+
+    async def _start_vnc_with_retries(self) -> bool:
+        attempt = 0
+        while not self.shutdown_event.is_set():
+            try:
+                await self.access_services.start_vnc()
+                return True
+            except Exception as error:
+                attempt += 1
+                self.log.warn("vnc.start_failed", attempt=attempt, exc=error)
+                await self.access_services.stop_vnc()
+                if attempt > self.MAX_RESTARTS:
+                    self.log.warn("vnc.max_restarts", restart_count=attempt)
+                    return False
+                await asyncio.sleep(min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX))
+        return False
+
+    async def monitor_processes(self) -> None:
+        """Monitor core and optional processes with their distinct policies."""
+        opencode_restarts = 0
+        bridge_restarts = 0
+        code_server_restarts = 0
+        ttyd_restarts = 0
+        ttyd_proxy_restarts = 0
+        vnc_restarts = 0
+
+        while not self.shutdown_event.is_set():
+            opencode = self.core_services.opencode_process
+            if opencode and opencode.returncode is not None:
+                opencode_restarts += 1
+                self.log.error(
+                    "opencode.crash",
+                    exit_code=opencode.returncode,
+                    restart_count=opencode_restarts,
+                )
+                if opencode_restarts > self.MAX_RESTARTS:
+                    self.log.error(
+                        "opencode.max_restarts",
+                        restart_count=opencode_restarts,
+                    )
+                    await self._report_fatal_error(
+                        f"OpenCode crashed {opencode_restarts} times, giving up"
+                    )
+                    self.shutdown_event.set()
+                    break
+                delay = min(self.BACKOFF_BASE**opencode_restarts, self.BACKOFF_MAX)
+                self.log.info(
+                    "opencode.restart",
+                    delay_s=round(delay, 1),
+                    restart_count=opencode_restarts,
+                )
+                await asyncio.sleep(delay)
+                await self.core_services.start_opencode()
+
+            bridge = self.core_services.bridge_process
+            if bridge and bridge.returncode is not None:
+                if bridge.returncode == 0:
+                    self.log.info("bridge.graceful_exit", exit_code=bridge.returncode)
+                    self.shutdown_event.set()
+                    break
+                bridge_restarts += 1
+                self.log.error(
+                    "bridge.crash",
+                    exit_code=bridge.returncode,
+                    restart_count=bridge_restarts,
+                )
+                if bridge_restarts > self.MAX_RESTARTS:
+                    self.log.error(
+                        "bridge.max_restarts",
+                        restart_count=bridge_restarts,
+                    )
+                    await self._report_fatal_error(
+                        f"Bridge crashed {bridge_restarts} times, giving up"
+                    )
+                    self.shutdown_event.set()
+                    break
+                delay = min(self.BACKOFF_BASE**bridge_restarts, self.BACKOFF_MAX)
+                self.log.info(
+                    "bridge.restart",
+                    delay_s=round(delay, 1),
+                    restart_count=bridge_restarts,
+                )
+                await asyncio.sleep(delay)
+                await self.core_services.start_bridge()
+
+            code_server = self.access_services.code_server_process
+            if code_server and code_server.returncode is not None:
+                code_server_restarts += 1
+                self.log.warn(
+                    "code_server.crash",
+                    exit_code=code_server.returncode,
+                    restart_count=code_server_restarts,
+                )
+                if code_server_restarts <= self.MAX_RESTARTS:
+                    await asyncio.sleep(
+                        min(self.BACKOFF_BASE**code_server_restarts, self.BACKOFF_MAX)
+                    )
+                    try:
+                        await self.access_services.start_code_server()
+                    except Exception as error:
+                        self.log.warn("code_server.restart_failed", exc=error)
+                        self.access_services.code_server_process = None
+                else:
+                    self.log.warn("code_server.max_restarts", restart_count=code_server_restarts)
+                    self.access_services.code_server_process = None
+
+            ttyd = self.access_services.ttyd_process
+            if ttyd and ttyd.returncode is not None:
+                ttyd_restarts += 1
+                self.log.warn("ttyd.crash", exit_code=ttyd.returncode, restart_count=ttyd_restarts)
+                if ttyd_restarts <= self.MAX_RESTARTS:
+                    await asyncio.sleep(min(self.BACKOFF_BASE**ttyd_restarts, self.BACKOFF_MAX))
+                    try:
+                        await self.access_services.start_ttyd()
+                    except Exception as error:
+                        self.log.warn("ttyd.restart_failed", exc=error)
+                        self.access_services.ttyd_process = None
+                else:
+                    self.log.warn("ttyd.max_restarts", restart_count=ttyd_restarts)
+                    self.access_services.ttyd_process = None
+
+            ttyd_proxy = self.access_services.ttyd_proxy_process
+            if ttyd_proxy and ttyd_proxy.returncode is not None:
+                ttyd_proxy_restarts += 1
+                self.log.warn(
+                    "ttyd_proxy.crash",
+                    exit_code=ttyd_proxy.returncode,
+                    restart_count=ttyd_proxy_restarts,
+                )
+                if ttyd_proxy_restarts <= self.MAX_RESTARTS:
+                    await asyncio.sleep(
+                        min(self.BACKOFF_BASE**ttyd_proxy_restarts, self.BACKOFF_MAX)
+                    )
+                    try:
+                        await self.access_services.start_ttyd_proxy()
+                    except Exception as error:
+                        self.log.warn("ttyd_proxy.restart_failed", exc=error)
+                        self.access_services.ttyd_proxy_process = None
+                else:
+                    self.log.warn("ttyd_proxy.max_restarts", restart_count=ttyd_proxy_restarts)
+                    self.access_services.ttyd_proxy_process = None
+
+            crashed_vnc = next(
+                (
+                    (name, process)
+                    for name, process in (
+                        ("xvfb", self.access_services.xvfb_process),
+                        ("fluxbox", self.access_services.fluxbox_process),
+                        ("x11vnc", self.access_services.x11vnc_process),
+                        ("novnc", self.access_services.novnc_process),
+                    )
+                    if process and process.returncode is not None
+                ),
+                None,
+            )
+            if crashed_vnc and (self._vnc_restart_task is None or self._vnc_restart_task.done()):
+                component, process = crashed_vnc
+                vnc_restarts += 1
+                self.log.warn(
+                    "vnc.crash",
+                    component=component,
+                    exit_code=process.returncode,
+                    restart_count=vnc_restarts,
+                )
+                await self.access_services.stop_vnc()
+                if vnc_restarts <= self.MAX_RESTARTS:
+                    self._vnc_restart_task = asyncio.create_task(self._start_vnc_with_retries())
+                else:
+                    self.log.warn("vnc.max_restarts", restart_count=vnc_restarts)
+
+            await asyncio.sleep(1.0)
+
+    def _image_build_execution_timeout_seconds(self) -> int | None:
+        raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
+        if not raw_timeout:
+            return None
+        try:
+            timeout_seconds = int(raw_timeout)
+        except ValueError as error:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            ) from error
+        if timeout_seconds <= 0:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            )
+        return timeout_seconds
+
+    async def _run_until_shutdown(self, operation: Awaitable[_ResultT]) -> _ResultT:
+        operation_task = asyncio.ensure_future(operation)
+        shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+        tasks = {operation_task, shutdown_task}
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if operation_task in done:
+                return operation_task.result()
+            raise ImageBuildExecutionCancelled
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_image_build_execution(self, expected_tunnel_ports: list[int]) -> BootstrapResult:
+        timeout_seconds = self._image_build_execution_timeout_seconds()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await self._run_until_shutdown(
+                    self.repository_bootstrapper.bootstrap(BootMode.BUILD, expected_tunnel_ports)
+                )
+        except TimeoutError as error:
+            raise RuntimeError(
+                f"image build exceeded its {timeout_seconds}-second execution timeout"
+            ) from error
+
+    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
+        startup_start = time.time()
+        self.boot_mode = BootMode.from_env(os.environ)
+        os.environ["OPENINSPECT_BOOT_MODE"] = self.boot_mode.value
+        self.log.info(
+            "supervisor.start",
+            repo_owner=self.config.repo_owner,
+            repo_name=self.config.repo_name,
+        )
+
+        if not self.config.has_repository:
+            self.log.info("supervisor.no_repo_configured")
+        elif self.boot_mode is BootMode.BUILD:
+            self.log.info("supervisor.image_build_mode")
+        elif self.boot_mode is BootMode.SNAPSHOT_RESTORE:
+            self.log.info("supervisor.restored_from_snapshot")
+        elif self.boot_mode is BootMode.REPO_IMAGE:
+            self.log.info(
+                "supervisor.from_repo_image",
+                build_sha=os.environ.get("REPO_IMAGE_SHA", "unknown"),
+            )
+
+        if self.boot_mode is BootMode.BUILD and repo_image_callback is None:
+            repo_image_callback = RepoImageBuildCallback.from_env(self.log)
+
+        expected_tunnel_ports = self.repository_bootstrapper.expected_tunnel_ports()
+        if self.boot_mode is BootMode.SNAPSHOT_RESTORE or expected_tunnel_ports:
+            self.repository_bootstrapper.clear_stale_tunnel_env_file()
+        Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
+
+        opencode_ready = False
+        try:
+            if self.boot_mode is BootMode.BUILD:
+                boot_result = await self._run_image_build_execution(expected_tunnel_ports)
+                if self.shutdown_event.is_set():
+                    raise ImageBuildExecutionCancelled
+                runtime_version = os.environ.get("SANDBOX_VERSION", "")
+                self.log.info(
+                    "image_build.complete",
+                    duration_ms=int((time.time() - startup_start) * 1000),
+                    runtime_version=runtime_version,
+                )
+                if repo_image_callback:
+                    reported = await self._run_until_shutdown(
+                        repo_image_callback.report_success(
+                            build_duration_seconds=time.time() - startup_start,
+                            repository_shas=boot_result.repository_shas,
+                            runtime_version=runtime_version,
+                        )
+                    )
+                    if not reported:
+                        raise RuntimeError("repo image build-complete callback failed")
+                await self.shutdown_event.wait()
+                return True
+
+            try:
+                await self.access_services.start_vnc()
+            except Exception as error:
+                self.log.warn("vnc.start_failed", exc=error)
+                await self.access_services.stop_vnc()
+
+            boot_result = await self.repository_bootstrapper.bootstrap(
+                self.boot_mode, expected_tunnel_ports
+            )
+            self.core_services.configure_workspace(boot_result.repositories, boot_result.workdir)
+            self.access_services.configure_workdir(boot_result.workdir)
+
+            for sidecar_name, starter in (
+                ("code_server", self.access_services.start_code_server),
+                ("ttyd", self.access_services.start_ttyd),
+            ):
+                try:
+                    await starter()
+                except Exception as error:
+                    self.log.warn(f"{sidecar_name}.start_failed", exc=error)
+            if self.access_services.ttyd_process is not None:
+                if await self.access_services.wait_for_ttyd():
+                    try:
+                        await self.access_services.start_ttyd_proxy()
+                    except Exception as error:
+                        self.log.warn("ttyd_proxy.start_failed", exc=error)
+
+            await self.core_services.start_opencode()
+            opencode_ready = True
+            await self.core_services.start_bridge()
+            self.log.info(
+                "sandbox.startup",
+                repo_owner=self.config.repo_owner,
+                repo_name=self.config.repo_name,
+                boot_mode=self.boot_mode.value,
+                restored_from_snapshot=self.boot_mode is BootMode.SNAPSHOT_RESTORE,
+                from_repo_image=self.boot_mode is BootMode.REPO_IMAGE,
+                git_sync_success=boot_result.git_sync_success,
+                setup_success=boot_result.setup_success,
+                start_success=boot_result.start_success,
+                opencode_ready=opencode_ready,
+                duration_ms=int((time.time() - startup_start) * 1000),
+                outcome="success",
+            )
+            await self.monitor_processes()
+        except ImageBuildExecutionCancelled:
+            self.log.info("image_build.cancelled", reason="shutdown_requested")
+            return True
+        except Exception as error:
+            self.log.error("supervisor.error", exc=error)
+            if self.boot_mode is BootMode.BUILD and self.shutdown_event.is_set():
+                self.log.info("image_build.cancelled", reason="shutdown_requested")
+                return True
+            if self.boot_mode is BootMode.BUILD and repo_image_callback:
+                try:
+                    await self._run_until_shutdown(repo_image_callback.report_failure(str(error)))
+                except ImageBuildExecutionCancelled:
+                    self.log.info("image_build.cancelled", reason="shutdown_requested")
+                    return True
+            await self._report_fatal_error(str(error))
+            return False
+        finally:
+            await self.shutdown()
+        return True
+
+    def request_shutdown(self, sig: signal.Signals) -> None:
+        self.log.info("supervisor.signal", signal_name=sig.name)
+        self.shutdown_event.set()
+
+    async def shutdown(self) -> None:
+        self.log.info("supervisor.shutdown_start")
+        if self._vnc_restart_task and not self._vnc_restart_task.done():
+            self._vnc_restart_task.cancel()
+            await asyncio.gather(self._vnc_restart_task, return_exceptions=True)
+        self._vnc_restart_task = None
+        await self.core_services.stop_bridge()
+        await self.access_services.stop()
+        await self.core_services.stop_opencode()
+        self.log.info("supervisor.shutdown_complete")

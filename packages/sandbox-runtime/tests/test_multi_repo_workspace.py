@@ -11,7 +11,9 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.core_services import CoreAgentServices
+from sandbox_runtime.repository_boot import RepositoryBootstrapper
+from tests.runtime_helpers import make_repository_bootstrapper
 
 MULTI_SESSION_CONFIG = json.dumps(
     {
@@ -28,9 +30,10 @@ MULTI_SESSION_CONFIG = json.dumps(
 )
 
 
-def _make_supervisor(tmp_path, session_config: str = MULTI_SESSION_CONFIG) -> SandboxSupervisor:
-    with patch.dict(
-        os.environ,
+def _make_bootstrapper(
+    tmp_path, session_config: str = MULTI_SESSION_CONFIG
+) -> RepositoryBootstrapper:
+    return make_repository_bootstrapper(
         {
             "SANDBOX_ID": "test-sandbox",
             "CONTROL_PLANE_URL": "https://cp.example.com",
@@ -39,34 +42,33 @@ def _make_supervisor(tmp_path, session_config: str = MULTI_SESSION_CONFIG) -> Sa
             "REPO_NAME": "frontend",
             "SESSION_CONFIG": session_config,
         },
-        clear=False,
-    ):
-        sup = SandboxSupervisor()
-    sup.workspace_path = tmp_path
-    sup.repo_path = tmp_path / "frontend"
-    sup.repositories = sup._parse_repositories()
-    return sup
+        workspace_path=tmp_path,
+    )
 
 
-def _mock_run_phases(sup: SandboxSupervisor) -> None:
-    """Mock everything run() touches beyond the phase under test."""
+def _mock_repository_boot(sup: RepositoryBootstrapper) -> None:
     sup._write_repo_manifest = MagicMock()
     sup._ensure_credential_helper_configured = AsyncMock()
     sup.sync_repositories = AsyncMock(return_value=[])
     sup.run_setup_script = AsyncMock(return_value=True)
     sup.run_start_script = AsyncMock(return_value=True)
-    sup.start_code_server = AsyncMock()
-    sup.start_ttyd = AsyncMock()
-    sup.start_opencode = AsyncMock()
-    sup.start_bridge = AsyncMock()
-    sup.monitor_processes = AsyncMock()
-    sup.shutdown = AsyncMock()
-    sup._report_fatal_error = AsyncMock()
+
+
+def _make_core_services(tmp_path, session_config: str = MULTI_SESSION_CONFIG) -> CoreAgentServices:
+    repository = _make_bootstrapper(tmp_path, session_config)
+    core = CoreAgentServices(
+        repository.config,
+        repository.shutdown_event,
+        repository.log,
+        repository.record_boot_warning,
+    )
+    core.configure_workspace(tuple(repository.repositories), repository._opencode_workdir())
+    return core
 
 
 class TestParseRepositories:
     def test_parses_ordered_list(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
 
         assert [(r.owner, r.name, r.branch) for r in sup.repositories] == [
             ("acme", "frontend", "main"),
@@ -83,13 +85,13 @@ class TestParseRepositories:
                 "repositories": [{"repo_owner": "acme", "repo_name": "frontend"}],
             }
         )
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
 
         assert sup.repositories[0].branch == "main"
 
     def test_synthesizes_single_entry_from_scalar_env(self, tmp_path):
         config = json.dumps({"session_id": "s", "branch": "develop"})
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
 
         assert [(r.owner, r.name, r.branch) for r in sup.repositories] == [
             ("acme", "frontend", "develop")
@@ -103,7 +105,7 @@ class TestParseRepositories:
                 "repositories": [{"repo_owner": "acme", "repo_name": "../../etc"}],
             }
         )
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
 
         assert sup.repositories == []
         assert "repo_name" in sup.repo_config_error
@@ -118,7 +120,7 @@ class TestParseRepositories:
                 ],
             }
         )
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
 
         assert sup.repositories == []
         assert "duplicate" in sup.repo_config_error
@@ -131,24 +133,23 @@ class TestParseRepositories:
                 "repositories": [{"repo_owner": "acme", "repo_name": "a/b"}],
             }
         )
-        sup = _make_supervisor(tmp_path, session_config=config)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
+        _mock_repository_boot(sup)
 
-        with patch(
-            "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
-            str(tmp_path / "warnings.jsonl"),
+        with (
+            patch(
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
+                str(tmp_path / "warnings.jsonl"),
+            ),
+            pytest.raises(RuntimeError, match="invalid repository config"),
         ):
-            await sup.run()
-
-        sup._report_fatal_error.assert_called_once()
-        assert "invalid repository config" in sup._report_fatal_error.call_args.args[0]
-        sup.start_opencode.assert_not_called()
+            await sup._run_repository_boot([])
 
 
 class TestSyncRepositories:
     @pytest.mark.asyncio
     async def test_returns_failed_members_in_order(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
         sup._sync_repo = AsyncMock(side_effect=[True, False])
 
         failed = await sup.sync_repositories()
@@ -160,10 +161,10 @@ class TestSyncRepositories:
     async def test_clone_subprocess_exception_is_a_member_failure(self, tmp_path):
         """An OSError from the clone subprocess must surface as a failed
         member, not abort the whole sync gather."""
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
 
         with patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.repository_boot.asyncio.create_subprocess_exec",
             AsyncMock(side_effect=OSError("no more processes")),
         ):
             failed = await sup.sync_repositories()
@@ -173,40 +174,36 @@ class TestSyncRepositories:
     @pytest.mark.asyncio
     async def test_fresh_boot_member_failure_is_fatal(self, tmp_path):
         """Deliberate change: a fresh boot no longer limps on repo-less."""
-        sup = _make_supervisor(tmp_path)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path)
+        _mock_repository_boot(sup)
         sup.sync_repositories = AsyncMock(return_value=[sup.repositories[1]])
 
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
-            await sup.run()
-
-        sup._report_fatal_error.assert_called_once()
-        assert "acme/backend" in sup._report_fatal_error.call_args.args[0]
-        sup.start_opencode.assert_not_called()
+            sup.boot_mode = "fresh"
+            with pytest.raises(RuntimeError, match="acme/backend"):
+                await sup._run_repository_boot([])
 
     @pytest.mark.asyncio
     async def test_snapshot_boot_member_failure_warns_and_continues(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path)
+        _mock_repository_boot(sup)
         sup.sync_repositories = AsyncMock(return_value=[sup.repositories[1]])
 
         with (
             patch.dict(os.environ, {"RESTORED_FROM_SNAPSHOT": "true"}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
-            await sup.run()
-
-        sup._report_fatal_error.assert_not_called()
-        sup.start_opencode.assert_called_once()
+            sup.boot_mode = "snapshot_restore"
+            await sup._run_repository_boot([])
         warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
         assert warning["scope"] == "sync"
         assert warning["repoName"] == "backend"
@@ -215,80 +212,74 @@ class TestSyncRepositories:
 class TestHookOrchestration:
     @pytest.mark.asyncio
     async def test_fresh_setup_failure_warns_and_runs_remaining_members(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path)
+        _mock_repository_boot(sup)
         sup.run_setup_script = AsyncMock(side_effect=[False, True])
 
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
-            await sup.run()
+            sup.boot_mode = "fresh"
+            await sup._run_repository_boot([])
 
         assert [c.args[0] for c in sup.run_setup_script.await_args_list] == sup.repositories
-        sup._report_fatal_error.assert_not_called()
-        sup.start_opencode.assert_called_once()
         warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
         assert warning["scope"] == "setup"
         assert warning["repoName"] == "frontend"
 
     @pytest.mark.asyncio
     async def test_build_setup_failure_is_fatal_naming_member(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path)
+        _mock_repository_boot(sup)
         sup.run_setup_script = AsyncMock(side_effect=[True, False])
 
         with (
             patch.dict(os.environ, {"IMAGE_BUILD_MODE": "true"}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
-            await sup.run()
-
-        sup._report_fatal_error.assert_called_once()
-        assert "acme/backend" in sup._report_fatal_error.call_args.args[0]
+            sup.boot_mode = "build"
+            with pytest.raises(RuntimeError, match="acme/backend"):
+                await sup._run_repository_boot([])
 
     @pytest.mark.asyncio
     async def test_primary_start_failure_is_fatal(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path)
+        _mock_repository_boot(sup)
         sup.run_start_script = AsyncMock(side_effect=[False, True])
 
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
-            await sup.run()
-
-        sup._report_fatal_error.assert_called_once()
-        assert "acme/frontend" in sup._report_fatal_error.call_args.args[0]
-        sup.start_opencode.assert_not_called()
+            sup.boot_mode = "fresh"
+            with pytest.raises(RuntimeError, match="acme/frontend"):
+                await sup._run_repository_boot([])
 
     @pytest.mark.asyncio
     async def test_secondary_start_failure_warns_and_continues(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _mock_run_phases(sup)
+        sup = _make_bootstrapper(tmp_path)
+        _mock_repository_boot(sup)
         sup.run_start_script = AsyncMock(side_effect=[True, False])
 
         with (
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+                "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
                 str(tmp_path / "warnings.jsonl"),
             ),
         ):
-            await sup.run()
-
-        sup._report_fatal_error.assert_not_called()
-        sup.start_opencode.assert_called_once()
+            sup.boot_mode = "fresh"
+            await sup._run_repository_boot([])
         warning = json.loads((tmp_path / "warnings.jsonl").read_text().splitlines()[0])
         assert warning["scope"] == "start"
         assert warning["repoName"] == "backend"
@@ -296,7 +287,7 @@ class TestHookOrchestration:
 
 class TestOpencodeWorkdir:
     def test_multi_repo_roots_at_workspace(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
         (tmp_path / "frontend" / ".git").mkdir(parents=True)
         (tmp_path / "backend" / ".git").mkdir(parents=True)
 
@@ -304,26 +295,22 @@ class TestOpencodeWorkdir:
 
     def test_single_repo_roots_at_repo(self, tmp_path):
         config = json.dumps({"session_id": "s", "branch": "main"})
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
         (tmp_path / "frontend" / ".git").mkdir(parents=True)
 
         assert sup._opencode_workdir() == tmp_path / "frontend"
 
     def test_no_repo_roots_at_workspace(self, tmp_path):
         config = json.dumps({"session_id": "s"})
-        with patch.dict(
-            os.environ,
+        sup = make_repository_bootstrapper(
             {
                 "SANDBOX_ID": "t",
                 "REPO_OWNER": "",
                 "REPO_NAME": "",
                 "SESSION_CONFIG": config,
             },
-            clear=False,
-        ):
-            sup = SandboxSupervisor()
-        sup.workspace_path = tmp_path
-        sup.repositories = sup._parse_repositories()
+            workspace_path=tmp_path,
+        )
 
         assert sup.repositories == []
         assert sup._opencode_workdir() == tmp_path
@@ -331,7 +318,7 @@ class TestOpencodeWorkdir:
 
 class TestWorkspaceManifest:
     def test_writes_manifest_with_members_and_working_branch(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
         (tmp_path / "frontend").mkdir()
         (tmp_path / "backend").mkdir()
         (tmp_path / "backend" / "AGENTS.md").write_text("# backend rules")
@@ -351,7 +338,7 @@ class TestWorkspaceManifest:
     def test_omits_working_branch_line_when_absent(self, tmp_path):
         config = json.loads(MULTI_SESSION_CONFIG)
         del config["working_branch_name"]
-        sup = _make_supervisor(tmp_path, session_config=json.dumps(config))
+        sup = _make_bootstrapper(tmp_path, session_config=json.dumps(config))
 
         sup._write_workspace_manifest()
 
@@ -360,7 +347,7 @@ class TestWorkspaceManifest:
 
     def test_single_repo_writes_nothing(self, tmp_path):
         config = json.dumps({"session_id": "s", "branch": "main"})
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_bootstrapper(tmp_path, session_config=config)
 
         sup._write_workspace_manifest()
 
@@ -369,7 +356,7 @@ class TestWorkspaceManifest:
 
 class TestOpencodeAssembly:
     def test_copies_in_position_order_with_collision_warning(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_core_services(tmp_path)
         front = tmp_path / "frontend" / ".opencode" / "command"
         back = tmp_path / "backend" / ".opencode" / "command"
         front.mkdir(parents=True)
@@ -380,7 +367,7 @@ class TestOpencodeAssembly:
         (tmp_path / "backend" / ".opencode" / "tool" / "db.js").write_text("tool")
 
         with patch(
-            "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+            "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
             str(tmp_path / "warnings.jsonl"),
         ):
             sup._assemble_workspace_opencode()
@@ -396,7 +383,7 @@ class TestOpencodeAssembly:
     def test_rebuilds_from_clean_tree(self, tmp_path):
         """Stale generated files (e.g. from a previous boot's member set)
         must not survive reassembly on snapshot/repo-image boots."""
-        sup = _make_supervisor(tmp_path)
+        sup = _make_core_services(tmp_path)
         stale = tmp_path / ".opencode" / "command" / "removed.md"
         stale.parent.mkdir(parents=True)
         stale.write_text("from a member no longer in the session")
@@ -416,7 +403,7 @@ class TestOpencodeAssembly:
         """The image-managed module tree survives the clean rebuild so
         snapshot restores keep _stage_opencode_deps' skip-if-present fast
         path instead of re-copying it every boot."""
-        sup = _make_supervisor(tmp_path)
+        sup = _make_core_services(tmp_path)
         staged = tmp_path / ".opencode" / "node_modules" / "@opencode-ai" / "plugin"
         staged.mkdir(parents=True)
         (staged / "index.js").write_text("plugin")
@@ -430,7 +417,7 @@ class TestOpencodeAssembly:
         assert not stale.exists()
 
     def test_skips_node_modules(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_core_services(tmp_path)
         nm = tmp_path / "frontend" / ".opencode" / "node_modules" / "pkg"
         nm.mkdir(parents=True)
         (nm / "index.js").write_text("x")
@@ -441,7 +428,7 @@ class TestOpencodeAssembly:
 
     def test_noop_for_single_repo(self, tmp_path):
         config = json.dumps({"session_id": "s", "branch": "main"})
-        sup = _make_supervisor(tmp_path, session_config=config)
+        sup = _make_core_services(tmp_path, session_config=config)
         src = tmp_path / "frontend" / ".opencode"
         src.mkdir(parents=True)
         (src / "a.md").write_text("a")
@@ -453,11 +440,11 @@ class TestOpencodeAssembly:
 
 class TestRepoManifestFile:
     def test_writes_canonical_entries_with_paths(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
         manifest_path = tmp_path / "repo-manifest.json"
 
         with patch(
-            "sandbox_runtime.entrypoint.REPO_MANIFEST_FILE_PATH",
+            "sandbox_runtime.repository_boot.REPO_MANIFEST_FILE_PATH",
             str(manifest_path),
         ):
             sup._write_repo_manifest()
@@ -481,11 +468,11 @@ class TestRepoManifestFile:
 
 class TestBootWarningRecorder:
     def test_appends_jsonl_entries(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
+        sup = _make_bootstrapper(tmp_path)
         sup.log = MagicMock()
 
         with patch(
-            "sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH",
+            "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
             str(tmp_path / "warnings.jsonl"),
         ):
             sup._record_boot_warning(scope="setup", message="m1", repo=sup.repositories[0])

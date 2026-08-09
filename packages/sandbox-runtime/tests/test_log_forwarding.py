@@ -8,10 +8,11 @@ that every ``_forward_*_logs`` method now reads through.
 
 from unittest.mock import MagicMock, patch
 
-from sandbox_runtime.entrypoint import _TRUNCATED_LINE_NOTICE, SandboxSupervisor
+from sandbox_runtime.core_services import _TRUNCATED_LINE_NOTICE, CoreAgentServices
+from tests.runtime_helpers import make_core_services
 
 
-def _make_supervisor() -> SandboxSupervisor:
+def _make_core_services() -> CoreAgentServices:
     """Create a SandboxSupervisor with env vars stubbed out."""
     with patch.dict(
         "os.environ",
@@ -23,7 +24,7 @@ def _make_supervisor() -> SandboxSupervisor:
             "REPO_NAME": "app",
         },
     ):
-        return SandboxSupervisor()
+        return make_core_services()
 
 
 class _ScriptedStream:
@@ -46,7 +47,7 @@ class _ScriptedStream:
         return step
 
 
-async def _collect(sup: SandboxSupervisor, stream: _ScriptedStream) -> list[str]:
+async def _collect(sup: CoreAgentServices, stream: _ScriptedStream) -> list[str]:
     return [
         line async for line in sup._iter_process_lines(stream, error_event="test.forward_error")
     ]
@@ -54,7 +55,7 @@ async def _collect(sup: SandboxSupervisor, stream: _ScriptedStream) -> list[str]
 
 async def test_oversized_line_does_not_stop_forwarding() -> None:
     """A line over the buffer limit is noted, and later lines still forward."""
-    sup = _make_supervisor()
+    sup = _make_core_services()
     stream = _ScriptedStream(
         [
             b"before\n",
@@ -68,7 +69,7 @@ async def test_oversized_line_does_not_stop_forwarding() -> None:
 
 async def test_undecodable_bytes_are_replaced_not_fatal() -> None:
     """Invalid UTF-8 is replaced rather than killing the forwarder."""
-    sup = _make_supervisor()
+    sup = _make_core_services()
     stream = _ScriptedStream([b"\xff\xfe partial\n", b"next\n"])
 
     lines = await _collect(sup, stream)
@@ -79,7 +80,7 @@ async def test_undecodable_bytes_are_replaced_not_fatal() -> None:
 
 async def test_unexpected_reader_error_is_logged_once() -> None:
     """A non-overflow reader failure ends forwarding after logging it once."""
-    sup = _make_supervisor()
+    sup = _make_core_services()
     sup.log = MagicMock()
     err = RuntimeError("transport closed")
     stream = _ScriptedStream([b"one\n", err])
@@ -92,7 +93,7 @@ async def test_unexpected_reader_error_is_logged_once() -> None:
 
 async def test_clean_eof_forwards_all_lines() -> None:
     """The common path: every line is forwarded, decoded and stripped."""
-    sup = _make_supervisor()
+    sup = _make_core_services()
     stream = _ScriptedStream([b"alpha\n", b"beta\n"])
 
     assert await _collect(sup, stream) == ["alpha", "beta"]

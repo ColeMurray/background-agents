@@ -55,9 +55,9 @@ async def test_snapshot_restore_preserves_head_index_and_worktree(tmp_path: Path
         ),
     }
     with patch.dict(os.environ, environment, clear=False):
-        from sandbox_runtime.entrypoint import SandboxSupervisor
+        from tests.runtime_helpers import make_repository_bootstrapper
 
-        supervisor = SandboxSupervisor()
+        supervisor = make_repository_bootstrapper()
     supervisor.boot_mode = "snapshot_restore"
     supervisor.repositories = [replace(supervisor.repositories[0], path=repo)]
     supervisor._ensure_plain_origin = AsyncMock(return_value=True)

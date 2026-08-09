@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.runtime_helpers import make_core_services
+
 
 def _make_supervisor(session_config: dict | None = None):
     """Create a SandboxSupervisor with MCP-relevant session config."""
@@ -16,9 +18,7 @@ def _make_supervisor(session_config: dict | None = None):
         "SESSION_CONFIG": json.dumps(session_config or {}),
     }
     with patch.dict(os.environ, env_vars, clear=False):
-        from sandbox_runtime.entrypoint import SandboxSupervisor
-
-        return SandboxSupervisor()
+        return make_core_services()
 
 
 # ─── _resolve_mcp_servers ────────────────────────────────────────────────────

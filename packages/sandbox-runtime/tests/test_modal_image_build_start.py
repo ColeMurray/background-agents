@@ -1,6 +1,7 @@
 """Behavioral tests for Modal's token-gated image-build entrypoint."""
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -146,6 +147,7 @@ async def test_cancelling_modal_callback_token_read_cleans_up_reader_task():
 @pytest.mark.asyncio
 async def test_modal_entrypoint_runs_supervisor_with_memory_only_callback_token(monkeypatch):
     from sandbox_runtime import entrypoint, modal_image_build_start
+    from sandbox_runtime.repository_boot import BootstrapResult
 
     _set_modal_build_context(monkeypatch)
     reader = asyncio.StreamReader()
@@ -163,8 +165,8 @@ async def test_modal_entrypoint_runs_supervisor_with_memory_only_callback_token(
 
     async def finish_build(supervisor, _expected_tunnel_ports):
         observed_supervisor["value"] = supervisor
-        observed_hook_env.update(supervisor._hook_env())
-        return entrypoint.RepositoryBootResult(True, [], True, None)
+        observed_hook_env.update(supervisor.repository_bootstrapper._hook_env())
+        return BootstrapResult(True, [], True, None, (), Path("/workspace"))
 
     monkeypatch.setattr(entrypoint.SandboxSupervisor, "_run_image_build_execution", finish_build)
 

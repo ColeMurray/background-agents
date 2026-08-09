@@ -1,4 +1,4 @@
-"""Tests for SandboxSupervisor._build_repo_url().
+"""Tests for RepositoryBootstrapper._build_repo_url().
 
 The supervisor no longer embeds credentials in remote URLs — authentication
 flows through the system-wide git credential helper, which fetches fresh
@@ -8,11 +8,12 @@ purely a function of host, owner, and name.
 
 from unittest.mock import patch
 
-from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.repository_boot import RepositoryBootstrapper
+from tests.runtime_helpers import make_repository_bootstrapper
 
 
-def _make_supervisor(env_overrides: dict[str, str] | None = None) -> SandboxSupervisor:
-    """Create a SandboxSupervisor with controlled env vars."""
+def _make_bootstrapper(env_overrides: dict[str, str] | None = None) -> RepositoryBootstrapper:
+    """Create a RepositoryBootstrapper with controlled env vars."""
     base_env = {
         "SANDBOX_ID": "test-sandbox",
         "CONTROL_PLANE_URL": "https://cp.example.com",
@@ -23,25 +24,25 @@ def _make_supervisor(env_overrides: dict[str, str] | None = None) -> SandboxSupe
     if env_overrides:
         base_env.update(env_overrides)
     with patch.dict("os.environ", base_env, clear=True):
-        return SandboxSupervisor()
+        return make_repository_bootstrapper()
 
 
 class TestBuildRepoUrl:
     def test_github_default(self) -> None:
-        sup = _make_supervisor({"VCS_HOST": "github.com"})
+        sup = _make_bootstrapper({"VCS_HOST": "github.com"})
         assert sup._build_repo_url(sup.repositories[0]) == "https://github.com/acme/app.git"
 
     def test_bitbucket(self) -> None:
-        sup = _make_supervisor({"VCS_HOST": "bitbucket.org"})
+        sup = _make_bootstrapper({"VCS_HOST": "bitbucket.org"})
         assert sup._build_repo_url(sup.repositories[0]) == "https://bitbucket.org/acme/app.git"
 
     def test_defaults_to_github(self) -> None:
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._build_repo_url(sup.repositories[0]) == "https://github.com/acme/app.git"
 
     def test_token_env_vars_are_ignored(self) -> None:
         """Stale snapshot tokens in env must NOT leak into the remote URL."""
-        sup = _make_supervisor(
+        sup = _make_bootstrapper(
             {
                 "VCS_CLONE_TOKEN": "ghp_stale",
                 "GITHUB_APP_TOKEN": "ghp_legacy",

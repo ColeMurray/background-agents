@@ -1,4 +1,4 @@
-"""Tests for SandboxSupervisor tunnel-env-file handling.
+"""Tests for RepositoryBootstrapper tunnel-env-file handling.
 
 The supervisor owns the tunnel env file lifecycle from inside the sandbox:
 - at boot, keeps a file the manager already wrote for THIS sandbox (the
@@ -17,11 +17,12 @@ from sandbox_runtime.constants import (
     TUNNEL_ENV_FILE_PATH,
     TUNNEL_ENV_SANDBOX_ID_KEY,
 )
-from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.repository_boot import RepositoryBootstrapper
+from tests.runtime_helpers import make_repository_bootstrapper
 
 
-def _make_supervisor() -> SandboxSupervisor:
-    """Create a SandboxSupervisor with minimal stable env.
+def _make_bootstrapper() -> RepositoryBootstrapper:
+    """Create a RepositoryBootstrapper with minimal stable env.
 
     Env vars read live (like EXPECTED_TUNNEL_PORTS) must be patched in the test
     body, not here — this helper only stabilizes the constructor.
@@ -34,38 +35,38 @@ def _make_supervisor() -> SandboxSupervisor:
         "REPO_NAME": "app",
     }
     with patch.dict("os.environ", base_env, clear=True):
-        return SandboxSupervisor()
+        return make_repository_bootstrapper()
 
 
 class TestExpectedTunnelPorts:
     def test_returns_empty_list_when_env_var_unset(self, monkeypatch):
         monkeypatch.delenv(EXPECTED_TUNNEL_PORTS_ENV_VAR, raising=False)
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._expected_tunnel_ports() == []
 
     def test_parses_single_port(self, monkeypatch):
         monkeypatch.setenv(EXPECTED_TUNNEL_PORTS_ENV_VAR, "3000")
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._expected_tunnel_ports() == [3000]
 
     def test_parses_multiple_ports(self, monkeypatch):
         monkeypatch.setenv(EXPECTED_TUNNEL_PORTS_ENV_VAR, "3000,5173,8080")
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._expected_tunnel_ports() == [3000, 5173, 8080]
 
     def test_tolerates_whitespace(self, monkeypatch):
         monkeypatch.setenv(EXPECTED_TUNNEL_PORTS_ENV_VAR, " 3000 , 5173 ")
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._expected_tunnel_ports() == [3000, 5173]
 
     def test_skips_unparseable_entries(self, monkeypatch):
         monkeypatch.setenv(EXPECTED_TUNNEL_PORTS_ENV_VAR, "3000,not-a-port,5173")
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._expected_tunnel_ports() == [3000, 5173]
 
     def test_empty_string_returns_empty(self, monkeypatch):
         monkeypatch.setenv(EXPECTED_TUNNEL_PORTS_ENV_VAR, "")
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert sup._expected_tunnel_ports() == []
 
 
@@ -74,9 +75,9 @@ class TestClearStaleTunnelEnvFile:
         """A file with no sandbox-ID tag (pre-tag writer, or user-made) is stale."""
         stub_path = tmp_path / "tunnels.env"
         stub_path.write_text("TUNNEL_3000=https://stale.example.com\n")
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup._clear_stale_tunnel_env_file()
 
         assert not stub_path.exists()
@@ -88,9 +89,9 @@ class TestClearStaleTunnelEnvFile:
             f"{TUNNEL_ENV_SANDBOX_ID_KEY}=test-sandbox\nTUNNEL_3000=https://fresh.example.com\n"
         )
         stub_path.write_text(content)
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup._clear_stale_tunnel_env_file()
 
         assert stub_path.read_text() == content
@@ -101,9 +102,9 @@ class TestClearStaleTunnelEnvFile:
         stub_path.write_text(
             f"{TUNNEL_ENV_SANDBOX_ID_KEY}=previous-sandbox\nTUNNEL_3000=https://stale.example.com\n"
         )
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup._clear_stale_tunnel_env_file()
 
         assert not stub_path.exists()
@@ -112,7 +113,7 @@ class TestClearStaleTunnelEnvFile:
         """Without a SANDBOX_ID identity, never trust a pre-existing file."""
         stub_path = tmp_path / "tunnels.env"
         stub_path.write_text(f"{TUNNEL_ENV_SANDBOX_ID_KEY}=unknown\n")
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
         base_env = {
             "CONTROL_PLANE_URL": "https://cp.example.com",
@@ -121,7 +122,7 @@ class TestClearStaleTunnelEnvFile:
             "REPO_NAME": "app",
         }
         with patch.dict("os.environ", base_env, clear=True):
-            sup = SandboxSupervisor()
+            sup = make_repository_bootstrapper()
         sup._clear_stale_tunnel_env_file()
 
         assert not stub_path.exists()
@@ -130,9 +131,9 @@ class TestClearStaleTunnelEnvFile:
         """exists() is False for a broken symlink, but it must still be cleared."""
         stub_path = tmp_path / "tunnels.env"
         stub_path.symlink_to(tmp_path / "missing-target")
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup._clear_stale_tunnel_env_file()
 
         assert not stub_path.is_symlink()
@@ -140,25 +141,25 @@ class TestClearStaleTunnelEnvFile:
 
     def test_no_op_when_file_missing(self, tmp_path, monkeypatch):
         stub_path = tmp_path / "tunnels.env"
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup._clear_stale_tunnel_env_file()  # must not raise
 
 
 class TestWaitForTunnelEnvFile:
     @pytest.mark.asyncio
     async def test_returns_true_immediately_when_no_ports_expected(self):
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert await sup._wait_for_tunnel_env_file([]) is True
 
     @pytest.mark.asyncio
     async def test_returns_true_when_file_already_present(self, tmp_path, monkeypatch):
         stub_path = tmp_path / "tunnels.env"
         stub_path.write_text("TUNNEL_3000=https://fresh.example.com\n")
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert await sup._wait_for_tunnel_env_file([3000]) is True
 
     @pytest.mark.asyncio
@@ -167,18 +168,18 @@ class TestWaitForTunnelEnvFile:
         stub_path.write_text(
             "TUNNEL_3000=https://a.example.com\nTUNNEL_5173=https://b.example.com\n"
         )
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         assert await sup._wait_for_tunnel_env_file([3000, 5173]) is True
 
     @pytest.mark.asyncio
     async def test_returns_false_on_timeout_when_file_missing(self, tmp_path, monkeypatch):
         stub_path = tmp_path / "tunnels.env"
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
         monkeypatch.setenv("TUNNEL_WAIT_TIMEOUT_SECONDS", "0.05")
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup.TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.01
         assert await sup._wait_for_tunnel_env_file([3000]) is False
 
@@ -187,20 +188,20 @@ class TestWaitForTunnelEnvFile:
         """If Modal only resolves a subset of ports, we time out and degrade."""
         stub_path = tmp_path / "tunnels.env"
         stub_path.write_text("TUNNEL_3000=https://a.example.com\n")
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
         monkeypatch.setenv("TUNNEL_WAIT_TIMEOUT_SECONDS", "0.05")
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup.TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.01
         assert await sup._wait_for_tunnel_env_file([3000, 5173]) is False
 
     @pytest.mark.asyncio
     async def test_returns_true_when_file_appears_during_wait(self, tmp_path, monkeypatch):
         stub_path = tmp_path / "tunnels.env"
-        monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", str(stub_path))
+        monkeypatch.setattr("sandbox_runtime.repository_boot.TUNNEL_ENV_FILE_PATH", str(stub_path))
         monkeypatch.setenv("TUNNEL_WAIT_TIMEOUT_SECONDS", "1.0")
 
-        sup = _make_supervisor()
+        sup = _make_bootstrapper()
         sup.TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.02
 
         async def write_after_delay() -> None:

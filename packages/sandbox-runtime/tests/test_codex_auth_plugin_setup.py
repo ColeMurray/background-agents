@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.core_services import CoreAgentServices
+from tests.runtime_helpers import make_core_services
 
 
-def _make_supervisor() -> SandboxSupervisor:
+def _make_core_services() -> CoreAgentServices:
     """Create a SandboxSupervisor with default test config."""
     with patch.dict(
         "os.environ",
@@ -19,7 +20,7 @@ def _make_supervisor() -> SandboxSupervisor:
             "REPO_NAME": "app",
         },
     ):
-        return SandboxSupervisor()
+        return make_core_services()
 
 
 def _auth_file(tmp_path: Path) -> Path:
@@ -58,7 +59,7 @@ class TestCodexAuthPluginSetup:
 
     def test_auth_json_uses_sentinel_token(self, tmp_path):
         """auth.json should contain the sentinel, not the real refresh token."""
-        sup = _make_supervisor()
+        sup = _make_core_services()
 
         with (
             patch.dict(
@@ -78,7 +79,7 @@ class TestCodexAuthPluginSetup:
 
     def test_auth_json_does_not_include_account_id(self, tmp_path):
         """The broker returns account IDs with access tokens when needed."""
-        sup = _make_supervisor()
+        sup = _make_core_services()
 
         with (
             patch.dict(
@@ -99,11 +100,12 @@ class TestCodexAuthPluginSetup:
 
     async def test_start_opencode_copies_js_plugin(self, tmp_path):
         """start_opencode() should deploy the precompiled JS plugin into .opencode/plugins."""
-        sup = _make_supervisor()
+        sup = _make_core_services()
         sup.workspace_path = tmp_path / "workspace"
         sup.workspace_path.mkdir()
         (sup.workspace_path / ".git").mkdir()
         sup.repo_path = sup.workspace_path / "app"
+        sup.workdir = sup.workspace_path
 
         plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "codex-auth-plugin.js"
         plugin_source.parent.mkdir(parents=True)
@@ -115,16 +117,16 @@ class TestCodexAuthPluginSetup:
         original_path = Path
 
         with (
-            patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
-            patch("sandbox_runtime.entrypoint.Path") as mock_path,
-            patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
-            patch("sandbox_runtime.entrypoint.install_runtime_git_excludes") as mock_excludes,
+            patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=True),
+            patch("sandbox_runtime.core_services.Path") as mock_path,
+            patch("sandbox_runtime.core_services.shutil.copy") as mock_copy,
+            patch("sandbox_runtime.core_services.install_runtime_git_excludes") as mock_excludes,
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                "sandbox_runtime.core_services.asyncio.create_subprocess_exec",
                 AsyncMock(return_value=fake_proc),
             ),
             patch(
-                "sandbox_runtime.entrypoint.asyncio.create_task",
+                "sandbox_runtime.core_services.asyncio.create_task",
                 side_effect=lambda coro: coro.close(),
             ),
         ):
