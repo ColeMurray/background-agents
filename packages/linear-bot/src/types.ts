@@ -2,7 +2,12 @@
  * Type definitions for the Linear bot.
  */
 
-import { linearCallbackContextSchema } from "@open-inspect/shared";
+import {
+  linearCompletionCallbackSchema,
+  linearToolCallCallbackSchema,
+  type LinearCompletionCallback,
+  type LinearToolCallCallback,
+} from "@open-inspect/shared";
 import { z } from "zod";
 
 /**
@@ -72,8 +77,7 @@ const staticTargetConfigSchema = z.union([staticRepoConfigSchema, staticEnvironm
 /**
  * Static team→target mapping stored in KV under "config:team-repos".
  */
-export const teamRepoMappingSchema = z.record(z.string(), z.array(staticTargetConfigSchema));
-export type TeamRepoMapping = z.infer<typeof teamRepoMappingSchema>;
+export type TeamRepoMapping = Record<string, StaticTargetConfig[]>;
 
 /**
  * Dynamic repo config from control plane.
@@ -92,14 +96,50 @@ export type {
 /**
  * Project→target mapping stored in KV under "config:project-repos".
  */
-export const projectRepoMappingSchema = z.record(
-  z.string(),
-  z.union([
-    staticRepoConfigSchema.omit({ label: true }),
-    staticEnvironmentConfigSchema.omit({ label: true }),
-  ])
-);
-export type ProjectRepoMapping = z.infer<typeof projectRepoMappingSchema>;
+export type ProjectRepoMapping = Record<string, StaticTargetConfig>;
+
+export interface ParsedMapping<T> {
+  mapping: T;
+  invalidEntries: string[];
+}
+
+const unknownMappingSchema = z.record(z.string(), z.unknown());
+
+export function parseTeamRepoMapping(value: unknown): ParsedMapping<TeamRepoMapping> {
+  const record = unknownMappingSchema.safeParse(value);
+  if (!record.success) return { mapping: {}, invalidEntries: ["<root>"] };
+
+  const mapping: TeamRepoMapping = {};
+  const invalidEntries: string[] = [];
+  for (const [teamId, targets] of Object.entries(record.data)) {
+    if (!Array.isArray(targets)) {
+      invalidEntries.push(teamId);
+      continue;
+    }
+    const parsedTargets = targets.flatMap((target, index) => {
+      const parsed = staticTargetConfigSchema.safeParse(target);
+      if (parsed.success) return [parsed.data];
+      invalidEntries.push(`${teamId}[${index}]`);
+      return [];
+    });
+    if (parsedTargets.length > 0) mapping[teamId] = parsedTargets;
+  }
+  return { mapping, invalidEntries };
+}
+
+export function parseProjectRepoMapping(value: unknown): ParsedMapping<ProjectRepoMapping> {
+  const record = unknownMappingSchema.safeParse(value);
+  if (!record.success) return { mapping: {}, invalidEntries: ["<root>"] };
+
+  const mapping: ProjectRepoMapping = {};
+  const invalidEntries: string[] = [];
+  for (const [projectId, target] of Object.entries(record.data)) {
+    const parsed = staticTargetConfigSchema.safeParse(target);
+    if (parsed.success) mapping[projectId] = parsed.data;
+    else invalidEntries.push(projectId);
+  }
+  return { mapping, invalidEntries };
+}
 
 export const userPreferencesSchema = z.strictObject({
   userId: z.string().trim().min(1),
@@ -117,12 +157,12 @@ export const userPreferencesSchema = z.strictObject({
  * the runtime contract and the type can never drift apart.
  */
 const issueSessionBaseShape = {
-  sessionId: z.string(),
-  issueId: z.string(),
-  issueIdentifier: z.string(),
-  model: z.string(),
-  agentSessionId: z.string().optional(),
-  createdAt: z.number(),
+  sessionId: z.string().trim().min(1),
+  issueId: z.string().trim().min(1),
+  issueIdentifier: z.string().trim().min(1),
+  model: z.string().trim().min(1),
+  agentSessionId: z.string().trim().min(1).optional(),
+  createdAt: z.number().finite(),
 };
 
 const issueSessionTargetSchema = z.discriminatedUnion("kind", [
@@ -175,46 +215,14 @@ export type IssueSession = z.infer<typeof issueSessionSchema>;
 // Re-export CallbackContext types from shared
 export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
 
-const callbackBaseShape = {
-  sessionId: z.string().trim().min(1),
-  messageId: z.string().trim().min(1),
-  timestamp: z.number().finite(),
-  signature: z.string().trim().min(1),
-  context: linearCallbackContextSchema,
-};
-
-export const completionCallbackSchema = z.discriminatedUnion("success", [
-  z
-    .object({ ...callbackBaseShape, success: z.literal(true), error: z.never().optional() })
-    .passthrough(),
-  z
-    .object({
-      ...callbackBaseShape,
-      success: z.literal(false),
-      error: z.string().optional(),
-    })
-    .passthrough(),
-]);
-
-export type CompletionCallback = z.infer<typeof completionCallbackSchema>;
+export const completionCallbackSchema = linearCompletionCallbackSchema;
+export type CompletionCallback = LinearCompletionCallback;
 
 /**
  * Tool call callback payload from control-plane (ephemeral, best-effort).
  */
-export const toolCallCallbackSchema = z
-  .object({
-    sessionId: z.string().trim().min(1),
-    tool: z.string(),
-    args: z.record(z.string(), z.unknown()),
-    callId: z.string().trim().min(1),
-    status: z.string().optional(),
-    timestamp: z.number().finite(),
-    context: linearCallbackContextSchema,
-    signature: z.string().trim().min(1),
-  })
-  .passthrough();
-
-export type ToolCallCallback = z.infer<typeof toolCallCallbackSchema>;
+export const toolCallCallbackSchema = linearToolCallCallbackSchema;
+export type ToolCallCallback = LinearToolCallCallback;
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
@@ -327,20 +335,31 @@ export const agentSessionWebhookIssueSchema = z.object({
   title: webhookStringSchema,
   description: z.string().nullable().optional(),
   url: webhookStringSchema,
-  priority: z.number(),
-  priorityLabel: z.string(),
-  team: webhookNamedEntitySchema.extend({ key: webhookStringSchema }),
-  teamId: webhookStringSchema.optional(),
-  labels: z.array(webhookNamedEntitySchema).optional(),
-  assignee: webhookNamedEntitySchema.optional(),
-  project: webhookNamedEntitySchema.optional(),
+  priority: z.number().nullable().optional(),
+  priorityLabel: z.string().nullable().optional(),
+  team: webhookNamedEntitySchema.extend({ key: webhookStringSchema }).nullable().optional(),
+  teamId: webhookStringSchema.nullable().optional(),
+  labels: z.array(webhookNamedEntitySchema).nullable().optional(),
+  assignee: webhookNamedEntitySchema.nullable().optional(),
+  project: webhookNamedEntitySchema.nullable().optional(),
 });
 
 export type AgentSessionWebhookIssue = z.infer<typeof agentSessionWebhookIssueSchema>;
 
-export const agentSessionWebhookSchema = z.object({
+const agentSessionEventEnvelopeSchema = z.object({
   type: z.literal("AgentSessionEvent"),
   action: webhookStringSchema,
+});
+
+const stopAgentSessionWebhookSchema = agentSessionEventEnvelopeSchema.extend({
+  agentSession: z.object({
+    id: webhookStringSchema,
+    issue: z.object({ id: webhookStringSchema }).optional(),
+  }),
+});
+
+const startAgentSessionWebhookSchema = agentSessionEventEnvelopeSchema.extend({
+  action: z.enum(["created", "prompted"]),
   organizationId: webhookStringSchema,
   webhookId: webhookStringSchema,
   appUserId: webhookStringSchema,
@@ -348,7 +367,7 @@ export const agentSessionWebhookSchema = z.object({
   agentSession: z.object({
     id: webhookStringSchema,
     creatorId: webhookStringSchema.nullable().optional(),
-    issue: agentSessionWebhookIssueSchema.optional(),
+    issue: agentSessionWebhookIssueSchema,
     comment: z.object({ body: z.string(), userId: webhookStringSchema.optional() }).optional(),
   }),
   agentActivity: z
@@ -360,43 +379,44 @@ export const agentSessionWebhookSchema = z.object({
     .optional(),
 });
 
-export type AgentSessionWebhook = z.infer<typeof agentSessionWebhookSchema>;
-type SessionWebhook = AgentSessionWebhook & {
-  action: "created" | "prompted";
-  agentSession: AgentSessionWebhook["agentSession"] & { issue: AgentSessionWebhookIssue };
-};
+export type AgentSessionWebhook = z.infer<typeof startAgentSessionWebhookSchema>;
 
 export type AgentSessionCommand =
-  | { kind: "stop"; webhook: AgentSessionWebhook }
-  | { kind: "start_or_follow_up"; webhook: SessionWebhook };
+  | { kind: "stop"; action: string; agentSessionId: string; issueId?: string }
+  | { kind: "start_or_follow_up"; webhook: AgentSessionWebhook };
 
 export type AgentSessionWebhookParseResult =
-  | { kind: "invalid" }
+  | { kind: "invalid"; reason: "invalid_envelope" | "invalid_stop" | "invalid_start" }
   | { kind: "unsupported"; eventType: string; action: string }
   | AgentSessionCommand;
 
 export function parseAgentSessionWebhook(payload: unknown): AgentSessionWebhookParseResult {
-  const parsed = agentSessionWebhookSchema.safeParse(payload);
-  if (!parsed.success) return { kind: "invalid" };
+  const envelope = agentSessionEventEnvelopeSchema.safeParse(payload);
+  if (!envelope.success) return { kind: "invalid", reason: "invalid_envelope" };
 
-  const webhook = parsed.data;
-  if (
-    webhook.agentActivity?.signal === "stop" ||
-    webhook.action === "stopped" ||
-    webhook.action === "cancelled"
-  ) {
-    return { kind: "stop", webhook };
-  }
-
-  if (webhook.action === "created" || webhook.action === "prompted") {
-    if (!webhook.agentSession.issue) return { kind: "invalid" };
-    const sessionWebhook: SessionWebhook = {
-      ...webhook,
-      action: webhook.action,
-      agentSession: { ...webhook.agentSession, issue: webhook.agentSession.issue },
+  const stopSignal = z
+    .object({ agentActivity: z.object({ signal: z.literal("stop") }) })
+    .safeParse(payload).success;
+  if (stopSignal || envelope.data.action === "stopped" || envelope.data.action === "cancelled") {
+    const stop = stopAgentSessionWebhookSchema.safeParse(payload);
+    if (!stop.success) return { kind: "invalid", reason: "invalid_stop" };
+    return {
+      kind: "stop",
+      action: stop.data.action,
+      agentSessionId: stop.data.agentSession.id,
+      issueId: stop.data.agentSession.issue?.id,
     };
-    return { kind: "start_or_follow_up", webhook: sessionWebhook };
   }
 
-  return { kind: "unsupported", eventType: webhook.type, action: webhook.action };
+  if (envelope.data.action === "created" || envelope.data.action === "prompted") {
+    const start = startAgentSessionWebhookSchema.safeParse(payload);
+    if (!start.success) return { kind: "invalid", reason: "invalid_start" };
+    return { kind: "start_or_follow_up", webhook: start.data };
+  }
+
+  return {
+    kind: "unsupported",
+    eventType: envelope.data.type,
+    action: envelope.data.action,
+  };
 }

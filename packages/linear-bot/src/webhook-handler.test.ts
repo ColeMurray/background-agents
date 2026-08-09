@@ -972,7 +972,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     };
   }
 
-  function makeWebhook(action: string): AgentSessionWebhook {
+  function makeWebhook(action: "created" | "prompted"): AgentSessionWebhook {
     return {
       type: "AgentSessionEvent",
       action,

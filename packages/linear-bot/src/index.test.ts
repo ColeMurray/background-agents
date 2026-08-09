@@ -185,6 +185,7 @@ describe("POST /webhook", () => {
     );
 
     expect(res.status).toBe(400);
+    expect(kv.get).not.toHaveBeenCalled();
     expect(kv.put).not.toHaveBeenCalled();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
@@ -202,6 +203,7 @@ describe("POST /webhook", () => {
     );
 
     expect(res.status).toBe(400);
+    expect(kv.get).not.toHaveBeenCalled();
     expect(kv.put).not.toHaveBeenCalled();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
@@ -209,7 +211,7 @@ describe("POST /webhook", () => {
   it("does not dedupe or enqueue unsupported AgentSessionEvent actions", async () => {
     const { kv } = createFakeKV();
     const ctx = makeExecutionContext();
-    const payload = { ...makeAgentSessionPayload(), action: "mystery_action" };
+    const payload = { type: "AgentSessionEvent", action: "mystery_action" };
 
     const res = await app.fetch(
       await makeWebhookRequest(payload, "delivery-1"),
@@ -226,6 +228,38 @@ describe("POST /webhook", () => {
     expect(kv.get).not.toHaveBeenCalled();
     expect(kv.put).not.toHaveBeenCalled();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("parses stop commands without validating unrelated issue fields", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+    const payload = {
+      type: "AgentSessionEvent",
+      action: "prompted",
+      agentSession: {
+        id: "agent-session-1",
+        issue: { id: "issue-1", labels: "irrelevant malformed field" },
+      },
+      agentActivity: { signal: "stop", content: { body: 42 } },
+    };
+
+    const res = await app.fetch(
+      await makeWebhookRequest(payload, "delivery-stop"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.handleAgentSessionEvent).toHaveBeenCalledWith(
+      {
+        kind: "stop",
+        action: "prompted",
+        agentSessionId: "agent-session-1",
+        issueId: "issue-1",
+      },
+      expect.anything(),
+      expect.any(String)
+    );
   });
 });
 

@@ -4,15 +4,15 @@
  * The `config:*` and `user_prefs:*` keys are operator-managed: edit them
  * directly with `wrangler kv key put --namespace-id <LINEAR_KV> <key> <json>`
  * using these key formats:
- * - `config:team-repos`   — { [teamKey]: "owner/repo" }
- * - `config:project-repos` — { [projectId]: "owner/repo" }
+ * - `config:team-repos` — { [teamId]: [{ owner, name, label? } | { environmentId, label? }] }
+ * - `config:project-repos` — { [projectId]: { owner, name, label? } | { environmentId, label? } }
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
 import {
   issueSessionSchema,
-  projectRepoMappingSchema,
-  teamRepoMappingSchema,
+  parseProjectRepoMapping,
+  parseTeamRepoMapping,
   userPreferencesSchema,
 } from "./types";
 import type {
@@ -29,8 +29,12 @@ const log = createLogger("kv-store");
 export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
   try {
     const data = await env.LINEAR_KV.get("config:team-repos", "json");
-    const parsed = teamRepoMappingSchema.safeParse(data);
-    if (parsed.success) return parsed.data;
+    if (data === null) return {};
+    const parsed = parseTeamRepoMapping(data);
+    if (parsed.invalidEntries.length > 0) {
+      log.warn("kv.invalid_team_repo_mapping", { invalid_entries: parsed.invalidEntries });
+    }
+    return parsed.mapping;
   } catch (e) {
     log.debug("kv.get_team_repo_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),
@@ -42,8 +46,12 @@ export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
 export async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMapping> {
   try {
     const data = await env.LINEAR_KV.get("config:project-repos", "json");
-    const parsed = projectRepoMappingSchema.safeParse(data);
-    if (parsed.success) return parsed.data;
+    if (data === null) return {};
+    const parsed = parseProjectRepoMapping(data);
+    if (parsed.invalidEntries.length > 0) {
+      log.warn("kv.invalid_project_repo_mapping", { invalid_entries: parsed.invalidEntries });
+    }
+    return parsed.mapping;
   } catch (e) {
     log.debug("kv.get_project_repo_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),

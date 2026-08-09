@@ -70,6 +70,54 @@ export const linearCallbackContextSchema = z.union([
 
 export type LinearCallbackContext = z.infer<typeof linearCallbackContextSchema>;
 
+export type CallbackCompletionOutcome =
+  | { success: true; error?: never }
+  | { success: false; error?: string };
+
+const linearCompletionCallbackBaseShape = {
+  sessionId: nonEmptyStringSchema,
+  messageId: nonEmptyStringSchema,
+  timestamp: z.number().refine(Number.isFinite),
+  context: linearCallbackContextSchema,
+};
+
+export const linearCompletionCallbackDataSchema = z.discriminatedUnion("success", [
+  z.looseObject({
+    ...linearCompletionCallbackBaseShape,
+    success: z.literal(true),
+    error: z.never().optional(),
+  }),
+  z.looseObject({
+    ...linearCompletionCallbackBaseShape,
+    success: z.literal(false),
+    error: z.string().optional(),
+  }),
+]);
+
+export const linearCompletionCallbackSchema = z.intersection(
+  linearCompletionCallbackDataSchema,
+  z.looseObject({ signature: nonEmptyStringSchema })
+);
+
+export type LinearCompletionCallback = z.infer<typeof linearCompletionCallbackSchema>;
+
+export const linearToolCallCallbackDataSchema = z.looseObject({
+  sessionId: nonEmptyStringSchema,
+  tool: z.string(),
+  args: z.record(z.string(), z.unknown()),
+  callId: z.string(),
+  status: z.string().optional(),
+  timestamp: z.number().refine(Number.isFinite),
+  context: linearCallbackContextSchema,
+});
+
+export const linearToolCallCallbackSchema = z.intersection(
+  linearToolCallCallbackDataSchema,
+  z.looseObject({ signature: nonEmptyStringSchema })
+);
+
+export type LinearToolCallCallback = z.infer<typeof linearToolCallCallbackSchema>;
+
 export const linearStartCallbackSchema = z.strictObject({
   sessionId: nonEmptyStringSchema,
   messageId: nonEmptyStringSchema,

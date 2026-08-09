@@ -122,7 +122,7 @@ app.post("/webhook", async (c) => {
     if (command.kind === "invalid") {
       log.warn("webhook.invalid_payload", {
         trace_id: traceId,
-        reason: "invalid_agent_session_event_shape",
+        reason: command.reason,
       });
       return c.json({ error: "Invalid payload" }, 400);
     }

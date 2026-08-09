@@ -8,6 +8,11 @@
  */
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import {
+  linearCompletionCallbackDataSchema,
+  linearToolCallCallbackDataSchema,
+  type CallbackCompletionOutcome,
+} from "@open-inspect/shared";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
@@ -160,7 +165,7 @@ export class CallbackNotificationService {
    * Notify the originating client of completion with retry.
    * Routes to the correct service binding based on the message source.
    */
-  async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
+  async notifyComplete(messageId: string, completion: CallbackCompletionOutcome): Promise<void> {
     const sessionId = this.getSessionId();
     const startedAt = Date.now();
     let source: string | null = null;
@@ -183,7 +188,7 @@ export class CallbackNotificationService {
 
       // Route automation callbacks to SchedulerDO (different URL + payload).
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(context, success, error, messageId);
+        result = await this.notifyAutomationComplete(context, completion, messageId);
         return;
       }
 
@@ -198,14 +203,17 @@ export class CallbackNotificationService {
       }
 
       const timestamp = Date.now();
-      const payloadData = {
+      const unparsedPayloadData = {
         sessionId,
         messageId,
-        success,
-        ...(error != null ? { error } : {}),
+        ...completion,
         timestamp,
         context,
       };
+      const payloadData =
+        source === "linear"
+          ? linearCompletionCallbackDataSchema.parse(unparsedPayloadData)
+          : unparsedPayloadData;
       const signature = await this.signPayload(payloadData, secret);
       const payload = { ...payloadData, signature };
       result = await deliverWithRetry(
@@ -269,8 +277,7 @@ export class CallbackNotificationService {
    */
   private async notifyAutomationComplete(
     context: { automationId: string; runId: string; automationName: string },
-    success: boolean,
-    error: string | undefined,
+    completion: CallbackCompletionOutcome,
     messageId: string
   ): Promise<CallbackDeliveryResult> {
     const binding = this.env.SCHEDULER_CALLBACK;
@@ -284,8 +291,7 @@ export class CallbackNotificationService {
       sessionId: this.getSessionId(),
       // The message whose agent response the bot fetches to post the run result.
       messageId,
-      success,
-      error,
+      ...completion,
       automationName: context.automationName,
     };
 
@@ -396,7 +402,7 @@ export class CallbackNotificationService {
     const sessionId = this.getSessionId();
     const context = JSON.parse(message.callback_context);
 
-    const payloadData = {
+    const unparsedPayloadData = {
       sessionId,
       tool,
       args: event.args ?? {},
@@ -405,6 +411,10 @@ export class CallbackNotificationService {
       timestamp: now,
       context,
     };
+    const payloadData =
+      source === "linear"
+        ? linearToolCallCallbackDataSchema.parse(unparsedPayloadData)
+        : unparsedPayloadData;
 
     const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };

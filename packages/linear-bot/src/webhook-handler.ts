@@ -214,10 +214,14 @@ async function getAgentSessionLinearClient(params: {
   }
 }
 
-async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: string): Promise<void> {
+async function handleStop(
+  command: Extract<AgentSessionCommand, { kind: "stop" }>,
+  env: Env,
+  traceId: string
+): Promise<void> {
   const startTime = Date.now();
-  const agentSessionId = webhook.agentSession.id;
-  const issueId = webhook.agentSession.issue?.id;
+  const agentSessionId = command.agentSessionId;
+  const issueId = command.issueId;
 
   if (issueId) {
     const existingSession = await lookupIssueSession(env, issueId);
@@ -258,7 +262,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
 
   log.info("agent_session.stop_handled", {
     trace_id: traceId,
-    action: webhook.action,
+    action: command.action,
     agent_session_id: agentSessionId,
     duration_ms: Date.now() - startTime,
   });
@@ -711,6 +715,16 @@ export async function handleAgentSessionEvent(
   env: Env,
   traceId: string
 ): Promise<void> {
+  if (command.kind === "stop") {
+    log.info("agent_session.received", {
+      trace_id: traceId,
+      action: command.action,
+      agent_session_id: command.agentSessionId,
+      issue_id: command.issueId,
+    });
+    return handleStop(command, env, traceId);
+  }
+
   const webhook = command.webhook;
   const agentSessionId = webhook.agentSession.id;
   const issue = webhook.agentSession.issue;
@@ -725,12 +739,7 @@ export async function handleAgentSessionEvent(
     org_id: webhook.organizationId,
   });
 
-  if (command.kind === "stop") {
-    return handleStop(webhook, env, traceId);
-  }
-
-  // The parser makes issue presence part of the actionable command.
-  const actionableIssue = command.webhook.agentSession.issue;
+  const actionableIssue = webhook.agentSession.issue;
 
   // Follow-up handling (action: "prompted" with existing session)
   const existingSession = await lookupIssueSession(env, actionableIssue.id);

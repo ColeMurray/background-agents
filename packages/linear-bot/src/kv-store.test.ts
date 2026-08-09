@@ -33,13 +33,18 @@ describe("getTeamRepoMapping", () => {
     expect(await getTeamRepoMapping(makeLinearBotEnv(errorKv))).toEqual({});
   });
 
-  it("rejects mixed and malformed targets", async () => {
+  it("retains valid targets when another target is malformed", async () => {
     const { kv } = createFakeKV({
       "config:team-repos": JSON.stringify({
-        "team-1": [{ owner: "org", name: "repo", environmentId: "env_1" }],
+        "team-1": [
+          { owner: "org", name: "repo" },
+          { owner: "org", name: "mixed", environmentId: "env_1" },
+        ],
       }),
     });
-    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual({});
+    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "team-1": [{ owner: "org", name: "repo" }],
+    });
   });
 });
 
@@ -61,9 +66,16 @@ describe("getProjectRepoMapping", () => {
     expect(await getProjectRepoMapping(makeLinearBotEnv(errorKv))).toEqual({});
   });
 
-  it("rejects targets with neither repository nor environment identity", async () => {
-    const { kv } = createFakeKV({ "config:project-repos": JSON.stringify({ "proj-1": {} }) });
-    expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual({});
+  it("retains valid projects and labels when another target is malformed", async () => {
+    const { kv } = createFakeKV({
+      "config:project-repos": JSON.stringify({
+        "proj-good": { owner: "org", name: "repo", label: "backend" },
+        "proj-bad": {},
+      }),
+    });
+    expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "proj-good": { owner: "org", name: "repo", label: "backend" },
+    });
   });
 });
 

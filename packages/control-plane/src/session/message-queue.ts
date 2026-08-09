@@ -383,7 +383,7 @@ export class SessionMessageQueue {
       })
     );
     this.messenger.broadcast({ type: "sandbox_event", event });
-    this.ctx.waitUntil(this.callbackService.notifyComplete(message.id, false, error));
+    this.ctx.waitUntil(this.callbackService.notifyComplete(message.id, { success: false, error }));
   }
 
   writeUserMessageEvent(

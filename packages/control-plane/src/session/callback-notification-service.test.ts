@@ -80,7 +80,7 @@ describe("CallbackNotificationService", () => {
     it("skips when no callback context", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue(null);
 
-      await harness.service.notifyComplete("msg-1", true);
+      await harness.service.notifyComplete("msg-1", { success: true });
 
       expect(harness.log.info).toHaveBeenCalledWith(
         "callback.complete_delivery",
@@ -103,7 +103,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      await harness.service.notifyComplete("msg-1", true);
+      await harness.service.notifyComplete("msg-1", { success: true });
 
       expect(
         (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
@@ -122,7 +122,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      await h.service.notifyComplete("msg-1", true);
+      await h.service.notifyComplete("msg-1", { success: true });
 
       expect(
         (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
@@ -138,7 +138,7 @@ describe("CallbackNotificationService", () => {
         source: "slack",
       });
 
-      await h.service.notifyComplete("msg-1", true);
+      await h.service.notifyComplete("msg-1", { success: true });
 
       expect(h.log.info).toHaveBeenCalledWith(
         "callback.complete_delivery",
@@ -164,7 +164,7 @@ describe("CallbackNotificationService", () => {
         (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
       ).mockResolvedValue(mockResponse);
 
-      await harness.service.notifyComplete("msg-1", true);
+      await harness.service.notifyComplete("msg-1", { success: true });
 
       const fetchMock = (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -218,7 +218,7 @@ describe("CallbackNotificationService", () => {
         .mockRejectedValueOnce(new Error("network error"))
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 
-      await harness.service.notifyComplete("msg-1", true);
+      await harness.service.notifyComplete("msg-1", { success: true });
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(harness.log.info).toHaveBeenCalledWith(
@@ -234,7 +234,7 @@ describe("CallbackNotificationService", () => {
       });
       harness.slackBot.fetch.mockResolvedValue(new Response("unavailable", { status: 503 }));
 
-      await harness.service.notifyComplete("msg-1", false);
+      await harness.service.notifyComplete("msg-1", { success: false });
 
       const terminalEvents = vi
         .mocked(harness.log.error)
@@ -262,7 +262,7 @@ describe("CallbackNotificationService", () => {
         .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
         .mockRejectedValueOnce(new Error("network error"));
 
-      await harness.service.notifyComplete("msg-1", false);
+      await harness.service.notifyComplete("msg-1", { success: false });
 
       const terminalEvent = vi
         .mocked(harness.log.error)
@@ -275,7 +275,13 @@ describe("CallbackNotificationService", () => {
 
     it("routes to LINEAR_BOT for linear source", async () => {
       vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
-        callback_context: JSON.stringify({ issueId: "LIN-123" }),
+        callback_context: JSON.stringify({
+          source: "linear",
+          issueId: "issue-123",
+          issueIdentifier: "LIN-123",
+          issueUrl: "https://linear.app/acme/issue/LIN-123",
+          model: "anthropic/claude-sonnet-4-6",
+        }),
         source: "linear",
       });
 
@@ -284,7 +290,7 @@ describe("CallbackNotificationService", () => {
         (harness.linearBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
       ).mockResolvedValue(mockResponse);
 
-      await harness.service.notifyComplete("msg-1", false);
+      await harness.service.notifyComplete("msg-1", { success: false });
 
       const linearFetch = (harness.linearBot as unknown as { fetch: ReturnType<typeof vi.fn> })
         .fetch;
@@ -776,7 +782,7 @@ describe("CallbackNotificationService", () => {
       );
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
-      await h.service.notifyComplete("msg-1", true);
+      await h.service.notifyComplete("msg-1", { success: true });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
@@ -817,7 +823,7 @@ describe("CallbackNotificationService", () => {
       );
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
-      await h.service.notifyComplete("msg-1", false, "Sandbox crashed");
+      await h.service.notifyComplete("msg-1", { success: false, error: "Sandbox crashed" });
 
       const body = JSON.parse(fetchMock.mock.calls[0][1].body);
       expect(body).toMatchObject({
@@ -841,7 +847,7 @@ describe("CallbackNotificationService", () => {
         source: "automation",
       });
 
-      await h.service.notifyComplete("msg-1", true);
+      await h.service.notifyComplete("msg-1", { success: true });
 
       const terminalEvents = vi
         .mocked(h.log.info)
@@ -884,7 +890,7 @@ describe("CallbackNotificationService", () => {
         .mockRejectedValueOnce(new Error("network error"))
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 
-      await h.service.notifyComplete("msg-1", true);
+      await h.service.notifyComplete("msg-1", { success: true });
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(h.log.info).toHaveBeenCalledWith(
@@ -914,7 +920,7 @@ describe("CallbackNotificationService", () => {
       );
       fetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
-      await h.service.notifyComplete("msg-1", true);
+      await h.service.notifyComplete("msg-1", { success: true });
 
       const slackFetch = (h.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
       expect(slackFetch).not.toHaveBeenCalled();
