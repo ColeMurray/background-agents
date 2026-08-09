@@ -396,8 +396,7 @@ describe("SandboxLifecycleManager", () => {
           sandboxId: config.sandboxId,
           status: "connecting",
           createdAt: Date.now(),
-          vncUrl: "https://vnc.test",
-          vncPassword: "secret",
+          vncAccess: { url: "https://vnc.test", password: "secret" },
         })),
       });
       const manager = new SandboxLifecycleManager(
@@ -1663,6 +1662,39 @@ describe("SandboxLifecycleManager", () => {
       expect(storage.calls).toContain("clearSandboxVncUrl");
       expect(storage.calls).not.toContain("clearSandboxVnc");
       expect(sandbox.vnc_password).toBe("encrypted-vnc-password");
+    });
+
+    it("clears complete VNC access when URL-only clearing is unavailable", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+        vnc_url: "https://vnc.test",
+        vnc_password: "encrypted-vnc-password",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      delete storage.clearSandboxVncUrl;
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox: vi.fn(async () => ({ success: true })),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(storage.calls).toContain("clearSandboxVnc");
+      expect(sandbox.vnc_url).toBeNull();
+      expect(sandbox.vnc_password).toBeNull();
     });
 
     it("calls onSandboxTerminating callback on heartbeat stale", async () => {

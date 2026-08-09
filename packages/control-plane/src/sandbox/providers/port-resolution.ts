@@ -9,6 +9,7 @@ import {
   DEFAULT_CODE_SERVER_PORT,
   DEFAULT_TERMINAL_PORT,
   DEFAULT_VNC_PORT,
+  INTERNAL_VNC_PORT,
   MAX_TUNNEL_PORTS,
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
@@ -31,7 +32,7 @@ export function resolveTunnelPorts(rawPorts: number[] | undefined): number[] {
   if (!rawPorts) return [];
   const ports: number[] = [];
   for (const value of rawPorts) {
-    if (Number.isInteger(value) && value >= 1 && value <= 65535) {
+    if (Number.isInteger(value) && value >= 1 && value <= 65535 && value !== INTERNAL_VNC_PORT) {
       ports.push(value);
     }
     if (ports.length >= MAX_TUNNEL_PORTS) break;

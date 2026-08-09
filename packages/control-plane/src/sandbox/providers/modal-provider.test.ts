@@ -497,7 +497,9 @@ describe("ModalSandboxProvider", () => {
       expect(result.providerObjectId).toBe("modal-obj-xyz");
       expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
-      expect(result).toMatchObject({ vncUrl: "https://vnc.test", vncPassword: "vnc-pw" });
+      expect(result).toMatchObject({
+        vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
+      });
       expect(client.createSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ vncEnabled: true }),
         undefined
@@ -743,7 +745,9 @@ describe("ModalSandboxProvider", () => {
       expect(result.success).toBe(true);
       expect(result.sandboxId).toBe("restored-sandbox-123");
       expect(result.providerObjectId).toBe("new-modal-obj-456");
-      expect(result).toMatchObject({ vncUrl: "https://vnc.test", vncPassword: "vnc-pw" });
+      expect(result).toMatchObject({
+        vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
+      });
       expect(client.restoreSandbox).toHaveBeenCalledWith(
         expect.objectContaining({ vncEnabled: true }),
         undefined

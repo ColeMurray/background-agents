@@ -140,6 +140,20 @@ export interface CreateSandboxConfig {
   repositories?: SessionRepositoryInfo[];
 }
 
+/** Complete browser-desktop access credential returned by sandbox providers. */
+export interface VncAccess {
+  url: string;
+  password: string;
+}
+
+/** Build a complete VNC access credential, or omit incomplete provider data. */
+export function createVncAccess(
+  url: string | undefined,
+  password: string | undefined
+): VncAccess | undefined {
+  return url && password ? { url, password } : undefined;
+}
+
 /**
  * Result of creating a sandbox.
  */
@@ -158,10 +172,8 @@ export interface CreateSandboxResult {
   codeServerPassword?: string;
   /** ttyd proxy tunnel URL (if available) */
   ttydUrl?: string;
-  /** Browser-based VNC URL (if available) */
-  vncUrl?: string;
-  /** VNC password (if available) */
-  vncPassword?: string;
+  /** Complete browser-based VNC credential (if available) */
+  vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
@@ -228,10 +240,8 @@ export interface RestoreResult {
   codeServerPassword?: string;
   /** ttyd proxy tunnel URL (if available) */
   ttydUrl?: string;
-  /** Browser-based VNC URL (if available) */
-  vncUrl?: string;
-  /** VNC password (if available) */
-  vncPassword?: string;
+  /** Complete browser-based VNC credential (if available) */
+  vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }
@@ -302,10 +312,8 @@ export interface ResumeResult {
   codeServerUrl?: string;
   /** Code-server password (if available) */
   codeServerPassword?: string;
-  /** Browser-based VNC URL (if available) */
-  vncUrl?: string;
-  /** VNC password (if available) */
-  vncPassword?: string;
+  /** Complete browser-based VNC credential (if available) */
+  vncAccess?: VncAccess;
   /** Tunnel URLs for extra ports (port -> URL mapping) */
   tunnelUrls?: Record<string, string>;
 }

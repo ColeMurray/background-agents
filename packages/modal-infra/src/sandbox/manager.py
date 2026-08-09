@@ -145,7 +145,7 @@ class SandboxManager:
     @staticmethod
     def _generate_vnc_password() -> str:
         """Generate a random VNC password."""
-        return secrets.token_urlsafe(VNC_PASSWORD_MAX_BYTES * 3 // 4)
+        return secrets.token_urlsafe(VNC_PASSWORD_MAX_BYTES)[:VNC_PASSWORD_MAX_BYTES]
 
     @staticmethod
     async def _resolve_tunnels(
@@ -356,6 +356,8 @@ class SandboxManager:
 
         if config.user_env_vars:
             env_vars.update(config.user_env_vars)
+        env_vars.pop(VNC_PASSWORD_ENV_VAR, None)
+        env_vars.pop(NOVNC_PORT_ENV_VAR, None)
 
         env_vars.update(
             {
@@ -613,6 +615,8 @@ class SandboxManager:
 
         if user_env_vars:
             env_vars.update(user_env_vars)
+        env_vars.pop(VNC_PASSWORD_ENV_VAR, None)
+        env_vars.pop(NOVNC_PORT_ENV_VAR, None)
 
         env_vars.update(
             {

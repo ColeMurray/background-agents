@@ -14,16 +14,19 @@ from sandbox_runtime.entrypoint import SandboxSupervisor
 _ORIGINAL_ASYNCIO_SLEEP = asyncio.sleep
 
 
-def _make_supervisor() -> SandboxSupervisor:
+def _make_supervisor(vnc_password: str | None = None) -> SandboxSupervisor:
+    env = {
+        "SANDBOX_ID": "test-sandbox",
+        "CONTROL_PLANE_URL": "https://cp.example.com",
+        "SANDBOX_AUTH_TOKEN": "tok",
+        "REPO_OWNER": "acme",
+        "REPO_NAME": "app",
+    }
+    if vnc_password is not None:
+        env["VNC_PASSWORD"] = vnc_password
     with patch.dict(
         os.environ,
-        {
-            "SANDBOX_ID": "test-sandbox",
-            "CONTROL_PLANE_URL": "https://cp.example.com",
-            "SANDBOX_AUTH_TOKEN": "tok",
-            "REPO_OWNER": "acme",
-            "REPO_NAME": "app",
-        },
+        env,
         clear=True,
     ):
         return SandboxSupervisor()
@@ -53,8 +56,10 @@ class TestStartVnc:
             },
             clear=True,
         ):
-            SandboxSupervisor()
+            supervisor = SandboxSupervisor()
             assert os.environ["DISPLAY"] == VNC_DISPLAY
+            assert "VNC_PASSWORD" not in os.environ
+            assert supervisor._vnc_password == "secret"
 
     @pytest.mark.asyncio
     async def test_skips_entire_stack_without_password(self, tmp_path):
@@ -76,7 +81,7 @@ class TestStartVnc:
 
     @pytest.mark.asyncio
     async def test_starts_dependencies_in_order_with_internal_raw_vnc(self, tmp_path):
-        supervisor = _make_supervisor()
+        supervisor = _make_supervisor("secret12")
         supervisor._forward_vnc_logs = AsyncMock()
         events: list[str] = []
         processes = [_process() for _ in range(4)]
@@ -101,7 +106,7 @@ class TestStartVnc:
         with (
             patch.dict(
                 os.environ,
-                {"VNC_PASSWORD": "secret12", "NOVNC_PORT": "6099"},
+                {"NOVNC_PORT": "6099"},
                 clear=True,
             ),
             patch(
@@ -150,10 +155,10 @@ class TestStartVnc:
 
     @pytest.mark.asyncio
     async def test_rejects_passwords_over_eight_bytes(self, tmp_path):
-        supervisor = _make_supervisor()
+        supervisor = _make_supervisor("ninebytes")
         password_path = tmp_path / "vnc-password"
         with (
-            patch.dict(os.environ, {"VNC_PASSWORD": "ninebytes"}, clear=True),
+            patch.dict(os.environ, {}, clear=True),
             patch("sandbox_runtime.entrypoint.VNC_PASSWORD_FILE_PATH", str(password_path)),
             patch(
                 "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
@@ -167,12 +172,37 @@ class TestStartVnc:
         assert not password_path.exists()
 
     @pytest.mark.asyncio
+    async def test_replaces_symlink_without_writing_to_its_target(self, tmp_path):
+        supervisor = _make_supervisor("secret12")
+        password_path = tmp_path / "vnc-password"
+        symlink_target = tmp_path / "attacker-target"
+        symlink_target.write_text("unchanged")
+        password_path.symlink_to(symlink_target)
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("sandbox_runtime.entrypoint.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch.object(supervisor, "_clear_vnc_display_artifacts"),
+            patch(
+                "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("stop after password write"),
+            ),
+            pytest.raises(RuntimeError, match="stop after password write"),
+        ):
+            await supervisor.start_vnc()
+
+        assert symlink_target.read_text() == "unchanged"
+        assert not password_path.is_symlink()
+        assert stat.S_IMODE(password_path.stat().st_mode) == 0o600
+
+    @pytest.mark.asyncio
     async def test_uses_default_novnc_port(self, tmp_path):
-        supervisor = _make_supervisor()
+        supervisor = _make_supervisor("pw")
         supervisor._forward_vnc_logs = AsyncMock()
         password_path = tmp_path / "vnc-password"
         with (
-            patch.dict(os.environ, {"VNC_PASSWORD": "pw"}, clear=True),
+            patch.dict(os.environ, {}, clear=True),
             patch("sandbox_runtime.entrypoint.VNC_PASSWORD_FILE_PATH", str(password_path)),
             patch.object(supervisor, "_wait_for_path", new_callable=AsyncMock, return_value=True),
             patch.object(supervisor, "_wait_for_port", new_callable=AsyncMock, return_value=True),

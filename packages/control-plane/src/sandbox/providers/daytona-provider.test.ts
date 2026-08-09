@@ -74,7 +74,7 @@ function createMockClient(
 
 const defaultProviderConfig: DaytonaProviderConfig = {
   scmProvider: "github",
-  codeServerPasswordSecret: "test-secret-key",
+  sandboxAccessPasswordSecret: "test-secret-key",
 };
 
 const baseCreateConfig: CreateSandboxConfig = {
@@ -179,7 +179,7 @@ describe("DaytonaSandboxProvider", () => {
       const provider = new DaytonaSandboxProvider(client, {
         scmProvider: "gitlab",
         gitlabAccessToken: "glpat-test-token",
-        codeServerPasswordSecret: "secret",
+        sandboxAccessPasswordSecret: "secret",
       });
 
       await provider.createSandbox(baseCreateConfig);
@@ -197,7 +197,7 @@ describe("DaytonaSandboxProvider", () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, {
         scmProvider: "bitbucket",
-        codeServerPasswordSecret: "secret",
+        sandboxAccessPasswordSecret: "secret",
       });
 
       await provider.createSandbox(baseCreateConfig);
@@ -427,8 +427,7 @@ describe("DaytonaSandboxProvider", () => {
 
       expect(envVars).toMatchObject({ VNC_PASSWORD: expected, NOVNC_PORT: "6099" });
       expect(result).toMatchObject({
-        vncUrl: "https://preview.test/6099",
-        vncPassword: expected,
+        vncAccess: { url: "https://preview.test/6099", password: expected },
         tunnelUrls: { "3000": "https://preview.test/3000" },
       });
     });
@@ -530,8 +529,8 @@ describe("DaytonaSandboxProvider", () => {
 
       const result = await provider.resumeSandbox({ ...baseResumeConfig, vncEnabled: true });
 
-      expect(result.vncUrl).toBe("https://preview.test/6080");
-      expect(result.vncPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+      expect(result.vncAccess?.url).toBe("https://preview.test/6080");
+      expect(result.vncAccess?.password).toMatch(/^[A-Za-z0-9]{8}$/);
     });
 
     it("tunnel URL failure does not fail the resume", async () => {

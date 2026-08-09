@@ -25,6 +25,7 @@ import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-cli
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  createVncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ResumeConfig,
@@ -45,7 +46,7 @@ export const DEFAULT_E2B_AUTO_PAUSE = true;
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
   /** Secret used for domain-separated sandbox access password derivation. */
-  codeServerPasswordSecret: string;
+  sandboxAccessPasswordSecret: string;
   sandboxTimeoutSeconds: number;
   /**
    * Pause (not kill) when the sandbox TTL expires, so it stays resumable. Resume is
@@ -82,11 +83,11 @@ export class E2BSandboxProvider implements SandboxProvider {
       const codeServerPassword = config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined;
       const vncPassword = config.vncEnabled
-        ? await deriveVncPassword(config.sandboxId, this.providerConfig.codeServerPasswordSecret)
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined;
       const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
       const envVars = buildSandboxEnvVars(
@@ -165,8 +166,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,
-        vncUrl,
-        vncPassword,
+        vncAccess: createVncAccess(vncUrl, vncPassword),
         tunnelUrls,
       };
     } catch (error) {
@@ -219,11 +219,11 @@ export class E2BSandboxProvider implements SandboxProvider {
       const codeServerPassword = config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined;
       const vncPassword = config.vncEnabled
-        ? await deriveVncPassword(config.sandboxId, this.providerConfig.codeServerPasswordSecret)
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined;
       const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         config.providerObjectId,
@@ -238,8 +238,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         providerObjectId: sandbox.sandboxID,
         codeServerUrl,
         codeServerPassword,
-        vncUrl,
-        vncPassword,
+        vncAccess: createVncAccess(vncUrl, vncPassword),
         tunnelUrls,
       };
     } catch (error) {

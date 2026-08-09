@@ -420,6 +420,8 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("modal_sandbox_id");
       expect(mock.calls[0].query).toContain("auth_token = NULL");
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
+      expect(mock.calls[0].query).toContain("vnc_url = NULL");
+      expect(mock.calls[0].query).toContain("vnc_password = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
   });

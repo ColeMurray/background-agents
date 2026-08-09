@@ -92,7 +92,7 @@ function createMockClient(
 
 const providerConfig: VercelProviderConfig = {
   scmProvider: "github",
-  codeServerPasswordSecret: "code-secret",
+  sandboxAccessPasswordSecret: "code-secret",
   token: "vercel-token",
   teamId: "team-123",
   apiBaseUrl: "https://vercel.test/api",
@@ -259,8 +259,7 @@ describe("VercelSandboxProvider", () => {
       })
     );
     expect(result).toMatchObject({
-      vncUrl: "https://vnc.test",
-      vncPassword: expect.any(String),
+      vncAccess: { url: "https://vnc.test", password: expect.any(String) },
       tunnelUrls: { "3000": "https://app.test" },
     });
     expect(result.tunnelUrls).not.toHaveProperty("6099");
@@ -548,8 +547,7 @@ describe("VercelSandboxProvider", () => {
         success: true,
         sandboxId: "sandbox-456",
         providerObjectId: "vercel-session-1",
-        vncUrl: "https://vnc.test",
-        vncPassword: expect.any(String),
+        vncAccess: { url: "https://vnc.test", password: expect.any(String) },
       })
     );
   });

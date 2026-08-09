@@ -74,7 +74,8 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 _ResultT = TypeVar("_ResultT")
 
-# VNC password files obscure their eight-byte payload with this protocol-defined key.
+# This fixed-key VNC encoding is obfuscation, not encryption. Confidentiality
+# depends on the password file being created with mode 0o600.
 _VNC_PASSWORD_FILE_KEY = bytes((0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)) * 3
 
 
@@ -176,7 +177,10 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
-        if os.environ.get(VNC_PASSWORD_ENV_VAR):
+        # Consume the credential before launching any child so OpenCode,
+        # code-server, ttyd, and the bridge cannot inherit it.
+        self._vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
+        if self._vnc_password:
             # GUI processes launched by OpenCode, code-server, or ttyd must use
             # the same display that the VNC sidecar exposes.
             os.environ["DISPLAY"] = VNC_DISPLAY
@@ -1283,7 +1287,7 @@ class SandboxSupervisor:
 
     async def start_vnc(self) -> None:
         """Start the optional desktop and browser-facing noVNC sidecar stack."""
-        password = os.environ.get(VNC_PASSWORD_ENV_VAR)
+        password = self._vnc_password
         if not password:
             Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
             self.log.info("vnc.skip", reason="no_password")
@@ -1296,9 +1300,11 @@ class SandboxSupervisor:
         self._clear_vnc_display_artifacts()
 
         password_path = Path(VNC_PASSWORD_FILE_PATH)
+        password_path.unlink(missing_ok=True)
+        password_open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         password_fd = os.open(
             password_path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+            password_open_flags,
             0o600,
         )
         try:
@@ -1307,7 +1313,6 @@ class SandboxSupervisor:
             os.close(password_fd)
 
         child_env = os.environ.copy()
-        child_env.pop(VNC_PASSWORD_ENV_VAR, None)
         display_env = {**child_env, "DISPLAY": VNC_DISPLAY}
         xvfb_cmd = [
             "Xvfb",

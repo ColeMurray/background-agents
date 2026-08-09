@@ -87,7 +87,7 @@ describe("OpenComputerSandboxProvider", () => {
   it("reports checkpoint/fork capabilities", () => {
     const provider = new OpenComputerSandboxProvider(createMockClient(), {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     expect(provider.name).toBe("opencomputer");
@@ -104,7 +104,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     const result = await provider.createSandbox({
@@ -172,7 +172,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
     const vncConfig = {
       vncEnabled: true,
@@ -194,8 +194,10 @@ describe("OpenComputerSandboxProvider", () => {
 
     for (const result of [created, restored, resumed]) {
       expect(result).toMatchObject({
-        vncUrl: expect.stringContaining("6099"),
-        vncPassword: expect.any(String),
+        vncAccess: {
+          url: expect.stringContaining("6099"),
+          password: expect.any(String),
+        },
         tunnelUrls: { "5173": expect.stringContaining("5173") },
       });
       expect(result.tunnelUrls).not.toHaveProperty("6099");
@@ -210,7 +212,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -231,7 +233,7 @@ describe("OpenComputerSandboxProvider", () => {
     Object.assign(client.config, { template: undefined });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(provider.createSandbox(baseConfig)).rejects.toThrow("OPENCOMPUTER_TEMPLATE");
@@ -242,7 +244,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -259,7 +261,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -286,7 +288,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
       llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
     });
 
@@ -300,7 +302,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
       llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
     });
 
@@ -317,7 +319,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "gitlab",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -345,7 +347,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "bitbucket",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -370,7 +372,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "bitbucket",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -390,7 +392,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "bitbucket",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.triggerImageBuild({
@@ -429,7 +431,7 @@ describe("OpenComputerSandboxProvider", () => {
     });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(provider.createSandbox(baseConfig)).rejects.toThrow(
@@ -444,7 +446,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.deleteSandbox("oc-build-1");
@@ -458,7 +460,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.deleteSandbox("oc-build-1", { deleteSecretStore: true });
@@ -472,7 +474,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({ ...baseConfig, userEnvVars: { ANTHROPIC_API_KEY: "sk-test" } });
@@ -491,7 +493,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     const result = await provider.createSandbox({
@@ -531,7 +533,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox({
@@ -554,7 +556,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     const result = await provider.restoreFromSnapshot({
@@ -586,7 +588,7 @@ describe("OpenComputerSandboxProvider", () => {
     });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(
@@ -604,7 +606,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.restoreFromSnapshot({
@@ -622,7 +624,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.restoreFromSnapshot({
@@ -650,7 +652,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.createSandbox(baseConfig);
@@ -669,7 +671,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(
@@ -694,7 +696,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(
@@ -720,7 +722,7 @@ describe("OpenComputerSandboxProvider", () => {
     const onProviderSessionCreated = vi.fn(async () => undefined);
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
       llmEnvVars: { ANTHROPIC_API_KEY: "sk-provider" },
     });
 
@@ -793,7 +795,7 @@ describe("OpenComputerSandboxProvider", () => {
     const onProviderSessionCreated = vi.fn(async () => undefined);
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.triggerImageBuild({
@@ -857,7 +859,7 @@ describe("OpenComputerSandboxProvider", () => {
     });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(
@@ -884,7 +886,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     const result = await provider.resumeSandbox({
@@ -905,7 +907,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.resumeSandbox({
@@ -927,7 +929,7 @@ describe("OpenComputerSandboxProvider", () => {
     });
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await provider.resumeSandbox({
@@ -947,7 +949,7 @@ describe("OpenComputerSandboxProvider", () => {
     const client = createMockClient();
     const provider = new OpenComputerSandboxProvider(client, {
       scmProvider: "github",
-      codeServerPasswordSecret: "secret",
+      sandboxAccessPasswordSecret: "secret",
     });
 
     await expect(

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { INTERNAL_TTYD_PORT } from "@open-inspect/shared/types/integrations";
+import {
+  DEFAULT_CODE_SERVER_PORT,
+  DEFAULT_TERMINAL_PORT,
+  DEFAULT_VNC_PORT,
+  INTERNAL_TTYD_PORT,
+} from "@open-inspect/shared/types/integrations";
 import {
   normalizeSandboxSettings,
   parsePersistedSandboxSettings,
@@ -163,15 +168,22 @@ describe("normalizeSandboxSettings", () => {
   });
 
   it("allows tunnels on default ports when the corresponding service is disabled", () => {
-    expect(normalizeSandboxSettings({ tunnelPorts: [8080, 6080, 7680] })).toEqual({
-      tunnelPorts: [8080, 6080, 7680],
+    const defaultPorts = [DEFAULT_CODE_SERVER_PORT, DEFAULT_VNC_PORT, DEFAULT_TERMINAL_PORT];
+    expect(normalizeSandboxSettings({ tunnelPorts: defaultPorts })).toEqual({
+      tunnelPorts: defaultPorts,
     });
   });
 
   it("frees the default port for a tunnel when code-server is moved", () => {
-    expect(normalizeSandboxSettings({ codeServerPort: 8081, tunnelPorts: [8080] })).toEqual({
-      codeServerPort: 8081,
-      tunnelPorts: [8080],
+    const movedCodeServerPort = DEFAULT_CODE_SERVER_PORT + 1;
+    expect(
+      normalizeSandboxSettings({
+        codeServerPort: movedCodeServerPort,
+        tunnelPorts: [DEFAULT_CODE_SERVER_PORT],
+      })
+    ).toEqual({
+      codeServerPort: movedCodeServerPort,
+      tunnelPorts: [DEFAULT_CODE_SERVER_PORT],
     });
   });
 

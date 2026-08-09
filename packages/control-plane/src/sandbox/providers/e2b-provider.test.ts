@@ -13,7 +13,7 @@ import {
 
 const providerConfig: E2BProviderConfig = {
   scmProvider: "github",
-  codeServerPasswordSecret: "secret",
+  sandboxAccessPasswordSecret: "secret",
   sandboxTimeoutSeconds: 1800,
   autoPause: true,
 };
@@ -88,8 +88,7 @@ describe("E2BSandboxProvider", () => {
 
     expect(env).toMatchObject({ VNC_PASSWORD: expected, NOVNC_PORT: "6099" });
     expect(result).toMatchObject({
-      vncUrl: "https://6099-e2b-id.e2b.app",
-      vncPassword: expected,
+      vncAccess: { url: "https://6099-e2b-id.e2b.app", password: expected },
       tunnelUrls: { "3000": "https://3000-e2b-id.e2b.app" },
     });
   });
@@ -149,8 +148,8 @@ describe("E2BSandboxProvider", () => {
       vncEnabled: true,
     });
 
-    expect(result.vncUrl).toBe("https://6080-e2b-id.e2b.app");
-    expect(result.vncPassword).toMatch(/^[A-Za-z0-9]{8}$/);
+    expect(result.vncAccess?.url).toBe("https://6080-e2b-id.e2b.app");
+    expect(result.vncAccess?.password).toMatch(/^[A-Za-z0-9]{8}$/);
   });
 
   it("resumeSandbox running uses setSandboxTimeout only", async () => {

@@ -538,8 +538,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
-      if (result.vncUrl && result.vncPassword) {
-        await this.storeAndBroadcastVnc(result.vncUrl, result.vncPassword);
+      if (result.vncAccess) {
+        await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
       }
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
@@ -796,8 +796,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         if (result.codeServerUrl && result.codeServerPassword) {
           await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
         }
-        if (result.vncUrl && result.vncPassword) {
-          await this.storeAndBroadcastVnc(result.vncUrl, result.vncPassword);
+        if (result.vncAccess) {
+          await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
         }
         await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
@@ -939,8 +939,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
       }
-      if (result.vncUrl && result.vncPassword) {
-        await this.storeAndBroadcastVnc(result.vncUrl, result.vncPassword);
+      if (result.vncAccess) {
+        await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
       }
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
@@ -1060,7 +1060,11 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   private clearSandboxAccessState(): void {
     if (this.usesProviderManagedStop() && this.storage.clearSandboxCodeServerUrl) {
       this.storage.clearSandboxCodeServerUrl();
-      this.storage.clearSandboxVncUrl?.();
+      if (this.storage.clearSandboxVncUrl) {
+        this.storage.clearSandboxVncUrl();
+      } else {
+        this.storage.clearSandboxVnc();
+      }
       this.storage.clearSandboxTunnelUrls();
       this.storage.clearSandboxTtyd();
       this.broadcaster.broadcast({ type: "sandbox_access_changed" });

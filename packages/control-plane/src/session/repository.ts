@@ -515,6 +515,8 @@ export class SessionRepository {
          modal_object_id = NULL,
          code_server_url = NULL,
          code_server_password = NULL,
+         vnc_url = NULL,
+         vnc_password = NULL,
          tunnel_urls = NULL,
          ttyd_url = NULL,
          ttyd_token = NULL

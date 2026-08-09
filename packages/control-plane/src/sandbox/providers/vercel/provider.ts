@@ -19,6 +19,7 @@ import {
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  createVncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ImageBuildProviderTriggerConfig,
@@ -30,6 +31,7 @@ import {
   type SnapshotResult,
   type StopConfig,
   type StopResult,
+  type VncAccess,
 } from "../../provider";
 import type {
   VercelCommandResult,
@@ -69,7 +71,7 @@ export interface VercelProviderConfig {
   runtime?: string;
   snapshotExpirationMs?: number;
   /** Secret used for domain-separated sandbox access password derivation. */
-  codeServerPasswordSecret: string;
+  sandboxAccessPasswordSecret: string;
   apiBaseUrl?: string;
   token: string;
   teamId?: string;
@@ -148,8 +150,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
-        vncUrl: access.vncUrl,
-        vncPassword: access.vncPassword,
+        vncAccess: access.vncAccess,
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
@@ -202,8 +203,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
-        vncUrl: access.vncUrl,
-        vncPassword: access.vncPassword,
+        vncAccess: access.vncAccess,
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
@@ -333,11 +333,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       codeServerPassword: config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined,
       vncPassword: config.vncEnabled
-        ? await deriveVncPassword(config.sandboxId, this.providerConfig.codeServerPasswordSecret)
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined,
     });
     Object.assign(envVars, this.buildPlatformEnvVars());
@@ -416,8 +416,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     codeServerUrl?: string;
     codeServerPassword?: string;
     ttydUrl?: string;
-    vncUrl?: string;
-    vncPassword?: string;
+    vncAccess?: VncAccess;
     tunnelUrls?: Record<string, string>;
   }> {
     const routeByPort = new Map(created.routes.map((route) => [route.port, route]));
@@ -445,20 +444,20 @@ export class VercelSandboxProvider implements SandboxProvider {
       ? routeToUrl(routeByPort.get(terminalPort))
       : undefined;
     const vncUrl = vncEnabled ? routeToUrl(routeByPort.get(vncPort)) : undefined;
+    const vncPassword = vncEnabled
+      ? await deriveVncPassword(logicalSandboxId, this.providerConfig.sandboxAccessPasswordSecret)
+      : undefined;
 
     return {
       codeServerUrl,
       codeServerPassword: codeServerEnabled
         ? await deriveCodeServerPassword(
             logicalSandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined,
       ttydUrl,
-      vncUrl,
-      vncPassword: vncEnabled
-        ? await deriveVncPassword(logicalSandboxId, this.providerConfig.codeServerPasswordSecret)
-        : undefined,
+      vncAccess: createVncAccess(vncUrl, vncPassword),
       tunnelUrls: Object.keys(tunnelUrls).length > 0 ? tunnelUrls : undefined,
     };
   }

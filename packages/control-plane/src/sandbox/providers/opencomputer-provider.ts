@@ -49,6 +49,7 @@ import {
   type SnapshotResult,
   type StopConfig,
   type StopResult,
+  type VncAccess,
 } from "../provider";
 
 const log = createLogger("opencomputer-provider");
@@ -58,7 +59,7 @@ const RESERVED_VNC_ENV_KEYS = ["VNC_PASSWORD", "NOVNC_PORT"] as const;
 export interface OpenComputerProviderConfig {
   scmProvider: SourceControlProviderName;
   /** Secret used for domain-separated sandbox access password derivation. */
-  codeServerPasswordSecret: string;
+  sandboxAccessPasswordSecret: string;
   /** Provider-level LLM credentials to expose to the sandbox runtime. */
   llmEnvVars?: Record<string, string | undefined>;
 }
@@ -134,8 +135,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         createdAt: Date.now(),
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,
-        vncUrl: tunnels.vncUrl,
-        vncPassword: tunnels.vncPassword,
+        vncAccess: tunnels.vncAccess,
         tunnelUrls: tunnels.tunnelUrls,
       };
     } catch (error) {
@@ -194,8 +194,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         providerObjectId,
         codeServerUrl: tunnels.codeServerUrl,
         codeServerPassword: tunnels.codeServerPassword,
-        vncUrl: tunnels.vncUrl,
-        vncPassword: tunnels.vncPassword,
+        vncAccess: tunnels.vncAccess,
         tunnelUrls: tunnels.tunnelUrls,
       };
     } catch (error) {
@@ -280,8 +279,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
 
       let codeServerUrl: string | undefined;
       let codeServerPassword: string | undefined;
-      let vncUrl: string | undefined;
-      let vncPassword: string | undefined;
+      let vncAccess: VncAccess | undefined;
       let tunnelUrls: Record<string, string> | undefined;
       try {
         const tunnels = await this.buildTunnelUrls(
@@ -294,8 +292,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         );
         codeServerUrl = tunnels.codeServerUrl;
         codeServerPassword = tunnels.codeServerPassword;
-        vncUrl = tunnels.vncUrl;
-        vncPassword = tunnels.vncPassword;
+        vncAccess = tunnels.vncAccess;
         tunnelUrls = tunnels.tunnelUrls;
       } catch (error) {
         log.warn("opencomputer.resume_tunnel_urls_failed", {
@@ -309,8 +306,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         providerObjectId: sandbox.id || config.providerObjectId,
         codeServerUrl,
         codeServerPassword,
-        vncUrl,
-        vncPassword,
+        vncAccess,
         tunnelUrls,
       };
     } catch (error) {
@@ -451,11 +447,11 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       codeServerPassword: config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined,
       vncPassword: config.vncEnabled
-        ? await deriveVncPassword(config.sandboxId, this.providerConfig.codeServerPasswordSecret)
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined,
     });
 
@@ -654,8 +650,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;
-    vncUrl?: string;
-    vncPassword?: string;
+    vncAccess?: VncAccess;
     tunnelUrls?: Record<string, string>;
   }> {
     const routeUrls = this.routeUrlsFromSandbox(sandbox);
@@ -663,8 +658,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
     let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
     let codeServerUrl: string | undefined;
     let codeServerPassword: string | undefined;
-    let vncUrl: string | undefined;
-    let vncPassword: string | undefined;
+    let vncAccess: VncAccess | undefined;
 
     if (codeServerEnabled) {
       codeServerUrl =
@@ -672,19 +666,20 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
         (await this.client.getTunnelUrl(providerObjectId, codeServerPort)).url;
       codeServerPassword = await deriveCodeServerPassword(
         logicalSandboxId,
-        this.providerConfig.codeServerPasswordSecret
+        this.providerConfig.sandboxAccessPasswordSecret
       );
       tunnelPorts = tunnelPorts.filter((port) => port !== codeServerPort);
     }
 
     if (vncEnabled) {
-      vncUrl =
+      const url =
         routeUrls[String(vncPort)] ??
         (await this.client.getTunnelUrl(providerObjectId, vncPort)).url;
-      vncPassword = await deriveVncPassword(
+      const password = await deriveVncPassword(
         logicalSandboxId,
-        this.providerConfig.codeServerPasswordSecret
+        this.providerConfig.sandboxAccessPasswordSecret
       );
+      vncAccess = { url, password };
       tunnelPorts = tunnelPorts.filter((port) => port !== vncPort);
     }
 
@@ -700,7 +695,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       tunnelUrls = Object.fromEntries(entries);
     }
 
-    return { codeServerUrl, codeServerPassword, vncUrl, vncPassword, tunnelUrls };
+    return { codeServerUrl, codeServerPassword, vncAccess, tunnelUrls };
   }
 
   private routeUrlsFromSandbox(sandbox?: OpenComputerSandboxResponse): Record<string, string> {
