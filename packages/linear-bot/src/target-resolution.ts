@@ -158,17 +158,16 @@ export async function resolveStoredSessionTarget(
   session: IssueSession,
   traceId: string
 ): Promise<SessionTarget | null> {
-  if (session.repoOwner && session.repoName) {
-    return repositoryTarget(session.repoOwner, session.repoName);
+  if (session.target.kind === "repository") {
+    return repositoryTarget(session.target.owner, session.target.name);
   }
-  if (session.environmentId) {
-    const environment = await getEnvironmentById(env, session.environmentId, traceId);
-    if (environment) return { kind: "environment", environment };
-    log.warn("target.stored_environment_not_found", {
-      trace_id: traceId,
-      environment_id: session.environmentId,
-    });
-  }
+
+  const environment = await getEnvironmentById(env, session.target.environmentId, traceId);
+  if (environment) return { kind: "environment", environment };
+  log.warn("target.stored_environment_not_found", {
+    trace_id: traceId,
+    environment_id: session.target.environmentId,
+  });
   return null;
 }
 

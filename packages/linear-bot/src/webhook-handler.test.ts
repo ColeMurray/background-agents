@@ -8,7 +8,13 @@ import {
 } from "./webhook-handler";
 import { clearEnvironmentsLocalCache } from "./environments";
 import { clearReposLocalCache } from "./classifier/repos";
-import type { AgentSessionWebhook, Env, Environment } from "./types";
+import {
+  parseAgentSessionWebhook,
+  type AgentSessionCommand,
+  type AgentSessionWebhook,
+  type Env,
+  type Environment,
+} from "./types";
 import {
   createFakeKV,
   createLinearFetchMock,
@@ -16,6 +22,12 @@ import {
   linearIdentityResponse,
   makeLinearBotEnv,
 } from "./test-helpers";
+
+function commandFor(webhook: AgentSessionWebhook): AgentSessionCommand {
+  const parsed = parseAgentSessionWebhook(webhook);
+  if (parsed.kind === "stop" || parsed.kind === "start_or_follow_up") return parsed;
+  throw new Error(`Test webhook is not actionable: ${parsed.kind}`);
+}
 
 describe("escapeHtml", () => {
   it("escapes & to &amp;", () => {
@@ -311,7 +323,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       throw new Error(`Unexpected control-plane fetch to ${url}`);
     });
 
-    await handleAgentSessionEvent(makeWebhook(), env, traceId);
+    await handleAgentSessionEvent(commandFor(makeWebhook()), env, traceId);
 
     return {
       issueSessionStored: store.has("issue:issue-1"),
@@ -351,7 +363,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "Please continue." },
     };
 
-    await handleAgentSessionEvent(webhook, env, traceId);
+    await handleAgentSessionEvent(commandFor(webhook), env, traceId);
 
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
@@ -371,7 +383,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
     const fetchMock = stubControlPlane(env);
 
-    await handleAgentSessionEvent(makeWebhook(), env, "trace-env-1");
+    await handleAgentSessionEvent(commandFor(makeWebhook()), env, "trace-env-1");
 
     const body = createSessionBody(fetchMock);
     expect(body).toMatchObject({
@@ -398,7 +410,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     > | null;
     expect(issueSession).toMatchObject({
       sessionId: "session-xyz",
-      environmentId: "env_abc",
+      target: { kind: "environment", environmentId: "env_abc" },
     });
     expect(issueSession).not.toHaveProperty("callbackRepoFullName");
     expect(issueSession).not.toHaveProperty("emitToolProgressActivities");
@@ -452,7 +464,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const webhook = makeWebhook([{ id: "label-1", name: "Fullstack" }]);
     delete webhook.agentSession.issue!.project;
 
-    await handleAgentSessionEvent(webhook, env, "trace-env-2");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-env-2");
 
     expect(createSessionBody(fetchMock)).toMatchObject({ environmentId: "env_abc" });
   });
@@ -465,7 +477,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const env = makeLinearBotEnv(kv);
     const fetchMock = stubControlPlane(env);
 
-    await handleAgentSessionEvent(makeWebhook(), env, "trace-env-3");
+    await handleAgentSessionEvent(commandFor(makeWebhook()), env, "trace-env-3");
 
     // No repos and no matching environment → clarification, never a session
     expect(createSessionBody(fetchMock)).toBeNull();
@@ -481,7 +493,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const env = makeLinearBotEnv(kv);
     const fetchMock = stubControlPlane(env);
 
-    await handleAgentSessionEvent(makeWebhook(), env, "trace-env-4");
+    await handleAgentSessionEvent(commandFor(makeWebhook()), env, "trace-env-4");
 
     const body = createSessionBody(fetchMock);
     expect(body).toMatchObject({ repoOwner: "acme", repoName: "backend" });
@@ -502,7 +514,9 @@ describe("handleAgentSessionEvent environment targets", () => {
       string,
       unknown
     > | null;
-    expect(issueSession).toMatchObject({ repoOwner: "acme", repoName: "backend" });
+    expect(issueSession).toMatchObject({
+      target: { kind: "repository", owner: "acme", name: "backend" },
+    });
     expect(issueSession).not.toHaveProperty("environmentId");
   });
 
@@ -520,7 +534,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       promptContext: "Use the parent issue's migration constraints.",
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-prompt-context");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-prompt-context");
 
     expect(promptBody(fetchMock)?.content).toContain(
       '<user_content source="linear_prompt_context" author="linear">\nUse the parent issue\'s migration constraints.'
@@ -539,7 +553,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const webhook = makeWebhook();
     webhook.agentSession.creatorId = null;
 
-    await handleAgentSessionEvent(webhook, env, "trace-automation");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-automation");
 
     expect(createSessionBody(fetchMock)).not.toHaveProperty("actorUserId");
     expect(promptBody(fetchMock)).toMatchObject({
@@ -559,7 +573,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     const webhook = makeWebhook();
     webhook.action = "prompted";
 
-    await handleAgentSessionEvent(webhook, env, "trace-unmapped-prompt");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-unmapped-prompt");
 
     expect(promptBody(fetchMock)).toMatchObject({
       callbackContext: { transitionIssueOnStart: false },
@@ -641,7 +655,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "Use acme/backend and preserve the migration." },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-clarification-reply");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-clarification-reply");
 
     const body = createSessionBody(fetchMock);
     expect(body).toMatchObject({ title: "ENG-42: Wire the fullstack flow" });
@@ -651,8 +665,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     > | null;
     expect(issueSession).toMatchObject({
       sessionId: "session-xyz",
-      repoOwner: "acme",
-      repoName: "backend",
+      target: { kind: "repository", owner: "acme", name: "backend" },
     });
     expect(promptBody(fetchMock)?.content).toContain(
       "Use acme/backend and preserve the migration."
@@ -676,7 +689,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "acme/backend" },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-clarification-actor");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-clarification-actor");
 
     const sessionCall = fetchMock.mock.calls.find(
       ([input]) => String(input) === "https://internal/sessions"
@@ -716,7 +729,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "Please continue." },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-follow-up");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-follow-up");
 
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
@@ -783,6 +796,8 @@ describe("handleAgentSessionEvent environment targets", () => {
         sessionId: "session-xyz",
         issueId: "issue-1",
         issueIdentifier: "ENG-42",
+        repoOwner: "acme",
+        repoName: "backend",
         model: "anthropic/claude-haiku-4-5",
         createdAt: Date.now(),
       }),
@@ -799,7 +814,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "stop" },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-stop");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-stop");
 
     expect(controlPlaneFetch).toHaveBeenCalledOnce();
     expect(controlPlaneFetch).toHaveBeenCalledWith(
@@ -815,6 +830,8 @@ describe("handleAgentSessionEvent environment targets", () => {
         sessionId: "session-xyz",
         issueId: "issue-1",
         issueIdentifier: "ENG-42",
+        repoOwner: "acme",
+        repoName: "backend",
         model: "anthropic/claude-haiku-4-5",
         createdAt: Date.now(),
       }),
@@ -830,7 +847,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "stop" },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-stop-failed");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-stop-failed");
 
     expect(controlPlaneFetch).toHaveBeenCalledOnce();
     expect(store.has("issue:issue-1")).toBe(true);
@@ -880,7 +897,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "Please continue." },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-environment-follow-up");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-environment-follow-up");
 
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
@@ -900,6 +917,8 @@ describe("handleAgentSessionEvent environment targets", () => {
         sessionId: "session-xyz",
         issueId: "issue-1",
         issueIdentifier: "ENG-42",
+        repoOwner: "acme",
+        repoName: "backend",
         model: "anthropic/claude-haiku-4-5",
         createdAt: Date.now(),
       }),
@@ -920,7 +939,7 @@ describe("handleAgentSessionEvent environment targets", () => {
       content: { type: "prompt", body: "Please continue anonymously." },
     };
 
-    await handleAgentSessionEvent(webhook, env, "trace-follow-up-anonymous");
+    await handleAgentSessionEvent(commandFor(webhook), env, "trace-follow-up-anonymous");
 
     const promptCall = controlPlaneFetch.mock.calls.find(([input]) =>
       String(input).endsWith("/prompt")
@@ -953,7 +972,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     };
   }
 
-  function makeWebhook(action: string): AgentSessionWebhook {
+  function makeWebhook(action: "created" | "prompted"): AgentSessionWebhook {
     return {
       type: "AgentSessionEvent",
       action,
@@ -1001,7 +1020,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     const env = makeLinearBotEnv(kv);
     const fetchMock = stubInvalidClient();
 
-    await handleAgentSessionEvent(makeWebhook("created"), env, "trace-123");
+    await handleAgentSessionEvent(commandFor(makeWebhook("created")), env, "trace-123");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.linear.app/oauth/token");
@@ -1039,7 +1058,7 @@ describe("handleAgentSessionEvent auth failures", () => {
     const env = makeLinearBotEnv(kv);
     const fetchMock = stubInvalidClient();
 
-    await handleAgentSessionEvent(makeWebhook("prompted"), env, "trace-456");
+    await handleAgentSessionEvent(commandFor(makeWebhook("prompted")), env, "trace-456");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://api.linear.app/oauth/token");

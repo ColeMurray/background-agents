@@ -8,6 +8,11 @@
  */
 
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import {
+  linearCompletionCallbackDataSchema,
+  linearToolCallCallbackDataSchema,
+  type CallbackCompletionOutcome,
+} from "@open-inspect/shared";
 import { callbackSigningSecret, type CallbackDestination } from "../auth/service/callback-signing";
 import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
@@ -160,7 +165,7 @@ export class CallbackNotificationService {
    * Notify the originating client of completion with retry.
    * Routes to the correct service binding based on the message source.
    */
-  async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
+  async notifyComplete(messageId: string, completion: CallbackCompletionOutcome): Promise<void> {
     const sessionId = this.getSessionId();
     const startedAt = Date.now();
     let source: string | null = null;
@@ -183,7 +188,7 @@ export class CallbackNotificationService {
 
       // Route automation callbacks to SchedulerDO (different URL + payload).
       if (source === "automation") {
-        result = await this.notifyAutomationComplete(context, success, error, messageId);
+        result = await this.notifyAutomationComplete(context, completion, messageId);
         return;
       }
 
@@ -198,14 +203,17 @@ export class CallbackNotificationService {
       }
 
       const timestamp = Date.now();
-      const payloadData = {
+      const unparsedPayloadData = {
         sessionId,
         messageId,
-        success,
-        ...(error != null ? { error } : {}),
+        ...completion,
         timestamp,
         context,
       };
+      const payloadData =
+        source === "linear"
+          ? linearCompletionCallbackDataSchema.parse(unparsedPayloadData)
+          : unparsedPayloadData;
       const signature = await this.signPayload(payloadData, secret);
       const payload = { ...payloadData, signature };
       result = await deliverWithRetry(
@@ -269,8 +277,7 @@ export class CallbackNotificationService {
    */
   private async notifyAutomationComplete(
     context: { automationId: string; runId: string; automationName: string },
-    success: boolean,
-    error: string | undefined,
+    completion: CallbackCompletionOutcome,
     messageId: string
   ): Promise<CallbackDeliveryResult> {
     const binding = this.env.SCHEDULER_CALLBACK;
@@ -284,8 +291,7 @@ export class CallbackNotificationService {
       sessionId: this.getSessionId(),
       // The message whose agent response the bot fetches to post the run result.
       messageId,
-      success,
-      error,
+      ...completion,
       automationName: context.automationName,
     };
 
@@ -330,21 +336,29 @@ export class CallbackNotificationService {
       status?: string;
     }
   ): Promise<void> {
-    const callId = event.callId ?? event.call_id ?? "";
+    const tool = event.tool ?? "unknown";
+    const callId = (event.callId ?? event.call_id ?? "").trim();
+    if (!callId) {
+      this.log.warn("callback.tool_call", {
+        message_id: messageId,
+        tool,
+        outcome: "skipped",
+        skip_reason: "missing_call_id",
+      });
+      return;
+    }
 
     // Dedup before throttle so a skipped duplicate doesn't burn the rate-limit
     // window. Anthropic emits running+completed for the same callId; OpenAI's
     // Responses API may emit only completed. Fire once per successfully
     // delivered callId either way — failed deliveries do not mark the set, so
     // a later event for the same callId can retry.
-    if (callId && this.notifiedCallIds.has(callId)) return;
+    if (this.notifiedCallIds.has(callId)) return;
 
     // Throttle: max 1 per 3 seconds
     const now = Date.now();
     if (now - this._lastToolCallCallbackTs < 3000) return;
     this._lastToolCallCallbackTs = now;
-
-    const tool = event.tool ?? "unknown";
 
     const message = this.repository.getMessageCallbackContext(messageId);
     if (!message?.callback_context) {
@@ -396,7 +410,7 @@ export class CallbackNotificationService {
     const sessionId = this.getSessionId();
     const context = JSON.parse(message.callback_context);
 
-    const payloadData = {
+    const unparsedPayloadData = {
       sessionId,
       tool,
       args: event.args ?? {},
@@ -405,6 +419,10 @@ export class CallbackNotificationService {
       timestamp: now,
       context,
     };
+    const payloadData =
+      source === "linear"
+        ? linearToolCallCallbackDataSchema.parse(unparsedPayloadData)
+        : unparsedPayloadData;
 
     const signature = await this.signPayload(payloadData, secret);
     const payload = { ...payloadData, signature };
@@ -420,7 +438,7 @@ export class CallbackNotificationService {
         // Mark only on success so a transient failure doesn't dedupe the next
         // event for this callId (Anthropic's running and completed may be
         // seconds apart for long-running tools — the second event should retry).
-        if (callId) this.markCallIdNotified(callId);
+        this.markCallIdNotified(callId);
         this.log.info("callback.tool_call", {
           message_id: messageId,
           session_id: sessionId,

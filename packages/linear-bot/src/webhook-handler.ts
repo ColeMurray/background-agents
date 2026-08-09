@@ -9,6 +9,7 @@ import type {
   Env,
   LinearCallbackContext,
   LinearIssueDetails,
+  AgentSessionCommand,
   AgentSessionWebhook,
   AgentSessionWebhookIssue,
 } from "./types";
@@ -213,10 +214,14 @@ async function getAgentSessionLinearClient(params: {
   }
 }
 
-async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: string): Promise<void> {
+async function handleStop(
+  command: Extract<AgentSessionCommand, { kind: "stop" }>,
+  env: Env,
+  traceId: string
+): Promise<void> {
   const startTime = Date.now();
-  const agentSessionId = webhook.agentSession.id;
-  const issueId = webhook.agentSession.issue?.id;
+  const agentSessionId = command.agentSessionId;
+  const issueId = command.issueId;
 
   if (issueId) {
     const existingSession = await lookupIssueSession(env, issueId);
@@ -257,7 +262,7 @@ async function handleStop(webhook: AgentSessionWebhook, env: Env, traceId: strin
 
   log.info("agent_session.stop_handled", {
     trace_id: traceId,
-    action: webhook.action,
+    action: command.action,
     agent_session_id: agentSessionId,
     duration_ms: Date.now() - startTime,
   });
@@ -622,7 +627,10 @@ async function handleNewSession(
     sessionId: session.sessionId,
     issueId: issue.id,
     issueIdentifier: issue.identifier,
-    ...targetRequestFields(target),
+    target:
+      target.kind === "environment"
+        ? { kind: "environment", environmentId: target.environment.id }
+        : { kind: "repository", owner: target.owner, name: target.name },
     model,
     agentSessionId,
     createdAt: Date.now(),
@@ -703,10 +711,21 @@ async function handleNewSession(
 // ─── Dispatcher ──────────────────────────────────────────────────────────────
 
 export async function handleAgentSessionEvent(
-  webhook: AgentSessionWebhook,
+  command: AgentSessionCommand,
   env: Env,
   traceId: string
 ): Promise<void> {
+  if (command.kind === "stop") {
+    log.info("agent_session.received", {
+      trace_id: traceId,
+      action: command.action,
+      agent_session_id: command.agentSessionId,
+      issue_id: command.issueId,
+    });
+    return handleStop(command, env, traceId);
+  }
+
+  const webhook = command.webhook;
   const agentSessionId = webhook.agentSession.id;
   const issue = webhook.agentSession.issue;
 
@@ -720,28 +739,16 @@ export async function handleAgentSessionEvent(
     org_id: webhook.organizationId,
   });
 
-  // Stop handling
-  if (
-    webhook.agentActivity?.signal === "stop" ||
-    webhook.action === "stopped" ||
-    webhook.action === "cancelled"
-  ) {
-    return handleStop(webhook, env, traceId);
-  }
-
-  if (!issue) {
-    log.warn("agent_session.no_issue", { trace_id: traceId, agent_session_id: agentSessionId });
-    return;
-  }
+  const actionableIssue = webhook.agentSession.issue;
 
   // Follow-up handling (action: "prompted" with existing session)
-  const existingSession = await lookupIssueSession(env, issue.id);
+  const existingSession = await lookupIssueSession(env, actionableIssue.id);
   if (existingSession && webhook.action === "prompted") {
-    return handleFollowUp(webhook, issue, env, traceId);
+    return handleFollowUp(webhook, actionableIssue, env, traceId);
   }
 
   // New session
-  return handleNewSession(webhook, issue, env, traceId);
+  return handleNewSession(webhook, actionableIssue, env, traceId);
 }
 
 // ─── Prompt Builder ──────────────────────────────────────────────────────────

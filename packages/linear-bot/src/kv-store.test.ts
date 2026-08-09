@@ -32,6 +32,20 @@ describe("getTeamRepoMapping", () => {
   it("returns {} when KV throws", async () => {
     expect(await getTeamRepoMapping(makeLinearBotEnv(errorKv))).toEqual({});
   });
+
+  it("retains valid targets when another target is malformed", async () => {
+    const { kv } = createFakeKV({
+      "config:team-repos": JSON.stringify({
+        "team-1": [
+          { owner: "org", name: "repo" },
+          { owner: "org", name: "mixed", environmentId: "env_1" },
+        ],
+      }),
+    });
+    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "team-1": [{ owner: "org", name: "repo" }],
+    });
+  });
 });
 
 // ─── getProjectRepoMapping ───────────────────────────────────────────────────
@@ -51,6 +65,18 @@ describe("getProjectRepoMapping", () => {
   it("returns {} when KV throws", async () => {
     expect(await getProjectRepoMapping(makeLinearBotEnv(errorKv))).toEqual({});
   });
+
+  it("retains valid projects and labels when another target is malformed", async () => {
+    const { kv } = createFakeKV({
+      "config:project-repos": JSON.stringify({
+        "proj-good": { owner: "org", name: "repo", label: "backend" },
+        "proj-bad": {},
+      }),
+    });
+    expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "proj-good": { owner: "org", name: "repo", label: "backend" },
+    });
+  });
 });
 
 // ─── getUserPreferences ──────────────────────────────────────────────────────
@@ -69,6 +95,20 @@ describe("getUserPreferences", () => {
 
   it("returns null when KV throws", async () => {
     expect(await getUserPreferences(makeLinearBotEnv(errorKv), "user-1")).toBeNull();
+  });
+
+  it("rejects preferences stored under a different user", async () => {
+    const { kv } = createFakeKV({
+      "user_prefs:user-1": JSON.stringify({ userId: "user-2", model: "model", updatedAt: 123 }),
+    });
+    expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toBeNull();
+  });
+
+  it("rejects non-finite preference timestamps", async () => {
+    const { kv } = createFakeKV({
+      "user_prefs:user-1": JSON.stringify({ userId: "user-1", updatedAt: "now" }),
+    });
+    expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toBeNull();
   });
 });
 
@@ -91,7 +131,14 @@ describe("lookupIssueSession", () => {
       createdAt: 123,
     };
     const { kv } = createFakeKV({ "issue:issue-1": JSON.stringify(session) });
-    expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toEqual(session);
+    expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toEqual({
+      sessionId: "sess-1",
+      issueId: "issue-1",
+      issueIdentifier: "ENG-1",
+      target: { kind: "repository", owner: "org", name: "repo" },
+      model: "claude-sonnet-4-5",
+      createdAt: 123,
+    });
   });
 
   it("returns null for malformed stored sessions", async () => {
@@ -99,6 +146,22 @@ describe("lookupIssueSession", () => {
       "issue:issue-1": JSON.stringify({ sessionId: "sess-1", issueId: "issue-1" }),
     });
 
+    expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toBeNull();
+  });
+
+  it("rejects mixed legacy targets", async () => {
+    const { kv } = createFakeKV({
+      "issue:issue-1": JSON.stringify({
+        sessionId: "sess-1",
+        issueId: "issue-1",
+        issueIdentifier: "ENG-1",
+        repoOwner: "org",
+        repoName: "repo",
+        environmentId: "env_1",
+        model: "model",
+        createdAt: 123,
+      }),
+    });
     expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toBeNull();
   });
 
@@ -114,8 +177,7 @@ describe("storeIssueSession", () => {
     sessionId: "sess-1",
     issueId: "issue-1",
     issueIdentifier: "ENG-1",
-    repoOwner: "org",
-    repoName: "repo",
+    target: { kind: "repository" as const, owner: "org", name: "repo" },
     model: "claude-sonnet-4-5",
     createdAt: 123,
   };

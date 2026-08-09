@@ -35,6 +35,15 @@ function makeAgentSessionPayload(webhookId = "webhook-config-1") {
     promptContext: "Implement the Linear issue.",
     agentSession: {
       id: "agent-session-1",
+      issue: {
+        id: "issue-1",
+        identifier: "ENG-1",
+        title: "Implement the issue",
+        url: "https://linear.app/acme/issue/ENG-1/implement",
+        priority: 0,
+        priorityLabel: "No priority",
+        team: { id: "team-1", key: "ENG", name: "Engineering" },
+      },
     },
   };
 }
@@ -138,6 +147,119 @@ describe("POST /webhook", () => {
     expect(kv.put).not.toHaveBeenCalled();
     expect(ctx.waitUntil).not.toHaveBeenCalled();
     expect(mocks.handleAgentSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed JSON before dedupe", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+    const body = "{not-json";
+    const res = await app.fetch(
+      new Request("http://localhost/webhook", {
+        method: "POST",
+        headers: {
+          "linear-signature": await signLinearWebhookRequest(body),
+          "linear-delivery": "delivery-1",
+        },
+        body,
+      }),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(400);
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(kv.put).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed nested issue data before dedupe", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+    const payload = makeAgentSessionPayload();
+    payload.agentSession.issue.team = { id: "team-1", key: "ENG", name: "" };
+
+    const res = await app.fetch(
+      await makeWebhookRequest(payload, "delivery-1"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(400);
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(kv.put).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("rejects start actions without an issue before dedupe", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+    const payload = makeAgentSessionPayload();
+    const { issue: _issue, ...agentSession } = payload.agentSession;
+
+    const res = await app.fetch(
+      await makeWebhookRequest({ ...payload, agentSession }, "delivery-1"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(400);
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(kv.put).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("does not dedupe or enqueue unsupported AgentSessionEvent actions", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+    const payload = { type: "AgentSessionEvent", action: "mystery_action" };
+
+    const res = await app.fetch(
+      await makeWebhookRequest(payload, "delivery-1"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      ok: true,
+      skipped: true,
+      reason: "unsupported action: mystery_action",
+    });
+    expect(kv.get).not.toHaveBeenCalled();
+    expect(kv.put).not.toHaveBeenCalled();
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
+  });
+
+  it("parses stop commands without validating unrelated issue fields", async () => {
+    const { kv } = createFakeKV();
+    const ctx = makeExecutionContext();
+    const payload = {
+      type: "AgentSessionEvent",
+      action: "prompted",
+      agentSession: {
+        id: "agent-session-1",
+        issue: { id: "issue-1", labels: "irrelevant malformed field" },
+      },
+      agentActivity: { signal: "stop", content: { body: 42 } },
+    };
+
+    const res = await app.fetch(
+      await makeWebhookRequest(payload, "delivery-stop"),
+      makeLinearBotEnv(kv),
+      ctx
+    );
+
+    expect(res.status).toBe(200);
+    expect(mocks.handleAgentSessionEvent).toHaveBeenCalledWith(
+      {
+        kind: "stop",
+        action: "prompted",
+        agentSessionId: "agent-session-1",
+        issueId: "issue-1",
+      },
+      expect.anything(),
+      expect.any(String)
+    );
   });
 });
 

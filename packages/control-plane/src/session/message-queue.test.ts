@@ -692,11 +692,10 @@ describe("SessionMessageQueue", () => {
       }),
       expect.any(Number)
     );
-    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith(
-      "msg-pending",
-      false,
-      "Execution was cancelled before it started"
-    );
+    expect(h.callbackService.notifyComplete).toHaveBeenCalledWith("msg-pending", {
+      success: false,
+      error: "Execution was cancelled before it started",
+    });
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-pending",
       "failed",

@@ -316,4 +316,14 @@ describe("isValidPayload", () => {
     const { signature: _signature, ...rest } = validPayload;
     expect(isValidPayload(rest)).toBe(false);
   });
+
+  it("rejects contradictory success and error state", () => {
+    expect(isValidPayload({ ...validPayload, error: "unexpected" })).toBe(false);
+  });
+
+  it("rejects incomplete callback context", () => {
+    expect(
+      isValidPayload({ ...validPayload, context: { source: "linear", issueId: "issue-1" } })
+    ).toBe(false);
+  });
 });
