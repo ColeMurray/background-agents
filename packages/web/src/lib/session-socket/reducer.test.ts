@@ -86,6 +86,7 @@ describe("sessionSocketReducer", () => {
       const state = createSessionSocketState(createSnapshot());
 
       expect(state.ready).toBe(false);
+      expect(state.presenceSynced).toBe(false);
       expect(state.events).toHaveLength(1);
       expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
     });
@@ -390,10 +391,45 @@ describe("sessionSocketReducer", () => {
         subscribedState(),
         serverMessage({ type: "presence_sync", participants })
       );
+      expect(synced.presenceSynced).toBe(true);
       expect(synced.participants).toEqual(participants);
 
       const left = reduce(synced, serverMessage({ type: "presence_leave", userId: "user-1" }));
       expect(left.participants.map((p) => p.userId)).toEqual(["user-2"]);
+    });
+
+    it("marks an empty presence sync as synchronized", () => {
+      const state = reduce(
+        subscribedState(),
+        serverMessage({ type: "presence_sync", participants: [] })
+      );
+
+      expect(state.presenceSynced).toBe(true);
+      expect(state.participants).toEqual([]);
+    });
+
+    it("keeps initial presence synchronized while reconnecting", () => {
+      const synced = reduce(
+        subscribedState(),
+        serverMessage({
+          type: "presence_sync",
+          participants: [
+            {
+              participantId: "participant-1",
+              userId: "user-1",
+              name: "A",
+              status: "active",
+              lastSeen: 1,
+            },
+          ],
+        })
+      );
+      const disconnected = reduce(synced, { type: "socket_closed" });
+      const resubscribed = reduce(disconnected, serverMessage(createSubscribedMessage()));
+
+      expect(disconnected.presenceSynced).toBe(true);
+      expect(disconnected.participants).toEqual([]);
+      expect(resubscribed.presenceSynced).toBe(true);
     });
   });
 

@@ -21,6 +21,7 @@ export interface HistoryCursor {
  */
 export interface SessionSocketState {
   ready: boolean;
+  presenceSynced: boolean;
   sessionState: SessionState | null;
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -33,6 +34,7 @@ export interface SessionSocketState {
 
 export const initialSessionSocketState: SessionSocketState = {
   ready: false,
+  presenceSynced: false,
   sessionState: null,
   events: [],
   participants: [],
@@ -195,6 +197,8 @@ function reduceServerMessage(
     }
 
     case "presence_sync":
+      return { ...state, presenceSynced: true, participants: message.participants };
+
     case "presence_update":
       return { ...state, participants: message.participants };
 

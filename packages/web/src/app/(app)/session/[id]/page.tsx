@@ -70,6 +70,7 @@ export default function SessionPage() {
     connected,
     connecting,
     ready,
+    presenceSynced,
     authError,
     connectionError,
     sessionState,
@@ -339,6 +340,7 @@ export default function SessionPage() {
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}
+                presenceSynced={presenceSynced}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -371,6 +373,7 @@ export default function SessionPage() {
               sessionId={sessionId}
               sessionState={sessionState}
               participants={profiledParticipants}
+              presenceSynced={presenceSynced}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -394,6 +397,7 @@ export default function SessionPage() {
           sessionId={sessionId}
           sessionState={sessionState}
           participants={profiledParticipants}
+          presenceSynced={presenceSynced}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}

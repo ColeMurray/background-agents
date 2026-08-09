@@ -37,6 +37,7 @@ interface UseSessionSocketReturn {
   connected: boolean;
   connecting: boolean;
   ready: boolean;
+  presenceSynced: boolean;
   authError: string | null;
   connectionError: string | null;
   sessionState: SessionState | null;
@@ -305,6 +306,7 @@ export function useSessionSocket(
     connected: transport.connected,
     connecting: transport.connecting,
     ready: state.ready,
+    presenceSynced: state.presenceSynced,
     authError: transport.authError,
     connectionError: transport.connectionError,
     sessionState,
