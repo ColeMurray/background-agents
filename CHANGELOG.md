@@ -2,6 +2,32 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 9, 2026
+
+**Browser-based sandbox desktops.** Opt in to a full VNC desktop for sessions, available from the
+session sidebar through authenticated noVNC access. Desktop settings can be configured globally or
+overridden per environment and repository, and work across supported sandbox providers.
+
+**Pull request creation policies.** Configure session-created pull and merge requests to open as
+drafts and carry a chosen label, with global defaults and per-repository overrides. The policy
+applies to the actual target repository in multi-repo sessions and supports both GitHub and GitLab.
+
+**Follow up with child sessions.** Parent agents can queue additional instructions for direct child
+sessions with `send-child-prompt`, including resuming completed or failed children while preserving
+lineage, ownership, concurrency, and cancellation safeguards.
+
+**Unread session outcomes.** Per-user unread indicators now highlight sessions and child sessions
+with new terminal results. Viewing meaningful output in an active tab marks it read automatically,
+with an explicit Mark as read action also available.
+
+**Context-aware Slack channel automations.** Runs triggered from Slack threads can now include the
+root and recent earlier replies, with bounded, safely attributed context. Text-bearing file-share
+messages can trigger runs too, while history failures fall back without blocking the automation.
+
+**Clearer, more resilient session timelines.** Session pages now server-render from a canonical
+snapshot, keep existing content visible through WebSocket reconnects, and show when OpenCode
+compacts context to continue a long-running session.
+
 ## August 1, 2026
 
 **Grok models with your SuperGrok subscription.** Use Grok 4.5 or Grok Build 0.1 through managed xAI
