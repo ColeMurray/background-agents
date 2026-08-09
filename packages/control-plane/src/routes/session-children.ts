@@ -5,10 +5,38 @@ import {
 } from "@open-inspect/shared";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionInternalPaths } from "../session/contracts";
+import { resolveSandboxSettings } from "../session/integration-settings-resolution";
+import {
+  ParentToChildFollowUpError,
+  type ParentToChildFollowUpErrorReason,
+  ParentToChildFollowUpService,
+} from "../session/services/parent-to-child-follow-up.service";
 import type { Env } from "../types";
-import { coordinateChildFollowUp } from "./session-child-follow-up-coordinator";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+
+const PARENT_TO_CHILD_FOLLOW_UP_ERROR_STATUS: Record<ParentToChildFollowUpErrorReason, number> = {
+  child_not_found: 404,
+  parent_not_found: 404,
+  capacity_exhausted: 429,
+  session_not_promptable: 409,
+  queue_full: 429,
+  child_service_error: 500,
+};
+
+function createParentToChildFollowUpService(
+  ctx: SessionRouteContext
+): ParentToChildFollowUpService {
+  const executionCtx = ctx.executionCtx;
+  return new ParentToChildFollowUpService({
+    sessionIndex: new SessionIndexStore(ctx.db),
+    sessionRuntime: ctx.sessionRuntime,
+    loadParentSandboxSettings: (parent) =>
+      resolveSandboxSettings(ctx.db, parent.repoOwner, parent.repoName, parent.environmentId),
+    defer: executionCtx ? (promise) => executionCtx.waitUntil(promise) : undefined,
+    correlation: ctx,
+  });
+}
 
 async function handleListChildren(
   _request: Request,
@@ -69,7 +97,17 @@ export async function handlePromptChild(
   const parsed = childFollowUpPromptRequestSchema.safeParse(rawBody);
   if (!parsed.success) return error("Invalid prompt body", 400);
 
-  return coordinateChildFollowUp({ parentId, childId, content: parsed.data.content }, ctx);
+  try {
+    const result = await createParentToChildFollowUpService(ctx).enqueue({
+      parentSessionId: parentId,
+      childSessionId: childId,
+      content: parsed.data.content,
+    });
+    return json(result);
+  } catch (errorCause) {
+    if (!(errorCause instanceof ParentToChildFollowUpError)) throw errorCause;
+    return error(errorCause.message, PARENT_TO_CHILD_FOLLOW_UP_ERROR_STATUS[errorCause.reason]);
+  }
 }
 
 export async function handleCancelChild(
