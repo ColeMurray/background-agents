@@ -1086,6 +1086,10 @@ export class SessionDO extends DurableObject<Env> {
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
       if (isSandbox) {
+        // A bridge can arrive while the provider call is still resolving access
+        // URLs. In that case the lifecycle manager publishes access after the
+        // values are persisted.
+        const accessIsPersisted = this.getSandbox()?.status !== "spawning";
         const { replaced } = this.wsManager.acceptAndSetSandboxSocket(
           server,
           sandboxId ?? undefined
@@ -1095,7 +1099,9 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
         this.broadcast({ type: "sandbox_status", status: "ready" });
-        this.broadcast({ type: "sandbox_access_changed" });
+        if (accessIsPersisted) {
+          this.broadcast({ type: "sandbox_access_changed" });
+        }
 
         // Set initial activity timestamp and schedule inactivity check
         // IMPORTANT: Must await to ensure alarm is scheduled before returning

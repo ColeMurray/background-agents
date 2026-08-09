@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { runInDurableObject } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import type { SessionDO } from "../../src/session/durable-object";
+import { encryptToken } from "../../src/auth/crypto";
 import {
   collectMessages,
   initNamedSession,
@@ -112,6 +113,24 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxId: SANDBOX_ID,
       status: "connecting",
     });
+    const [codePassword, vncPassword, terminalToken] = await Promise.all([
+      encryptToken("code-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      encryptToken("vnc-secret", env.REPO_SECRETS_ENCRYPTION_KEY),
+      encryptToken("terminal-token", env.REPO_SECRETS_ENCRYPTION_KEY),
+    ]);
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec(
+        `UPDATE sandbox
+         SET code_server_url = ?, code_server_password = ?, vnc_url = ?, vnc_password = ?,
+             ttyd_url = ?, ttyd_token = ?`,
+        "https://code.test",
+        codePassword,
+        "https://vnc.test",
+        vncPassword,
+        "https://terminal.test",
+        terminalToken
+      );
+    });
     const { ws: clientWs } = await openClientWs(name, { subscribe: true });
     const collector = collectMessages(clientWs, {
       until: (message) => message.type === "sandbox_access_changed",
@@ -131,6 +150,37 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ]);
     const accessResponse = await stub.fetch("http://internal/internal/sandbox-access");
     expect(accessResponse.status).toBe(200);
+    await expect(accessResponse.json()).resolves.toEqual({
+      codeServer: { url: "https://code.test", password: "code-secret" },
+      vnc: { url: "https://vnc.test", password: "vnc-secret" },
+      ttyd: { url: "https://terminal.test", token: "terminal-token" },
+    });
+
+    sandboxWs!.close();
+    clientWs.close();
+  });
+
+  it("does not publish sandbox access when the bridge arrives during spawning", async () => {
+    const name = `ws-sandbox-access-spawning-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    await seedSandboxAuth(stub, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+      status: "spawning",
+    });
+    const { ws: clientWs } = await openClientWs(name, { subscribe: true });
+    const collector = collectMessages(clientWs, { timeoutMs: 100 });
+
+    const { ws: sandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(sandboxWs).not.toBeNull();
+    sandboxWs!.accept();
+
+    const messages = await collector;
+    expect(messages).toContainEqual({ type: "sandbox_status", status: "ready" });
+    expect(messages).not.toContainEqual({ type: "sandbox_access_changed" });
 
     sandboxWs!.close();
     clientWs.close();

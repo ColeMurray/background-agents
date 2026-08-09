@@ -546,13 +546,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         await this.storeTtyd(result.ttydUrl, sandboxAuthToken, sessionId, expectedSandboxId);
       }
 
-      this.storage.updateSandboxStatus("connecting");
-      this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
-
-      // Schedule connecting timeout watchdog — if the bridge doesn't connect
-      // within the allowed window, handleAlarm() will fail the sandbox.
-      // This alarm is naturally replaced by the inactivity alarm on successful connect.
-      await this.alarmScheduler.scheduleAlarm(Date.now() + this.config.connectingTimeout.timeoutMs);
+      await this.finishProviderStartup();
 
       // Reset circuit breaker on successful spawn initiation
       this.storage.resetCircuitBreaker();
@@ -804,13 +798,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           );
         }
 
-        this.storage.updateSandboxStatus("connecting");
-        this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
-
-        // Schedule connecting timeout watchdog
-        await this.alarmScheduler.scheduleAlarm(
-          Date.now() + this.config.connectingTimeout.timeoutMs
-        );
+        await this.finishProviderStartup();
 
         this.broadcaster.broadcast({
           type: "sandbox_restored",
@@ -1443,6 +1431,19 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
     this.log.info("Storing ttyd info", { url });
     await this.storage.updateSandboxTtyd(url, token);
+  }
+
+  private async finishProviderStartup(): Promise<void> {
+    if (this.wsManager.getSandboxWebSocket()) {
+      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+      return;
+    }
+
+    this.storage.updateSandboxStatus("connecting");
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "connecting" });
+
+    // The bridge replaces this with its inactivity alarm when it connects.
+    await this.alarmScheduler.scheduleAlarm(Date.now() + this.config.connectingTimeout.timeoutMs);
   }
 
   /**
