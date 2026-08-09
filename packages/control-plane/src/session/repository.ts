@@ -959,6 +959,14 @@ export class SessionRepository {
     this.upsertEventByMessageId("token", messageId, event, createdAt);
   }
 
+  sealTokenEvent(messageId: string, boundaryId: string): void {
+    this.sql.exec(
+      `UPDATE events SET id = ? WHERE id = ?`,
+      `token:${messageId}:${boundaryId}`,
+      `token:${messageId}`
+    );
+  }
+
   upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
     const id = `tool_call:${toolCallIdentityKey(event)}`;
     this.sql.exec(

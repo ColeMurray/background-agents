@@ -934,6 +934,16 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("sealTokenEvent", () => {
+    it("moves the current token to a compaction-specific event ID", () => {
+      repo.sealTokenEvent("msg-1", "compaction-1");
+
+      expect(mock.calls).toHaveLength(1);
+      expect(mock.calls[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
+      expect(mock.calls[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
+    });
+  });
+
   describe("upsertToolCallEvent", () => {
     it("scopes child call IDs and preserves the first event position on updates", () => {
       const event = {

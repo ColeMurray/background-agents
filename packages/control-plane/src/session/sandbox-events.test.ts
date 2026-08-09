@@ -27,6 +27,7 @@ function createProcessor() {
     updateSandboxHeartbeat: vi.fn(),
     getProcessingMessage,
     upsertTokenEvent: vi.fn(),
+    sealTokenEvent: vi.fn(),
     upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
@@ -225,6 +226,17 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent({ ...event, timestamp: 1001 });
 
     expect(h.repository.createEvent).toHaveBeenCalledTimes(2);
+    expect(h.repository.sealTokenEvent).toHaveBeenCalledTimes(2);
+    expect(h.repository.sealTokenEvent).toHaveBeenNthCalledWith(
+      1,
+      "msg-1",
+      h.repository.createEvent.mock.calls[0][0].id
+    );
+    expect(h.repository.sealTokenEvent).toHaveBeenNthCalledWith(
+      2,
+      "msg-1",
+      h.repository.createEvent.mock.calls[1][0].id
+    );
     expect(h.repository.createEvent).toHaveBeenNthCalledWith(1, {
       id: expect.any(String),
       type: "context_compacted",

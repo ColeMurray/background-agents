@@ -139,6 +139,22 @@ export class SessionSandboxEventProcessor {
       return;
     }
 
+    if (event.type === "context_compacted") {
+      const eventId = generateId();
+      if (messageId) {
+        this.repository.sealTokenEvent(messageId, eventId);
+      }
+      this.repository.createEvent({
+        id: eventId,
+        type: event.type,
+        data: JSON.stringify(event),
+        messageId,
+        createdAt: now,
+      });
+      this.messenger.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
     if (event.type === "step_start" || event.type === "step_finish") {
       this.updateLastActivity(now);
       if (

@@ -171,6 +171,28 @@ describe("context compaction", () => {
       "single",
     ]);
   });
+
+  it("keeps assistant segments on both sides of a marker", () => {
+    const token = (content: string, timestamp: number): SandboxEvent => ({
+      type: "token",
+      content,
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp,
+    });
+
+    const items = buildTimelineItems([
+      token("before compaction", 1),
+      compaction(2),
+      token("after compaction", 3),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "single", event: { type: "token", content: "before compaction" } },
+      { type: "single", event: { type: "context_compacted" } },
+      { type: "single", event: { type: "token", content: "after compaction" } },
+    ]);
+  });
 });
 
 const baseTimelineProps = {

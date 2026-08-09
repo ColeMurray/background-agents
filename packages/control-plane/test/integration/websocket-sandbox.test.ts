@@ -289,7 +289,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     ws!.close();
   });
 
-  it("stores and broadcasts context compaction events", async () => {
+  it("preserves token segments around context compaction for replay", async () => {
     const name = `ws-sandbox-compaction-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     const { ws: clientWs } = await openClientWs(name, { subscribe: true });
@@ -303,32 +303,70 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
 
     const collector = collectMessages(clientWs, {
       until: (message) =>
-        message.type === "sandbox_event" && message.event.type === "context_compacted",
+        message.type === "sandbox_event" &&
+        message.event.type === "token" &&
+        message.event.content === "After compaction",
     });
-    const event = {
+    const before = {
+      type: "token",
+      content: "Before compaction",
+      messageId: "msg-compaction-1",
+      sandboxId: SANDBOX_ID,
+      timestamp: 1,
+    } as const;
+    const compacted = {
       type: "context_compacted",
       messageId: "msg-compaction-1",
       sandboxId: SANDBOX_ID,
-      timestamp: Date.now() / 1000,
+      timestamp: 2,
     } as const;
-    sandboxWs!.send(JSON.stringify(event));
+    const after = {
+      type: "token",
+      content: "After compaction",
+      messageId: "msg-compaction-1",
+      sandboxId: SANDBOX_ID,
+      timestamp: 3,
+    } as const;
+    sandboxWs!.send(JSON.stringify(before));
+    sandboxWs!.send(JSON.stringify(compacted));
+    sandboxWs!.send(JSON.stringify(after));
 
     const messages = await collector;
-    expect(messages).toContainEqual({ type: "sandbox_event", event });
-    const events = await queryDO<{ type: string; data: string; message_id: string }>(
+    expect(messages).toContainEqual({ type: "sandbox_event", event: compacted });
+    const events = await queryDO<{
+      id: string;
+      type: string;
+      data: string;
+      timeline_sequence: number;
+    }>(
       stub,
-      "SELECT type, data, message_id FROM events WHERE type = ?",
-      "context_compacted"
+      "SELECT id, type, data, timeline_sequence FROM events WHERE message_id = ? ORDER BY timeline_sequence",
+      "msg-compaction-1"
     );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "context_compacted",
-      message_id: "msg-compaction-1",
+    expect(events.map(({ type, data }) => ({ type, event: JSON.parse(data) }))).toEqual([
+      { type: "token", event: before },
+      { type: "context_compacted", event: compacted },
+      { type: "token", event: after },
+    ]);
+    expect(events[0].id).toMatch(/^token:msg-compaction-1:/);
+    expect(events[2].id).toBe("token:msg-compaction-1");
+
+    const { ws: replayWs, messages: replayMessages } = await openClientWs(name, {
+      subscribe: true,
+      userId: "user-replay",
     });
-    expect(JSON.parse(events[0].data)).toEqual(event);
+    const subscribed = replayMessages.find((message) => message.type === "subscribed") as
+      | { timeline: { events: Array<{ event: unknown }> } }
+      | undefined;
+    expect(subscribed?.timeline.events.map(({ event }) => event)).toEqual([
+      before,
+      compacted,
+      after,
+    ]);
 
     sandboxWs!.close();
     clientWs.close();
+    replayWs.close();
   });
 
   it("accepts step_finish messages with structured token usage", async () => {
