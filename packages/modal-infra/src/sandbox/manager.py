@@ -513,7 +513,7 @@ class SandboxManager:
     async def restore_from_snapshot(
         self,
         snapshot_image_id: str,
-        session_config: SessionConfig | dict,
+        session_config: dict,
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
@@ -532,7 +532,7 @@ class SandboxManager:
 
         Args:
             snapshot_image_id: Modal Image ID from snapshot_filesystem()
-            session_config: Session configuration (SessionConfig or dict)
+            session_config: Session configuration
             sandbox_id: Optional sandbox ID (generated if not provided)
             control_plane_url: URL for the control plane
             sandbox_auth_token: Auth token for the sandbox
@@ -543,15 +543,9 @@ class SandboxManager:
         """
         start_time = time.time()
 
-        # Handle both SessionConfig and dict
-        if isinstance(session_config, dict):
-            repo_owner = session_config.get("repo_owner")
-            repo_name = session_config.get("repo_name")
-            session_config_json = json.dumps(session_config)
-        else:
-            repo_owner = session_config.repo_owner
-            repo_name = session_config.repo_name
-            session_config_json = session_config.model_dump_json()
+        repo_owner = session_config.get("repo_owner")
+        repo_name = session_config.get("repo_name")
+        session_config_json = json.dumps(session_config)
         has_repository = _has_repository(repo_owner, repo_name)
 
         # Use provided sandbox_id or generate one

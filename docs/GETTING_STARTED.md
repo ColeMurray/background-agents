@@ -580,7 +580,6 @@ project_root    = "../../../"
 # messages (Slack/Linear), PR body footer, and outbound HTTP User-Agent.
 # app_name = "Open-Inspect"
 # Short brand label shown only in the sidebar header.
-# app_short_name = "Inspect"
 # Optional URL (absolute or root-relative) to a custom logo/favicon override.
 # Leave empty to keep the built-in favicon and default in-app icon.
 # app_icon_url = ""
@@ -981,7 +980,6 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `GH_WEBHOOK_SECRET`              | GitHub webhook secret (required if GitHub bot enabled)                                      |
 | `GH_BOT_USERNAME`                | GitHub App bot username, e.g., `my-app[bot]` (required if GitHub bot enabled)               |
 | `APP_NAME`                       | Optional display name for whitelabeling (default: `Open-Inspect`)                           |
-| `APP_SHORT_NAME`                 | Optional short label for sidebar header (default: `Inspect`)                                |
 | `APP_ICON_URL`                   | Optional URL to a custom logo/favicon (default: built-in icon)                              |
 
 When enabling or upgrading the Linear bot, also enable **Client credentials tokens** on the OAuth
@@ -1221,10 +1219,6 @@ Add these to your `terraform.tfvars`:
 #   - Outbound HTTP User-Agent headers (GitHub, GitLab API)
 app_name = "Acme Bot"
 
-# Optional short label for the sidebar header. Set this when app_name is too
-# wide for the sidebar.
-app_short_name = "Acme"
-
 # Optional URL to a custom logo image (SVG/PNG). When set, replaces the icon in
 # the command menu and favicon. Leave empty to keep the built-in favicon.
 # Use an absolute URL or a root-relative path served from packages/web/public/.
@@ -1232,8 +1226,8 @@ app_icon_url = "/branding/acme-logo.svg"   # or "https://cdn.example.com/logo.sv
 ```
 
 After changing any of these values, run `terraform apply` and (for Vercel) redeploy the web app so
-the new build picks up the `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_APP_SHORT_NAME`, and
-`NEXT_PUBLIC_APP_ICON_URL` env vars (Cloudflare's web deploy is rebuilt automatically by Terraform).
+the new build picks up the `NEXT_PUBLIC_APP_NAME` and `NEXT_PUBLIC_APP_ICON_URL` env vars
+(Cloudflare's web deploy is rebuilt automatically by Terraform).
 
 > **Note**: `NEXT_PUBLIC_*` vars are inlined into the client bundle at build time, so changes
 > require a fresh web build. The bot/control-plane workers read `APP_NAME` at request time, so they

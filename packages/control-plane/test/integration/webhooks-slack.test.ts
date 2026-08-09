@@ -63,7 +63,8 @@ async function seedSlackAutomation(): Promise<string> {
   const store = new AutomationStore(env.DB);
   const automation = makeSlackAutomation();
   await store.create(automation);
-  await new SlackChannelStore(env.DB).setSlackChannels(automation.id, ["C1"]);
+  const channels = new SlackChannelStore(env.DB);
+  await env.DB.batch(channels.bindChannelStatements(automation.id, ["C1"]));
   return automation.id;
 }
 

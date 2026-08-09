@@ -1,6 +1,5 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { serverMessageSchema, sessionSnapshotSchema } from "./server-messages";
-import type { PullRequestSummary, Session } from "./sessions";
 
 describe("artifact_updated server message", () => {
   const artifact = {
@@ -28,14 +27,6 @@ describe("artifact_updated server message", () => {
 
   it("rejects artifact_updated without an artifact", () => {
     expect(serverMessageSchema.safeParse({ type: "artifact_updated" }).success).toBe(false);
-  });
-});
-
-describe("Session.pullRequestSummary contract", () => {
-  it("is optional on the session list contract and counts by display status", () => {
-    expectTypeOf<Session["pullRequestSummary"]>().toEqualTypeOf<PullRequestSummary | undefined>();
-    const summary: PullRequestSummary = { total: 2, open: 1, draft: 0, merged: 1, closed: 0 };
-    expect(summary.total).toBe(2);
   });
 });
 

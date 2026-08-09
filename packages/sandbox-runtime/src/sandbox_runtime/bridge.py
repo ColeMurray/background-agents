@@ -42,7 +42,7 @@ from .constants import (
 )
 from .diff_capture import ControlPlaneDiffClient, SessionDiffRefreshWorker
 from .event_forwarder import BufferedEventForwarder
-from .git_signing import UNSIGNED_GIT_USER, GitSigningError, GitSigningRuntime
+from .git_signing import GitSigningError, GitSigningRuntime
 from .log_config import configure_logging, get_logger
 from .opencode_client import OpenCodeClient
 from .prompt_stream import OpenCodePromptStream
@@ -50,9 +50,6 @@ from .repo_config import find_repo_entry, load_repo_manifest
 from .types import GitUser
 
 configure_logging()
-
-# Compatibility alias for the runtime's unsigned fallback identity.
-FALLBACK_GIT_USER = UNSIGNED_GIT_USER
 
 
 def parse_prompt_git_author(author_data: object) -> GitUser | None:
