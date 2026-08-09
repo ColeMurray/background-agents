@@ -2,7 +2,7 @@
  * Spawn-time prebuilt-image selection.
  *
  * A session boots from its scope's prebuilt image iff the latest ready image
- * on the active provider passes the session's runtime-compatibility floor and its
+ * on the active provider passes the runtime-compatibility floor and its
  * repositories fingerprint equals the fingerprint of the session's OWN
  * repository snapshot — not the scope's current repositories, so an entity
  * edited after the session was created can never hand the session a
@@ -21,7 +21,7 @@ import {
   type FingerprintRepositoryInput,
 } from "../../image-builds/fingerprint";
 import {
-  getMinimumCompatibleRuntimeVersion,
+  MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
   type ImageBuildScope,
 } from "../../image-builds/model";
@@ -79,14 +79,12 @@ export type ImageBuildSelectionResult =
 
 /**
  * Evaluate the latest ready image (or its absence) against the session's own
- * repository snapshot. Checks run cheapest-first; the floor accounts for
- * runtime features enabled on the session and fails closed on an unparseable
- * runtime version.
+ * repository snapshot. Checks run cheapest-first; the floor fails closed on an
+ * unparseable runtime version.
  */
 export async function evaluateImageBuildForSpawn(
   image: ImageBuildSpawnRow | null,
-  sessionRepositories: FingerprintRepositoryInput[],
-  vncEnabled: boolean
+  sessionRepositories: FingerprintRepositoryInput[]
 ): Promise<ImageBuildSelectionResult> {
   if (!image) {
     return { outcome: "miss", reason: "no_ready_image" };
@@ -98,7 +96,7 @@ export async function evaluateImageBuildForSpawn(
   }
 
   const runtimeVersion = parseRuntimeVersionNumber(image.runtime_version);
-  if (runtimeVersion === null || runtimeVersion < getMinimumCompatibleRuntimeVersion(vncEnabled)) {
+  if (runtimeVersion === null || runtimeVersion < MIN_COMPATIBLE_RUNTIME_VERSION) {
     return { outcome: "miss", reason: "runtime_below_floor", imageBuildId: image.id };
   }
 

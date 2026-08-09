@@ -438,7 +438,6 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const { provider, model: modelId } = this.resolveProviderAndModel(session);
       const repositories = this.storage.getSessionRepositories();
       const multiRepoFields = multiRepoSpawnFields(repositories);
-      const vncEnabled = session.vnc_enabled === 1;
 
       // Prebuilt-image selection: an environment session matches its
       // environment's image against the session's own repository snapshot
@@ -453,14 +452,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       if (session.environment_id) {
         selectedImage = await this.lookupImageBuildForSpawn(
           { kind: "environment", id: session.environment_id },
-          repositories,
-          vncEnabled
+          repositories
         );
       } else if (hasRepository && repositories.length === 1) {
         selectedImage = await this.lookupImageBuildForSpawn(
           repoImageBuildScope(repositories[0].repoOwner, repositories[0].repoName),
-          repositories,
-          vncEnabled
+          repositories
         );
       }
 
@@ -470,6 +467,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const mcpServers = await this.loadMcpServers(repositories);
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
@@ -620,13 +618,12 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private async lookupImageBuildForSpawn(
     scope: ImageBuildScope,
-    repositories: SessionRepositoryInfo[],
-    vncEnabled: boolean
+    repositories: SessionRepositoryInfo[]
   ): Promise<SelectedImageBuild | null> {
     if (!this.imageBuildLookup || repositories.length === 0) return null;
     try {
       const image = await this.imageBuildLookup.getLatestReady(scope);
-      const result = await evaluateImageBuildForSpawn(image, repositories, vncEnabled);
+      const result = await evaluateImageBuildForSpawn(image, repositories);
       if (result.outcome === "selected") {
         this.log.info("Using prebuilt image", {
           event: "image_build.spawn_selected",

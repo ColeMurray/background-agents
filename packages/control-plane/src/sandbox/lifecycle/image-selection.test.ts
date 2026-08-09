@@ -29,11 +29,7 @@ async function readyImage(
 
 describe("evaluateImageBuildForSpawn", () => {
   it("selects a ready image matching the session's own snapshot", async () => {
-    const result = await evaluateImageBuildForSpawn(
-      await readyImage(),
-      SESSION_REPOSITORIES,
-      false
-    );
+    const result = await evaluateImageBuildForSpawn(await readyImage(), SESSION_REPOSITORIES);
 
     expect(result).toEqual({
       outcome: "selected",
@@ -53,7 +49,7 @@ describe("evaluateImageBuildForSpawn", () => {
         { repoOwner: "ACME", repoName: "api", baseBranch: "develop" },
       ]),
     });
-    expect((await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, false)).outcome).toBe(
+    expect((await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).outcome).toBe(
       "selected"
     );
 
@@ -63,7 +59,7 @@ describe("evaluateImageBuildForSpawn", () => {
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ]),
     });
-    expect(await evaluateImageBuildForSpawn(branchCased, SESSION_REPOSITORIES, false)).toEqual({
+    expect(await evaluateImageBuildForSpawn(branchCased, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "fingerprint_mismatch",
       imageBuildId: "imgb-1",
@@ -71,7 +67,7 @@ describe("evaluateImageBuildForSpawn", () => {
   });
 
   it("misses when no ready image exists", async () => {
-    expect(await evaluateImageBuildForSpawn(null, SESSION_REPOSITORIES, false)).toEqual({
+    expect(await evaluateImageBuildForSpawn(null, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "no_ready_image",
     });
@@ -80,20 +76,19 @@ describe("evaluateImageBuildForSpawn", () => {
   it("misses on a ready row without a provider artifact", async () => {
     const image = await readyImage({ provider_image_id: null });
 
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, false)).toEqual({
+    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "missing_artifact",
       imageBuildId: "imgb-1",
     });
   });
 
-  it("preserves the v56 floor when VNC is disabled", async () => {
+  it("preserves the v56 compatibility floor", async () => {
     expect(
       (
         await evaluateImageBuildForSpawn(
           await readyImage({ runtime_version: "v56-managed-provider-runtime" }),
-          SESSION_REPOSITORIES,
-          false
+          SESSION_REPOSITORIES
         )
       ).outcome
     ).toBe("selected");
@@ -101,25 +96,12 @@ describe("evaluateImageBuildForSpawn", () => {
     for (const runtimeVersion of ["v55-legacy-runtime", "dev", ""]) {
       const image = await readyImage({ runtime_version: runtimeVersion });
 
-      expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, false)).toEqual({
+      expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
         outcome: "miss",
         reason: "runtime_below_floor",
         imageBuildId: "imgb-1",
       });
     }
-  });
-
-  it("requires v57 when VNC is enabled", async () => {
-    const image = await readyImage({ runtime_version: "v56-managed-provider-runtime" });
-
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, true)).toEqual({
-      outcome: "miss",
-      reason: "runtime_below_floor",
-      imageBuildId: "imgb-1",
-    });
-    expect(
-      (await evaluateImageBuildForSpawn(await readyImage(), SESSION_REPOSITORIES, true)).outcome
-    ).toBe("selected");
   });
 
   it("misses when the environment was edited after the session was created", async () => {
@@ -132,7 +114,7 @@ describe("evaluateImageBuildForSpawn", () => {
       ]),
     });
 
-    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, false)).toEqual({
+    expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({
       outcome: "miss",
       reason: "fingerprint_mismatch",
       imageBuildId: "imgb-1",
@@ -142,15 +124,13 @@ describe("evaluateImageBuildForSpawn", () => {
   it("misses when the session's repositories are reordered relative to the build", async () => {
     const reordered = [SESSION_REPOSITORIES[1], SESSION_REPOSITORIES[0]];
 
-    expect((await evaluateImageBuildForSpawn(await readyImage(), reordered, false)).outcome).toBe(
-      "miss"
-    );
+    expect((await evaluateImageBuildForSpawn(await readyImage(), reordered)).outcome).toBe("miss");
   });
 
   it("still selects when the provenance document is malformed — the SHA is informational", async () => {
     for (const repositoryShas of ["not json", "[]", '[{"repoOwner":"acme"}]', '"scalar"']) {
       const image = await readyImage({ repository_shas: repositoryShas });
-      const result = await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES, false);
+      const result = await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES);
 
       expect(result.outcome).toBe("selected");
       if (result.outcome === "selected") {
