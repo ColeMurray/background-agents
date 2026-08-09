@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared";
-import { createChildSessionsHandler } from "./child-sessions.handler";
-import {
-  ChildFollowUpService,
-  MAX_PENDING_CHILD_PROMPTS,
-} from "../../services/child-follow-up.service";
+import { createChildSessionsHandler, MAX_PENDING_CHILD_PROMPTS } from "./child-sessions.handler";
 import { SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
@@ -158,11 +154,6 @@ function createHandler() {
     status: "queued" as const,
   }));
   const messageService = { enqueuePrompt };
-  const childFollowUpService = new ChildFollowUpService({
-    repository,
-    getSession,
-    messageService,
-  });
 
   const handler = createChildSessionsHandler({
     repository,
@@ -171,7 +162,7 @@ function createHandler() {
     getPublicSessionId,
     parseArtifactMetadata,
     messenger,
-    childFollowUpService,
+    messageService,
   });
 
   return {

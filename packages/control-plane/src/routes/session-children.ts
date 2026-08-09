@@ -1,42 +1,18 @@
 import {
   cancelChildSessionRequestSchema,
   childFollowUpPromptRequestSchema,
+  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   type CancelChildSessionRequest,
 } from "@open-inspect/shared";
-import { SessionIndexStore } from "../db/session-index";
+import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
+import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
-import {
-  ParentToChildFollowUpError,
-  type ParentToChildFollowUpErrorReason,
-  ParentToChildFollowUpService,
-} from "../session/services/parent-to-child-follow-up.service";
 import type { Env } from "../types";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 
-const PARENT_TO_CHILD_FOLLOW_UP_ERROR_STATUS: Record<ParentToChildFollowUpErrorReason, number> = {
-  child_not_found: 404,
-  parent_not_found: 404,
-  capacity_exhausted: 429,
-  session_not_promptable: 409,
-  queue_full: 429,
-  child_service_error: 500,
-};
-
-function createParentToChildFollowUpService(
-  ctx: SessionRouteContext
-): ParentToChildFollowUpService {
-  const executionCtx = ctx.executionCtx;
-  return new ParentToChildFollowUpService({
-    sessionIndex: new SessionIndexStore(ctx.db),
-    sessionRuntime: ctx.sessionRuntime,
-    loadParentSandboxSettings: (parent) =>
-      resolveSandboxSettings(ctx.db, parent.repoOwner, parent.repoName, parent.environmentId),
-    defer: executionCtx ? (promise) => executionCtx.waitUntil(promise) : undefined,
-    correlation: ctx,
-  });
-}
+const logger = createLogger("router:session-children");
 
 async function handleListChildren(
   _request: Request,
@@ -97,17 +73,82 @@ export async function handlePromptChild(
   const parsed = childFollowUpPromptRequestSchema.safeParse(rawBody);
   if (!parsed.success) return error("Invalid prompt body", 400);
 
-  try {
-    const result = await createParentToChildFollowUpService(ctx).enqueue({
-      parentSessionId: parentId,
-      childSessionId: childId,
-      content: parsed.data.content,
-    });
-    return json(result);
-  } catch (errorCause) {
-    if (!(errorCause instanceof ParentToChildFollowUpError)) throw errorCause;
-    return error(errorCause.message, PARENT_TO_CHILD_FOLLOW_UP_ERROR_STATUS[errorCause.reason]);
+  const sessionStore = new SessionIndexStore(ctx.db);
+  const childSession = await sessionStore.get(childId);
+  if (!childSession || childSession.parentSessionId !== parentId) {
+    return error("Child session not found", 404);
   }
+
+  let admissionLease: ChildAdmissionLease | null = null;
+  if (childSession.status === "completed" || childSession.status === "failed") {
+    const parentSession = await sessionStore.get(parentId);
+    if (!parentSession) return error("Parent session not found", 404);
+    const parentSettings = await resolveSandboxSettings(
+      ctx.db,
+      parentSession.repoOwner,
+      parentSession.repoName,
+      parentSession.environmentId
+    );
+    const maxConcurrentChildren =
+      parentSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+    admissionLease = await sessionStore.acquireChildAdmissionLease(
+      parentId,
+      childId,
+      maxConcurrentChildren
+    );
+    if (!admissionLease) {
+      return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
+    }
+  }
+
+  // A transport error is ambiguous: the child may have accepted the prompt before the response
+  // was lost. Keep the lease until active-state finalization or its expiry rather than undercounting.
+  const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parentSessionId: parentId, content: parsed.data.content }),
+  });
+  if (response.ok) {
+    let messageId: string | undefined;
+    try {
+      const payload = (await response.clone().json()) as { messageId?: unknown };
+      if (typeof payload.messageId === "string") messageId = payload.messageId;
+    } catch {
+      // The child response remains authoritative; logging is best-effort.
+    }
+    logger.info("session.child_prompt", {
+      event: "session.child_prompt",
+      outcome: "accepted",
+      parent_id: parentId,
+      child_id: childId,
+      message_id: messageId,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    ctx.executionCtx?.waitUntil(
+      sessionStore.touchUpdatedAt(childId).catch((error) => {
+        logger.error("session_index.touch_updated_at.background_error", {
+          parent_id: parentId,
+          child_id: childId,
+          request_id: ctx.request_id,
+          trace_id: ctx.trace_id,
+          error,
+        });
+      })
+    );
+  } else {
+    if (admissionLease) await sessionStore.releaseChildAdmissionLease(admissionLease);
+    logger.warn("session.child_prompt", {
+      event: "session.child_prompt",
+      outcome: "rejected",
+      parent_id: parentId,
+      child_id: childId,
+      http_status: response.status,
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+  }
+  return response;
 }
 
 export async function handleCancelChild(

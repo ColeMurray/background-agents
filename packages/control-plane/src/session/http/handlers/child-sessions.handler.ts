@@ -3,12 +3,9 @@ import { z } from "zod";
 import type { SessionStatus } from "../../../types";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
+import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
-import {
-  ChildFollowUpError,
-  type ChildFollowUpErrorReason,
-  type ChildFollowUpService,
-} from "../../services/child-follow-up.service";
+import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
@@ -37,7 +34,7 @@ export interface ChildSessionsHandlerDeps {
     artifact: Pick<ArtifactRow, "id" | "metadata">
   ) => Record<string, unknown> | null;
   messenger: SessionMessenger;
-  childFollowUpService: ChildFollowUpService;
+  messageService: Pick<MessageService, "enqueuePrompt">;
 }
 
 export interface ChildSessionsHandler {
@@ -51,18 +48,7 @@ const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
 });
 
-function childFollowUpErrorStatus(reason: ChildFollowUpErrorReason): 404 | 409 | 429 | 500 {
-  switch (reason) {
-    case "child_not_found":
-      return 404;
-    case "session_not_promptable":
-      return 409;
-    case "queue_full":
-      return 429;
-    case "owner_missing":
-      return 500;
-  }
-}
+export const MAX_PENDING_CHILD_PROMPTS = 10;
 
 export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): ChildSessionsHandler {
   return {
@@ -179,14 +165,39 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         );
       }
 
-      try {
-        return Response.json(await deps.childFollowUpService.enqueue(parsed.data));
-      } catch (error) {
-        if (!(error instanceof ChildFollowUpError)) throw error;
+      const session = deps.getSession();
+      if (!session || session.parent_session_id !== parsed.data.parentSessionId) {
+        return Response.json({ error: "Child session not found" }, { status: 404 });
+      }
+      if (!isPromptableSessionStatus(session.status)) {
         return Response.json(
-          { error: error.message },
-          { status: childFollowUpErrorStatus(error.reason) }
+          { error: `Cannot prompt a ${session.status} session` },
+          { status: 409 }
         );
+      }
+      if (deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
+        return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
+      }
+
+      const owner = deps.repository
+        .listParticipants()
+        .find((participant) => participant.role === "owner");
+      if (!owner) {
+        return Response.json({ error: "No owner participant found" }, { status: 500 });
+      }
+
+      try {
+        return Response.json(
+          await deps.messageService.enqueuePrompt({
+            content: parsed.data.content,
+            authorId: owner.user_id,
+            canonicalUserId: owner.canonical_user_id ?? undefined,
+            source: "agent",
+          })
+        );
+      } catch (error) {
+        if (!(error instanceof SessionNotPromptableError)) throw error;
+        return Response.json({ error: error.message }, { status: 409 });
       }
     },
 
