@@ -294,7 +294,7 @@ export default function SessionPage() {
   );
 
   return (
-    <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
+    <div className="h-full min-w-0 overflow-hidden flex flex-col">
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}

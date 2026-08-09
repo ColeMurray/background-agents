@@ -85,7 +85,6 @@ export function SessionTimeline({
   }, [timelineItems, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isPrependingRef = useRef(false);
   const didPrependRef = useRef(false);
@@ -139,7 +138,8 @@ export function SessionTimeline({
       return;
     }
     if (isNearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      const container = scrollContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
     }
   }, [events]);
 
@@ -248,7 +248,7 @@ export function SessionTimeline({
         )}
         {isProcessing && <ThinkingIndicator />}
 
-        <div ref={messagesEndRef} />
+        <div />
       </div>
     </div>
   );
