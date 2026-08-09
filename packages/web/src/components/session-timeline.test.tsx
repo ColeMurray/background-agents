@@ -510,6 +510,32 @@ function toolEvent(
 }
 
 describe("task activity grouping", () => {
+  it("pulses while a Task is running and stops after its completion update", () => {
+    const runningTask = toolEvent("task", "task-call", 1, {
+      args: { description: "Review code" },
+      status: "running",
+    });
+    const { rerender } = render(<SessionTimeline {...baseTimelineProps} events={[runningTask]} />);
+
+    const indicator = screen.getByRole("status", { name: "Task in progress" });
+    expect(indicator).toHaveClass("bg-accent", "animate-pulse");
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          runningTask,
+          toolEvent("task", "task-call", 2, {
+            args: { description: "Review code" },
+            status: "completed",
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.queryByRole("status", { name: "Task in progress" })).not.toBeInTheDocument();
+  });
+
   it("nests child tools beneath their Task and keeps parallel Tasks separate", () => {
     const groups = buildTimelineItems([
       toolEvent("task", "task-a", 1, { childSessionId: "child-a" }),

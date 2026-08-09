@@ -63,6 +63,7 @@ export function TaskActivityItem({
   const agent = stringArg(event, "subagent_type");
   const taskId = stringArg(event, "task_id");
   const result = cleanTaskResult(event.output);
+  const isRunning = event.status === "running";
   return (
     <div className="py-0.5">
       <button
@@ -77,6 +78,13 @@ export function TaskActivityItem({
           }`}
         />
         <BoxIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+        {isRunning && (
+          <span
+            role="status"
+            aria-label="Task in progress"
+            className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse flex-shrink-0"
+          />
+        )}
         <span className="truncate">
           {formatted.toolName} {formatted.summary}
         </span>
