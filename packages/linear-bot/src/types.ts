@@ -155,14 +155,13 @@ export type {
 // ─── Event / Artifact Types ──────────────────────────────────────────────────
 
 export type {
-  EventResponse,
-  ListEventsResponse,
   ArtifactResponse,
   ListArtifactsResponse,
   ToolCallSummary,
   ArtifactInfo,
   AgentResponse,
 } from "@open-inspect/shared";
+export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 
 // ─── User Preferences ────────────────────────────────────────────────────────
 
@@ -269,12 +268,12 @@ export interface AgentSessionWebhook {
   organizationId: string;
   webhookId: string;
   appUserId: string;
+  promptContext?: string;
   agentSession: {
     id: string;
     creatorId?: string | null;
     issue?: AgentSessionWebhookIssue;
     comment?: { body: string; userId?: string };
-    promptContext?: string;
   };
   agentActivity?: {
     userId?: string;

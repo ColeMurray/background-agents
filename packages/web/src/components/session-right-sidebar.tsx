@@ -8,6 +8,7 @@ import { TasksSection } from "./sidebar/tasks-section";
 import { FilesChangedSection } from "./sidebar/files-changed-section";
 import { MediaSection } from "./sidebar/media-section";
 import { CodeServerSection } from "./sidebar/code-server-section";
+import { VncSection } from "./sidebar/vnc-section";
 import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
@@ -128,6 +129,17 @@ export function SessionRightSidebarContent({
           <CodeServerSection
             url={sessionState.codeServerUrl}
             password={sessionState.codeServerPassword ?? null}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
+
+      {/* VNC Desktop */}
+      {sessionState.vncUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <VncSection
+            url={sessionState.vncUrl}
+            password={sessionState.vncPassword ?? null}
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>

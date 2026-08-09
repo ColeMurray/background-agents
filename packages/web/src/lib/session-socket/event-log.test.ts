@@ -127,6 +127,26 @@ describe("ingestLiveSandboxEvent", () => {
     expect(result.pending).toBe(pending);
     expect(result.append).toEqual([toolCall]);
   });
+
+  it("passes context compaction through without flushing pending text", () => {
+    const pending: PendingAssistantText = {
+      content: "in flight",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1,
+    };
+    const compaction: SandboxEvent = {
+      type: "context_compacted",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 2,
+    };
+
+    const result = ingestLiveSandboxEvent(pending, compaction);
+
+    expect(result.pending).toBe(pending);
+    expect(result.append).toEqual([compaction]);
+  });
 });
 
 describe("pendingToTokenEvent", () => {

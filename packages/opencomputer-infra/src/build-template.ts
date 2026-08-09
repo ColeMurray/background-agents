@@ -144,6 +144,11 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       "libcairo2",
       "ffmpeg",
       "procps",
+      "xvfb",
+      "fluxbox",
+      "x11vnc",
+      "websockify",
+      "novnc",
     ])
     .pipInstall(["uv"])
     .runCommands(

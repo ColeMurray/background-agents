@@ -546,6 +546,111 @@ describe("GitHubSourceControlProvider", () => {
       expect(sentBody.draft).toBe(true);
     });
 
+    it("adds an existing label without trying to create it", async () => {
+      mockFetchWithTimeout
+        .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+        .mockResolvedValueOnce(makeResponse({ name: "open inspect" }))
+        .mockResolvedValueOnce(makeResponse([]));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        labels: ["open inspect"],
+      });
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(3);
+      expect(mockFetchWithTimeout.mock.calls[1][0]).toMatch(
+        /\/repos\/acme\/web\/labels\/open%20inspect$/
+      );
+      expect(mockFetchWithTimeout.mock.calls[1][1]?.method).toBeUndefined();
+      expect(mockFetchWithTimeout.mock.calls[2][0]).toMatch(/\/issues\/7\/labels$/);
+      expect(JSON.parse(mockFetchWithTimeout.mock.calls[2][1]?.body as string)).toEqual({
+        labels: ["open inspect"],
+      });
+    });
+
+    it("creates a missing label before adding it to the pull request", async () => {
+      mockFetchWithTimeout
+        .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+        .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+        .mockResolvedValueOnce(makeResponse({ name: "generated" }, 201))
+        .mockResolvedValueOnce(makeResponse([]));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        labels: ["generated"],
+      });
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(4);
+      expect(mockFetchWithTimeout.mock.calls[2][0]).toMatch(/\/repos\/acme\/web\/labels$/);
+      expect(mockFetchWithTimeout.mock.calls[2][1]?.method).toBe("POST");
+      expect(JSON.parse(mockFetchWithTimeout.mock.calls[2][1]?.body as string)).toEqual({
+        name: "generated",
+        color: "ededed",
+      });
+      expect(mockFetchWithTimeout.mock.calls[3][0]).toMatch(/\/issues\/7\/labels$/);
+    });
+
+    it("confirms a concurrent label creation after a 422 response", async () => {
+      mockFetchWithTimeout
+        .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+        .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+        .mockResolvedValueOnce(makeResponse({ message: "Validation Failed" }, 422))
+        .mockResolvedValueOnce(makeResponse({ name: "generated" }))
+        .mockResolvedValueOnce(makeResponse([]));
+
+      const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+      await provider.createPullRequest(fakeAuth, {
+        repository: fakeRepository,
+        title: "Add feature",
+        body: "Body",
+        sourceBranch: "feature",
+        targetBranch: "main",
+        labels: ["generated"],
+      });
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledTimes(5);
+      expect(mockFetchWithTimeout.mock.calls[3][0]).toMatch(/\/labels\/generated$/);
+      expect(mockFetchWithTimeout.mock.calls[4][0]).toMatch(/\/issues\/7\/labels$/);
+    });
+
+    it("logs an unconfirmed 422 label creation failure", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        mockFetchWithTimeout
+          .mockResolvedValueOnce(makeResponse(prResponseBody, 201))
+          .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+          .mockResolvedValueOnce(makeResponse({ message: "Validation Failed" }, 422))
+          .mockResolvedValueOnce(makeResponse({ message: "Not Found" }, 404))
+          .mockResolvedValueOnce(makeResponse([]));
+
+        const provider = new GitHubSourceControlProvider({ appConfig: fakeAppConfig });
+        await provider.createPullRequest(fakeAuth, {
+          repository: fakeRepository,
+          title: "Add feature",
+          body: "Body",
+          sourceBranch: "feature",
+          targetBranch: "main",
+          labels: ["generated"],
+        });
+
+        expect(warn).toHaveBeenCalledWith('Failed to create label "generated" in acme/web: 422');
+        expect(mockFetchWithTimeout.mock.calls[3][0]).toMatch(/\/labels\/generated$/);
+        expect(mockFetchWithTimeout.mock.calls[4][0]).toMatch(/\/issues\/7\/labels$/);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it("throws a SourceControlProviderError when PR creation fails", async () => {
       mockFetchWithTimeout.mockResolvedValueOnce(
         makeResponse("Validation failed: head branch does not exist", 422)

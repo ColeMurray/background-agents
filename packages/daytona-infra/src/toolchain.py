@@ -9,7 +9,8 @@ from daytona import CreateSnapshotParams, Daytona, Image
 
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
-DAYTONA_IMAGE_REVISION = "v4"
+# Bump when changing image contents to invalidate the Daytona snapshot.
+DAYTONA_IMAGE_REVISION = "v5-vnc"
 
 
 def build_base_image(repo_root: Path) -> Image:
@@ -38,7 +39,8 @@ def build_base_image(repo_root: Path) -> Image:
             "openssh-client jq unzip libnss3 libnspr4 libatk1.0-0 "
             "libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 "
             "libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 "
-            "libpango-1.0-0 libcairo2 ffmpeg",
+            "libpango-1.0-0 libcairo2 ffmpeg xvfb fluxbox x11vnc "
+            "websockify novnc",
             "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg "
             "| dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg",
             "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] "
@@ -75,7 +77,7 @@ def build_base_image(repo_root: Path) -> Image:
             # below. Mirror packages/modal-infra/src/images/base.py.
             "printf '%s\\n'"
             " '#!/bin/sh'"
-            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
+            " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
             " > /usr/local/bin/oi-git-credentials",
             "chmod 0755 /usr/local/bin/oi-git-credentials",
             "git config --system credential.helper /usr/local/bin/oi-git-credentials",

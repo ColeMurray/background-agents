@@ -12,7 +12,12 @@
 
 import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { createLogger } from "../../logger";
-import { buildSandboxEnvVars, deriveCodeServerPassword, scmCloneIdentity } from "../sandbox-env";
+import {
+  buildSandboxEnvVars,
+  deriveCodeServerPassword,
+  deriveVncPassword,
+  scmCloneIdentity,
+} from "../sandbox-env";
 import { resolveServicePorts, resolveTunnelPorts } from "./port-resolution";
 import type { SourceControlProviderName } from "../../source-control";
 import type { E2BRestClient, E2BSandboxDetail } from "../e2b-rest-client";
@@ -20,6 +25,7 @@ import { E2BApiError, E2BConflictError, E2BNotFoundError } from "../e2b-rest-cli
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  createVncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type ResumeConfig,
@@ -39,7 +45,8 @@ export const DEFAULT_E2B_AUTO_PAUSE = true;
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;
-  codeServerPasswordSecret: string;
+  /** Secret used for domain-separated sandbox access password derivation. */
+  sandboxAccessPasswordSecret: string;
   sandboxTimeoutSeconds: number;
   /**
    * Pause (not kill) when the sandbox TTL expires, so it stays resumable. Resume is
@@ -76,8 +83,11 @@ export class E2BSandboxProvider implements SandboxProvider {
       const codeServerPassword = config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
+        : undefined;
+      const vncPassword = config.vncEnabled
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined;
       const timeoutSeconds = config.timeoutSeconds ?? this.providerConfig.sandboxTimeoutSeconds;
       const envVars = buildSandboxEnvVars(
@@ -85,6 +95,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         {
           scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
           codeServerPassword,
+          vncPassword,
         }
       );
       // E2B sandboxes run as a non-root user and /run is a root-owned tmpfs, so
@@ -140,9 +151,10 @@ export class E2BSandboxProvider implements SandboxProvider {
         throw error;
       }
 
-      const { codeServerUrl, tunnelUrls } = this.buildTunnelUrls(
+      const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         sandbox.sandboxID,
         config.codeServerEnabled,
+        config.vncEnabled,
         config.sandboxSettings,
         sandbox.domain
       );
@@ -154,6 +166,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         createdAt: Date.now(),
         codeServerUrl,
         codeServerPassword,
+        vncAccess: createVncAccess(vncUrl, vncPassword),
         tunnelUrls,
       };
     } catch (error) {
@@ -206,12 +219,16 @@ export class E2BSandboxProvider implements SandboxProvider {
       const codeServerPassword = config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined;
-      const { codeServerUrl, tunnelUrls } = this.buildTunnelUrls(
+      const vncPassword = config.vncEnabled
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
+        : undefined;
+      const { codeServerUrl, vncUrl, tunnelUrls } = this.buildTunnelUrls(
         config.providerObjectId,
         config.codeServerEnabled,
+        config.vncEnabled,
         config.sandboxSettings,
         sandbox.domain
       );
@@ -221,6 +238,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         providerObjectId: sandbox.sandboxID,
         codeServerUrl,
         codeServerPassword,
+        vncAccess: createVncAccess(vncUrl, vncPassword),
         tunnelUrls,
       };
     } catch (error) {
@@ -277,16 +295,24 @@ export class E2BSandboxProvider implements SandboxProvider {
   private buildTunnelUrls(
     e2bSandboxId: string,
     codeServerEnabled: boolean | undefined,
+    vncEnabled: boolean | undefined,
     sandboxSettings: SandboxSettings | undefined,
     domain?: string | null
   ) {
     let tunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts);
     let codeServerUrl: string | undefined;
+    let vncUrl: string | undefined;
 
     if (codeServerEnabled) {
       const { codeServerPort } = resolveServicePorts(sandboxSettings);
       codeServerUrl = this.client.getHostnameForPort(e2bSandboxId, codeServerPort, domain);
       tunnelPorts = tunnelPorts.filter((p) => p !== codeServerPort);
+    }
+
+    if (vncEnabled) {
+      const { vncPort } = resolveServicePorts(sandboxSettings);
+      vncUrl = this.client.getHostnameForPort(e2bSandboxId, vncPort, domain);
+      tunnelPorts = tunnelPorts.filter((p) => p !== vncPort);
     }
 
     const tunnelUrls =
@@ -299,7 +325,7 @@ export class E2BSandboxProvider implements SandboxProvider {
           )
         : undefined;
 
-    return { codeServerUrl, tunnelUrls };
+    return { codeServerUrl, vncUrl, tunnelUrls };
   }
 
   private classifyError(

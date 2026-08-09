@@ -130,6 +130,49 @@ describe("user message authors", () => {
   });
 });
 
+describe("context compaction", () => {
+  function compaction(timestamp: number): SandboxEvent {
+    return {
+      type: "context_compacted",
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp,
+    };
+  }
+
+  it("renders a muted divider marker", () => {
+    render(
+      <EventItem
+        event={compaction(1)}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    const marker = screen.getByText("Context compacted");
+    expect(marker.closest(".text-muted-foreground")).not.toBeNull();
+    expect(marker.parentElement?.querySelectorAll("[aria-hidden='true']")).toHaveLength(2);
+  });
+
+  it("keeps multiple markers and separates adjacent tool groups", () => {
+    const items = buildTimelineItems([
+      toolCall("call-1", "Read", "/workspace/one.ts"),
+      compaction(2),
+      toolCall("call-2", "Read", "/workspace/two.ts"),
+      compaction(3),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "tool_group",
+      "single",
+      "tool_group",
+      "single",
+    ]);
+  });
+});
+
 const baseTimelineProps = {
   sessionId: "session-1",
   currentParticipantId: null,

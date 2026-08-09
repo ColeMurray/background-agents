@@ -482,6 +482,8 @@ describe("ModalSandboxProvider", () => {
         modalObjectId: "modal-obj-xyz",
         status: "created",
         createdAt: 1234567890,
+        vncUrl: "https://vnc.test",
+        vncPassword: "vnc-pw",
       };
 
       const client = createMockModalClient({
@@ -489,12 +491,19 @@ describe("ModalSandboxProvider", () => {
       });
       const provider = new ModalSandboxProvider(client);
 
-      const result = await provider.createSandbox(testConfig);
+      const result = await provider.createSandbox({ ...testConfig, vncEnabled: true });
 
       expect(result.sandboxId).toBe("sandbox-abc");
       expect(result.providerObjectId).toBe("modal-obj-xyz");
       expect(result.status).toBe("created");
       expect(result.createdAt).toBe(1234567890);
+      expect(result).toMatchObject({
+        vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
+      });
+      expect(client.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ vncEnabled: true }),
+        undefined
+      );
     });
   });
 
@@ -714,6 +723,8 @@ describe("ModalSandboxProvider", () => {
           success: true,
           sandboxId: "restored-sandbox-123",
           modalObjectId: "new-modal-obj-456",
+          vncUrl: "https://vnc.test",
+          vncPassword: "vnc-pw",
         })),
       });
       const provider = new ModalSandboxProvider(client);
@@ -728,11 +739,19 @@ describe("ModalSandboxProvider", () => {
         repoName: "repo",
         provider: "anthropic",
         model: "anthropic/claude-sonnet-4-5",
+        vncEnabled: true,
       });
 
       expect(result.success).toBe(true);
       expect(result.sandboxId).toBe("restored-sandbox-123");
       expect(result.providerObjectId).toBe("new-modal-obj-456");
+      expect(result).toMatchObject({
+        vncAccess: { url: "https://vnc.test", password: "vnc-pw" },
+      });
+      expect(client.restoreSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ vncEnabled: true }),
+        undefined
+      );
     });
   });
 });

@@ -92,6 +92,43 @@ test("formatChildDetail does not show final response placeholder for trajectory-
   assert.match(output, /Trajectory/);
 });
 
+test("formatChildDetail labels an older response while a follow-up is active", () => {
+  const output = formatChildDetail(
+    {
+      session: {
+        id: "task-1",
+        title: "Resumed task",
+        status: "active",
+      },
+      finalResponse: {
+        success: true,
+        textContent: "previous answer",
+      },
+      hasUnfinishedPrompt: true,
+    },
+    "task-1",
+    { includeResponse: true }
+  );
+
+  assert.match(output, /Latest completed response \(newer prompt queued or running\)/);
+  assert.doesNotMatch(output, /Final response:/);
+});
+
+test("formatChildDetail does not claim work is running from session status alone", () => {
+  const output = formatChildDetail(
+    {
+      session: { id: "task-1", title: "Idle active task", status: "active" },
+      finalResponse: { success: true, textContent: "previous answer" },
+      hasUnfinishedPrompt: false,
+    },
+    "task-1",
+    { includeResponse: true }
+  );
+
+  assert.match(output, /Final response:/);
+  assert.doesNotMatch(output, /current prompt still running/);
+});
+
 test("formatRecentEvents summarizes message-like payloads", () => {
   const output = formatRecentEvents([
     { type: "error", createdAt: 1000, data: { message: "boom" } },

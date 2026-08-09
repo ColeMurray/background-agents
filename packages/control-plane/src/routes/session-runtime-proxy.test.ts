@@ -42,6 +42,40 @@ function getHandler(method: string, path: string) {
 }
 
 describe("session runtime proxy routes", () => {
+  it.each([
+    ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
+    ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
+  ])("forwards %s for users and rejects service principals", async (_name, path, internalPath) => {
+    const requests: Request[] = [];
+    const fetch = vi.fn(async (request: Request) => {
+      requests.push(request);
+      return Response.json({ sessionId: "session-1" });
+    });
+    const { handler, match } = getHandler("GET", path);
+
+    const response = await handler(
+      new Request(`https://test.local${path}`),
+      createEnv(fetch),
+      match,
+      createCtx()
+    );
+
+    expect(response.status).toBe(200);
+    expect(new URL(requests[0].url).pathname).toBe(internalPath);
+    const serviceCtx = createCtx();
+    serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
+
+    const rejected = await handler(
+      new Request(`https://test.local${path}`),
+      createEnv(fetch),
+      match,
+      serviceCtx
+    );
+
+    expect(rejected.status).toBe(403);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it("forwards event query strings through the session runtime dependency", async () => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {

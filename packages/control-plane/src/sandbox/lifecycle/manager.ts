@@ -120,6 +120,12 @@ export interface SandboxStorage {
   clearSandboxCodeServer(): void;
   /** Clear the code-server URL while preserving the stored password */
   clearSandboxCodeServerUrl?(): void;
+  /** Update VNC URL and (encrypted) password on the sandbox row */
+  updateSandboxVnc(url: string, password: string): void | Promise<void>;
+  /** Clear stale VNC URL and password */
+  clearSandboxVnc(): void;
+  /** Clear the VNC URL while preserving the stored password */
+  clearSandboxVncUrl?(): void;
   /** Update tunnel URLs for extra ports on the sandbox row */
   updateSandboxTunnelUrls(urls: Record<string, string>): void | Promise<void>;
   /** Clear stale tunnel URLs (e.g. on sandbox teardown) */
@@ -461,6 +467,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const mcpServers = await this.loadMcpServers(repositories);
 
       const codeServerEnabled = session.code_server_enabled === 1;
+      const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const sandboxSettings = this.parseSandboxSettings(session);
       const timeoutSeconds = this.resolveSandboxTimeoutSeconds(sandboxSettings);
@@ -479,6 +486,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
@@ -529,6 +537,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+      }
+      if (result.vncAccess) {
+        await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
       }
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
       if (result.ttydUrl) {
@@ -752,6 +763,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       const repositories = this.storage.getSessionRepositories();
       const codeServerEnabled = session.code_server_enabled === 1;
+      const vncEnabled = session.vnc_enabled === 1;
       const agentSlackNotifyEnabled = await this.resolveAgentSlackNotifyEnabled(session);
       const mcpServers = await this.loadMcpServers(repositories);
       const sandboxSettings = this.parseSandboxSettings(session);
@@ -770,6 +782,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         timeoutSeconds,
         branch: session.base_branch,
         codeServerEnabled,
+        vncEnabled,
         agentSlackNotifyEnabled,
         mcpServers,
         sandboxSettings,
@@ -782,6 +795,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         }
         if (result.codeServerUrl && result.codeServerPassword) {
           await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+        }
+        if (result.vncAccess) {
+          await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
         }
         await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
         if (result.ttydUrl) {
@@ -897,6 +913,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         sandboxId: sandbox.modal_sandbox_id,
         timeoutSeconds,
         codeServerEnabled: session.code_server_enabled === 1,
+        vncEnabled: session.vnc_enabled === 1,
         sandboxSettings,
       });
 
@@ -921,6 +938,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
 
       if (result.codeServerUrl && result.codeServerPassword) {
         await this.storeAndBroadcastCodeServer(result.codeServerUrl, result.codeServerPassword);
+      }
+      if (result.vncAccess) {
+        await this.storeAndBroadcastVnc(result.vncAccess.url, result.vncAccess.password);
       }
 
       await this.storeAndBroadcastTunnelUrls(result.tunnelUrls);
@@ -1033,21 +1053,29 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
   /**
    * Clear preview URLs after a sandbox is no longer reachable.
    *
-   * Daytona resumes preserve the code-server password, so only the URL is
-   * cleared. Modal-style snapshots rotate the password on restore, so both
-   * values are removed.
+   * Persistent resumes preserve code-server and VNC passwords, so only their
+   * URLs are cleared. Snapshot restores rotate passwords, so both values are
+   * removed.
    */
   private clearSandboxAccessState(): void {
     if (this.usesProviderManagedStop() && this.storage.clearSandboxCodeServerUrl) {
       this.storage.clearSandboxCodeServerUrl();
+      if (this.storage.clearSandboxVncUrl) {
+        this.storage.clearSandboxVncUrl();
+      } else {
+        this.storage.clearSandboxVnc();
+      }
       this.storage.clearSandboxTunnelUrls();
       this.storage.clearSandboxTtyd();
+      this.broadcaster.broadcast({ type: "sandbox_access_changed" });
       return;
     }
 
     this.storage.clearSandboxCodeServer();
+    this.storage.clearSandboxVnc();
     this.storage.clearSandboxTunnelUrls();
     this.storage.clearSandboxTtyd();
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**
@@ -1356,21 +1384,17 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     }
   }
 
-  /**
-   * Store code-server details in the database and push to connected clients.
-   * Shared by doSpawn() and restoreFromSnapshot().
-   *
-   * The storage adapter may encrypt the password before persisting;
-   * the plaintext is broadcast over the already-authenticated WebSocket.
-   */
+  /** Store code-server details and invalidate cached authenticated access. */
   private async storeAndBroadcastCodeServer(url: string, password: string): Promise<void> {
-    this.log.info("Storing and broadcasting code-server info", { url });
+    this.log.info("Storing code-server info", { url });
     await this.storage.updateSandboxCodeServer(url, password);
-    this.broadcaster.broadcast({
-      type: "code_server_info",
-      url,
-      password,
-    });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
+  }
+
+  private async storeAndBroadcastVnc(url: string, password: string): Promise<void> {
+    this.log.info("Storing VNC info", { url });
+    await this.storage.updateSandboxVnc(url, password);
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   private parseSandboxSettings(session: SessionRow): SandboxSettings {
@@ -1405,10 +1429,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     this.broadcaster.broadcast({ type: "tunnel_urls", urls });
   }
 
-  /**
-   * Mint a terminal JWT, persist the ttyd proxy URL + token, and broadcast to clients.
-   * The storage adapter encrypts the token before persisting (same pattern as code-server).
-   */
+  /** Mint and persist terminal access, then invalidate cached authenticated access. */
   private async storeAndBroadcastTtyd(
     url: string,
     sandboxAuthToken: string,
@@ -1425,9 +1446,9 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       sandboxAuthToken
     );
 
-    this.log.info("Storing and broadcasting ttyd info", { url });
+    this.log.info("Storing ttyd info", { url });
     await this.storage.updateSandboxTtyd(url, token);
-    this.broadcaster.broadcast({ type: "ttyd_info", url, token });
+    this.broadcaster.broadcast({ type: "sandbox_access_changed" });
   }
 
   /**

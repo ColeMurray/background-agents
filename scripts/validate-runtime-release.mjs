@@ -20,10 +20,15 @@ assert.ok(
   release.managed_runtime_version >= release.minimum_compatible_runtime_version,
   "managed runtime is below the compatibility floor"
 );
-assert.equal(
-  release.managed_sandbox_version,
-  `v${release.managed_runtime_version}-opencode-${release.opencode_version.replaceAll(".", "-")}`,
-  "managed sandbox label does not match the release metadata"
+assert.ok(
+  release.managed_sandbox_version.startsWith(`v${release.managed_runtime_version}-`),
+  "managed sandbox label does not match the runtime release"
+);
+assert.ok(
+  release.managed_sandbox_version.endsWith(
+    `-opencode-${release.opencode_version.replaceAll(".", "-")}`
+  ),
+  "managed sandbox label does not match the OpenCode release"
 );
 
 const dockerfile = readFileSync("packages/e2b-infra/e2b.Dockerfile", "utf8");

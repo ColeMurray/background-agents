@@ -134,8 +134,10 @@ user selected GitHub:
 5. If GitHub sign-in is selected, set the **Callback URL** (under "Identifying and authorizing
    users"): `{deployed-web-app-url}/api/auth/callback/github`
    - **CRITICAL**: The origin must exactly match the Homepage URL selected above.
-6. **Repository permissions**: Contents (Read & Write), Issues (Read & Write), Pull requests (Read &
-   Write), Metadata (Read-only)
+6. **Repository permissions**: Contents (Read & Write), Pull requests (Read & Write), Metadata
+   (Read-only), and Issues (Read & Write) only if the GitHub bot is enabled. Pull requests
+   permission also authorizes creating and applying labels to session-created pull requests;
+   labeling does not require Issues permission.
 7. If GitHub sign-in uses email/domain admission, set **Account permissions**: Email addresses
    (Read-only)
 8. Create app, note **App ID**

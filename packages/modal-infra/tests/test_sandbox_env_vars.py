@@ -2,6 +2,11 @@ import json
 
 import pytest
 
+from sandbox_runtime.constants import (
+    NOVNC_PORT_ENV_VAR,
+    VNC_PASSWORD_ENV_VAR,
+    VNC_PASSWORD_MAX_BYTES,
+)
 from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import (
     DEFAULT_SANDBOX_TIMEOUT_SECONDS,
@@ -92,6 +97,8 @@ async def test_user_env_vars_override_order(monkeypatch):
         user_env_vars={
             "CONTROL_PLANE_URL": "https://malicious.example",
             "CUSTOM_SECRET": "value",
+            VNC_PASSWORD_ENV_VAR: "user-password",
+            NOVNC_PORT_ENV_VAR: "6099",
         },
     )
 
@@ -101,6 +108,8 @@ async def test_user_env_vars_override_order(monkeypatch):
     assert env_vars["CONTROL_PLANE_URL"] == "https://control-plane.example"
     assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     assert env_vars["CUSTOM_SECRET"] == "value"
+    assert VNC_PASSWORD_ENV_VAR not in env_vars
+    assert NOVNC_PORT_ENV_VAR not in env_vars
 
 
 @pytest.mark.asyncio
@@ -142,6 +151,8 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
             "CONTROL_PLANE_URL": "https://malicious.example",
             "SANDBOX_AUTH_TOKEN": "evil-token",
             "CUSTOM_SECRET": "value",
+            VNC_PASSWORD_ENV_VAR: "user-password",
+            NOVNC_PORT_ENV_VAR: "6099",
         },
     )
 
@@ -152,6 +163,12 @@ async def test_restore_user_env_vars_override_order(monkeypatch):
     assert env_vars["SANDBOX_TIMEOUT_SECONDS"] == str(DEFAULT_SANDBOX_TIMEOUT_SECONDS)
     # User vars that don't collide are preserved
     assert env_vars["CUSTOM_SECRET"] == "value"
+    assert VNC_PASSWORD_ENV_VAR not in env_vars
+    assert NOVNC_PORT_ENV_VAR not in env_vars
+
+
+def test_generated_vnc_password_respects_protocol_limit():
+    assert len(SandboxManager._generate_vnc_password().encode()) == VNC_PASSWORD_MAX_BYTES
 
 
 @pytest.mark.asyncio

@@ -288,6 +288,10 @@ export async function initNamedSession(
     reasoningEffort?: string;
     userId?: string;
     scmLogin?: string;
+    parentSessionId?: string;
+    spawnSource?: string;
+    spawnDepth?: number;
+    sandboxSettings?: Record<string, unknown>;
   }
 ) {
   const id = env.SESSION.idFromName(sessionName);

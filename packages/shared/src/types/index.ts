@@ -87,23 +87,6 @@ export type {
 } from "./artifacts";
 export { sessionArtifactSchema } from "./artifacts";
 
-export {
-  eventResponseSchema,
-  eventTypeSchema,
-  listEventsResponseSchema,
-  sandboxEventSchema,
-  toolCallIdentityKey,
-  toolCallIdentityTuple,
-} from "./sandbox-events";
-export type {
-  AgentEvent,
-  SandboxEvent,
-  EventResponse,
-  ListEventsResponse,
-  GitSyncStatus,
-  EventType,
-} from "./sandbox-events";
-
 export type {
   SessionParticipant,
   Session,
@@ -130,8 +113,20 @@ export {
   sessionParticipantProfilesResponseSchema,
 } from "./sessions";
 
-export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage, SessionState, ParticipantPresence } from "./server-messages";
+export {
+  serverMessageSchema,
+  sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
+  sessionTimelineEventSchema,
+} from "./server-messages";
+export type {
+  ParticipantPresence,
+  ServerMessage,
+  SessionSnapshot,
+  SessionSnapshotState,
+  SessionState,
+  SessionTimelineEvent,
+} from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
@@ -182,6 +177,8 @@ export {
   callbackContextSchema,
   linearCallbackContextSchema,
   linearStartCallbackSchema,
+  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
+  childFollowUpPromptRequestSchema,
   sendPromptRequestSchema,
   slackCallbackContextSchema,
   createSessionRequestSchema,
@@ -191,7 +188,6 @@ export {
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
   cancelChildSessionRequestSchema,
-  spawnContextSchema,
 } from "./session-api";
 export type {
   UserPreferences,
@@ -200,6 +196,7 @@ export type {
   LinearStartCallback,
   AutomationCallbackContext,
   CallbackContext,
+  ChildFollowUpPromptRequest,
   SendPromptRequest,
   CreateSessionRequest,
   CreateSessionInput,
@@ -209,7 +206,6 @@ export type {
   ListSessionsResponse,
   SpawnChildSessionRequest,
   CancelChildSessionRequest,
-  SpawnContext,
   ChildSessionFinalResponse,
   ChildSessionTrajectory,
   ChildSessionDetail,
