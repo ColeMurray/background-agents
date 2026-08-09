@@ -24,6 +24,21 @@ export type SlackEnvelope<T = object> =
   | ({ ok: true } & T)
   | { ok: false; error: string; retryAfter?: number };
 
+const slackEnvelopeSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }).passthrough(),
+  z
+    .object({ ok: z.literal(false), error: z.string(), retryAfter: z.number().optional() })
+    .passthrough(),
+]);
+
+function parseSlackEnvelope<T>(value: unknown): SlackEnvelope<T> | null {
+  const parsed = slackEnvelopeSchema.safeParse(value);
+  if (!parsed.success) return null;
+  // SAFETY: Endpoint methods supply T for Slack's endpoint-specific success fields;
+  // this parser validates the common envelope discriminator and preserves unknown keys.
+  return parsed.data as SlackEnvelope<T>;
+}
+
 export interface ExternalUploadUrlOptions {
   filename: string;
   length: number;
@@ -79,7 +94,8 @@ async function slackFetch<T>(
   }
 
   try {
-    return (await response.json()) as SlackEnvelope<T>;
+    const parsed = parseSlackEnvelope<T>(await response.json());
+    return parsed ?? { ok: false, error: "invalid_response" };
   } catch {
     return { ok: false, error: "invalid_response" };
   }
