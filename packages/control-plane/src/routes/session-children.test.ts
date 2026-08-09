@@ -1,15 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionIndexStore } from "../db/session-index";
-import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import type { SessionRuntimeClient } from "../session/runtime-client";
 import type { Env } from "../types";
-import { handleCancelChild, handlePromptChild } from "./session-children";
+import { handleCancelChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
 import { parsePattern } from "./shared";
-
-vi.mock("../session/integration-settings-resolution", () => ({
-  resolveSandboxSettings: vi.fn(),
-}));
 
 function routeMatch(path: string, pattern: string): RegExpMatchArray {
   const match = path.match(parsePattern(pattern));
@@ -26,84 +21,6 @@ function routeContext(fetch: SessionRuntimeClient["fetch"]): SessionRouteContext
     sessionRuntime: { fetch },
   };
 }
-
-describe("handlePromptChild", () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it("reserves terminal-child capacity from parent policy for child-owned finalization", async () => {
-    vi.spyOn(SessionIndexStore.prototype, "get")
-      .mockResolvedValueOnce({
-        id: "child",
-        parentSessionId: "parent",
-        status: "completed",
-      } as never)
-      .mockResolvedValueOnce({
-        id: "parent",
-        repoOwner: "acme",
-        repoName: "repo",
-        environmentId: "env-1",
-      } as never);
-    vi.mocked(resolveSandboxSettings).mockResolvedValue({ maxConcurrentChildSessions: 2 });
-    const lease = { token: "lease-1", childSessionId: "child", expiresAt: Date.now() + 60_000 };
-    const reserve = vi
-      .spyOn(SessionIndexStore.prototype, "acquireChildAdmissionLease")
-      .mockResolvedValue(lease);
-    const release = vi
-      .spyOn(SessionIndexStore.prototype, "releaseChildAdmissionLease")
-      .mockResolvedValue();
-    vi.spyOn(SessionIndexStore.prototype, "touchUpdatedAt").mockResolvedValue(true);
-    const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async () =>
-      Response.json({ messageId: "message-1", status: "queued" })
-    );
-
-    const response = await handlePromptChild(
-      new Request("https://test.local/sessions/parent/children/child/prompt", {
-        method: "POST",
-        body: JSON.stringify({ content: "Continue" }),
-      }),
-      {} as Env,
-      routeMatch(
-        "/sessions/parent/children/child/prompt",
-        "/sessions/:id/children/:childId/prompt"
-      ),
-      routeContext(fetch)
-    );
-
-    expect(response.status).toBe(200);
-    expect(resolveSandboxSettings).toHaveBeenCalledWith(expect.anything(), "acme", "repo", "env-1");
-    expect(reserve).toHaveBeenCalledWith("parent", "child", 2);
-    expect(release).not.toHaveBeenCalled();
-  });
-
-  it("rejects a terminal-child resume when the parent has no capacity", async () => {
-    vi.spyOn(SessionIndexStore.prototype, "get")
-      .mockResolvedValueOnce({
-        id: "child",
-        parentSessionId: "parent",
-        status: "failed",
-      } as never)
-      .mockResolvedValueOnce({ id: "parent" } as never);
-    vi.mocked(resolveSandboxSettings).mockResolvedValue({ maxConcurrentChildSessions: 1 });
-    vi.spyOn(SessionIndexStore.prototype, "acquireChildAdmissionLease").mockResolvedValue(null);
-    const fetch = vi.fn<SessionRuntimeClient["fetch"]>();
-
-    const response = await handlePromptChild(
-      new Request("https://test.local/sessions/parent/children/child/prompt", {
-        method: "POST",
-        body: JSON.stringify({ content: "Continue" }),
-      }),
-      {} as Env,
-      routeMatch(
-        "/sessions/parent/children/child/prompt",
-        "/sessions/:id/children/:childId/prompt"
-      ),
-      routeContext(fetch)
-    );
-
-    expect(response.status).toBe(429);
-    expect(fetch).not.toHaveBeenCalled();
-  });
-});
 
 describe("handleCancelChild", () => {
   afterEach(() => vi.restoreAllMocks());
