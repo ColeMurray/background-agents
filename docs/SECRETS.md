@@ -63,14 +63,17 @@ repository, re-import it or update the environment secret directly.
 
 ### When to use global secrets
 
-Use global secrets for keys that every session needs regardless of which repository it runs against.
-The most common example:
+Use global secrets for keys that every session needs regardless of which repository it runs against,
+and for operations that run before a target is known (such as Slack target classification). The most
+common examples:
 
-| Key                 | Description                                                                                                                                           |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ANTHROPIC_API_KEY` | Required for Claude models when using the **Daytona** or **Vercel** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
-| `DEEPSEEK_API_KEY`  | Required for DeepSeek models with any sandbox provider                                                                                                |
-| `ZHIPU_API_KEY`     | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                    |
+| Key                          | Description                                                                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`          | Required for Claude models when using the **Daytona** or **Vercel** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
+| `DEEPSEEK_API_KEY`           | Required for DeepSeek models with any sandbox provider                                                                                                |
+| `ZHIPU_API_KEY`              | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                    |
+| `OPENAI_OAUTH_REFRESH_TOKEN` | Managed ChatGPT OAuth; **global** scope is required for Slack target classification because its repository/environment target is not known yet        |
+| `OPENAI_OAUTH_ACCOUNT_ID`    | Optional ChatGPT account ID for managed OAuth; it can be populated after the first refresh                                                            |
 
 > **Daytona and Vercel sandbox users**: If you plan to use Claude models, you must add
 > `ANTHROPIC_API_KEY` as a global secret after deploying. Without it, Claude sessions will fail with
@@ -152,6 +155,12 @@ Managed OpenAI and xAI OAuth credentials are exceptions to generic environment i
 refresh and cached access tokens stay in the control plane; the sandbox receives only a non-secret
 provider marker and requests short-lived access through its session-authenticated broker.
 
+OpenAI Slack target classification uses this same managed ChatGPT OAuth transport. Store
+`OPENAI_OAUTH_REFRESH_TOKEN` in **global** secrets before switching the deployment's
+`slack_classification_model` to `openai/gpt-5.6-luna`: classification runs before a repository or
+environment is known, so repository and environment tokens cannot be used. No `OPENAI_API_KEY` is
+needed.
+
 ### Secrets and prebuilt images
 
 Image builds (repository images and environment images) run your `.openinspect/setup.sh` with the
@@ -171,17 +180,17 @@ from it, even after you rotate the secret. Two guidelines:
 
 ## Common Examples
 
-| Key                          | Scope  | Purpose                                                      |
-| ---------------------------- | ------ | ------------------------------------------------------------ |
-| `ANTHROPIC_API_KEY`          | Global | Claude API access (required for Daytona or Vercel sandboxes) |
-| `DEEPSEEK_API_KEY`           | Global | DeepSeek API access                                          |
-| `ZHIPU_API_KEY`              | Global | Z.AI Coding Plan GLM access                                  |
-| `OPENAI_OAUTH_REFRESH_TOKEN` | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
-| `OPENAI_OAUTH_ACCOUNT_ID`    | Repo   | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
-| `XAI_OAUTH_REFRESH_TOKEN`    | Any    | SuperGrok access ([setup guide](GROK_MODELS.md))             |
-| `DATABASE_URL`               | Repo   | Database connection string                                   |
-| `AWS_ACCESS_KEY_ID`          | Repo   | AWS credentials for a specific project                       |
-| `STRIPE_SECRET_KEY`          | Repo   | Stripe API key for a specific project                        |
+| Key                          | Scope                                                                                         | Purpose                                                      |
+| ---------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `ANTHROPIC_API_KEY`          | Global                                                                                        | Claude API access (required for Daytona or Vercel sandboxes) |
+| `DEEPSEEK_API_KEY`           | Global                                                                                        | DeepSeek API access                                          |
+| `ZHIPU_API_KEY`              | Global                                                                                        | Z.AI Coding Plan GLM access                                  |
+| `OPENAI_OAUTH_REFRESH_TOKEN` | Global for Slack classification; repo/environment also supported for target-specific sessions | OpenAI Codex access ([setup guide](OPENAI_MODELS.md))        |
+| `OPENAI_OAUTH_ACCOUNT_ID`    | Same scope as its refresh token; optional                                                     | OpenAI Codex account ID ([setup guide](OPENAI_MODELS.md))    |
+| `XAI_OAUTH_REFRESH_TOKEN`    | Any                                                                                           | SuperGrok access ([setup guide](GROK_MODELS.md))             |
+| `DATABASE_URL`               | Repo                                                                                          | Database connection string                                   |
+| `AWS_ACCESS_KEY_ID`          | Repo                                                                                          | AWS credentials for a specific project                       |
+| `STRIPE_SECRET_KEY`          | Repo                                                                                          | Stripe API key for a specific project                        |
 
 ---
 
@@ -189,9 +198,10 @@ from it, even after you rotate the secret. Two guidelines:
 
 ### "Model not found" errors
 
-If you see "Model not found" errors, add the API key for your selected model provider as a global
+If you see "Model not found" errors, add the credential for your selected model provider as a global
 secret in Settings. For Claude on Daytona or Vercel, add `ANTHROPIC_API_KEY`. For DeepSeek, add
-`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`. For SuperGrok, follow the
+`DEEPSEEK_API_KEY`. For Z.AI Coding Plan, add `ZHIPU_API_KEY`. For OpenAI Slack classification, add
+`OPENAI_OAUTH_REFRESH_TOKEN` globally; do not add `OPENAI_API_KEY`. For SuperGrok, follow the
 [managed OAuth setup guide](GROK_MODELS.md) instead of injecting the refresh token into a sandbox.
 
 ### Secret not appearing in sandbox

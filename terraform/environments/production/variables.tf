@@ -241,6 +241,20 @@ variable "slack_signing_secret" {
   default     = ""
 }
 
+variable "slack_classification_model" {
+  description = "Deployment-wide model used to classify Slack prompts before a target repository is known. Allowed values: anthropic/claude-haiku-4-5 or openai/gpt-5.6-luna."
+  type        = string
+  default     = "anthropic/claude-haiku-4-5"
+
+  validation {
+    condition = contains([
+      "anthropic/claude-haiku-4-5",
+      "openai/gpt-5.6-luna",
+    ], var.slack_classification_model)
+    error_message = "slack_classification_model must be 'anthropic/claude-haiku-4-5' or 'openai/gpt-5.6-luna'."
+  }
+}
+
 # =============================================================================
 # Linear Agent Credentials
 # =============================================================================
@@ -295,6 +309,17 @@ variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
   sensitive   = true
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition = (
+      !var.enable_slack_bot ||
+      var.slack_classification_model != "anthropic/claude-haiku-4-5" ||
+      trimspace(var.anthropic_api_key) != ""
+    )
+    error_message = "anthropic_api_key must be non-blank when Slack uses Anthropic classification."
+  }
 }
 
 # =============================================================================

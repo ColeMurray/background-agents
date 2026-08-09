@@ -11,6 +11,11 @@ import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
 
 const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS = 3;
+const OPENAI_TOKEN_PERSIST_RETRY_DELAY_MS = 100;
+const OPENAI_CONCURRENT_ROTATION_DELAY_MS = 500;
+const OPENAI_TOKEN_PERSIST_FAILURE =
+  "OpenAI tokens rotated but could not be saved; reconnect OpenAI OAuth";
 
 /**
  * Where a session's OpenAI OAuth tokens are read from and rotated back to. A
@@ -33,17 +38,34 @@ export type OpenAITokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn?: number; accountId?: string }
   | { ok: false; status: number; error: string };
 
-export class OpenAITokenRefreshService {
+/** Source-aware broker shared by session-scoped and global OAuth consumers. */
+export class OpenAITokenBroker {
   constructor(
     private readonly db: SqlDatabase,
     private readonly encryptionKey: string,
-    private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
     private readonly log: Logger
   ) {}
 
-  async refresh(session: SessionRow): Promise<OpenAITokenRefreshResult> {
-    const readTokenState = () => this.readTokenState(session);
+  refreshGlobal(): Promise<OpenAITokenRefreshResult> {
+    return this.refreshFrom(() => this.readTokenStateForSources([{ kind: "global" }]));
+  }
 
+  refreshSession(
+    session: SessionRow,
+    ensureRepoId: (session: SessionRow) => Promise<number>
+  ): Promise<OpenAITokenRefreshResult> {
+    return this.refreshFrom(async () => {
+      const source = await this.resolveSessionSecretSource(session, ensureRepoId);
+      const sources = source
+        ? [source, { kind: "global" } as const]
+        : [{ kind: "global" } as const];
+      return this.readTokenStateForSources(sources);
+    });
+  }
+
+  private async refreshFrom(
+    readTokenState: () => Promise<OpenAITokenState | null>
+  ): Promise<OpenAITokenRefreshResult> {
     let tokenState: OpenAITokenState | null;
     try {
       tokenState = await readTokenState();
@@ -114,12 +136,15 @@ export class OpenAITokenRefreshService {
    * environment (global-only). Environment-launched sessions resolve to the
    * environment and never read member repo secrets (§6.4/§7.4).
    */
-  private async resolveSessionSecretSource(session: SessionRow): Promise<TokenSecretSource | null> {
+  private async resolveSessionSecretSource(
+    session: SessionRow,
+    ensureRepoId: (session: SessionRow) => Promise<number>
+  ): Promise<TokenSecretSource | null> {
     if (session.environment_id) {
       return { kind: "environment", environmentId: session.environment_id };
     }
     if (session.repo_owner && session.repo_name) {
-      const repoId = await this.ensureRepoId(session);
+      const repoId = await ensureRepoId(session);
       return {
         kind: "repo",
         repoId,
@@ -168,18 +193,17 @@ export class OpenAITokenRefreshService {
     }
   }
 
-  private async readTokenState(session: SessionRow): Promise<OpenAITokenState | null> {
-    const source = await this.resolveSessionSecretSource(session);
-    if (source) {
+  private async readTokenStateForSources(
+    sources: readonly TokenSecretSource[]
+  ): Promise<OpenAITokenState | null> {
+    for (const source of sources) {
       const secrets = await this.readSecretsForSource(source);
       const state = this.getTokenStateFromSecrets(secrets, source);
       if (state) {
         return state;
       }
     }
-
-    const globalSecrets = await this.readSecretsForSource({ kind: "global" });
-    return this.getTokenStateFromSecrets(globalSecrets, { kind: "global" });
+    return null;
   }
 
   private async attemptRefresh(
@@ -189,28 +213,25 @@ export class OpenAITokenRefreshService {
     const accountId = extractOpenAIAccountId(tokens);
     const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
 
-    try {
-      const secretsToWrite: Record<string, string> = {
-        OPENAI_OAUTH_REFRESH_TOKEN: tokens.refresh_token,
-        OPENAI_OAUTH_ACCESS_TOKEN: tokens.access_token,
-        OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(expiresAt),
-      };
+    const secretsToWrite: Record<string, string> = {
+      OPENAI_OAUTH_REFRESH_TOKEN: tokens.refresh_token,
+      OPENAI_OAUTH_ACCESS_TOKEN: tokens.access_token,
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(expiresAt),
+    };
 
-      if (accountId) {
-        secretsToWrite.OPENAI_OAUTH_ACCOUNT_ID = accountId;
-      }
-
-      await this.writeSecretsForSource(tokenState.source, secretsToWrite);
-
-      this.log.info("OpenAI tokens rotated and cached", {
-        source: tokenState.source.kind,
-        has_account_id: !!accountId,
-      });
-    } catch (e) {
-      this.log.error("Failed to store rotated OpenAI tokens", {
-        error: e instanceof Error ? e.message : String(e),
-      });
+    if (accountId) {
+      secretsToWrite.OPENAI_OAUTH_ACCOUNT_ID = accountId;
     }
+
+    const persisted = await this.persistRotatedTokens(tokenState.source, secretsToWrite);
+    if (!persisted) {
+      return { ok: false, status: 500, error: OPENAI_TOKEN_PERSIST_FAILURE };
+    }
+
+    this.log.info("OpenAI tokens rotated and cached", {
+      source: tokenState.source.kind,
+      has_account_id: !!accountId,
+    });
 
     return {
       ok: true,
@@ -218,6 +239,36 @@ export class OpenAITokenRefreshService {
       expiresIn: tokens.expires_in,
       accountId,
     };
+  }
+
+  private async persistRotatedTokens(
+    source: TokenSecretSource,
+    secrets: Record<string, string>
+  ): Promise<boolean> {
+    for (let attempt = 1; attempt <= OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS; attempt++) {
+      try {
+        await this.writeSecretsForSource(source, secrets);
+        return true;
+      } catch (e) {
+        const finalAttempt = attempt === OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS;
+        const context = {
+          source: source.kind,
+          attempt,
+          max_attempts: OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS,
+          error: e instanceof Error ? e.message : String(e),
+        };
+
+        if (finalAttempt) {
+          this.log.error("Failed to store rotated OpenAI tokens", context);
+          return false;
+        }
+
+        this.log.warn("Failed to store rotated OpenAI tokens; retrying", context);
+        await new Promise((resolve) => setTimeout(resolve, OPENAI_TOKEN_PERSIST_RETRY_DELAY_MS));
+      }
+    }
+
+    return false;
   }
 
   private async handleUnauthorizedRefresh(
@@ -228,7 +279,7 @@ export class OpenAITokenRefreshService {
       source: tokenState.source.kind,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => setTimeout(resolve, OPENAI_CONCURRENT_ROTATION_DELAY_MS));
 
     try {
       const reread = await readTokenState();
@@ -254,5 +305,23 @@ export class OpenAITokenRefreshService {
     }
 
     return { ok: false, status: 401, error: "OpenAI token refresh failed: unauthorized" };
+  }
+}
+
+/** Backwards-compatible session facade used by the Durable Object. */
+export class OpenAITokenRefreshService {
+  private readonly broker: OpenAITokenBroker;
+
+  constructor(
+    db: SqlDatabase,
+    encryptionKey: string,
+    private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
+    log: Logger
+  ) {
+    this.broker = new OpenAITokenBroker(db, encryptionKey, log);
+  }
+
+  refresh(session: SessionRow): Promise<OpenAITokenRefreshResult> {
+    return this.broker.refreshSession(session, this.ensureRepoId);
   }
 }
