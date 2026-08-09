@@ -160,7 +160,7 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
     clientWs.close();
   });
 
-  it("does not publish sandbox access when the bridge arrives during spawning", async () => {
+  it("does not publish sandbox access for replacement bridges during provider startup", async () => {
     const name = `ws-sandbox-access-spawning-${Date.now()}`;
     const { stub } = await initNamedSession(name);
     await seedSandboxAuth(stub, {
@@ -168,21 +168,38 @@ describe("Sandbox WebSocket (via SELF.fetch)", () => {
       sandboxId: SANDBOX_ID,
       status: "spawning",
     });
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      const lifecycleManager = (
+        instance as unknown as {
+          lifecycleManager: { providerStartupPending: boolean };
+        }
+      ).lifecycleManager;
+      lifecycleManager.providerStartupPending = true;
+    });
     const { ws: clientWs } = await openClientWs(name, { subscribe: true });
     const collector = collectMessages(clientWs, { timeoutMs: 100 });
 
-    const { ws: sandboxWs } = await openSandboxWs(name, {
+    const { ws: firstSandboxWs } = await openSandboxWs(name, {
       authToken: SANDBOX_TOKEN,
       sandboxId: SANDBOX_ID,
     });
-    expect(sandboxWs).not.toBeNull();
-    sandboxWs!.accept();
+    expect(firstSandboxWs).not.toBeNull();
+    firstSandboxWs!.accept();
+
+    const { ws: replacementSandboxWs } = await openSandboxWs(name, {
+      authToken: SANDBOX_TOKEN,
+      sandboxId: SANDBOX_ID,
+    });
+    expect(replacementSandboxWs).not.toBeNull();
+    replacementSandboxWs!.accept();
 
     const messages = await collector;
-    expect(messages).toContainEqual({ type: "sandbox_status", status: "ready" });
+    expect(
+      messages.filter((message) => message.type === "sandbox_status" && message.status === "ready")
+    ).toHaveLength(2);
     expect(messages).not.toContainEqual({ type: "sandbox_access_changed" });
 
-    sandboxWs!.close();
+    replacementSandboxWs!.close();
     clientWs.close();
   });
 

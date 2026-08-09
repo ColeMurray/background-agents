@@ -354,6 +354,113 @@ function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+type ProviderStartupKind = "spawn" | "restore" | "resume";
+
+async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void> {
+  const sandbox = createMockSandbox({
+    status: kind === "spawn" ? "pending" : "stopped",
+    created_at: Date.now() - 60000,
+    snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+  });
+  const storage = createMockStorage(
+    createMockSession({ code_server_enabled: 1, vnc_enabled: 1 }),
+    sandbox
+  );
+  const broadcaster = createMockBroadcaster();
+  const wsManager = createMockWebSocketManager(false);
+  const alarmScheduler = createMockAlarmScheduler();
+  const accessAtBroadcast: Array<
+    Pick<
+      SandboxRow,
+      "code_server_url" | "code_server_password" | "vnc_url" | "vnc_password" | "tunnel_urls"
+    >
+  > = [];
+  vi.mocked(broadcaster.broadcast).mockImplementation((message: object) => {
+    broadcaster.messages.push(message);
+    if ((message as { type?: string }).type === "sandbox_access_changed") {
+      accessAtBroadcast.push({
+        code_server_url: sandbox.code_server_url,
+        code_server_password: sandbox.code_server_password,
+        vnc_url: sandbox.vnc_url,
+        vnc_password: sandbox.vnc_password,
+        tunnel_urls: sandbox.tunnel_urls,
+      });
+    }
+  });
+  const connectBridge = () => {
+    sandbox.status = "ready";
+    vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
+    broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
+  };
+  const access = {
+    codeServerUrl: `https://${kind}-code.test`,
+    codeServerPassword: `${kind}-code-secret`,
+    vncAccess: { url: `https://${kind}-vnc.test`, password: `${kind}-vnc-secret` },
+    tunnelUrls: { "3000": `https://${kind}-preview.test` },
+  };
+  const provider = createMockProvider({
+    capabilities: { supportsPersistentResume: kind === "resume" },
+    createSandbox: vi.fn(async (config) => {
+      connectBridge();
+      return {
+        sandboxId: config.sandboxId,
+        status: "connecting",
+        createdAt: Date.now(),
+        ...access,
+      };
+    }),
+    restoreFromSnapshot: vi.fn(async (config) => {
+      connectBridge();
+      return { success: true, sandboxId: config.sandboxId, ...access };
+    }),
+    resumeSandbox: vi.fn(async () => {
+      connectBridge();
+      return { success: true, ...access };
+    }),
+  });
+  const manager = new SandboxLifecycleManager(
+    provider,
+    storage,
+    broadcaster,
+    wsManager,
+    alarmScheduler,
+    createMockIdGenerator(),
+    createTestConfig()
+  );
+
+  await manager.spawnSandbox();
+
+  expect(sandbox.status).toBe("ready");
+  expect(storage.calls.filter((call) => call === "updateSandboxStatus:connecting")).toHaveLength(
+    kind === "resume" ? 1 : 0
+  );
+  expect(alarmScheduler.alarms).toEqual([]);
+  expect(manager.isProviderStartupPending()).toBe(false);
+  const readyIndex = broadcaster.messages.findIndex(
+    (message) =>
+      (message as { type?: string; status?: string }).type === "sandbox_status" &&
+      (message as { status?: string }).status === "ready"
+  );
+  expect(broadcaster.messages.slice(readyIndex + 1)).not.toContainEqual({
+    type: "sandbox_status",
+    status: "connecting",
+  });
+  expect(
+    broadcaster.messages.filter(
+      (message) => (message as { type: string }).type === "sandbox_access_changed"
+    )
+  ).toHaveLength(1);
+  expect(accessAtBroadcast).toEqual([
+    {
+      code_server_url: access.codeServerUrl,
+      code_server_password: access.codeServerPassword,
+      vnc_url: access.vncAccess.url,
+      vnc_password: access.vncAccess.password,
+      tunnel_urls: JSON.stringify(access.tunnelUrls),
+    },
+  ]);
+}
+
 // ==================== Tests ====================
 
 describe("SandboxLifecycleManager", () => {
@@ -419,80 +526,10 @@ describe("SandboxLifecycleManager", () => {
       expect(JSON.stringify(broadcaster.messages)).not.toContain("secret");
     });
 
-    it("preserves an early bridge connection until spawn access is persisted", async () => {
-      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
-      const storage = createMockStorage(
-        createMockSession({ code_server_enabled: 1, vnc_enabled: 1 }),
-        sandbox
-      );
-      const broadcaster = createMockBroadcaster();
-      const wsManager = createMockWebSocketManager(false);
-      const alarmScheduler = createMockAlarmScheduler();
-      const accessAtBroadcast: Array<
-        Pick<
-          SandboxRow,
-          "code_server_url" | "code_server_password" | "vnc_url" | "vnc_password" | "tunnel_urls"
-        >
-      > = [];
-      vi.mocked(broadcaster.broadcast).mockImplementation((message: object) => {
-        broadcaster.messages.push(message);
-        if ((message as { type?: string }).type === "sandbox_access_changed") {
-          accessAtBroadcast.push({
-            code_server_url: sandbox.code_server_url,
-            code_server_password: sandbox.code_server_password,
-            vnc_url: sandbox.vnc_url,
-            vnc_password: sandbox.vnc_password,
-            tunnel_urls: sandbox.tunnel_urls,
-          });
-        }
-      });
-      const provider = createMockProvider({
-        createSandbox: vi.fn(async (config) => {
-          sandbox.status = "ready";
-          vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
-          broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
-          return {
-            sandboxId: config.sandboxId,
-            status: "connecting",
-            createdAt: Date.now(),
-            codeServerUrl: "https://code.test",
-            codeServerPassword: "code-secret",
-            vncAccess: { url: "https://vnc.test", password: "vnc-secret" },
-            tunnelUrls: { "3000": "https://preview.test" },
-          };
-        }),
-      });
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        broadcaster,
-        wsManager,
-        alarmScheduler,
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      await manager.spawnSandbox();
-
-      expect(sandbox.status).toBe("ready");
-      expect(storage.calls).not.toContain("updateSandboxStatus:connecting");
-      expect(alarmScheduler.alarms).toEqual([]);
-      expect(
-        broadcaster.messages.filter(
-          (message) => (message as { type: string }).type === "sandbox_access_changed"
-        )
-      ).toHaveLength(1);
-      expect(broadcaster.messages.at(-1)).toEqual({ type: "sandbox_access_changed" });
-      expect(accessAtBroadcast).toEqual([
-        {
-          code_server_url: "https://code.test",
-          code_server_password: "code-secret",
-          vnc_url: "https://vnc.test",
-          vnc_password: "vnc-secret",
-          tunnel_urls: JSON.stringify({ "3000": "https://preview.test" }),
-        },
-      ]);
-    });
+    it.each(["spawn", "restore", "resume"] as const)(
+      "preserves an early bridge connection until %s access is persisted",
+      expectEarlyBridgeStartup
+    );
 
     it("logs one terminal sandbox.spawn event for success", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -985,91 +1022,6 @@ describe("SandboxLifecycleManager", () => {
       const scheduledTime = alarmScheduler.alarms[0];
       expect(scheduledTime).toBeGreaterThanOrEqual(before + config.connectingTimeout.timeoutMs);
       expect(scheduledTime).toBeLessThanOrEqual(after + config.connectingTimeout.timeoutMs);
-    });
-
-    it("preserves an early bridge connection until restore access is persisted", async () => {
-      const sandbox = createMockSandbox({
-        status: "stopped",
-        snapshot_image_id: "img-abc123",
-      });
-      const storage = createMockStorage(
-        createMockSession({ code_server_enabled: 1, vnc_enabled: 1 }),
-        sandbox
-      );
-      const broadcaster = createMockBroadcaster();
-      const wsManager = createMockWebSocketManager(false);
-      const alarmScheduler = createMockAlarmScheduler();
-      const accessAtBroadcast: Array<
-        Pick<
-          SandboxRow,
-          "code_server_url" | "code_server_password" | "vnc_url" | "vnc_password" | "tunnel_urls"
-        >
-      > = [];
-      vi.mocked(broadcaster.broadcast).mockImplementation((message: object) => {
-        broadcaster.messages.push(message);
-        if ((message as { type?: string }).type === "sandbox_access_changed") {
-          accessAtBroadcast.push({
-            code_server_url: sandbox.code_server_url,
-            code_server_password: sandbox.code_server_password,
-            vnc_url: sandbox.vnc_url,
-            vnc_password: sandbox.vnc_password,
-            tunnel_urls: sandbox.tunnel_urls,
-          });
-        }
-      });
-      const provider = createMockProvider({
-        restoreFromSnapshot: vi.fn(async (config) => {
-          sandbox.status = "ready";
-          vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
-          broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
-          return {
-            success: true,
-            sandboxId: config.sandboxId,
-            codeServerUrl: "https://restored-code.test",
-            codeServerPassword: "restored-code-secret",
-            vncAccess: { url: "https://restored-vnc.test", password: "restored-vnc-secret" },
-            tunnelUrls: { "8080": "https://restored-preview.test" },
-          };
-        }),
-      });
-      const manager = new SandboxLifecycleManager(
-        provider,
-        storage,
-        broadcaster,
-        wsManager,
-        alarmScheduler,
-        createMockIdGenerator(),
-        createTestConfig()
-      );
-
-      await manager.spawnSandbox();
-
-      expect(sandbox.status).toBe("ready");
-      expect(storage.calls).not.toContain("updateSandboxStatus:connecting");
-      expect(alarmScheduler.alarms).toEqual([]);
-      expect(
-        broadcaster.messages.filter(
-          (message) => (message as { type: string }).type === "sandbox_access_changed"
-        )
-      ).toHaveLength(1);
-      expect(
-        broadcaster.messages.findIndex(
-          (message) => (message as { type: string }).type === "sandbox_access_changed"
-        )
-      ).toBeLessThan(
-        broadcaster.messages.findIndex(
-          (message) => (message as { type: string }).type === "sandbox_restored"
-        )
-      );
-      expect(accessAtBroadcast).toEqual([
-        {
-          code_server_url: "https://restored-code.test",
-          code_server_password: "restored-code-secret",
-          vnc_url: "https://restored-vnc.test",
-          vnc_password: "restored-vnc-secret",
-          tunnel_urls: JSON.stringify({ "8080": "https://restored-preview.test" }),
-        },
-      ]);
     });
 
     it("stores providerObjectId after successful restore for future snapshots", async () => {

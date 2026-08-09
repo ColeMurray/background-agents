@@ -1086,10 +1086,9 @@ export class SessionDO extends DurableObject<Env> {
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
       if (isSandbox) {
-        // A bridge can arrive while the provider call is still resolving access
-        // URLs. In that case the lifecycle manager publishes access after the
-        // values are persisted.
-        const accessIsPersisted = this.getSandbox()?.status !== "spawning";
+        // The lifecycle manager publishes access after any pending provider
+        // startup has persisted its URLs and credentials.
+        const accessIsPersisted = !this.lifecycleManager.isProviderStartupPending();
         const { replaced } = this.wsManager.acceptAndSetSandboxSocket(
           server,
           sandboxId ?? undefined
