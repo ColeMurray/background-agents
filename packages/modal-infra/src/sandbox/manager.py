@@ -560,7 +560,7 @@ class SandboxManager:
     async def restore_from_snapshot(
         self,
         snapshot_image_id: str,
-        session_config: dict,
+        session_config: SessionConfig | dict,
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
@@ -591,9 +591,14 @@ class SandboxManager:
         """
         start_time = time.time()
 
-        repo_owner = session_config.get("repo_owner")
-        repo_name = session_config.get("repo_name")
-        session_config_json = json.dumps(session_config)
+        if isinstance(session_config, dict):
+            repo_owner = session_config.get("repo_owner")
+            repo_name = session_config.get("repo_name")
+            session_config_json = json.dumps(session_config)
+        else:
+            repo_owner = session_config.repo_owner
+            repo_name = session_config.repo_name
+            session_config_json = session_config.model_dump_json()
         has_repository = _has_repository(repo_owner, repo_name)
 
         # Use provided sandbox_id or generate one
