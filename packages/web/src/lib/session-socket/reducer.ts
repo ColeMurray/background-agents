@@ -326,6 +326,7 @@ export function sessionSocketReducer(
       return {
         ...state,
         ready: false,
+        presenceSynced: false,
         participants: [],
       };
   }

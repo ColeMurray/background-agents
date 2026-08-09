@@ -408,7 +408,7 @@ describe("sessionSocketReducer", () => {
       expect(state.participants).toEqual([]);
     });
 
-    it("keeps initial presence synchronized while reconnecting", () => {
+    it("waits for a new presence sync while reconnecting", () => {
       const synced = reduce(
         subscribedState(),
         serverMessage({
@@ -426,10 +426,16 @@ describe("sessionSocketReducer", () => {
       );
       const disconnected = reduce(synced, { type: "socket_closed" });
       const resubscribed = reduce(disconnected, serverMessage(createSubscribedMessage()));
+      const resynced = reduce(
+        resubscribed,
+        serverMessage({ type: "presence_sync", participants: [] })
+      );
 
-      expect(disconnected.presenceSynced).toBe(true);
+      expect(disconnected.presenceSynced).toBe(false);
       expect(disconnected.participants).toEqual([]);
-      expect(resubscribed.presenceSynced).toBe(true);
+      expect(resubscribed.presenceSynced).toBe(false);
+      expect(resynced.presenceSynced).toBe(true);
+      expect(resynced.participants).toEqual([]);
     });
   });
 

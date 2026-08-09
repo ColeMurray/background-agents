@@ -11,6 +11,7 @@ export function ParticipantsSection({ participants, presenceSynced }: Participan
   if (!presenceSynced) {
     return (
       <div
+        aria-hidden="true"
         className="flex h-6 items-center gap-2 animate-pulse"
         data-testid="participants-skeleton"
       >
