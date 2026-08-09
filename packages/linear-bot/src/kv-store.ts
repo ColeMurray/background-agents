@@ -9,7 +9,12 @@
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
-import { issueSessionSchema } from "./types";
+import {
+  issueSessionSchema,
+  projectRepoMappingSchema,
+  teamRepoMappingSchema,
+  userPreferencesSchema,
+} from "./types";
 import type {
   Env,
   TeamRepoMapping,
@@ -24,7 +29,8 @@ const log = createLogger("kv-store");
 export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
   try {
     const data = await env.LINEAR_KV.get("config:team-repos", "json");
-    if (data && typeof data === "object") return data as TeamRepoMapping;
+    const parsed = teamRepoMappingSchema.safeParse(data);
+    if (parsed.success) return parsed.data;
   } catch (e) {
     log.debug("kv.get_team_repo_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),
@@ -36,7 +42,8 @@ export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
 export async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMapping> {
   try {
     const data = await env.LINEAR_KV.get("config:project-repos", "json");
-    if (data && typeof data === "object") return data as ProjectRepoMapping;
+    const parsed = projectRepoMappingSchema.safeParse(data);
+    if (parsed.success) return parsed.data;
   } catch (e) {
     log.debug("kv.get_project_repo_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),
@@ -51,7 +58,8 @@ export async function getUserPreferences(
 ): Promise<UserPreferences | null> {
   try {
     const data = await env.LINEAR_KV.get(`user_prefs:${userId}`, "json");
-    if (data && typeof data === "object") return data as UserPreferences;
+    const parsed = userPreferencesSchema.safeParse(data);
+    if (parsed.success && parsed.data.userId === userId) return parsed.data;
   } catch (e) {
     log.debug("kv.get_user_preferences_failed", {
       userId,
@@ -84,7 +92,8 @@ export async function storeIssueSession(
   issueId: string,
   session: IssueSession
 ): Promise<void> {
-  await env.LINEAR_KV.put(getIssueSessionKey(issueId), JSON.stringify(session), {
+  const canonical = issueSessionSchema.parse(session);
+  await env.LINEAR_KV.put(getIssueSessionKey(issueId), JSON.stringify(canonical), {
     expirationTtl: 86400 * 7,
   });
 }

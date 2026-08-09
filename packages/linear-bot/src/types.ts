@@ -2,7 +2,7 @@
  * Type definitions for the Linear bot.
  */
 
-import type { LinearCallbackContext } from "@open-inspect/shared";
+import { linearCallbackContextSchema } from "@open-inspect/shared";
 import { z } from "zod";
 
 /**
@@ -43,33 +43,37 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export interface StaticRepoConfig {
-  owner: string;
-  name: string;
-  label?: string;
-}
+const staticRepoConfigSchema = z.strictObject({
+  owner: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  label: z.string().trim().min(1).optional(),
+});
+
+export type StaticRepoConfig = z.infer<typeof staticRepoConfigSchema>;
 
 /**
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export interface StaticEnvironmentConfig {
-  environmentId: string;
-  label?: string;
-}
+const staticEnvironmentConfigSchema = z.strictObject({
+  environmentId: z.string().trim().min(1),
+  label: z.string().trim().min(1).optional(),
+});
+
+export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSchema>;
 
 /**
  * A mapping entry: a repository or a saved environment. Targets unify instead
  * of migrate — repository entries never stop working; environments join them.
  */
 export type StaticTargetConfig = StaticRepoConfig | StaticEnvironmentConfig;
+const staticTargetConfigSchema = z.union([staticRepoConfigSchema, staticEnvironmentConfigSchema]);
 
 /**
  * Static team→target mapping stored in KV under "config:team-repos".
  */
-export interface TeamRepoMapping {
-  [teamId: string]: StaticTargetConfig[];
-}
+export const teamRepoMappingSchema = z.record(z.string(), z.array(staticTargetConfigSchema));
+export type TeamRepoMapping = z.infer<typeof teamRepoMappingSchema>;
 
 /**
  * Dynamic repo config from control plane.
@@ -88,9 +92,22 @@ export type {
 /**
  * Project→target mapping stored in KV under "config:project-repos".
  */
-export interface ProjectRepoMapping {
-  [projectId: string]: { owner: string; name: string } | { environmentId: string };
-}
+export const projectRepoMappingSchema = z.record(
+  z.string(),
+  z.union([
+    staticRepoConfigSchema.omit({ label: true }),
+    staticEnvironmentConfigSchema.omit({ label: true }),
+  ])
+);
+export type ProjectRepoMapping = z.infer<typeof projectRepoMappingSchema>;
+
+export const userPreferencesSchema = z.strictObject({
+  userId: z.string().trim().min(1),
+  model: z.string().trim().min(1).optional(),
+  reasoningEffort: z.string().trim().min(1).optional(),
+  branch: z.string().trim().min(1).optional(),
+  updatedAt: z.number().finite(),
+});
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 
@@ -99,51 +116,105 @@ export interface ProjectRepoMapping {
  * stored value is untrusted on read: `lookupIssueSession` parses with this, so
  * the runtime contract and the type can never drift apart.
  */
-export const issueSessionSchema = z.object({
+const issueSessionBaseShape = {
   sessionId: z.string(),
   issueId: z.string(),
   issueIdentifier: z.string(),
-  /** Set for repository sessions; absent for environment sessions. */
-  repoOwner: z.string().optional(),
-  repoName: z.string().optional(),
-  /** Set for environment sessions. */
-  environmentId: z.string().optional(),
   model: z.string(),
   agentSessionId: z.string().optional(),
   createdAt: z.number(),
+};
+
+const issueSessionTargetSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("repository"),
+    owner: z.string().trim().min(1),
+    name: z.string().trim().min(1),
+  }),
+  z.strictObject({
+    kind: z.literal("environment"),
+    environmentId: z.string().trim().min(1),
+  }),
+]);
+
+const canonicalIssueSessionSchema = z.strictObject({
+  ...issueSessionBaseShape,
+  target: issueSessionTargetSchema,
 });
+
+const legacyRepositoryIssueSessionSchema = z
+  .strictObject({
+    ...issueSessionBaseShape,
+    repoOwner: z.string().trim().min(1),
+    repoName: z.string().trim().min(1),
+  })
+  .transform(({ repoOwner, repoName, ...session }) => ({
+    ...session,
+    target: { kind: "repository" as const, owner: repoOwner, name: repoName },
+  }));
+
+const legacyEnvironmentIssueSessionSchema = z
+  .strictObject({
+    ...issueSessionBaseShape,
+    environmentId: z.string().trim().min(1),
+  })
+  .transform(({ environmentId, ...session }) => ({
+    ...session,
+    target: { kind: "environment" as const, environmentId },
+  }));
+
+/** Decode persisted records into the sole canonical issue-session shape. */
+export const issueSessionSchema = z.union([
+  canonicalIssueSessionSchema,
+  legacyRepositoryIssueSessionSchema,
+  legacyEnvironmentIssueSessionSchema,
+]);
 
 export type IssueSession = z.infer<typeof issueSessionSchema>;
 
 // Re-export CallbackContext types from shared
 export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
 
-/**
- * Completion callback payload from control-plane.
- */
-export interface CompletionCallback {
-  sessionId: string;
-  messageId: string;
-  success: boolean;
-  error?: string;
-  timestamp: number;
-  signature: string;
-  context: LinearCallbackContext;
-}
+const callbackBaseShape = {
+  sessionId: z.string().trim().min(1),
+  messageId: z.string().trim().min(1),
+  timestamp: z.number().finite(),
+  signature: z.string().trim().min(1),
+  context: linearCallbackContextSchema,
+};
+
+export const completionCallbackSchema = z.discriminatedUnion("success", [
+  z
+    .object({ ...callbackBaseShape, success: z.literal(true), error: z.never().optional() })
+    .passthrough(),
+  z
+    .object({
+      ...callbackBaseShape,
+      success: z.literal(false),
+      error: z.string().optional(),
+    })
+    .passthrough(),
+]);
+
+export type CompletionCallback = z.infer<typeof completionCallbackSchema>;
 
 /**
  * Tool call callback payload from control-plane (ephemeral, best-effort).
  */
-export interface ToolCallCallback {
-  sessionId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  callId: string;
-  status?: string;
-  timestamp: number;
-  context: LinearCallbackContext;
-  signature: string;
-}
+export const toolCallCallbackSchema = z
+  .object({
+    sessionId: z.string().trim().min(1),
+    tool: z.string(),
+    args: z.record(z.string(), z.unknown()),
+    callId: z.string().trim().min(1),
+    status: z.string().optional(),
+    timestamp: z.number().finite(),
+    context: linearCallbackContextSchema,
+    signature: z.string().trim().min(1),
+  })
+  .passthrough();
+
+export type ToolCallCallback = z.infer<typeof toolCallCallbackSchema>;
 
 // ─── Classification Types ────────────────────────────────────────────────────
 
@@ -247,40 +318,85 @@ export const linearUserResponseSchema = z.object({
 
 // ─── Webhook Payload Types ──────────────────────────────────────────────────
 
-export interface AgentSessionWebhookIssue {
-  id: string;
-  identifier: string;
-  title: string;
-  description?: string;
-  url: string;
-  priority: number;
-  priorityLabel: string;
-  team: { id: string; key: string; name: string };
-  teamId?: string;
-  labels?: Array<{ id: string; name: string }>;
-  assignee?: { id: string; name: string };
-  project?: { id: string; name: string };
-}
+const webhookStringSchema = z.string().trim().min(1);
+const webhookNamedEntitySchema = z.object({ id: webhookStringSchema, name: webhookStringSchema });
 
-export interface AgentSessionWebhook {
-  type: string;
-  action: string;
-  organizationId: string;
-  webhookId: string;
-  appUserId: string;
-  promptContext?: string;
-  agentSession: {
-    id: string;
-    creatorId?: string | null;
-    issue?: AgentSessionWebhookIssue;
-    comment?: { body: string; userId?: string };
-  };
-  agentActivity?: {
-    userId?: string;
-    signal?: string;
-    content?: {
-      type?: string;
-      body?: string;
+export const agentSessionWebhookIssueSchema = z.object({
+  id: webhookStringSchema,
+  identifier: webhookStringSchema,
+  title: webhookStringSchema,
+  description: z.string().nullable().optional(),
+  url: webhookStringSchema,
+  priority: z.number(),
+  priorityLabel: z.string(),
+  team: webhookNamedEntitySchema.extend({ key: webhookStringSchema }),
+  teamId: webhookStringSchema.optional(),
+  labels: z.array(webhookNamedEntitySchema).optional(),
+  assignee: webhookNamedEntitySchema.optional(),
+  project: webhookNamedEntitySchema.optional(),
+});
+
+export type AgentSessionWebhookIssue = z.infer<typeof agentSessionWebhookIssueSchema>;
+
+export const agentSessionWebhookSchema = z.object({
+  type: z.literal("AgentSessionEvent"),
+  action: webhookStringSchema,
+  organizationId: webhookStringSchema,
+  webhookId: webhookStringSchema,
+  appUserId: webhookStringSchema,
+  promptContext: z.string().optional(),
+  agentSession: z.object({
+    id: webhookStringSchema,
+    creatorId: webhookStringSchema.nullable().optional(),
+    issue: agentSessionWebhookIssueSchema.optional(),
+    comment: z.object({ body: z.string(), userId: webhookStringSchema.optional() }).optional(),
+  }),
+  agentActivity: z
+    .object({
+      userId: webhookStringSchema.optional(),
+      signal: z.string().optional(),
+      content: z.object({ type: z.string().optional(), body: z.string().optional() }).optional(),
+    })
+    .optional(),
+});
+
+export type AgentSessionWebhook = z.infer<typeof agentSessionWebhookSchema>;
+type SessionWebhook = AgentSessionWebhook & {
+  action: "created" | "prompted";
+  agentSession: AgentSessionWebhook["agentSession"] & { issue: AgentSessionWebhookIssue };
+};
+
+export type AgentSessionCommand =
+  | { kind: "stop"; webhook: AgentSessionWebhook }
+  | { kind: "start_or_follow_up"; webhook: SessionWebhook };
+
+export type AgentSessionWebhookParseResult =
+  | { kind: "invalid" }
+  | { kind: "unsupported"; eventType: string; action: string }
+  | AgentSessionCommand;
+
+export function parseAgentSessionWebhook(payload: unknown): AgentSessionWebhookParseResult {
+  const parsed = agentSessionWebhookSchema.safeParse(payload);
+  if (!parsed.success) return { kind: "invalid" };
+
+  const webhook = parsed.data;
+  if (
+    webhook.agentActivity?.signal === "stop" ||
+    webhook.action === "stopped" ||
+    webhook.action === "cancelled"
+  ) {
+    return { kind: "stop", webhook };
+  }
+
+  if (webhook.action === "created" || webhook.action === "prompted") {
+    if (!webhook.agentSession.issue) return { kind: "invalid" };
+    const sessionWebhook: SessionWebhook = {
+      ...webhook,
+      action: webhook.action,
+      agentSession: { ...webhook.agentSession, issue: webhook.agentSession.issue },
     };
-  };
+    return { kind: "start_or_follow_up", webhook: sessionWebhook };
+  }
+
+  return { kind: "unsupported", eventType: webhook.type, action: webhook.action };
 }

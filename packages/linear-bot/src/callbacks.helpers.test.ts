@@ -179,4 +179,13 @@ describe("isValidToolCallPayload", () => {
   it("rejects sessionId of wrong type", () => {
     expect(isValidToolCallPayload({ ...valid, sessionId: 123 })).toBe(false);
   });
+
+  it("rejects missing args and callId", () => {
+    const { args: _args, callId: _callId, ...rest } = valid;
+    expect(isValidToolCallPayload(rest)).toBe(false);
+  });
+
+  it("rejects malformed callback context", () => {
+    expect(isValidToolCallPayload({ ...valid, context: { source: "linear" } })).toBe(false);
+  });
 });
