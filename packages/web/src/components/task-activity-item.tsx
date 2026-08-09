@@ -80,8 +80,7 @@ export function TaskActivityItem({
         <BoxIcon className="w-3.5 h-3.5 text-secondary-foreground" />
         {isRunning && (
           <span
-            role="status"
-            aria-label="Task in progress"
+            aria-hidden="true"
             className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse flex-shrink-0"
           />
         )}
@@ -92,6 +91,11 @@ export function TaskActivityItem({
           {formatSessionEventTime(event.timestamp)}
         </span>
       </button>
+      {isRunning && (
+        <span role="status" className="sr-only">
+          Task in progress
+        </span>
+      )}
 
       {isExpanded && (
         <div className="mt-2 ml-5 space-y-2">

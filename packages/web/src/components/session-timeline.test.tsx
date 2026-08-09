@@ -515,10 +515,17 @@ describe("task activity grouping", () => {
       args: { description: "Review code" },
       status: "running",
     });
-    const { rerender } = render(<SessionTimeline {...baseTimelineProps} events={[runningTask]} />);
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[runningTask]} />
+    );
 
-    const indicator = screen.getByRole("status", { name: "Task in progress" });
-    expect(indicator).toHaveClass("bg-accent", "animate-pulse");
+    const indicator = screen.getByRole("status");
+    expect(indicator).toHaveClass("sr-only");
+    expect(indicator).toHaveTextContent("Task in progress");
+    expect(indicator.closest("button")).toBeNull();
+    expect(container.querySelector("button [aria-hidden='true'].animate-pulse")).toHaveClass(
+      "bg-accent"
+    );
 
     rerender(
       <SessionTimeline
@@ -533,7 +540,8 @@ describe("task activity grouping", () => {
       />
     );
 
-    expect(screen.queryByRole("status", { name: "Task in progress" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(container.querySelector("button [aria-hidden='true'].animate-pulse")).toBeNull();
   });
 
   it("nests child tools beneath their Task and keeps parallel Tasks separate", () => {
