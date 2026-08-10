@@ -159,6 +159,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     );
     return;
   }
+  const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, [user]);
+  const senderName = userNames.get(user) || user || "User";
   // A message with no text of its own still needs prompt content for the agent
   // to act on; what it carried instead decides which stand-in to use.
   const imageOnly = !messageText && !forwarded.hasBody;
@@ -168,6 +170,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   // Forwarded bodies lead: the user's own text ("deal with this") is the
   // instruction and reads as one when it comes last.
   const promptText = formatForwardedContext(forwarded.entries) + requestText;
+  const deliveredPromptText =
+    formatForwardedContext(forwarded.entries) + `[${senderName}]: ${requestText}`;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -196,7 +200,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
       const promptResult = await deliverPrompt(env, {
         sessionId: existingSession.sessionId,
-        content: channelContext + interimContext + promptText,
+        content: channelContext + interimContext + deliveredPromptText,
         authorId: `slack:${user}`,
         attachments: await prepareImageAttachments(env, images, traceId),
         imageOnly,
@@ -269,7 +273,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       return;
     }
     await storePendingRequest(env, channel, threadTs || ts, {
-      message: promptText,
+      message: deliveredPromptText,
       userId: user,
       previousMessages,
       channelName,
@@ -303,7 +307,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     target: result.target,
     channel,
     threadTs: threadKey,
-    messageText: promptText,
+    messageText: deliveredPromptText,
     userId: user,
     messageTs: ts,
     previousMessages,
