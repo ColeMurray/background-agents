@@ -1891,7 +1891,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 130_000, // 130s ago, past 120s timeout
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);
@@ -1953,7 +1953,7 @@ describe("SandboxLifecycleManager", () => {
       const now = Date.now();
       const sandbox = createMockSandbox({
         status: "connecting" as SandboxStatus,
-        created_at: now - 130_000,
+        created_at: now - (DEFAULT_LIFECYCLE_CONFIG.connectingTimeout.timeoutMs + 10_000),
         last_heartbeat: null,
       });
       const storage = createMockStorage(createMockSession(), sandbox);

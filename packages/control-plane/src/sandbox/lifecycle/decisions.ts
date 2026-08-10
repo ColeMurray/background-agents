@@ -500,12 +500,20 @@ export interface ConnectingTimeoutConfig {
 }
 
 /**
- * Default connecting timeout: 2 minutes.
- * Boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically
- * takes 30–90 seconds. Two minutes provides margin without leaving users waiting too long.
+ * Default connecting timeout for the initial-connect watchdog.
+ *
+ * The boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically takes
+ * 30–90 seconds, but large repos with real setup scripts land close to the previous two-minute
+ * limit. Overrunning it is not a soft failure: `clearSandboxAccessState` locks out the sandbox that
+ * does eventually come up, the queued prompt is never re-driven, and the documented recovery ("it
+ * will be retried on your next message") cannot fire for bot-triggered sessions, which only ever
+ * send one prompt. Sessions were being stranded by boots that overran by under five seconds.
+ *
+ * Widened to give slow boots real headroom. This is a mitigation, not the fix — see
+ * ColeMurray/background-agents#1363 for the underlying recovery gap.
  */
 export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
-  timeoutMs: 120_000,
+  timeoutMs: 240_000,
 };
 
 /**
