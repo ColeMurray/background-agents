@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   automationRepositoriesInputSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-  MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
   decodeRepositoryPathSegments,
   encodeRepositoryPathSegments,

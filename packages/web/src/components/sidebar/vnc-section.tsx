@@ -1,6 +1,6 @@
 "use client";
 
-import type { SandboxStatus } from "@open-inspect/shared";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import { MonitorIcon } from "@/components/ui/icons";
 import { buildVncUrl } from "@/lib/urls";
 import { ACTIVE_SANDBOX_STATUSES, STARTING_SANDBOX_STATUSES } from "./sandbox-statuses";

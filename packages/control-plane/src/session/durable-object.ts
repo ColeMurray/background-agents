@@ -54,12 +54,7 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import type {
-  Env,
-  ClientInfo,
-  ServerMessage,
-  SessionRepositoryState,
-} from "../types";
+import type { Env, ClientInfo, ServerMessage, SessionRepositoryState } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";

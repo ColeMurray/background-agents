@@ -13,7 +13,6 @@ import type {
   Automation,
   AutomationRepositoryInput,
   CreateEnvironmentInput,
-  ListAutomationsResponse,
   RepositoryInput,
   ServerMessage,
   UpdateEnvironmentInput,

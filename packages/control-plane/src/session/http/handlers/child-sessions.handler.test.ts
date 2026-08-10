@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared";
+import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
 import { createChildSessionsHandler, MAX_PENDING_CHILD_PROMPTS } from "./child-sessions.handler";
 import { SessionNotPromptableError } from "../../message-queue";
 import {
