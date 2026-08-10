@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Env, Environment, RepoConfig } from "../types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 
 const {
   mockMessagesCreate,
