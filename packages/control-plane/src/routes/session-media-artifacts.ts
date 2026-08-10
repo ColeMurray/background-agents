@@ -1,4 +1,5 @@
 import {
+  listArtifactsResponseSchema,
   sessionArtifactSchema,
   type ScreenshotArtifactMetadata,
   type SessionArtifact,
@@ -13,10 +14,6 @@ import { error } from "./shared";
 import type { SessionRouteContext } from "./session-route";
 
 const logger = createLogger("router:session-media");
-
-const listArtifactsResponseSchema = z.object({
-  artifacts: z.array(sessionArtifactSchema),
-});
 
 const getArtifactResponseSchema = z.object({
   artifact: sessionArtifactSchema.nullable(),
