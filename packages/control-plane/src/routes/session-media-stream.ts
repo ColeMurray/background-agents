@@ -1,5 +1,6 @@
 import { createLogger } from "../logger";
 import { isSupportedScreenshotMimeType, isSupportedVideoMimeType } from "../media";
+import type { NormalizedArtifactResponse } from "../session/artifacts";
 import { createMediaObjectStorage, type ObjectStorageMetadata } from "../storage/object-storage";
 import type { Env } from "../types";
 import { parseByteRangeHeader, type ByteRange } from "./requests/byte-range";
@@ -8,10 +9,7 @@ import {
   createRangeNotSatisfiableResponse,
   createStoredObjectResponse,
 } from "./responses/stored-object-response";
-import {
-  getSessionArtifactFromRuntime,
-  type NormalizedArtifactResponse,
-} from "./session-media-artifacts";
+import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
 export { parseByteRangeHeader } from "./requests/byte-range";

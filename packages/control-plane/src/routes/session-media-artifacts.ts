@@ -1,12 +1,12 @@
 import {
   sessionArtifactSchema,
-  type ArtifactResponse,
   type ScreenshotArtifactMetadata,
   type SessionArtifact,
   type VideoArtifactMetadata,
 } from "@open-inspect/shared/types/artifacts";
 import { z } from "zod";
 import { createLogger } from "../logger";
+import type { NormalizedArtifactResponse } from "../session/artifacts";
 import { SessionInternalPaths } from "../session/contracts";
 import type { ObjectStorage } from "../storage/object-storage";
 import { error } from "./shared";
@@ -21,10 +21,6 @@ const listArtifactsResponseSchema = z.object({
 const getArtifactResponseSchema = z.object({
   artifact: sessionArtifactSchema.nullable(),
 });
-
-export type NormalizedArtifactResponse = Omit<ArtifactResponse, "updatedAt"> & {
-  updatedAt: number;
-};
 
 /**
  * Reads a runtime response body as JSON, normalizing empty/non-JSON bodies to
