@@ -88,7 +88,6 @@ function plannedBuild(overrides: Record<string, unknown> = {}): ImageBuildPlan {
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1800_000,
     correlation: { trace_id: "t", request_id: "r" },
-    provider: "modal",
     callbackToken: MODAL_CALLBACK_TOKEN,
     cloneAuth: { type: "unavailable" },
     ...overrides,
@@ -105,7 +104,6 @@ function vercelPlannedBuild(): ImageBuildPlan {
     failureCallbackUrl: "https://worker.test/image-builds/build-failed",
     buildTimeoutMs: 1800_000,
     correlation: { trace_id: "t", request_id: "r" },
-    provider: "vercel",
     callbackToken: "callback-token",
     cloneAuth: { type: "unavailable" },
   };

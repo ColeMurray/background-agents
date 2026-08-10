@@ -10,7 +10,7 @@ import {
   hashImageBuildCallbackToken,
   IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS,
 } from "./callback-auth";
-import type { ImageBuildProvider, ImageBuildScope } from "./model";
+import type { ImageBuildScope } from "./model";
 import {
   loadScopeBuildSecrets,
   resolveScopeSandboxSettings,
@@ -47,8 +47,7 @@ export type { ResolvedImageBuildTarget } from "./scope";
 export class ImageBuildPlanner {
   constructor(
     private readonly env: Env,
-    private readonly db: SqlDatabase,
-    private readonly provider: ImageBuildProvider
+    private readonly db: SqlDatabase
   ) {}
 
   async resolveTarget(scope: ImageBuildScope): Promise<ResolvedImageBuildTarget> {
@@ -101,7 +100,6 @@ export class ImageBuildPlanner {
 
     return {
       ...basePlan,
-      provider: this.provider,
       callbackToken: params.callbackAuth.token,
       cloneAuth,
     };
