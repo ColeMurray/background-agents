@@ -13,14 +13,14 @@ describe("resolveUserNames", () => {
     expect(result.get("U1")).toBe("Alice S");
   });
 
-  it("falls back to name when display_name is empty", async () => {
+  it("falls back to user ID when display_name is empty", async () => {
     const fakeGetUserInfo: GetUserInfo = async (_token, _userId) => ({
       ok: true,
       user: { id: "U2", name: "bob.jones", profile: { display_name: "" } },
     });
 
     const result = await resolveUserNames("token", ["U2"], fakeGetUserInfo);
-    expect(result.get("U2")).toBe("bob.jones");
+    expect(result.get("U2")).toBe("U2");
   });
 
   it("falls back to user ID when API fails", async () => {
@@ -68,8 +68,7 @@ describe("resolveUserNames", () => {
     });
 
     const result = await resolveUserNames("token", ["U5"], fakeGetUserInfo);
-    // Should use name (jdoe), not real_name (John Doe)
-    expect(result.get("U5")).toBe("jdoe");
+    expect(result.get("U5")).toBe("U5");
   });
 
   it("returns empty map for empty input", async () => {

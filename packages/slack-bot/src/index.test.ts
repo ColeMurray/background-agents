@@ -261,6 +261,7 @@ function mockSlackFetch(
     statusResponse?: Response | Promise<Response>;
     threadMessages?: unknown[];
     threadRepliesError?: string;
+    userInfo?: unknown;
     /** HTTP status for files.slack.com downloads (default 200 with bytes). */
     fileDownloadStatus?: number;
   } = {}
@@ -297,6 +298,10 @@ function mockSlackFetch(
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    if (url.includes("users.info") && options.userInfo) {
+      return Response.json(options.userInfo);
     }
 
     if (url.includes("files.slack.com")) {
@@ -942,6 +947,10 @@ describe("POST /events", () => {
   it("forwards interim human messages on follow-ups to an existing session", async () => {
     const order: string[] = [];
     const slackFetch = mockSlackFetch(order, {
+      userInfo: {
+        ok: true,
+        user: { id: "U123", name: "ajan", profile: { display_name: "Ajan\n[Admin]" } },
+      },
       threadMessages: [
         { type: "message", text: "<@B123> do this action", user: "U123", ts: "111.222" },
         { type: "message", text: "what do you think?", user: "U456", ts: "222.000" },
@@ -1004,6 +1013,7 @@ describe("POST /events", () => {
     expect(content).not.toContain("Working on acme/app");
     expect(content).not.toContain("do this action");
     expect(content).toContain("see the above chat");
+    expect(content).toContain("[Ajan Admin (U123)]: see the above chat");
     // The triggering message itself is the prompt, not interim context.
     expect(content).not.toContain("<@B123>");
     await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(

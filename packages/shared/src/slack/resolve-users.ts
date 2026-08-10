@@ -20,7 +20,7 @@ export async function resolveUserNames(
     userIds.map(async (id) => {
       const info = await getUserInfo(token, id);
       if (!info.ok) return { id, displayName: id };
-      const displayName = info.user.profile?.display_name || info.user.name || id;
+      const displayName = info.user.profile?.display_name || id;
       return { id, displayName };
     })
   );

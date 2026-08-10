@@ -160,7 +160,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     return;
   }
   const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, [user]);
-  const senderName = userNames.get(user) || user || "User";
+  const senderName = (userNames.get(user) ?? user)
+    .replace(/[[\]\r\n]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  const senderLabel = senderName && senderName !== user ? `${senderName} (${user})` : user;
   // A message with no text of its own still needs prompt content for the agent
   // to act on; what it carried instead decides which stand-in to use.
   const imageOnly = !messageText && !forwarded.hasBody;
@@ -169,9 +174,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     (forwarded.entries.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
   // Forwarded bodies lead: the user's own text ("deal with this") is the
   // instruction and reads as one when it comes last.
-  const promptText = formatForwardedContext(forwarded.entries) + requestText;
-  const deliveredPromptText =
-    formatForwardedContext(forwarded.entries) + `[${senderName}]: ${requestText}`;
+  const forwardedContext = formatForwardedContext(forwarded.entries);
+  const promptText = forwardedContext + requestText;
+  const deliveredPromptText = forwardedContext + `[${senderLabel}]: ${requestText}`;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
