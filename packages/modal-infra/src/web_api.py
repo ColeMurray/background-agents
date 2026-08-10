@@ -49,11 +49,18 @@ class SnapshotBuildSandboxRequest(_ModalRequestModel):
     provider_session_id: NonEmptyString
 
 
+class BuildRepositoryRequest(_ModalRequestModel):
+    repo_owner: NonEmptyString
+    repo_name: NonEmptyString
+    branch: NonEmptyString
+    base_sha: str | None = None
+
+
 class CreateBuildSandboxRequest(_ModalRequestModel):
     scope_kind: NonEmptyString
     scope_id: NonEmptyString
     build_id: NonEmptyString
-    repositories: list[dict[str, object]]
+    repositories: list[BuildRepositoryRequest]
     callback_url: NonEmptyString
     failure_callback_url: NonEmptyString
     clone_token: str | None = None
@@ -867,28 +874,34 @@ def _validated_timeout_seconds(
     return min(max_seconds, max(1, value))
 
 
-def _validated_build_repositories(value: object) -> list[dict]:
-    if not isinstance(value, list) or not value:
+def _validated_build_repositories(
+    value: list[BuildRepositoryRequest],
+) -> list[dict[str, str]]:
+    if not value:
         raise HTTPException(status_code=400, detail="repositories must be a non-empty list")
-    for entry in value:
-        if (
-            not isinstance(entry, dict)
-            or not entry.get("repo_owner")
-            or not entry.get("repo_name")
-            or not entry.get("branch")
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="repositories entries require repo_owner, repo_name, and branch",
-            )
+
+    request_repositories = [entry.model_dump(exclude_none=True) for entry in value]
     try:
-        parse_repositories(
-            {"repositories": value},
+        repositories = parse_repositories(
+            {"repositories": request_repositories},
             workspace_path=Path("/workspace"),
         )
     except RepoConfigError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    return value
+    if len(repositories) != len(value):
+        raise HTTPException(
+            status_code=400,
+            detail="repositories entries require repo_owner, repo_name, and branch",
+        )
+    return [
+        {
+            "repo_owner": repository.owner,
+            "repo_name": repository.name,
+            "branch": repository.branch,
+            **({"base_sha": repository.base_sha} if repository.base_sha else {}),
+        }
+        for repository in repositories
+    ]
 
 
 @app.function(

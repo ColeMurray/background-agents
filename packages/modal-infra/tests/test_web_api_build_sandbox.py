@@ -327,6 +327,28 @@ async def test_create_clamps_build_execution_timeout_independently(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["repo_owner", "repo_name", "branch"])
+async def test_create_rejects_non_string_repository_fields(monkeypatch, field):
+    service = _patch_dependencies(monkeypatch)
+    repository = {**REPOSITORIES[0], field: True}
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": [repository],
+                **CALLBACK_CONTEXT,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_case_insensitive_repository_path_collisions(monkeypatch):
     service = _patch_dependencies(monkeypatch)
 
