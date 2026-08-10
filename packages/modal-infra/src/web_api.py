@@ -918,10 +918,10 @@ async def api_delete_provider_image(
 
     require_auth(authorization)
 
-    parsed_request = _parse_request(DeleteProviderImageRequest, request)
-    provider_image_id = parsed_request.provider_image_id
-
     try:
+        parsed_request = _parse_request(DeleteProviderImageRequest, request)
+        provider_image_id = parsed_request.provider_image_id
+
         # Modal doesn't have an explicit delete API for images;
         # images are garbage-collected when no longer referenced.
         # We log the request for auditability.
