@@ -261,7 +261,6 @@ function mockSlackFetch(
     statusResponse?: Response | Promise<Response>;
     threadMessages?: unknown[];
     threadRepliesError?: string;
-    userInfo?: unknown;
     /** HTTP status for files.slack.com downloads (default 200 with bytes). */
     fileDownloadStatus?: number;
   } = {}
@@ -298,10 +297,6 @@ function mockSlackFetch(
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }
-
-    if (url.includes("users.info") && options.userInfo) {
-      return Response.json(options.userInfo);
     }
 
     if (url.includes("files.slack.com")) {
@@ -813,6 +808,7 @@ describe("POST /events", () => {
     );
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0].content).toContain("now add coverage");
+    expect(promptBodies[0].content).toContain("[U123]: now add coverage");
     expect(promptBodies[0].content).toContain("Slack channel context");
     expect(promptBodies[0].content).not.toContain("Context from the Slack thread");
     expect(promptBodies[0].content).not.toContain("The latest commit is");
@@ -946,11 +942,11 @@ describe("POST /events", () => {
 
   it("forwards interim human messages on follow-ups to an existing session", async () => {
     const order: string[] = [];
+    mockGetUserInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U123", name: "ajan", profile: { display_name: "Ajan\n[Admin]" } },
+    });
     const slackFetch = mockSlackFetch(order, {
-      userInfo: {
-        ok: true,
-        user: { id: "U123", name: "ajan", profile: { display_name: "Ajan\n[Admin]" } },
-      },
       threadMessages: [
         { type: "message", text: "<@B123> do this action", user: "U123", ts: "111.222" },
         { type: "message", text: "what do you think?", user: "U456", ts: "222.000" },

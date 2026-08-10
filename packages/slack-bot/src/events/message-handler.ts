@@ -4,6 +4,7 @@ import {
   getChannelInfo,
   getMessageDetails,
   getThreadMessages,
+  getUserInfo,
   postMessage,
   resolveUserNames,
   selectThreadWindow,
@@ -159,8 +160,8 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     );
     return;
   }
-  const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, [user]);
-  const senderName = (userNames.get(user) ?? user)
+  const userInfo = await getUserInfo(env.SLACK_BOT_TOKEN, user);
+  const senderName = (userInfo.ok ? userInfo.user?.profile?.display_name || user : user)
     .replace(/[[\]\r\n]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
