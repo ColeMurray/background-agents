@@ -211,21 +211,3 @@ export type SandboxCommand =
   | AckCommand
   | PushCommand
   | RefreshDiffCommand;
-
-// Internal session update types
-
-export interface SessionUpdate {
-  title?: string;
-  branchName?: string;
-  baseSha?: string;
-  currentSha?: string;
-  opencodeSessionId?: string;
-  status?: SessionStatus;
-}
-
-export interface SandboxUpdate {
-  modalSandboxId?: string;
-  snapshotId?: string;
-  status?: SandboxStatus;
-  gitSyncStatus?: GitSyncStatus;
-}
