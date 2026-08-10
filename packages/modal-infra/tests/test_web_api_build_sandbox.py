@@ -345,6 +345,41 @@ async def test_create_rejects_non_string_repository_fields(monkeypatch, field):
         )
 
     assert exc.value.status_code == 400
+    assert exc.value.detail == "repositories entry fields must be strings"
+    service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_update", "expected_detail"),
+    [
+        ({"repositories": "not-a-list"}, "repositories must be a list"),
+        (
+            {"user_env_vars": {"TOKEN": 123}},
+            "user_env_vars values must be strings",
+        ),
+    ],
+)
+async def test_create_reports_container_validation_errors_without_echoing_values(
+    monkeypatch, request_update, expected_detail
+):
+    service = _patch_dependencies(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                **CALLBACK_CONTEXT,
+                **request_update,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == expected_detail
     service.create.assert_not_awaited()
 
 
