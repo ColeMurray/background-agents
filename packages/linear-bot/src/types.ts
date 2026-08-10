@@ -43,33 +43,42 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export interface StaticRepoConfig {
-  owner: string;
-  name: string;
-  label?: string;
-}
+export const staticRepoConfigSchema = z.object({
+  owner: z.string(),
+  name: z.string(),
+  label: z.string().optional(),
+});
+
+export type StaticRepoConfig = z.infer<typeof staticRepoConfigSchema>;
 
 /**
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export interface StaticEnvironmentConfig {
-  environmentId: string;
-  label?: string;
-}
+export const staticEnvironmentConfigSchema = z.object({
+  environmentId: z.string(),
+  label: z.string().optional(),
+});
+
+export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSchema>;
 
 /**
  * A mapping entry: a repository or a saved environment. Targets unify instead
  * of migrate — repository entries never stop working; environments join them.
  */
-export type StaticTargetConfig = StaticRepoConfig | StaticEnvironmentConfig;
+export const staticTargetConfigSchema = z.union([
+  staticRepoConfigSchema,
+  staticEnvironmentConfigSchema,
+]);
+
+export type StaticTargetConfig = z.infer<typeof staticTargetConfigSchema>;
 
 /**
  * Static team→target mapping stored in KV under "config:team-repos".
  */
-export interface TeamRepoMapping {
-  [teamId: string]: StaticTargetConfig[];
-}
+export const teamRepoMappingSchema = z.record(z.string(), z.array(staticTargetConfigSchema));
+
+export type TeamRepoMapping = z.infer<typeof teamRepoMappingSchema>;
 
 /**
  * Dynamic repo config from control plane.
@@ -88,9 +97,15 @@ export type {
 /**
  * Project→target mapping stored in KV under "config:project-repos".
  */
-export interface ProjectRepoMapping {
-  [projectId: string]: { owner: string; name: string } | { environmentId: string };
-}
+export const projectRepoMappingSchema = z.record(
+  z.string(),
+  z.union([
+    z.object({ owner: z.string(), name: z.string() }),
+    z.object({ environmentId: z.string() }),
+  ])
+);
+
+export type ProjectRepoMapping = z.infer<typeof projectRepoMappingSchema>;
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 

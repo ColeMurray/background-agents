@@ -50,6 +50,11 @@ describe("getAvailableEnvironments", () => {
     expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
   });
 
+  it("fails open when the control-plane response is malformed", async () => {
+    const env = makeEnv(jsonResponse({ environments: [{ id: "env_bad" }], total: 1 }));
+    expect(await getAvailableEnvironments(env, "trace")).toEqual([]);
+  });
+
   it("serves the in-memory cache without refetching", async () => {
     const env = makeEnv(jsonResponse({ environments: [TEST_ENVIRONMENT], total: 1 }));
     await getAvailableEnvironments(env);
@@ -80,6 +85,21 @@ describe("getAvailableEnvironments", () => {
     } as unknown as Env;
 
     expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
+  });
+
+  it("ignores malformed environments in the KV fallback", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue([{ id: "env_bad" }]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 500 })),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    expect(await getAvailableEnvironments(env, "trace")).toEqual([]);
   });
 });
 
