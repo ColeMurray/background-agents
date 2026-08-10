@@ -8,7 +8,6 @@ import type {
   ParticipantRole,
   SessionStatus,
 } from "@open-inspect/shared/types/sessions";
-import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 // Environment bindings
@@ -169,22 +168,3 @@ export interface ParticipantResponse {
   role: ParticipantRole;
   joinedAt: number;
 }
-
-// GitHub OAuth types
-export interface GitHubUser {
-  id: number;
-  login: string;
-  name: string | null;
-  email: string | null;
-  avatar_url: string;
-}
-
-export const githubTokenResponseSchema = z.object({
-  access_token: z.string(),
-  token_type: z.string(),
-  scope: z.string(),
-  refresh_token: z.string().optional(),
-  expires_in: z.number().optional(),
-});
-
-export type GitHubTokenResponse = z.infer<typeof githubTokenResponseSchema>;
