@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseSessionTitlePatchBody } from "./route";
+import { parseSessionTitlePatchBody } from "./parse-request";
 
 describe("session title API route", () => {
   describe("parseSessionTitlePatchBody", () => {
