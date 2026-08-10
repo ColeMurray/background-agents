@@ -112,6 +112,8 @@ def _parse_request[RequestModelT: BaseModel](
                 "dict_type": "user_env_vars must be an object",
                 "string_type": "user_env_vars values must be strings",
             }.get(error_type, "user_env_vars has an invalid value")
+        elif len(location) > 1:
+            detail = f"{field} has an invalid value"
         else:
             detail = {
                 "missing": f"{field} is required",
