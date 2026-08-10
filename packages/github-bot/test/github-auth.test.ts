@@ -3,6 +3,7 @@ import {
   generateAppJwt,
   generateInstallationToken,
   postReaction,
+  postCommitStatus,
   checkSenderPermission,
 } from "../src/github-auth";
 
@@ -133,6 +134,105 @@ describe("postReaction", () => {
         headers: expect.objectContaining({ "User-Agent": "Open-Inspect" }),
       })
     );
+  });
+});
+
+describe("postCommitStatus", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("posts the status to the exact commit SHA", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+
+    const result = await postCommitStatus(
+      "test-token",
+      "acme",
+      "widgets",
+      "abc123",
+      {
+        state: "pending",
+        context: "open-inspect",
+        description: "Review in progress",
+      },
+      "Acme Bot"
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/widgets/statuses/abc123",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer test-token",
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "Acme Bot",
+        },
+        body: JSON.stringify({
+          state: "pending",
+          context: "open-inspect",
+          description: "Review in progress",
+        }),
+      }
+    );
+  });
+
+  it("includes a review target URL when completing the status", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("", { status: 201 }));
+    const targetUrl = "https://github.com/acme/widgets/pull/42#pullrequestreview-100";
+
+    await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "success",
+      context: "open-inspect",
+      description: "Review completed",
+      targetUrl,
+    });
+
+    const [, request] = vi.mocked(globalThis.fetch).mock.calls[0];
+    expect(JSON.parse(request?.body as string)).toEqual({
+      state: "success",
+      context: "open-inspect",
+      description: "Review completed",
+      target_url: targetUrl,
+    });
+  });
+
+  it("returns GitHub's status code when the status is rejected", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue(new Response("Forbidden", { status: 403 }));
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      error: "GitHub API returned 403",
+    });
+  });
+
+  it("returns the network error when the request fails", async () => {
+    vi.mocked(globalThis.fetch).mockRejectedValue(new Error("connection reset"));
+
+    const result = await postCommitStatus("test-token", "acme", "widgets", "abc123", {
+      state: "pending",
+      context: "open-inspect",
+      description: "Review in progress",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "connection reset",
+    });
   });
 });
 

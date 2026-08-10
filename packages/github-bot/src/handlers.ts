@@ -7,13 +7,21 @@ import { resolveAppName } from "@open-inspect/shared/app-name";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
-  PullRequestOpenedPayload,
+  PullRequestReviewTriggerPayload,
   ReviewRequestedPayload,
   IssueCommentPayload,
   ReviewCommentPayload,
 } from "./types";
 import type { Logger } from "./logger";
-import { generateInstallationToken, postReaction, checkSenderPermission } from "./github-auth";
+import {
+  generateInstallationToken,
+  postCommitStatus,
+  postReaction,
+  checkSenderPermission,
+  REVIEW_PENDING_DESCRIPTION,
+  REVIEW_START_FAILED_DESCRIPTION,
+  REVIEW_STATUS_CONTEXT,
+} from "./github-auth";
 import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
@@ -118,6 +126,82 @@ function fireAndForgetReaction(
   );
 }
 
+interface ReviewStatusTarget {
+  log: Logger;
+  token: string;
+  owner: string;
+  repo: string;
+  headSha: string;
+  userAgent: string;
+  meta: Record<string, unknown>;
+}
+
+async function postReviewStatus(
+  target: ReviewStatusTarget,
+  status: { state: "pending" | "error"; description: string }
+): Promise<void> {
+  const result = await postCommitStatus(
+    target.token,
+    target.owner,
+    target.repo,
+    target.headSha,
+    {
+      ...status,
+      context: REVIEW_STATUS_CONTEXT,
+    },
+    target.userAgent
+  );
+  const statusMeta = {
+    ...target.meta,
+    head_sha: target.headSha,
+    state: status.state,
+  };
+  if (result.ok) {
+    target.log.debug("review_status.posted", statusMeta);
+    return;
+  }
+  target.log.warn("review_status.failed", {
+    ...statusMeta,
+    ...(result.status === undefined ? {} : { github_status: result.status }),
+    error: result.error,
+  });
+}
+
+async function postPendingReviewStatus(
+  log: Logger,
+  token: string,
+  owner: string,
+  repo: string,
+  headSha: string,
+  userAgent: string,
+  meta: Record<string, unknown>
+): Promise<ReviewStatusTarget> {
+  const statusTarget: ReviewStatusTarget = { log, token, owner, repo, headSha, userAgent, meta };
+  await postReviewStatus(statusTarget, {
+    state: "pending",
+    description: REVIEW_PENDING_DESCRIPTION,
+  });
+  return statusTarget;
+}
+
+async function sendReviewPrompt(
+  env: Env,
+  traceId: string,
+  sessionId: string,
+  params: { content: string; authorId: string },
+  statusTarget: ReviewStatusTarget
+): Promise<string> {
+  try {
+    return await sendPrompt(env, traceId, sessionId, params);
+  } catch (error) {
+    await postReviewStatus(statusTarget, {
+      state: "error",
+      description: REVIEW_START_FAILED_DESCRIPTION,
+    });
+    throw error;
+  }
+}
+
 type CallerGatingResult =
   | { allowed: true; ghToken: string }
   | {
@@ -215,11 +299,12 @@ export async function handleReviewRequested(
   const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
+  const userAgent = resolveAppName(env);
   fireAndForgetReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
-    resolveAppName(env),
+    userAgent,
     meta
   );
 
@@ -240,6 +325,15 @@ export async function handleReviewRequested(
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
+  const statusTarget = await postPendingReviewStatus(
+    log,
+    ghToken,
+    owner,
+    repoName,
+    pr.head.sha,
+    userAgent,
+    meta
+  );
   log.info("session.created", { ...meta, session_id: sessionId, action: "review" });
 
   const prompt = buildCodeReviewPrompt({
@@ -251,14 +345,21 @@ export async function handleReviewRequested(
     author: pr.user.login,
     base: pr.base.ref,
     head: pr.head.ref,
+    headSha: pr.head.sha,
     isPublic: !repo.private,
     codeReviewInstructions: config.codeReviewInstructions,
   });
 
-  const messageId = await sendPrompt(env, traceId, sessionId, {
-    content: prompt,
-    authorId: `github:${payload.sender.id}`,
-  });
+  const messageId = await sendReviewPrompt(
+    env,
+    traceId,
+    sessionId,
+    {
+      content: prompt,
+      authorId: `github:${payload.sender.id}`,
+    },
+    statusTarget
+  );
   log.info("prompt.sent", {
     ...meta,
     session_id: sessionId,
@@ -275,10 +376,10 @@ export async function handleReviewRequested(
   };
 }
 
-export async function handlePullRequestOpened(
+export async function handlePullRequestReviewTrigger(
   env: Env,
   log: Logger,
-  payload: PullRequestOpenedPayload,
+  payload: PullRequestReviewTriggerPayload,
   traceId: string
 ): Promise<HandlerResult> {
   const { pull_request: pr, repository: repo, sender } = payload;
@@ -317,11 +418,12 @@ export async function handlePullRequestOpened(
   const { ghToken } = gating;
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
+  const userAgent = resolveAppName(env);
   fireAndForgetReaction(
     log,
     ghToken,
     `https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/reactions`,
-    resolveAppName(env),
+    userAgent,
     meta
   );
 
@@ -342,6 +444,15 @@ export async function handlePullRequestOpened(
     scmUserId: String(sender.id),
     scmAvatarUrl: sender.avatar_url,
   });
+  const statusTarget = await postPendingReviewStatus(
+    log,
+    ghToken,
+    owner,
+    repoName,
+    pr.head.sha,
+    userAgent,
+    meta
+  );
   log.info("session.created", { ...meta, session_id: sessionId, action: "auto_review" });
 
   const prompt = buildCodeReviewPrompt({
@@ -353,15 +464,22 @@ export async function handlePullRequestOpened(
     author: pr.user.login,
     base: pr.base.ref,
     head: pr.head.ref,
+    headSha: pr.head.sha,
     isPublic: !repo.private,
     codeReviewInstructions: config.codeReviewInstructions,
     isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
   });
 
-  const messageId = await sendPrompt(env, traceId, sessionId, {
-    content: prompt,
-    authorId: `github:${sender.id}`,
-  });
+  const messageId = await sendReviewPrompt(
+    env,
+    traceId,
+    sessionId,
+    {
+      content: prompt,
+      authorId: `github:${sender.id}`,
+    },
+    statusTarget
+  );
   log.info("prompt.sent", {
     ...meta,
     session_id: sessionId,
