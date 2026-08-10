@@ -14,9 +14,6 @@ import type { SessionRepository, WsClientMappingResult } from "./repository";
 // Types
 // ---------------------------------------------------------------------------
 
-/** The two kinds of WebSocket connections the DO manages. */
-export type WsKind = "client" | "sandbox";
-
 /** Result of parsing a WebSocket's Cloudflare hibernation tags. */
 export type ParsedTags =
   | { kind: "sandbox"; sandboxId?: string }

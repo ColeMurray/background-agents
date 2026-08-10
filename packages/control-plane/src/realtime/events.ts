@@ -2,9 +2,6 @@
  * Real-time event utilities.
  */
 
-import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
-
 /**
  * Event categories for filtering.
  */
@@ -33,35 +30,6 @@ export function getEventCategory(eventType: string): EventCategory {
     default:
       return "system";
   }
-}
-
-/**
- * Create a server message from sandbox event.
- */
-export function createSandboxEventMessage(event: SandboxEvent): ServerMessage {
-  return {
-    type: "sandbox_event",
-    event,
-  };
-}
-
-/**
- * Create error message.
- */
-export function createErrorMessage(code: string, message: string): ServerMessage {
-  return {
-    type: "error",
-    code,
-    message,
-  };
-}
-
-/**
- * Determine if event should be broadcast to clients.
- */
-export function shouldBroadcastEvent(_eventType: string): boolean {
-  // Always broadcast to clients
-  return true;
 }
 
 /**

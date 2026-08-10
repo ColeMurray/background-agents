@@ -63,7 +63,7 @@ const TERMINAL_TOKEN_TTL_SECONDS = 86400;
 /**
  * Sandbox state with circuit breaker info (subset of full SandboxRow).
  */
-export interface SandboxCircuitBreakerInfo {
+interface SandboxCircuitBreakerInfo {
   status: string;
   created_at: number;
   modal_object_id: string | null;

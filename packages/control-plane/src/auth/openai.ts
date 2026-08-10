@@ -7,7 +7,7 @@ import { z } from "zod";
 const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-export const openAITokenResponseSchema = z.object({
+const openAITokenResponseSchema = z.object({
   id_token: z.string(),
   access_token: z.string(),
   refresh_token: z.string(),

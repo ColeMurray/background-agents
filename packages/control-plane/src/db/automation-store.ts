@@ -125,7 +125,7 @@ export interface InvocationRunAggregate {
 
 // ─── Mappers ─────────────────────────────────────────────────────────────────
 
-export function toAutomationRepository(row: AutomationRepositoryRow): AutomationRepository {
+function toAutomationRepository(row: AutomationRepositoryRow): AutomationRepository {
   return {
     repoOwner: row.repo_owner,
     repoName: row.repo_name,
@@ -199,7 +199,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
 // backfilled skip rows), no failure ⇒ completed, no success ⇒ failed,
 // otherwise partial_failed.
 
-export const DERIVED_INVOCATION_STATUS_SQL = `CASE
+const DERIVED_INVOCATION_STATUS_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN 'skipped'
   WHEN SUM(CASE WHEN r.status IN ('starting', 'running') THEN 1 ELSE 0 END) > 0 THEN
     CASE
@@ -213,7 +213,7 @@ export const DERIVED_INVOCATION_STATUS_SQL = `CASE
 END`;
 
 /** Derived completion time: latest child completion once all children are terminal. */
-export const DERIVED_INVOCATION_COMPLETED_AT_SQL = `CASE
+const DERIVED_INVOCATION_COMPLETED_AT_SQL = `CASE
   WHEN COUNT(r.id) = 0 THEN NULL
   WHEN SUM(CASE WHEN r.status IN ('starting', 'running') THEN 1 ELSE 0 END) > 0 THEN NULL
   ELSE MAX(r.completed_at)
@@ -243,7 +243,7 @@ export function deriveInvocationStatus(counts: {
   return "partial_failed";
 }
 
-export function toAutomationInvocation(
+function toAutomationInvocation(
   row: AutomationInvocationRow & { derived_status: string; derived_completed_at: number | null },
   runs: AutomationRun[]
 ): AutomationInvocation {

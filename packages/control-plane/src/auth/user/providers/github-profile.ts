@@ -2,7 +2,7 @@ import type { AdmissionPolicy, GitHubAdmissionEvidence } from "../admission-poli
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
 import { OAuthProviderError, type VerifiedProviderIdentity } from "./types";
 
-export interface GitHubIdentityResolver {
+interface GitHubIdentityResolver {
   resolveIdentity(accessToken: string): Promise<VerifiedProviderIdentity<"github">>;
 }
 
