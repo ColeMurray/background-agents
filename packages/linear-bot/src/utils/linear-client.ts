@@ -22,8 +22,6 @@ export {
   completeLinearOAuthInstallation,
   getClientCredentialsTokenOrThrow,
   LinearAuthError,
-  type LinearAuthFailure,
-  type LinearAuthFailureReason,
 } from "./linear-credentials";
 
 const log = createLogger("linear-client");

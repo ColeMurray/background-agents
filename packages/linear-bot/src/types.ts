@@ -43,7 +43,7 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export interface StaticRepoConfig {
+interface StaticRepoConfig {
   owner: string;
   name: string;
   label?: string;
@@ -53,7 +53,7 @@ export interface StaticRepoConfig {
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export interface StaticEnvironmentConfig {
+interface StaticEnvironmentConfig {
   environmentId: string;
   label?: string;
 }
@@ -136,7 +136,7 @@ const linearCommentSchema = z.object({
   user: z.object({ name: z.string() }).nullable().optional(),
 });
 
-export const linearIssueDetailsSchema = z
+const linearIssueDetailsSchema = z
   .object({
     id: z.string(),
     identifier: z.string(),
