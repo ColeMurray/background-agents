@@ -806,8 +806,8 @@ describe("OpenComputerSandboxProvider", () => {
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ],
-      callbackUrl: "https://control.example/environment-images/build-complete",
-      failureCallbackUrl: "https://control.example/environment-images/build-failed",
+      callbackUrl: "https://control.example/image-builds/build-complete",
+      failureCallbackUrl: "https://control.example/image-builds/build-failed",
       callbackToken: "callback-token",
       buildExecutionTimeoutSeconds: 1800,
       providerSessionTimeoutSeconds: 2400,
@@ -825,9 +825,9 @@ describe("OpenComputerSandboxProvider", () => {
       REPO_NAME: "web",
       SANDBOX_ID: "build-env-env_flagship",
       OI_REPO_IMAGE_BUILD_ID: "envimg-1",
-      OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/environment-images/build-complete",
+      OI_REPO_IMAGE_CALLBACK_URL: "https://control.example/image-builds/build-complete",
       OI_REPO_IMAGE_CALLBACK_TOKEN: "callback-token",
-      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://control.example/environment-images/build-failed",
+      OI_REPO_IMAGE_FAILURE_CALLBACK_URL: "https://control.example/image-builds/build-failed",
     });
     expect(JSON.parse(createCall.env!.SESSION_CONFIG)).toEqual({
       branch: "main",
