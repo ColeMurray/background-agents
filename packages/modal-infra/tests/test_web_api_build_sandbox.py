@@ -492,6 +492,51 @@ async def test_snapshot_build_maps_missing_or_mismatched_session_to_not_found(mo
 
 
 @pytest.mark.asyncio
+async def test_delete_provider_image_accepts_valid_request(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    result = await _call(
+        web_api.api_delete_provider_image,
+        {"provider_image_id": "im-1"},
+    )
+
+    assert result == {
+        "success": True,
+        "data": {"provider_image_id": "im-1", "deleted": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_rejects_non_string_id(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_delete_provider_image,
+            {"provider_image_id": 123},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "provider_image_id must be a string"
+
+
+@pytest.mark.asyncio
+async def test_image_request_validation_runs_after_authentication(monkeypatch):
+    def reject_auth(_authorization):
+        raise web_api.HTTPException(status_code=401, detail="Unauthorized")
+
+    monkeypatch.setattr(web_api, "require_auth", reject_auth)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_delete_provider_image,
+            {"provider_image_id": 123},
+        )
+
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_generic_snapshot_reason_cannot_select_build_identity_rules(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
     handle = SimpleNamespace()

@@ -13,9 +13,11 @@ The control plane must include an Authorization header with a valid token.
 
 import time
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import Header, HTTPException
 from modal import fastapi_endpoint
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sandbox_runtime.auth import AuthConfigurationError, verify_internal_token
 from sandbox_runtime.repo_config import RepoConfigError, parse_repositories
@@ -33,6 +35,67 @@ from .log_config import configure_logging, get_logger
 configure_logging()
 log = get_logger("web_api")
 IMAGE_BUILD_FINALIZATION_GRACE_SECONDS = 10 * 60
+
+
+class _ModalRequestModel(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+
+NonEmptyString = Annotated[str, Field(min_length=1)]
+
+
+class SnapshotBuildSandboxRequest(_ModalRequestModel):
+    build_id: NonEmptyString
+    provider_session_id: NonEmptyString
+
+
+class CreateBuildSandboxRequest(_ModalRequestModel):
+    scope_kind: NonEmptyString
+    scope_id: NonEmptyString
+    build_id: NonEmptyString
+    repositories: list[dict[str, object]]
+    callback_url: NonEmptyString
+    failure_callback_url: NonEmptyString
+    clone_token: str | None = None
+    clone_host: str | None = None
+    clone_username: str | None = None
+    user_env_vars: dict[str, str] | None = None
+    build_execution_timeout_seconds: int | None = None
+    provider_session_timeout_seconds: int | None = None
+
+
+class StartBuildSandboxRequest(_ModalRequestModel):
+    build_id: NonEmptyString
+    provider_session_id: NonEmptyString
+    callback_token: NonEmptyString
+
+
+class TerminateBuildSandboxRequest(_ModalRequestModel):
+    build_id: NonEmptyString
+    provider_session_id: NonEmptyString
+    reason: NonEmptyString
+
+
+class DeleteProviderImageRequest(_ModalRequestModel):
+    provider_image_id: NonEmptyString
+
+
+def _parse_request[RequestModelT: BaseModel](
+    model: type[RequestModelT], request: dict[str, object]
+) -> RequestModelT:
+    try:
+        return model.model_validate(request)
+    except ValidationError as e:
+        error = e.errors(include_input=False)[0]
+        location = error["loc"]
+        field = str(location[0]) if location else "request"
+        detail = {
+            "missing": f"{field} is required",
+            "string_too_short": f"{field} is required",
+            "string_type": f"{field} must be a string",
+            "int_type": f"{field} must be an integer",
+        }.get(error["type"], f"{field} has an invalid value")
+        raise HTTPException(status_code=400, detail=detail) from None
 
 
 def require_auth(authorization: str | None) -> None:
@@ -357,7 +420,7 @@ async def api_snapshot_sandbox(
 @app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
 async def api_snapshot_build_sandbox(
-    request: dict,
+    request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
@@ -377,8 +440,9 @@ async def api_snapshot_build_sandbox(
             ModalBuildSessionService,
         )
 
-        build_id = _required_string(request, "build_id")
-        provider_session_id = _required_string(request, "provider_session_id")
+        parsed_request = _parse_request(SnapshotBuildSandboxRequest, request)
+        build_id = parsed_request.build_id
+        provider_session_id = parsed_request.provider_session_id
         image_id = await ModalBuildSessionService().snapshot(
             build_id=build_id,
             provider_session_id=provider_session_id,
@@ -569,7 +633,7 @@ async def api_restore_sandbox(
 )
 @fastapi_endpoint(method="POST")
 async def api_create_build_sandbox(
-    request: dict,
+    request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
@@ -590,30 +654,29 @@ async def api_create_build_sandbox(
             ModalBuildSessionService,
         )
 
-        build_id = _required_string(request, "build_id")
-        scope_kind = _required_string(request, "scope_kind")
-        scope_id = _required_string(request, "scope_id")
+        parsed_request = _parse_request(CreateBuildSandboxRequest, request)
+        build_id = parsed_request.build_id
+        scope_kind = parsed_request.scope_kind
+        scope_id = parsed_request.scope_id
         if scope_kind not in {"repo", "environment"}:
             raise HTTPException(status_code=400, detail="scope_kind must be repo or environment")
-        repositories = _validated_build_repositories(request.get("repositories"))
+        repositories = _validated_build_repositories(parsed_request.repositories)
         build_execution_timeout_seconds = _validated_timeout_seconds(
-            request,
-            "build_execution_timeout_seconds",
+            parsed_request.build_execution_timeout_seconds,
             default_seconds=DEFAULT_BUILD_TIMEOUT_SECONDS,
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS,
         )
         provider_session_timeout_seconds = _validated_timeout_seconds(
-            request,
-            "provider_session_timeout_seconds",
+            parsed_request.provider_session_timeout_seconds,
             default_seconds=(
                 DEFAULT_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS
             ),
             max_seconds=MAX_BUILD_TIMEOUT_SECONDS + IMAGE_BUILD_FINALIZATION_GRACE_SECONDS,
         )
-        clone_host = _optional_string(request, "clone_host")
-        clone_username = _optional_string(request, "clone_username")
-        callback_url = _required_string(request, "callback_url")
-        failure_callback_url = _required_string(request, "failure_callback_url")
+        clone_host = parsed_request.clone_host or None
+        clone_username = parsed_request.clone_username or None
+        callback_url = parsed_request.callback_url
+        failure_callback_url = parsed_request.failure_callback_url
         if not validate_control_plane_url(callback_url) or not validate_control_plane_url(
             failure_callback_url
         ):
@@ -628,10 +691,10 @@ async def api_create_build_sandbox(
             repositories=repositories,
             callback_url=callback_url,
             failure_callback_url=failure_callback_url,
-            clone_token=request.get("clone_token") or "",
+            clone_token=parsed_request.clone_token or "",
             clone_host=clone_host,
             clone_username=clone_username,
-            user_env_vars=request.get("user_env_vars") or None,
+            user_env_vars=parsed_request.user_env_vars or None,
             build_execution_timeout_seconds=build_execution_timeout_seconds,
             timeout_seconds=provider_session_timeout_seconds,
         )
@@ -665,7 +728,7 @@ async def api_create_build_sandbox(
 @app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
 async def api_start_build_sandbox(
-    request: dict,
+    request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
@@ -682,12 +745,13 @@ async def api_start_build_sandbox(
     try:
         from .sandbox.build_session import ModalBuildSessionService
 
-        build_id = _required_string(request, "build_id")
-        provider_session_id = _required_string(request, "provider_session_id")
+        parsed_request = _parse_request(StartBuildSandboxRequest, request)
+        build_id = parsed_request.build_id
+        provider_session_id = parsed_request.provider_session_id
         await ModalBuildSessionService().start(
             build_id=build_id,
             provider_session_id=provider_session_id,
-            callback_token=_required_string(request, "callback_token"),
+            callback_token=parsed_request.callback_token,
         )
         return {"success": True, "data": {"started": True}}
     except HTTPException as e:
@@ -716,7 +780,7 @@ async def api_start_build_sandbox(
 @app.function(image=function_image, secrets=[internal_api_secret])
 @fastapi_endpoint(method="POST")
 async def api_terminate_build_sandbox(
-    request: dict,
+    request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
@@ -733,12 +797,13 @@ async def api_terminate_build_sandbox(
     try:
         from .sandbox.build_session import ModalBuildSessionService
 
-        build_id = _required_string(request, "build_id")
-        provider_session_id = _required_string(request, "provider_session_id")
+        parsed_request = _parse_request(TerminateBuildSandboxRequest, request)
+        build_id = parsed_request.build_id
+        provider_session_id = parsed_request.provider_session_id
         await ModalBuildSessionService().terminate(
             build_id=build_id,
             provider_session_id=provider_session_id,
-            reason=_required_string(request, "reason"),
+            reason=parsed_request.reason,
         )
         return {"success": True, "data": {"terminated": True}}
     except HTTPException as e:
@@ -762,22 +827,6 @@ async def api_terminate_build_sandbox(
             build_id=build_id,
             provider_session_id=provider_session_id,
         )
-
-
-def _required_string(request: dict, field: str) -> str:
-    value = request.get(field)
-    if not isinstance(value, str) or not value:
-        raise HTTPException(status_code=400, detail=f"{field} is required")
-    return value
-
-
-def _optional_string(request: dict, field: str) -> str | None:
-    value = request.get(field)
-    if value is None or value == "":
-        return None
-    if not isinstance(value, str):
-        raise HTTPException(status_code=400, detail=f"{field} must be a string")
-    return value
 
 
 def _log_build_http_request(
@@ -808,17 +857,13 @@ def _log_build_http_request(
 
 
 def _validated_timeout_seconds(
-    request: dict,
-    field: str,
+    value: int | None,
     *,
     default_seconds: int,
     max_seconds: int,
 ) -> int:
-    value = request.get(field)
     if value is None:
         return default_seconds
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise HTTPException(status_code=400, detail=f"{field} must be an integer")
     return min(max_seconds, max(1, value))
 
 
@@ -852,7 +897,7 @@ def _validated_build_repositories(value: object) -> list[dict]:
 )
 @fastapi_endpoint(method="POST")
 async def api_delete_provider_image(
-    request: dict,
+    request: dict[str, object],
     authorization: str | None = Header(None),
     x_trace_id: str | None = Header(None),
     x_request_id: str | None = Header(None),
@@ -873,9 +918,8 @@ async def api_delete_provider_image(
 
     require_auth(authorization)
 
-    provider_image_id = request.get("provider_image_id")
-    if not provider_image_id:
-        raise HTTPException(status_code=400, detail="provider_image_id is required")
+    parsed_request = _parse_request(DeleteProviderImageRequest, request)
+    provider_image_id = parsed_request.provider_image_id
 
     try:
         # Modal doesn't have an explicit delete API for images;
