@@ -566,6 +566,8 @@ async def test_delete_provider_image_accepts_valid_request(monkeypatch):
 @pytest.mark.asyncio
 async def test_delete_provider_image_rejects_non_string_id(monkeypatch):
     monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
 
     with pytest.raises(web_api.HTTPException) as exc:
         await _call(
@@ -575,6 +577,8 @@ async def test_delete_provider_image_rejects_non_string_id(monkeypatch):
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "provider_image_id must be a string"
+    assert info.call_args.kwargs["http_status"] == 400
+    assert info.call_args.kwargs["outcome"] == "error"
 
 
 @pytest.mark.asyncio
