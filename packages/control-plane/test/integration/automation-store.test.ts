@@ -39,8 +39,9 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 
 function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): AutomationRunRow {
   const now = Date.now();
+  const id = `run-${Math.random().toString(36).slice(2, 8)}`;
   return {
-    id: `run-${Math.random().toString(36).slice(2, 8)}`,
+    id,
     automation_id: automationId,
     session_id: null,
     status: "starting",
@@ -50,7 +51,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     started_at: null,
     completed_at: null,
     created_at: now,
-    invocation_id: null,
+    invocation_id: `inv-${id}`,
     repo_owner: null,
     repo_name: null,
     repo_id: null,

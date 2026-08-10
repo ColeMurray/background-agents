@@ -1,8 +1,7 @@
 /**
  * Raw-SQL run seeding/reading for integration tests. The store no longer
  * exposes single-run inserts (runs are created only as invocation children),
- * but tests still need to place rows in arbitrary shapes — including the
- * legacy shape (no invocation link) that rollback-window code produces.
+ * but tests still need to place rows in arbitrary states.
  */
 
 import { env } from "cloudflare:test";
@@ -13,10 +12,11 @@ export function makeRunRow(
   overrides?: Partial<AutomationRunRow>
 ): AutomationRunRow {
   const now = Date.now();
+  const id = `run-${Math.random().toString(36).slice(2, 8)}`;
   return {
-    id: `run-${Math.random().toString(36).slice(2, 8)}`,
+    id,
     automation_id: automationId,
-    invocation_id: null,
+    invocation_id: `inv-${id}`,
     session_id: null,
     status: "starting",
     skip_reason: null,
@@ -35,6 +35,14 @@ export function makeRunRow(
 }
 
 export async function seedRun(run: AutomationRunRow): Promise<void> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO automation_invocations
+       (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+        trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+     VALUES (?, ?, 'manual', NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`
+  )
+    .bind(run.invocation_id, run.automation_id, run.created_at, run.created_at)
+    .run();
   await env.DB.prepare(
     `INSERT INTO automation_runs
      (id, automation_id, invocation_id, session_id, status, skip_reason, failure_reason,
