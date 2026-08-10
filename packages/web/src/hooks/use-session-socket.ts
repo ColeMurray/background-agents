@@ -13,9 +13,13 @@ import {
 import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
-import type { ServerMessage, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
+import type {
+  ParticipantPresence,
+  ServerMessage,
+  SessionSnapshot,
+  SessionState,
+} from "@open-inspect/shared/types/server-messages";
 
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;

@@ -1,8 +1,9 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type {
+  ParticipantPresence,
   ServerMessage,
   SessionSnapshot,
+  SessionState,
   SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";

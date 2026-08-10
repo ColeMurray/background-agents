@@ -4,11 +4,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import useSWR, { mutate } from "swr";
 import { toast } from "sonner";
 import {
-  type EnrichedRepository,
   type ScmRepoSettings,
   type ScmSettings,
   type ScmGlobalConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import {
   encodeRepositoryPathSegments,
   parseRepositoryFullName,

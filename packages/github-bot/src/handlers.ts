@@ -1,4 +1,4 @@
-import { escapeRegExp } from "@open-inspect/shared";
+import { escapeRegExp } from "@open-inspect/shared/regex";
 import {
   createSessionResponseSchema,
   sendPromptResponseSchema,

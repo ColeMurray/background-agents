@@ -5,7 +5,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { EnrichedRepository, ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared/types/integrations";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
 import { getScmRepoSettingsPath, ScmSettingsPage } from "./scm-settings";
 

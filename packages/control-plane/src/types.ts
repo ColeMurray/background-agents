@@ -11,15 +11,6 @@ import type {
 import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
-export type { ParticipantPresence, SessionState } from "@open-inspect/shared";
-export type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
-export type { ServerMessage } from "@open-inspect/shared/types/server-messages";
-export type {
-  SessionAttachmentReference,
-  ResolvedSessionAttachment,
-} from "@open-inspect/shared/types/session-attachments";
-export type { ClientMessage } from "@open-inspect/shared/types/websocket";
-
 // Environment bindings
 export interface Env {
   // Durable Objects

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ParticipantPresence } from "@open-inspect/shared";
+import type { ParticipantPresence } from "@open-inspect/shared/types/server-messages";
 
 interface ParticipantsSectionProps {
   participants: ParticipantPresence[];
