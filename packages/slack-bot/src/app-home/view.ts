@@ -12,7 +12,7 @@ import type { AppHomeBlock, AppHomeView, ModelOption } from "./slack-types";
 import type { SlackSelectOption } from "../slack-blocks";
 import { plainTextOption } from "../slack-options";
 
-export interface AppHomeViewState {
+interface AppHomeViewState {
   appName: string;
   availableModels: ModelOption[];
   currentModel: string;

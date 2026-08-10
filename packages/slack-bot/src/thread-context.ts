@@ -25,12 +25,12 @@ const log = createLogger("thread-context");
  * rendered oldest-first. Bounded because an automation can wake on a reply deep
  * in a long thread and only the tail bears on it.
  */
-export const THREAD_CONTEXT_MESSAGE_LIMIT = 20;
+const THREAD_CONTEXT_MESSAGE_LIMIT = 20;
 
 /** Max characters kept per message. */
-export const THREAD_CONTEXT_MESSAGE_MAX_LENGTH = 1024;
+const THREAD_CONTEXT_MESSAGE_MAX_LENGTH = 1024;
 
-export type ThreadContextSpeaker =
+type ThreadContextSpeaker =
   | { kind: "self" }
   | { kind: "app"; id: string }
   | { kind: "user"; id: string; displayName: string }
