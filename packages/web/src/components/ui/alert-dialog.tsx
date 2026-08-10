@@ -8,6 +8,7 @@ import { buttonVariants } from "@/components/ui/button-variants";
 
 const AlertDialog = AlertDialogPrimitive.Root;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger;
 
 const AlertDialogPortal = AlertDialogPrimitive.Portal;
@@ -110,9 +111,6 @@ AlertDialogCancel.displayName = AlertDialogPrimitive.Cancel.displayName;
 
 export {
   AlertDialog,
-  AlertDialogPortal,
-  AlertDialogOverlay,
-  AlertDialogTrigger,
   AlertDialogContent,
   AlertDialogHeader,
   AlertDialogFooter,

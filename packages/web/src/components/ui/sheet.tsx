@@ -8,8 +8,10 @@ import { cn } from "@/lib/utils";
 
 const Sheet = SheetPrimitive.Root;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const SheetTrigger = SheetPrimitive.Trigger;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const SheetClose = SheetPrimitive.Close;
 
 const SheetPortal = SheetPrimitive.Portal;
@@ -66,12 +68,14 @@ const SheetContent = React.forwardRef<
 ));
 SheetContent.displayName = SheetPrimitive.Content.displayName;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function SheetHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cn("flex flex-col space-y-2 text-center sm:text-left", className)} {...props} />
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function SheetFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -105,15 +109,4 @@ const SheetDescription = React.forwardRef<
 ));
 SheetDescription.displayName = SheetPrimitive.Description.displayName;
 
-export {
-  Sheet,
-  SheetPortal,
-  SheetOverlay,
-  SheetTrigger,
-  SheetClose,
-  SheetContent,
-  SheetHeader,
-  SheetFooter,
-  SheetTitle,
-  SheetDescription,
-};
+export { Sheet, SheetContent, SheetTitle };

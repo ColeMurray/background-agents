@@ -9,10 +9,13 @@ const DropdownMenu = DropdownMenuPrimitive.Root;
 
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DropdownMenuGroup = DropdownMenuPrimitive.Group;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DropdownMenuSub = DropdownMenuPrimitive.Sub;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
 
 const DropdownMenuContent = React.forwardRef<
@@ -96,8 +99,4 @@ export {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuGroup,
-  DropdownMenuSub,
-  DropdownMenuRadioGroup,
 };

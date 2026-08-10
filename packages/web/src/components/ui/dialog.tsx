@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const Dialog = DialogPrimitive.Root;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const DialogTrigger = DialogPrimitive.Trigger;
 
 const DialogPortal = DialogPrimitive.Portal;
@@ -48,12 +49,14 @@ const DialogContent = React.forwardRef<
 ));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div className={cn("flex flex-col space-y-2 text-center sm:text-left", className)} {...props} />
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
@@ -87,15 +90,4 @@ const DialogDescription = React.forwardRef<
 ));
 DialogDescription.displayName = DialogPrimitive.Description.displayName;
 
-export {
-  Dialog,
-  DialogPortal,
-  DialogOverlay,
-  DialogClose,
-  DialogTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogFooter,
-  DialogTitle,
-  DialogDescription,
-};
+export { Dialog, DialogClose, DialogContent, DialogTitle, DialogDescription };

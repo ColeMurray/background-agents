@@ -9,7 +9,7 @@ import type {
 import { toUiArtifact } from "./artifact-metadata";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
 
-export interface HistoryCursor {
+interface HistoryCursor {
   timestamp: number;
   id: string;
   sequence?: number;

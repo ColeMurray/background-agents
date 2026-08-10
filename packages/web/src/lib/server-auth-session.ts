@@ -7,7 +7,7 @@ import {
 import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
 import { serializeBrowserSessionCookies } from "./browser-session-cookie";
 
-export type ServerAuthUser = BrowserAuthSessionUser;
+type ServerAuthUser = BrowserAuthSessionUser;
 
 /**
  * App-owned session contract consumed by server-side BFF routes.
