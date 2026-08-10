@@ -596,6 +596,22 @@ describe("timeline auto-scrolling", () => {
 
     expect(timeline.scrollTop).toBe(300);
   });
+
+  it("follows processing indicator height changes before paint", () => {
+    const events = [event()];
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={events} />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+
+    rerender(<SessionTimeline {...baseTimelineProps} events={events} isProcessing />);
+
+    expect(timeline.scrollTop).toBe(1_000);
+  });
 });
 
 describe("task activity grouping", () => {

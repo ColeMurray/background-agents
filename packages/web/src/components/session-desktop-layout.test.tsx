@@ -10,12 +10,14 @@ vi.mock("react-resizable-panels", () => ({
     children,
     id,
     defaultSize,
+    style,
   }: {
     children: React.ReactNode;
     id: string;
     defaultSize: string;
+    style?: React.CSSProperties;
   }) => (
-    <div data-testid={id} data-default-size={defaultSize}>
+    <div data-testid={id} data-default-size={defaultSize} style={style}>
       {children}
     </div>
   ),
@@ -38,6 +40,22 @@ describe("SessionDesktopLayout", () => {
 
     expect(screen.getByTestId("session-main")).toHaveAttribute("data-default-size", "45%");
     expect(screen.getByTestId("session-changes")).toHaveAttribute("data-default-size", "55%");
+  });
+
+  it("contains overflow within the session workspace panel", () => {
+    render(
+      <SessionDesktopLayout
+        workspace={<main>timeline and terminal</main>}
+        sidebar={<aside>details</aside>}
+        changes={null}
+      />
+    );
+
+    expect(screen.getByTestId("session-main")).toHaveStyle({
+      minWidth: "0",
+      minHeight: "0",
+      overflow: "hidden",
+    });
   });
 
   it("keeps the session workspace mounted when the changes panel opens and closes", () => {

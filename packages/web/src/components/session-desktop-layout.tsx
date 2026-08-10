@@ -34,7 +34,12 @@ export function SessionDesktopLayout({
         defaultLayout={defaultLayout}
         onLayoutChanged={onLayoutChanged}
       >
-        <Panel id="session-main" defaultSize={changes ? "45%" : "100%"} minSize="25%">
+        <Panel
+          id="session-main"
+          defaultSize={changes ? "45%" : "100%"}
+          minSize="25%"
+          style={{ minWidth: 0, minHeight: 0, overflow: "hidden" }}
+        >
           {workspace}
         </Panel>
         {changes && (
