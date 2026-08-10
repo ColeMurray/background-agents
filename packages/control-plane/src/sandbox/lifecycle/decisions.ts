@@ -164,7 +164,8 @@ export interface SpawnConfig {
   readyWaitMs: number;
   /**
    * Max time a sandbox may remain in "spawning"/"connecting" before it is
-   * treated as dead and a fresh spawn is allowed (default: 120s).
+   * treated as dead and a fresh spawn is allowed. Defaults to
+   * CONNECT_WATCHDOG_MS — see the note there on why the two must agree.
    *
    * Guards against spawns interrupted before the sandbox connects (provider
    * crash, redeploy, cancelled provider call). Such a spawn can leave the
@@ -176,12 +177,33 @@ export interface SpawnConfig {
 }
 
 /**
+ * How long a sandbox may sit in "spawning"/"connecting" before it is treated as dead.
+ *
+ * Single source of truth for two decisions that must agree: the initial-connect watchdog
+ * (DEFAULT_CONNECTING_TIMEOUT_CONFIG) that fails a sandbox, and the staleness bound
+ * (DEFAULT_SPAWN_CONFIG.spawningTimeoutMs) that lets a replacement spawn. If the staleness bound
+ * were the shorter of the two, a healthy sandbox still inside the watchdog window would be judged
+ * dead and a second sandbox spawned alongside it.
+ *
+ * The boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically takes
+ * 30–90 seconds, but large repos with real setup scripts land close to the previous two-minute
+ * limit. Overrunning it is not a soft failure: `clearSandboxAccessState` locks out the sandbox that
+ * does eventually come up, the queued prompt is never re-driven, and the documented recovery ("it
+ * will be retried on your next message") cannot fire for bot-triggered sessions, which only ever
+ * send one prompt. Sessions were being stranded by boots that overran by under five seconds.
+ *
+ * Widened to give slow boots real headroom. This is a mitigation, not the fix — see
+ * ColeMurray/background-agents#1363 for the underlying recovery gap.
+ */
+const CONNECT_WATCHDOG_MS = 240_000;
+
+/**
  * Default spawn configuration.
  */
 export const DEFAULT_SPAWN_CONFIG: SpawnConfig = {
   cooldownMs: 30000, // 30 seconds
   readyWaitMs: 60000, // 60 seconds
-  spawningTimeoutMs: 120000, // 2 minutes — matches the connecting-timeout watchdog
+  spawningTimeoutMs: CONNECT_WATCHDOG_MS,
 };
 
 /**
@@ -501,19 +523,10 @@ export interface ConnectingTimeoutConfig {
 
 /**
  * Default connecting timeout for the initial-connect watchdog.
- *
- * The boot sequence (git clone → setup.sh → start.sh → opencode → bridge connect) typically takes
- * 30–90 seconds, but large repos with real setup scripts land close to the previous two-minute
- * limit. Overrunning it is not a soft failure: `clearSandboxAccessState` locks out the sandbox that
- * does eventually come up, the queued prompt is never re-driven, and the documented recovery ("it
- * will be retried on your next message") cannot fire for bot-triggered sessions, which only ever
- * send one prompt. Sessions were being stranded by boots that overran by under five seconds.
- *
- * Widened to give slow boots real headroom. This is a mitigation, not the fix — see
- * ColeMurray/background-agents#1363 for the underlying recovery gap.
+ * Shares CONNECT_WATCHDOG_MS with DEFAULT_SPAWN_CONFIG.spawningTimeoutMs; see the rationale there.
  */
 export const DEFAULT_CONNECTING_TIMEOUT_CONFIG: ConnectingTimeoutConfig = {
-  timeoutMs: 240_000,
+  timeoutMs: CONNECT_WATCHDOG_MS,
 };
 
 /**
