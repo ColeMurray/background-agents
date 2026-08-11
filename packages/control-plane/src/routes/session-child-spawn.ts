@@ -5,6 +5,7 @@ import {
   type SandboxSettings,
 } from "@open-inspect/shared/types/integrations";
 import {
+  getReasoningConfig,
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
@@ -152,6 +153,16 @@ async function handleSpawnChild(
     return error(`Model "${body.model}" is not enabled`, 400);
   }
   const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  if (body.reasoningEffort !== undefined && !isValidReasoningEffort(model, body.reasoningEffort)) {
+    const validEfforts = getReasoningConfig(model)?.efforts;
+    const suffix = validEfforts?.length
+      ? ` Valid efforts: ${validEfforts.join(", ")}`
+      : " This model does not support reasoning effort overrides.";
+    return error(
+      `Invalid reasoning effort "${body.reasoningEffort}" for model "${model}".${suffix}`,
+      400
+    );
+  }
   const requestedReasoningEffort = body.reasoningEffort ?? spawnContext.reasoningEffort;
   const reasoningEffort =
     requestedReasoningEffort && isValidReasoningEffort(model, requestedReasoningEffort)
