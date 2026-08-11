@@ -1,7 +1,5 @@
 import { refreshXaiToken, XaiTokenRefreshError } from "../auth/xai";
-import { EnvironmentSecretsStore } from "../db/environment-secrets";
-import { GlobalSecretsStore } from "../db/global-secrets";
-import { RepoSecretsStore } from "../db/repo-secrets";
+import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "../auth/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
@@ -10,26 +8,25 @@ const XAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const XAI_DEFAULT_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 const XAI_CONCURRENT_ROTATION_DELAY_MS = 500;
 
-type TokenSecretSource =
-  | { kind: "environment"; environmentId: string }
-  | { kind: "repo"; repoId: number; repoOwner: string; repoName: string }
-  | { kind: "global" };
-
 type XaiTokenState =
   | { type: "cached"; accessToken: string; expiresIn: number }
-  | { type: "refresh"; refreshToken: string; source: TokenSecretSource };
+  | { type: "refresh"; refreshToken: string; source: OAuthSecretScope };
 
 export type XaiTokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn: number }
   | { ok: false; status: number; error: string };
 
 export class XaiTokenRefreshService {
+  private readonly secrets: ScopedOAuthSecretsStore;
+
   constructor(
-    private readonly db: SqlDatabase,
-    private readonly encryptionKey: string,
+    db: SqlDatabase,
+    encryptionKey: string,
     private readonly ensureRepoId: (session: SessionRow) => Promise<number>,
     private readonly log: Logger
-  ) {}
+  ) {
+    this.secrets = new ScopedOAuthSecretsStore(db, encryptionKey);
+  }
 
   async refresh(session: SessionRow): Promise<XaiTokenRefreshResult> {
     const readState = () => this.readTokenState(session);
@@ -65,7 +62,7 @@ export class XaiTokenRefreshService {
 
   private stateFromSecrets(
     secrets: Record<string, string>,
-    source: TokenSecretSource
+    source: OAuthSecretScope
   ): XaiTokenState | null {
     const refreshToken = secrets.XAI_OAUTH_REFRESH_TOKEN;
     if (!refreshToken) return null;
@@ -78,7 +75,7 @@ export class XaiTokenRefreshService {
     return { type: "refresh", refreshToken, source };
   }
 
-  private async sessionSource(session: SessionRow): Promise<TokenSecretSource | null> {
+  private async sessionSource(session: SessionRow): Promise<OAuthSecretScope | null> {
     if (session.environment_id) {
       return { kind: "environment", environmentId: session.environment_id };
     }
@@ -93,49 +90,14 @@ export class XaiTokenRefreshService {
     return null;
   }
 
-  private async readSecrets(source: TokenSecretSource): Promise<Record<string, string>> {
-    if (source.kind === "environment") {
-      return new EnvironmentSecretsStore(this.db, this.encryptionKey).getDecryptedSecrets(
-        source.environmentId
-      );
-    }
-    if (source.kind === "repo") {
-      return new RepoSecretsStore(this.db, this.encryptionKey).getDecryptedSecrets(source.repoId);
-    }
-    return new GlobalSecretsStore(this.db, this.encryptionKey).getDecryptedSecrets();
-  }
-
-  private async writeSecrets(
-    source: TokenSecretSource,
-    secrets: Record<string, string>
-  ): Promise<void> {
-    if (source.kind === "environment") {
-      await new EnvironmentSecretsStore(this.db, this.encryptionKey).setSecrets(
-        source.environmentId,
-        secrets
-      );
-      return;
-    }
-    if (source.kind === "repo") {
-      await new RepoSecretsStore(this.db, this.encryptionKey).setSecrets(
-        source.repoId,
-        source.repoOwner,
-        source.repoName,
-        secrets
-      );
-      return;
-    }
-    await new GlobalSecretsStore(this.db, this.encryptionKey).setSecrets(secrets);
-  }
-
   private async readTokenState(session: SessionRow): Promise<XaiTokenState | null> {
     const source = await this.sessionSource(session);
     if (source) {
-      const state = this.stateFromSecrets(await this.readSecrets(source), source);
+      const state = this.stateFromSecrets(await this.secrets.read(source), source);
       if (state) return state;
     }
     const globalSource = { kind: "global" } as const;
-    return this.stateFromSecrets(await this.readSecrets(globalSource), globalSource);
+    return this.stateFromSecrets(await this.secrets.read(globalSource), globalSource);
   }
 
   private async attemptRefresh(
@@ -149,7 +111,7 @@ export class XaiTokenRefreshService {
       XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + expiresIn * 1000),
     };
     try {
-      await this.writeSecrets(state.source, secrets);
+      await this.secrets.write(state.source, secrets);
       this.log.info("xAI tokens rotated and cached", { source: state.source.kind });
     } catch (error) {
       this.log.error("xAI token refreshed but failed to persist rotated tokens", {

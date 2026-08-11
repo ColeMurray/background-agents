@@ -12,7 +12,7 @@ import {
   CLASSIFIER_PROMPT_MAX_CHARS,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
   OPENAI_CLASSIFICATION_MODEL_ID,
-  classifierInferenceRequestSchema,
+  openAIClassifierInferenceRequestSchema,
   classifierInferenceResponseSchema,
   classificationModelSchema,
   targetClassificationDecisionSchema,
@@ -252,12 +252,10 @@ export class RepoClassifier {
   }
 
   private async inferWithControlPlane(
-    model: ClassificationModel,
     prompt: string,
     traceId?: string
   ): Promise<TargetClassificationDecision> {
-    const request = classifierInferenceRequestSchema.safeParse({
-      model,
+    const request = openAIClassifierInferenceRequestSchema.safeParse({
       systemPrompt: CLASSIFIER_SYSTEM_PROMPT,
       prompt,
     });
@@ -296,7 +294,7 @@ export class RepoClassifier {
       return this.inferWithAnthropic(prompt);
     }
     if (model === OPENAI_CLASSIFICATION_MODEL_ID) {
-      return this.inferWithControlPlane(model, prompt, traceId);
+      return this.inferWithControlPlane(prompt, traceId);
     }
     throw new Error(`Unsupported classifier model: ${model}`);
   }

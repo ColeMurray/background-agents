@@ -34,15 +34,16 @@ export const targetClassificationDecisionSchema = z
 
 export type TargetClassificationDecision = z.infer<typeof targetClassificationDecisionSchema>;
 
-export const classifierInferenceRequestSchema = z
+export const openAIClassifierInferenceRequestSchema = z
   .object({
-    model: classificationModelSchema,
     systemPrompt: z.string().trim().min(1).max(CLASSIFIER_PROMPT_MAX_CHARS),
     prompt: z.string().min(1).max(CLASSIFIER_PROMPT_MAX_CHARS),
   })
   .strict();
 
-export type ClassifierInferenceRequest = z.infer<typeof classifierInferenceRequestSchema>;
+export type OpenAIClassifierInferenceRequest = z.infer<
+  typeof openAIClassifierInferenceRequestSchema
+>;
 
 export const classifierInferenceResponseSchema = z
   .object({ decision: targetClassificationDecisionSchema })

@@ -846,7 +846,6 @@ describe("RepoClassifier", () => {
         traceId: "trace-openai",
       });
       expect(JSON.parse(request.body)).toEqual({
-        model: "openai/gpt-5.6-luna",
         systemPrompt: expect.stringContaining("## Your Task"),
         prompt: expect.any(String),
       });

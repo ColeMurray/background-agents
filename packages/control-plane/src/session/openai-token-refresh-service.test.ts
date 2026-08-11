@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
 import type { SessionRow } from "./types";
-import { OpenAITokenBroker, OpenAITokenRefreshService } from "./openai-token-refresh-service";
+import { OpenAITokenBroker } from "../auth/openai-token-broker";
+import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { OpenAITokenRefreshError } from "../auth/openai";
 
 const mockState = vi.hoisted(() => ({
@@ -357,6 +358,23 @@ describe("OpenAITokenRefreshService", () => {
       ok: false,
       status: 404,
       error: "OPENAI_OAUTH_REFRESH_TOKEN not configured",
+    });
+  });
+
+  it("returns a bounded failure when repository scope resolution fails", async () => {
+    const service = new OpenAITokenRefreshService(
+      TEST_DB,
+      "enc-key",
+      async () => {
+        throw new Error("repository lookup failed");
+      },
+      createLogger()
+    );
+
+    await expect(service.refresh(createSession())).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "Failed to read token state",
     });
   });
 

@@ -73,14 +73,14 @@ export {
   OPENAI_CLASSIFICATION_MODEL_ID,
   classificationModelSchema,
   targetClassificationDecisionSchema,
-  classifierInferenceRequestSchema,
+  openAIClassifierInferenceRequestSchema,
   classifierInferenceResponseSchema,
   targetClassificationJsonSchema,
 } from "./target-classification";
 export type {
   ClassificationModel,
   TargetClassificationDecision,
-  ClassifierInferenceRequest,
+  OpenAIClassifierInferenceRequest,
   ClassifierInferenceResponse,
 } from "./target-classification";
 export {
