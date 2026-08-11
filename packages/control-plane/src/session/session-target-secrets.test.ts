@@ -53,7 +53,11 @@ describe("resolveSessionOAuthSecretScope", () => {
     { repo_owner: "acme", repo_name: null },
     { repo_owner: null, repo_name: "web" },
     { repo_owner: "acme", repo_name: null, environment_id: "env_1" },
-  ])("rejects incomplete repository context", async (overrides) => {
+    { repo_owner: "", repo_name: "web" },
+    { repo_owner: "acme", repo_name: "" },
+    { repo_owner: "", repo_name: "" },
+    { repo_owner: " ", repo_name: "web" },
+  ])("rejects incomplete or empty repository context", async (overrides) => {
     const ensureRepoId = vi.fn();
 
     await expect(resolveSessionOAuthSecretScope(session(overrides), ensureRepoId)).rejects.toThrow(
@@ -80,6 +84,18 @@ describe("resolveSessionOAuthSecretScope", () => {
 
     await expect(
       resolveSessionOAuthSecretScope(session({ environment_id: "env_1" }), ensureRepoId)
+    ).resolves.toEqual({ kind: "environment", environmentId: "env_1" });
+    expect(ensureRepoId).not.toHaveBeenCalled();
+  });
+
+  it("gives an environment target precedence over complete repository context", async () => {
+    const ensureRepoId = vi.fn();
+
+    await expect(
+      resolveSessionOAuthSecretScope(
+        session({ environment_id: "env_1", repo_owner: "group/subgroup", repo_name: "web" }),
+        ensureRepoId
+      )
     ).resolves.toEqual({ kind: "environment", environmentId: "env_1" });
     expect(ensureRepoId).not.toHaveBeenCalled();
   });

@@ -197,6 +197,20 @@ describe("POST /internal/target-classifications", () => {
     });
   });
 
+  it.each([
+    ["primary target", { ...decision, targetId: "acme/unknown" }],
+    ["alternative", { ...decision, alternatives: ["acme/unknown"] }],
+  ])("rejects a classifier decision with an unknown %s", async (_name, output) => {
+    mocks.requestFunction.mockResolvedValue({ kind: "completed", output });
+
+    const response = await targetClassificationRequest(validRequest());
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Classifier returned an invalid response",
+    });
+  });
+
   it("maps invalid provider output without exposing details", async () => {
     mocks.requestFunction.mockResolvedValue({ kind: "invalid_response" });
 

@@ -80,5 +80,19 @@ export async function createTargetClassification(
     });
     throw new InvalidTargetClassificationResponseError();
   }
+
+  const catalogIds = new Set(request.targets.map((target) => target.id));
+  const referencesUnknownTarget =
+    (decision.data.targetId !== null && !catalogIds.has(decision.data.targetId)) ||
+    decision.data.alternatives.some((targetId) => !catalogIds.has(targetId));
+  if (referencesUnknownTarget) {
+    logger.warn("Classifier decision referenced a target outside the catalog", {
+      event: "classifier.invalid_decision",
+      request_id: context.requestId,
+      trace_id: context.traceId,
+    });
+    throw new InvalidTargetClassificationResponseError();
+  }
+
   return decision.data;
 }

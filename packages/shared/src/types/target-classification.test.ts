@@ -222,9 +222,73 @@ describe("target classification contracts", () => {
 
     const prompt = buildTargetClassificationPrompt(request);
 
-    expect(prompt.length).toBe(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(prompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);
     expect(prompt).toContain("[truncated]");
     expect(prompt.endsWith(message)).toBe(true);
+  });
+
+  it("truncates only between complete catalog entries", () => {
+    const message = "m".repeat(CLASSIFIER_MESSAGE_MAX_CHARS - 500);
+    const request = targetClassificationRequestSchema.parse({
+      message,
+      targets: [
+        {
+          kind: "repository",
+          id: "group/subgroup/api",
+          fullName: "group/subgroup/api",
+          description: "API",
+          defaultBranch: "main",
+          private: true,
+        },
+        {
+          kind: "repository",
+          id: "group/subgroup/worker",
+          fullName: "group/subgroup/worker",
+          description: "catalog ".repeat(500),
+          defaultBranch: "main",
+          private: true,
+        },
+      ],
+    });
+
+    const prompt = buildTargetClassificationPrompt(request);
+
+    expect(prompt).toContain("**group/subgroup/api** (group/subgroup/api)");
+    expect(prompt).not.toContain("group/subgroup/worker");
+    expect(prompt).toContain("\n[truncated]\n\n## User's Message");
+    expect(prompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);
+  });
+
+  it("stops rendering catalog entries after the prompt budget is exhausted", () => {
+    const message = "m".repeat(CLASSIFIER_MESSAGE_MAX_CHARS - 100);
+    const request = targetClassificationRequestSchema.parse({
+      message,
+      targets: [
+        {
+          kind: "repository",
+          id: "acme/oversized",
+          fullName: "acme/oversized",
+          description: "catalog ".repeat(500),
+          defaultBranch: "main",
+          private: true,
+        },
+        {
+          kind: "repository",
+          id: "acme/later",
+          fullName: "acme/later",
+          description: "Later entry",
+          defaultBranch: "main",
+          private: true,
+        },
+      ],
+    });
+    Object.defineProperty(request.targets[1], "description", {
+      get: () => {
+        throw new Error("later entry should not be rendered");
+      },
+    });
+
+    expect(() => buildTargetClassificationPrompt(request)).not.toThrow();
   });
 
   it("returns the target classification directly", () => {

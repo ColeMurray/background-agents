@@ -83,7 +83,10 @@ export async function* decodeBoundedJsonSse(
         }
         newlineIndex = lineBuffer.indexOf("\n");
       }
-      if (encoder.encode(lineBuffer).byteLength > limits.maxEventBytes) {
+      if (
+        lineBuffer.length > limits.maxEventBytes ||
+        encoder.encode(lineBuffer).byteLength > limits.maxEventBytes
+      ) {
         throw new InvalidBoundedJsonSseError();
       }
     }

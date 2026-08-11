@@ -104,8 +104,6 @@ const targetClassificationContextSchema = z
   })
   .strict();
 
-type TargetClassificationContext = z.infer<typeof targetClassificationContextSchema>;
-
 export const targetClassificationRequestSchema = z
   .object({
     message: z.string().min(1).max(CLASSIFIER_MESSAGE_MAX_CHARS),
@@ -119,79 +117,94 @@ export type TargetClassificationRequest = z.infer<typeof targetClassificationReq
 
 const PROMPT_TRUNCATION_MARKER = "[truncated]";
 
-function truncateWithMarker(value: string, maxChars: number): string {
-  if (maxChars <= PROMPT_TRUNCATION_MARKER.length) {
-    return PROMPT_TRUNCATION_MARKER.slice(0, Math.max(0, maxChars));
-  }
-  return `${value.slice(0, maxChars - PROMPT_TRUNCATION_MARKER.length)}${PROMPT_TRUNCATION_MARKER}`;
-}
-
-function buildRepositoryDescriptions(targets: readonly TargetClassificationTarget[]): string {
-  const repositories = targets.filter((target) => target.kind === "repository");
-  if (repositories.length === 0) return "No repositories are currently available.";
-  return repositories
-    .map(
-      (repository) => `
+function formatRepository(
+  repository: Extract<TargetClassificationTarget, { kind: "repository" }>
+): string {
+  return `
 - **${repository.id}** (${repository.fullName})
   - Description: ${repository.description}
   - Also known as: ${repository.aliases?.join(", ") || "N/A"}
   - Keywords: ${repository.keywords?.join(", ") || "N/A"}
   - Default branch: ${repository.defaultBranch}
-  - Private: ${repository.private ? "Yes" : "No"}`
-    )
-    .join("\n");
+  - Private: ${repository.private ? "Yes" : "No"}`;
 }
 
-function buildEnvironmentSection(targets: readonly TargetClassificationTarget[]): string {
-  const environments = targets.filter((target) => target.kind === "environment");
-  if (environments.length === 0) return "";
-  const descriptions = environments
-    .map(
-      (environment) => `
+function formatEnvironment(
+  environment: Extract<TargetClassificationTarget, { kind: "environment" }>
+): string {
+  return `
 - **${environment.id}** ("${environment.name}")
   - Description: ${environment.description || "N/A"}
-  - Repositories: ${environment.repositories.join(", ")}`
-    )
-    .join("\n");
-  return `
+  - Repositories: ${environment.repositories.join(", ")}`;
+}
+
+function* catalogAndContextEntries(request: TargetClassificationRequest): Generator<string> {
+  yield "## Available Repositories\n";
+
+  let hasRepositories = false;
+  for (const target of request.targets) {
+    if (target.kind !== "repository") continue;
+    hasRepositories = true;
+    yield formatRepository(target);
+  }
+  if (!hasRepositories) yield "No repositories are currently available.";
+
+  let hasEnvironments = false;
+  for (const target of request.targets) {
+    if (target.kind !== "environment") continue;
+    if (!hasEnvironments) {
+      hasEnvironments = true;
+      yield `
 ## Available Environments
 
 Environments are saved multi-repository workspaces. Prefer an environment over a
 single repository when the message names it, or when the work spans several of
 its repositories.
-${descriptions}
 `;
-}
+    }
+    yield formatEnvironment(target);
+  }
+  if (hasEnvironments) yield "\n";
 
-function buildContextSection(context: TargetClassificationContext | undefined): string {
-  if (!context) return "";
-  return `
+  const { context } = request;
+  if (!context) return;
+  yield `
 ## Context
 
 **Channel**: ${context.channelName ? `#${context.channelName}` : context.channelId}
-${context.channelDescription ? `**Channel Description**: ${context.channelDescription}` : ""}
-${context.inThread ? `**In Thread**: Yes` : "**In Thread**: No"}
-${
-  context.previousMessages?.length
-    ? `**Previous Messages in Thread**:
-${context.previousMessages.map((message) => `- ${message}`).join("\n")}`
-    : ""
-}`;
+`;
+  if (context.channelDescription) {
+    yield `**Channel Description**: ${context.channelDescription}\n`;
+  }
+  yield context.inThread ? "**In Thread**: Yes\n" : "**In Thread**: No\n";
+  if (context.previousMessages?.length) {
+    yield "**Previous Messages in Thread**:";
+    for (const message of context.previousMessages) yield `\n- ${message}`;
+  }
+}
+
+function joinBoundedEntries(entries: Iterable<string>, maxChars: number): string {
+  const parts: string[] = [];
+  let renderedChars = 0;
+
+  for (const entry of entries) {
+    if (renderedChars + entry.length > maxChars) {
+      const marker = `${renderedChars === 0 ? "" : "\n"}${PROMPT_TRUNCATION_MARKER}`;
+      if (renderedChars + marker.length <= maxChars) parts.push(marker);
+      break;
+    }
+    parts.push(entry);
+    renderedChars += entry.length;
+  }
+  return parts.join("");
 }
 
 /** Builds the bounded provider prompt from validated, provider-neutral classification data. */
 export function buildTargetClassificationPrompt(request: TargetClassificationRequest): string {
-  const catalogAndContext = `## Available Repositories
-${buildRepositoryDescriptions(request.targets)}
-${buildEnvironmentSection(request.targets)}
-${buildContextSection(request.context)}`;
   const userSection = `${CLASSIFIER_USER_MESSAGE_PREFIX}${request.message}`;
   const catalogBudget = CLASSIFIER_PROMPT_MAX_CHARS - userSection.length - 2;
-
-  if (catalogAndContext.length <= catalogBudget) {
-    return `${catalogAndContext}\n\n${userSection}`;
-  }
-  return `${truncateWithMarker(catalogAndContext, catalogBudget)}\n\n${userSection}`;
+  const catalogAndContext = joinBoundedEntries(catalogAndContextEntries(request), catalogBudget);
+  return `${catalogAndContext}\n\n${userSection}`;
 }
 
 export const targetClassificationResponseSchema = targetClassificationDecisionSchema;

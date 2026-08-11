@@ -53,6 +53,22 @@ describe("OpenAI Responses stream reducer", () => {
   });
 
   it.each([
+    ["an error event", { type: "error", message: "upstream failure" }],
+    ["a failed response", { type: "response.failed", response: {} }],
+  ])("maps %s to an upstream error", async (_name, event) => {
+    await expect(parse(event)).resolves.toEqual({ kind: "upstream_error" });
+  });
+
+  it("rejects a stream that ends without a completed response", async () => {
+    await expect(
+      parse({
+        type: "response.output_item.added",
+        item: { type: "function_call", id: "fc-1", name: TOOL_NAME, arguments: "" },
+      })
+    ).resolves.toEqual({ kind: "invalid_response" });
+  });
+
+  it.each([
     ["non-function output", { type: "message", content: [] }],
     ["wrong tool", { ...functionCall(), name: "another_tool" }],
     ["oversized tool arguments", functionCall("x".repeat(33 * 1_024))],
@@ -80,6 +96,39 @@ describe("OpenAI Responses stream reducer", () => {
     ).resolves.toEqual({ kind: "completed", output });
   });
 
+  it("assembles function-call argument deltas", async () => {
+    const argumentsValue = JSON.stringify(output);
+
+    await expect(
+      parse(
+        {
+          type: "response.output_item.added",
+          item: { type: "function_call", id: "fc-1", name: TOOL_NAME, arguments: "" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc-1",
+          delta: argumentsValue.slice(0, 20),
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          item_id: "fc-1",
+          delta: argumentsValue.slice(20),
+        },
+        { type: "response.completed", response: {} }
+      )
+    ).resolves.toEqual({ kind: "completed", output });
+  });
+
+  it("ignores unrelated events", async () => {
+    await expect(
+      parse(
+        { type: "response.created", response: {} },
+        { type: "response.completed", response: { output: [functionCall()] } }
+      )
+    ).resolves.toEqual({ kind: "completed", output });
+  });
+
   it("ignores a non-function output item before the completed response", async () => {
     await expect(
       parse(
@@ -90,5 +139,22 @@ describe("OpenAI Responses stream reducer", () => {
         }
       )
     ).resolves.toEqual({ kind: "completed", output });
+  });
+
+  it("normalizes malformed SSE as an invalid response", async () => {
+    const response = new Response("data: not-json\n\n");
+
+    await expect(
+      parseOpenAIResponsesStream(response, new AbortController().signal, TOOL_NAME)
+    ).resolves.toEqual({ kind: "invalid_response" });
+  });
+
+  it("maps an aborted stream to an upstream error", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      parseOpenAIResponsesStream(sseResponse(), controller.signal, TOOL_NAME)
+    ).resolves.toEqual({ kind: "upstream_error" });
   });
 });

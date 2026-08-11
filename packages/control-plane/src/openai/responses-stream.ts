@@ -30,7 +30,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function functionCallFromItem(value: unknown, toolName: string): PendingFunctionCall | null {
+function functionCallFromItem(
+  value: unknown,
+  toolName: string,
+  encoder: TextEncoder
+): PendingFunctionCall | null {
   if (
     !isRecord(value) ||
     value.type !== "function_call" ||
@@ -42,7 +46,7 @@ function functionCallFromItem(value: unknown, toolName: string): PendingFunction
   return {
     name: value.name,
     arguments: value.arguments,
-    argumentBytes: new TextEncoder().encode(value.arguments).byteLength,
+    argumentBytes: encoder.encode(value.arguments).byteLength,
   };
 }
 
@@ -57,15 +61,15 @@ function parseFunctionArguments(call: PendingFunctionCall | null, toolName: stri
   }
 }
 
-function parseFunctionCallItem(value: unknown, toolName: string): unknown {
-  return parseFunctionArguments(functionCallFromItem(value, toolName), toolName);
+function parseFunctionCallItem(value: unknown, toolName: string, encoder: TextEncoder): unknown {
+  return parseFunctionArguments(functionCallFromItem(value, toolName, encoder), toolName);
 }
 
-function extractCompletedOutput(body: unknown, toolName: string): unknown {
+function extractCompletedOutput(body: unknown, toolName: string, encoder: TextEncoder): unknown {
   if (!isRecord(body) || !Array.isArray(body.output)) return null;
   return (
     body.output
-      .map((item) => parseFunctionCallItem(item, toolName))
+      .map((item) => parseFunctionCallItem(item, toolName, encoder))
       .find((output) => output !== null) ?? null
   );
 }
@@ -131,11 +135,11 @@ function applyResponseEvent(
   }
   if (event.type === "response.output_item.done") {
     if (!isRecord(event.item) || event.item.type !== "function_call") return "continue";
-    state.outputItem = parseFunctionCallItem(event.item, toolName);
+    state.outputItem = parseFunctionCallItem(event.item, toolName, encoder);
     return state.outputItem === null ? "invalid" : "continue";
   }
   if (event.type === "response.completed") {
-    state.completedOutput = extractCompletedOutput(event.response, toolName);
+    state.completedOutput = extractCompletedOutput(event.response, toolName, encoder);
     return "completed";
   }
   return "continue";
