@@ -5,6 +5,7 @@ import { handleTargetSelection } from "./target-selection";
 import { getPendingRequest, deletePendingRequest } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
+import { resolveSlackActorIdentity } from "../user-identity";
 
 vi.mock(import("@open-inspect/shared/slack"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -32,6 +33,10 @@ vi.mock("../target-clarification", () => ({
   resolveTargetValue: vi.fn(),
 }));
 
+vi.mock("../user-identity", () => ({
+  resolveSlackActorIdentity: vi.fn(),
+}));
+
 const repositoryTarget = {
   kind: "repository" as const,
   repo: {
@@ -57,6 +62,11 @@ function makeEnv(): Env {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(resolveTargetValue).mockResolvedValue(repositoryTarget);
+  vi.mocked(resolveSlackActorIdentity).mockResolvedValue({
+    userId: "U123",
+    senderLabel: "Ajan (U123)",
+    displayName: "Ajan",
+  });
 });
 
 describe("handleTargetSelection", () => {
@@ -88,7 +98,11 @@ describe("handleTargetSelection", () => {
       env,
       expect.objectContaining({
         messageText: "What is wrong in this screenshot?",
-        userId: "U123",
+        actor: {
+          userId: "U123",
+          senderLabel: "Ajan (U123)",
+          displayName: "Ajan",
+        },
         images: [
           {
             id: "F1",

@@ -408,7 +408,7 @@ describe("POST /events", () => {
     vi.clearAllMocks();
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
-    mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+    mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
   });
 
   it("publishes App Home when the home tab is opened", async () => {
@@ -522,6 +522,7 @@ describe("POST /events", () => {
     expect(startingStatusBodies(slackFetch)).toHaveLength(3);
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("channelInfo"));
     expect(order.indexOf("status")).toBeLessThan(order.indexOf("session"));
+    expect(mockGetUserInfo).toHaveBeenCalledOnce();
 
     const postBodies = slackApiBodies(slackFetch, "chat.postMessage");
     expect(postBodies.some((body) => String(body.text).includes("Session started!"))).toBe(false);
@@ -1584,7 +1585,7 @@ describe("POST /interactions", () => {
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockOpenView.mockResolvedValue({ ok: true });
-    mockGetUserInfo.mockResolvedValue({ ok: true, user: undefined });
+    mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
   });
 
   it("sets Starting status for repo-selection starts before session creation", async () => {
@@ -2263,6 +2264,7 @@ describe("POST /interactions", () => {
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.actorDisplayName).toBe("Jane");
     expect(body.actorEmail).toBe("jane@example.com");
+    expect(mockGetUserInfo).toHaveBeenCalledOnce();
     // Identity travels via the signed actor assertion, never the body.
     expect(body.actorUserId).toBeUndefined();
     expect(body.spawnSource).toBeUndefined();

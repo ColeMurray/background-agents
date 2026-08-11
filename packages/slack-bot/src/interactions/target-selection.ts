@@ -17,6 +17,7 @@ import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
+import { resolveSlackActorIdentity } from "../user-identity";
 
 const log = createLogger("target-selection");
 
@@ -103,12 +104,13 @@ export async function handleTargetSelection(
     blocks: buildWorkingMessageBlocks(label),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
+  const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
   const sessionResult = await startSessionAndSendPrompt(env, {
     target,
     channel,
     threadTs: threadKey,
     messageText: message,
-    userId,
+    actor,
     // The original message ts isn't persisted with the pending request, so
     // the "Working on..." ack — or the interaction message when the ack post
     // fails — marks where interim thread context resumes.

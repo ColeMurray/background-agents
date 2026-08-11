@@ -4,7 +4,6 @@ import {
   getChannelInfo,
   getMessageDetails,
   getThreadMessages,
-  getUserInfo,
   postMessage,
   resolveUserNames,
   selectThreadWindow,
@@ -49,6 +48,7 @@ import {
 import { buildTargetClarificationBlocks } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
+import { resolveSlackActorIdentity } from "../user-identity";
 
 const log = createLogger("handler");
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
@@ -160,13 +160,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     );
     return;
   }
-  const userInfo = await getUserInfo(env.SLACK_BOT_TOKEN, user);
-  const senderName = (userInfo.ok ? userInfo.user?.profile?.display_name || user : user)
-    .replace(/[[\]\r\n]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
-  const senderLabel = senderName && senderName !== user ? `${senderName} (${user})` : user;
+  const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
   // A message with no text of its own still needs prompt content for the agent
   // to act on; what it carried instead decides which stand-in to use.
   const imageOnly = !messageText && !forwarded.hasBody;
@@ -177,7 +171,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   // instruction and reads as one when it comes last.
   const forwardedContext = formatForwardedContext(forwarded.entries);
   const promptText = forwardedContext + requestText;
-  const deliveredPromptText = forwardedContext + `[${senderLabel}]: ${requestText}`;
+  const deliveredPromptText = forwardedContext + `[${actor.senderLabel}]: ${requestText}`;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -314,7 +308,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     channel,
     threadTs: threadKey,
     messageText: deliveredPromptText,
-    userId: user,
+    actor,
     messageTs: ts,
     previousMessages,
     channelName,
