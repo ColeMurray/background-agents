@@ -35,16 +35,10 @@ export class OpenAITokenBroker {
     return this.refreshScopes([{ kind: "global" }]);
   }
 
-  refreshScopes(scopes: readonly OAuthSecretScope[]): Promise<OpenAITokenRefreshResult> {
-    return this.refreshFrom(() => this.readTokenState(scopes));
-  }
-
-  private async refreshFrom(
-    readTokenState: () => Promise<OpenAITokenState | null>
-  ): Promise<OpenAITokenRefreshResult> {
+  async refreshScopes(scopes: readonly OAuthSecretScope[]): Promise<OpenAITokenRefreshResult> {
     let tokenState: OpenAITokenState | null;
     try {
-      tokenState = await readTokenState();
+      tokenState = await this.readTokenState(scopes);
     } catch (error) {
       this.log.error("Failed to read OpenAI token state from secrets", {
         error: error instanceof Error ? error.message : String(error),
@@ -69,7 +63,7 @@ export class OpenAITokenBroker {
       return await this.attemptRefresh(tokenState);
     } catch (error) {
       if (error instanceof OpenAITokenRefreshError && error.status === 401) {
-        return this.handleUnauthorizedRefresh(tokenState, readTokenState);
+        return this.handleUnauthorizedRefresh(tokenState, scopes);
       }
 
       this.log.error("OpenAI token refresh failed", {
@@ -180,7 +174,7 @@ export class OpenAITokenBroker {
 
   private async handleUnauthorizedRefresh(
     tokenState: Extract<OpenAITokenState, { type: "refresh" }>,
-    readTokenState: () => Promise<OpenAITokenState | null>
+    scopes: readonly OAuthSecretScope[]
   ): Promise<OpenAITokenRefreshResult> {
     this.log.warn("OpenAI refresh got 401, checking for concurrent rotation", {
       scope: tokenState.scope.kind,
@@ -188,7 +182,7 @@ export class OpenAITokenBroker {
     await new Promise((resolve) => setTimeout(resolve, OPENAI_CONCURRENT_ROTATION_DELAY_MS));
 
     try {
-      const reread = await readTokenState();
+      const reread = await this.readTokenState(scopes);
       if (reread?.type === "cached") {
         this.log.info("Using cached access token from concurrent rotation");
         return {
