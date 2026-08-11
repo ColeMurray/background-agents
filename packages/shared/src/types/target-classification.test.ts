@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLASSIFIER_MESSAGE_MAX_CHARS,
   CLASSIFIER_PROMPT_MAX_CHARS,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
   targetClassificationRequestSchema,
@@ -54,7 +55,7 @@ describe("target classification contracts", () => {
   it("derives a strict provider tool schema from the decision contract", () => {
     expect(targetClassificationJsonSchema).toMatchObject({
       type: "object",
-      required: ["targetId", "confidence", "reasoning", "alternatives"],
+      required: ["reasoning", "confidence", "targetId", "alternatives"],
       additionalProperties: false,
       properties: {
         targetId: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
@@ -64,6 +65,18 @@ describe("target classification contracts", () => {
       },
     });
     expect(targetClassificationJsonSchema).not.toHaveProperty("$schema");
+    expect(Object.keys(targetClassificationJsonSchema.properties ?? {})).toEqual([
+      "reasoning",
+      "confidence",
+      "targetId",
+      "alternatives",
+    ]);
+    expect(targetClassificationJsonSchema.required).toEqual([
+      "reasoning",
+      "confidence",
+      "targetId",
+      "alternatives",
+    ]);
     expect(targetClassificationJsonSchema.properties?.targetId).toMatchObject({
       description: expect.stringContaining("exactly from the catalog"),
     });
@@ -90,14 +103,15 @@ describe("target classification contracts", () => {
       ],
     };
 
-    expect(targetClassificationRequestSchema.parse(request)).toEqual(request);
-    expect(buildTargetClassificationPrompt(request)).toContain(
+    const parsed = targetClassificationRequestSchema.parse(request);
+    expect(parsed).toEqual(request);
+    expect(buildTargetClassificationPrompt(parsed)).toContain(
       "## User's Message\nRoute this request."
     );
     expect(
       targetClassificationRequestSchema.safeParse({
         ...request,
-        message: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1),
+        message: "x".repeat(CLASSIFIER_MESSAGE_MAX_CHARS + 1),
       }).success
     ).toBe(false);
 
@@ -107,6 +121,110 @@ describe("target classification contracts", () => {
         prompt: "Caller-authored prompt",
       }).success
     ).toBe(false);
+  });
+
+  it("preserves a maximum-length user message within the prompt limit", () => {
+    const message = "x".repeat(CLASSIFIER_MESSAGE_MAX_CHARS);
+    const request = targetClassificationRequestSchema.parse({
+      message,
+      targets: [
+        {
+          kind: "repository",
+          id: "acme/api",
+          fullName: "acme/api",
+          description: "Acme API",
+          defaultBranch: "main",
+          private: true,
+        },
+      ],
+    });
+
+    const prompt = buildTargetClassificationPrompt(request);
+
+    expect(prompt.length).toBe(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(prompt.endsWith(message)).toBe(true);
+  });
+
+  it("renders environment and thread context as untrusted prompt data", () => {
+    const request = targetClassificationRequestSchema.parse({
+      message: "Deploy the full stack workspace.",
+      targets: [
+        {
+          kind: "environment",
+          id: "env_full_stack",
+          name: "full-stack",
+          description: null,
+          repositories: ["acme/api", "acme/web"],
+        },
+      ],
+      context: {
+        channelId: "C123",
+        channelName: "engineering",
+        channelDescription: "Engineering requests",
+        inThread: true,
+        previousMessages: ["The production deploy failed."],
+      },
+    });
+
+    const prompt = buildTargetClassificationPrompt(request);
+
+    expect(prompt).toContain("No repositories are currently available.");
+    expect(prompt).toContain('**env_full_stack** ("full-stack")');
+    expect(prompt).toContain("Repositories: acme/api, acme/web");
+    expect(prompt).toContain("**Channel**: #engineering");
+    expect(prompt).toContain("**Channel Description**: Engineering requests");
+    expect(prompt).toContain("**In Thread**: Yes");
+    expect(prompt).toContain("- The production deploy failed.");
+  });
+
+  it("renders minimal channel context without optional metadata", () => {
+    const request = targetClassificationRequestSchema.parse({
+      message: "Route this request.",
+      targets: [
+        {
+          kind: "repository",
+          id: "acme/api",
+          fullName: "acme/api",
+          description: "Acme API",
+          defaultBranch: "main",
+          private: false,
+        },
+      ],
+      context: {
+        channelId: "C123",
+        inThread: false,
+      },
+    });
+
+    const prompt = buildTargetClassificationPrompt(request);
+
+    expect(prompt).toContain("**Channel**: C123");
+    expect(prompt).toContain("**In Thread**: No");
+    expect(prompt).not.toContain("Channel Description");
+    expect(prompt).not.toContain("Previous Messages in Thread");
+  });
+
+  it("truncates catalog data before truncating the user message", () => {
+    const message = "m".repeat(CLASSIFIER_MESSAGE_MAX_CHARS - 100);
+    const request = targetClassificationRequestSchema.parse({
+      message,
+      targets: [
+        {
+          kind: "repository",
+          id: "acme/api",
+          fullName: "acme/api",
+          description: "catalog ".repeat(500),
+          defaultBranch: "main",
+          private: true,
+        },
+      ],
+    });
+
+    const prompt = buildTargetClassificationPrompt(request);
+
+    expect(prompt.length).toBe(CLASSIFIER_PROMPT_MAX_CHARS);
+    expect(prompt).toContain("[truncated]");
+    expect(prompt.endsWith(message)).toBe(true);
   });
 
   it("returns the target classification directly", () => {

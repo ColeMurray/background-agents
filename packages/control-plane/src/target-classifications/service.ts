@@ -2,7 +2,6 @@ import {
   buildTargetClassificationPrompt,
   CLASSIFY_TARGET_TOOL_NAME,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
-  TargetClassificationPromptTooLongError,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
   type TargetClassificationDecision,
@@ -16,13 +15,10 @@ import { requestOpenAICodexFunction } from "../openai/codex-responses";
 const logger = createLogger("target-classifications");
 const OPENAI_MODEL = "gpt-5.6-luna";
 
-type CreateTargetClassificationResult =
-  | { kind: "completed"; classification: TargetClassificationDecision }
-  | { kind: "prompt_too_long" }
-  | { kind: "oauth_not_configured" }
-  | { kind: "oauth_unavailable" }
-  | { kind: "upstream_unavailable" }
-  | { kind: "invalid_response" };
+export class OpenAIOAuthNotConfiguredError extends Error {}
+export class OpenAIOAuthUnavailableError extends Error {}
+export class TargetClassifierUpstreamUnavailableError extends Error {}
+export class InvalidTargetClassificationResponseError extends Error {}
 
 type TargetClassificationServiceContext = {
   db: SqlDatabase;
@@ -34,23 +30,12 @@ type TargetClassificationServiceContext = {
 export async function createTargetClassification(
   request: TargetClassificationRequest,
   context: TargetClassificationServiceContext
-): Promise<CreateTargetClassificationResult> {
-  let prompt: string;
-  try {
-    prompt = buildTargetClassificationPrompt(request);
-  } catch (error) {
-    if (error instanceof TargetClassificationPromptTooLongError) {
-      return { kind: "prompt_too_long" };
-    }
-    throw error;
-  }
-
+): Promise<TargetClassificationDecision> {
   const broker = new OpenAITokenBroker(context.db, context.encryptionKey, logger);
   const tokenResult = await broker.refreshGlobal();
   if (!tokenResult.ok) {
-    return {
-      kind: tokenResult.status === 404 ? "oauth_not_configured" : "oauth_unavailable",
-    };
+    if (tokenResult.status === 404) throw new OpenAIOAuthNotConfiguredError();
+    throw new OpenAIOAuthUnavailableError();
   }
 
   const result = await requestOpenAICodexFunction({
@@ -60,7 +45,7 @@ export async function createTargetClassification(
     traceId: context.traceId,
     model: OPENAI_MODEL,
     systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
-    prompt,
+    prompt: buildTargetClassificationPrompt(request),
     tool: {
       name: CLASSIFY_TARGET_TOOL_NAME,
       description: "Select the best target for the Slack request.",
@@ -75,7 +60,7 @@ export async function createTargetClassification(
       request_id: context.requestId,
       trace_id: context.traceId,
     });
-    return { kind: "upstream_unavailable" };
+    throw new TargetClassifierUpstreamUnavailableError();
   }
   if (result.kind === "invalid_response") {
     logger.warn("Classifier returned an unparsable response", {
@@ -83,7 +68,7 @@ export async function createTargetClassification(
       request_id: context.requestId,
       trace_id: context.traceId,
     });
-    return { kind: "invalid_response" };
+    throw new InvalidTargetClassificationResponseError();
   }
 
   const decision = targetClassificationDecisionSchema.safeParse(result.output);
@@ -93,7 +78,7 @@ export async function createTargetClassification(
       request_id: context.requestId,
       trace_id: context.traceId,
     });
-    return { kind: "invalid_response" };
+    throw new InvalidTargetClassificationResponseError();
   }
-  return { kind: "completed", classification: decision.data };
+  return decision.data;
 }

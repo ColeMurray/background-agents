@@ -1,5 +1,11 @@
 import { targetClassificationRequestSchema } from "@open-inspect/shared/types/target-classification";
-import { createTargetClassification } from "../target-classifications/service";
+import {
+  createTargetClassification,
+  InvalidTargetClassificationResponseError,
+  OpenAIOAuthNotConfiguredError,
+  OpenAIOAuthUnavailableError,
+  TargetClassifierUpstreamUnavailableError,
+} from "../target-classifications/service";
 import type { Env } from "../types";
 import {
   error,
@@ -30,26 +36,28 @@ export async function handleCreateTargetClassification(
     return error("OpenAI OAuth is not configured", 503);
   }
 
-  const result = await createTargetClassification(parsedRequest.data, {
-    db: ctx.db,
-    encryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
-    requestId: ctx.request_id,
-    traceId: ctx.trace_id,
-  });
-
-  switch (result.kind) {
-    case "completed":
-      return json(result.classification);
-    case "prompt_too_long":
-      return error("Target classification input exceeds the prompt limit", 400);
-    case "oauth_not_configured":
+  try {
+    const classification = await createTargetClassification(parsedRequest.data, {
+      db: ctx.db,
+      encryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
+      requestId: ctx.request_id,
+      traceId: ctx.trace_id,
+    });
+    return json(classification);
+  } catch (caught) {
+    if (caught instanceof OpenAIOAuthNotConfiguredError) {
       return error("OpenAI OAuth is not configured", 503);
-    case "oauth_unavailable":
+    }
+    if (caught instanceof OpenAIOAuthUnavailableError) {
       return error("OpenAI OAuth unavailable", 502);
-    case "upstream_unavailable":
+    }
+    if (caught instanceof TargetClassifierUpstreamUnavailableError) {
       return error("Classifier upstream unavailable", 502);
-    case "invalid_response":
+    }
+    if (caught instanceof InvalidTargetClassificationResponseError) {
       return error("Classifier returned an invalid response", 502);
+    }
+    throw caught;
   }
 }
 

@@ -19,7 +19,7 @@ export type OpenAICodexFunctionRequest = {
   };
 };
 
-export type OpenAICodexResult =
+type OpenAICodexResult =
   | { kind: "completed"; output: unknown }
   | { kind: "upstream_error"; status?: number }
   | { kind: "invalid_response" };

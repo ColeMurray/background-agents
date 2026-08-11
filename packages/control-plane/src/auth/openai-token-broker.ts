@@ -1,5 +1,5 @@
 import { extractOpenAIAccountId, OpenAITokenRefreshError, refreshOpenAIToken } from "./openai";
-import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "./scoped-oauth-secrets";
+import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "../db/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 

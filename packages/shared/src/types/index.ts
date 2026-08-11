@@ -68,6 +68,7 @@ export type {
 
 export {
   CLASSIFY_TARGET_TOOL_NAME,
+  CLASSIFIER_MESSAGE_MAX_CHARS,
   CLASSIFIER_PROMPT_MAX_CHARS,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
@@ -78,7 +79,6 @@ export {
   targetClassificationResponseSchema,
   targetClassificationJsonSchema,
   buildTargetClassificationPrompt,
-  TargetClassificationPromptTooLongError,
 } from "./target-classification";
 export type {
   ClassificationModel,

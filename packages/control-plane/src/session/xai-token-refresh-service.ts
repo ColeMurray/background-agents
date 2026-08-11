@@ -1,8 +1,8 @@
 import { refreshXaiToken, XaiTokenRefreshError } from "../auth/xai";
-import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "../auth/scoped-oauth-secrets";
+import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "../db/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import { resolveSessionOAuthSecretScope } from "./oauth-secret-scope";
+import { resolveSessionOAuthSecretScope } from "./session-target-secrets";
 import type { SessionRow } from "./types";
 
 const XAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -30,10 +30,9 @@ export class XaiTokenRefreshService {
   }
 
   async refresh(session: SessionRow): Promise<XaiTokenRefreshResult> {
-    const readState = () => this.readTokenState(session);
     let state: XaiTokenState | null;
     try {
-      state = await readState();
+      state = await this.readTokenState(session);
     } catch (error) {
       this.log.error("Failed to read xAI token state from secrets", {
         error: error instanceof Error ? error.message : String(error),
@@ -52,7 +51,7 @@ export class XaiTokenRefreshService {
         error instanceof XaiTokenRefreshError &&
         (error.reason === "invalid_grant" || error.reason === "unauthorized")
       ) {
-        return this.handleUnauthorizedRefresh(state, readState);
+        return this.handleUnauthorizedRefresh(state, session);
       }
       this.log.error("xAI token refresh failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -82,8 +81,8 @@ export class XaiTokenRefreshService {
       const state = this.stateFromSecrets(await this.secrets.read(scope), scope);
       if (state) return state;
     }
-    const globalSource = { kind: "global" } as const;
-    return this.stateFromSecrets(await this.secrets.read(globalSource), globalSource);
+    const globalScope: OAuthSecretScope = { kind: "global" };
+    return this.stateFromSecrets(await this.secrets.read(globalScope), globalScope);
   }
 
   private async attemptRefresh(
@@ -110,14 +109,14 @@ export class XaiTokenRefreshService {
 
   private async handleUnauthorizedRefresh(
     state: Extract<XaiTokenState, { type: "refresh" }>,
-    readState: () => Promise<XaiTokenState | null>
+    session: SessionRow
   ): Promise<XaiTokenRefreshResult> {
     this.log.warn("xAI refresh was rejected, checking for concurrent rotation", {
       scope: state.scope.kind,
     });
     await new Promise((resolve) => setTimeout(resolve, XAI_CONCURRENT_ROTATION_DELAY_MS));
     try {
-      const current = await readState();
+      const current = await this.readTokenState(session);
       if (current?.type === "cached") {
         return { ok: true, accessToken: current.accessToken, expiresIn: current.expiresIn };
       }

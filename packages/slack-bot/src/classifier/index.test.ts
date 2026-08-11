@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTargetClassificationPrompt,
   CLASSIFIER_PROMPT_MAX_CHARS,
-  type TargetClassificationRequest,
+  targetClassificationRequestSchema,
 } from "@open-inspect/shared/types/target-classification";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
@@ -200,6 +200,44 @@ describe("RepoClassifier", () => {
     expect(result.alternatives).toBeUndefined();
   });
 
+  it("asks for clarification when Anthropic tool input is not an object", async () => {
+    mockMessagesCreate.mockResolvedValue({
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_non_object",
+          name: "classify_target",
+          input: null,
+        },
+      ],
+    });
+
+    const result = await new RepoClassifier(TEST_ENV).classify("route this request");
+
+    expect(result).toMatchObject({
+      target: null,
+      confidence: "low",
+      needsClarification: true,
+    });
+    expect(result.reasoning).toContain("structured model output");
+  });
+
+  it("fails closed when catalog data violates the classifier request contract", async () => {
+    mockGetAvailableRepos.mockResolvedValue([
+      { ...TEST_REPOS[0], description: undefined } as unknown as RepoConfig,
+      TEST_REPOS[1],
+    ]);
+
+    const result = await new RepoClassifier(TEST_ENV).classify("route this request");
+
+    expect(result).toMatchObject({
+      target: null,
+      confidence: "low",
+      needsClarification: true,
+    });
+    expect(mockMessagesCreate).not.toHaveBeenCalled();
+  });
+
   describe("Anthropic tool-input normalization", () => {
     it.each([
       ["blank", { targetId: "   " }],
@@ -311,7 +349,7 @@ describe("RepoClassifier", () => {
     await openAiClassifier.classify(message, context);
     const openAiRequest = JSON.parse(mockSignedControlPlaneFetch.mock.calls[0][1].body);
     const openAiPrompt = buildTargetClassificationPrompt(
-      openAiRequest as TargetClassificationRequest
+      targetClassificationRequestSchema.parse(openAiRequest)
     );
 
     expect(anthropicPrompt.length).toBeLessThanOrEqual(CLASSIFIER_PROMPT_MAX_CHARS);

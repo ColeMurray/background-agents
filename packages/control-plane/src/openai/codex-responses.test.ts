@@ -217,6 +217,14 @@ describe("OpenAI Codex Responses client", () => {
     await expect(request()).resolves.toEqual({ kind: "invalid_response" });
   });
 
+  it("returns invalid_response when the stream ends before a terminal event", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      fragmentedSseResponse({ type: "response.created", response: { id: "resp-classify" } })
+    );
+
+    await expect(request()).resolves.toEqual({ kind: "invalid_response" });
+  });
+
   it.each(["response.failed", "error"])("sanitizes %s events", async (type) => {
     vi.mocked(fetch).mockResolvedValueOnce(
       fragmentedSseResponse({ type, error: { message: "upstream secret details" } })

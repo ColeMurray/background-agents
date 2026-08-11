@@ -9,17 +9,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
   CLASSIFY_TARGET_TOOL_NAME,
-  CLASSIFIER_PROMPT_MAX_CHARS,
+  CLASSIFIER_MESSAGE_MAX_CHARS,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
-  OPENAI_CLASSIFICATION_MODEL_ID,
   targetClassificationRequestSchema,
   targetClassificationResponseSchema,
   classificationModelSchema,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
   buildTargetClassificationPrompt,
-  TargetClassificationPromptTooLongError,
   type ClassificationModel,
   type TargetClassificationDecision,
   type TargetClassificationRequest,
@@ -47,6 +45,8 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
     "Use targetId as null when uncertain.",
   input_schema: CLASSIFY_TARGET_INPUT_SCHEMA,
 };
+
+class ClassificationMessageTooLongError extends Error {}
 
 function createTargetClassificationRequest(
   message: string,
@@ -87,12 +87,11 @@ function createTargetClassificationRequest(
       : undefined,
   });
   if (!parsed.success) {
-    if (message.length > CLASSIFIER_PROMPT_MAX_CHARS) {
-      throw new TargetClassificationPromptTooLongError();
+    if (message.length > CLASSIFIER_MESSAGE_MAX_CHARS) {
+      throw new ClassificationMessageTooLongError();
     }
     throw new Error("Invalid target classification input");
   }
-  buildTargetClassificationPrompt(parsed.data);
   return parsed.data;
 }
 
@@ -232,10 +231,7 @@ export class RepoClassifier {
     if (model === ANTHROPIC_CLASSIFICATION_MODEL_ID) {
       return this.classifyWithAnthropic(request);
     }
-    if (model === OPENAI_CLASSIFICATION_MODEL_ID) {
-      return this.classifyWithControlPlane(request, traceId);
-    }
-    throw new Error(`Unsupported classifier model: ${model}`);
+    return this.classifyWithControlPlane(request, traceId);
   }
 
   /**
@@ -431,8 +427,8 @@ export class RepoClassifier {
         target: null,
         confidence: "low",
         reasoning:
-          e instanceof TargetClassificationPromptTooLongError
-            ? e.message
+          e instanceof ClassificationMessageTooLongError
+            ? "This Slack message is too long to classify. Please shorten it and try again."
             : "Could not classify a target from structured model output. Please pick one below.",
         // No basis to suggest specific targets on a classification failure;
         // the picker lets the user search the full list.

@@ -1,8 +1,8 @@
 import { OpenAITokenBroker, type OpenAITokenRefreshResult } from "../auth/openai-token-broker";
-import type { OAuthSecretScope } from "../auth/scoped-oauth-secrets";
+import type { OAuthSecretScope } from "../db/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
-import { resolveSessionOAuthSecretScope } from "./oauth-secret-scope";
+import { resolveSessionOAuthSecretScope } from "./session-target-secrets";
 import type { SessionRow } from "./types";
 
 export type { OpenAITokenRefreshResult } from "../auth/openai-token-broker";

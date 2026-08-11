@@ -118,6 +118,20 @@ describe("POST /internal/target-classifications", () => {
     expect(mocks.refreshGlobal).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed JSON before token brokerage", async () => {
+    const response = await handleRequest(
+      await signedServiceRequest("https://internal/internal/target-classifications", {
+        method: "POST",
+        body: "{",
+        service: "slack-bot",
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+  });
+
   it("returns 503 without configured global OAuth", async () => {
     mocks.refreshGlobal.mockResolvedValue({
       ok: false,
@@ -215,5 +229,14 @@ describe("POST /internal/target-classifications", () => {
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth unavailable" });
     expect(mocks.requestFunction).not.toHaveBeenCalled();
+  });
+
+  it("does not misclassify unexpected service failures", async () => {
+    mocks.refreshGlobal.mockRejectedValue(new Error("unexpected internal failure"));
+
+    const response = await targetClassificationRequest(validRequest());
+
+    expect(response.status).toBe(500);
+    await expect(response.text()).resolves.not.toContain("unexpected internal failure");
   });
 });

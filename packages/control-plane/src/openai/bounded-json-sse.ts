@@ -64,9 +64,7 @@ export async function* decodeBoundedJsonSse(
         if (line === "") {
           if (eventData) {
             eventCount += 1;
-            if (eventCount > limits.maxEvents || eventDataBytes > limits.maxEventBytes) {
-              throw new InvalidBoundedJsonSseError();
-            }
+            if (eventCount > limits.maxEvents) throw new InvalidBoundedJsonSseError();
             let event: unknown;
             try {
               event = JSON.parse(eventData);

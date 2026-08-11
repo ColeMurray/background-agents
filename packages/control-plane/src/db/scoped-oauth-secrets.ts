@@ -1,7 +1,7 @@
-import { EnvironmentSecretsStore } from "../db/environment-secrets";
-import { GlobalSecretsStore } from "../db/global-secrets";
-import { RepoSecretsStore } from "../db/repo-secrets";
-import type { SqlDatabase } from "../db/sql-database";
+import { EnvironmentSecretsStore } from "./environment-secrets";
+import { GlobalSecretsStore } from "./global-secrets";
+import { RepoSecretsStore } from "./repo-secrets";
+import type { SqlDatabase } from "./sql-database";
 
 export type OAuthSecretScope =
   | { kind: "environment"; environmentId: string }
