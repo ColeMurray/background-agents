@@ -1,5 +1,7 @@
 import { getUserInfo } from "@open-inspect/shared/slack";
 
+const MAX_SENDER_LABEL_LENGTH = 80;
+
 export interface SlackActorIdentity {
   userId: string;
   senderLabel: string;
@@ -12,7 +14,7 @@ function formatSenderLabel(displayName: string | undefined, userId: string): str
     .replace(/[[\]\r\n]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 80);
+    .slice(0, MAX_SENDER_LABEL_LENGTH);
   return normalizedName && normalizedName !== userId ? `${normalizedName} (${userId})` : userId;
 }
 

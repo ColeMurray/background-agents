@@ -564,9 +564,14 @@ describe("POST /events", () => {
     slackFetch.mockRestore();
   });
 
-  it("embeds repo options in clarification messages when the repo list fits inline", async () => {
-    const slackFetch = mockSlackFetch([]);
+  it("resolves the actor once across clarification and selection", async () => {
+    const order: string[] = [];
+    const slackFetch = mockSlackFetch(order);
     const env = makeEnv();
+    mockGetUserInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U123", name: "ajan", profile: { display_name: "Ajan" } },
+    });
     (env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>).mockImplementation(
       async (input: RequestInfo | URL) => {
         const url = typeof input === "string" ? input : input.toString();
@@ -597,6 +602,22 @@ describe("POST /events", () => {
             }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           );
+        }
+
+        if (url.endsWith("/sessions")) {
+          order.push("session");
+          return new Response(JSON.stringify({ sessionId: "session-1", status: "created" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        if (url.includes("/prompt")) {
+          order.push("prompt");
+          return new Response(JSON.stringify({ messageId: "msg-1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
         }
 
         return new Response(JSON.stringify({ enabledModels: ["anthropic/claude-haiku-4-5"] }), {
@@ -645,6 +666,54 @@ describe("POST /events", () => {
         ]),
       })
     );
+
+    expect(mockGetUserInfo).not.toHaveBeenCalled();
+    await expect(
+      (env.SLACK_KV as unknown as { get: (key: string, type: string) => Promise<unknown> }).get(
+        "pending:C123:111.222",
+        "json"
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        message: "frontend backend help",
+        userId: "U123",
+        unattributedPrompt: { forwardedMessages: [] },
+      })
+    );
+
+    const selectionCtx = makeCtx();
+    const selectionResponse = await app.fetch(
+      new Request("http://localhost/interactions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "x-slack-signature": "v0=test",
+          "x-slack-request-timestamp": `${Math.floor(Date.now() / 1000)}`,
+        },
+        body: new URLSearchParams({
+          payload: JSON.stringify({
+            type: "block_actions",
+            user: { id: "U123" },
+            channel: { id: "C123" },
+            message: { ts: "111.222" },
+            actions: [{ action_id: "select_repo", selected_option: { value: "acme/web" } }],
+          }),
+        }),
+      }),
+      env,
+      selectionCtx
+    );
+
+    expect(selectionResponse.status).toBe(200);
+    await flushWaitUntil(selectionCtx);
+    expect(mockGetUserInfo).toHaveBeenCalledOnce();
+    expect(
+      promptFetchBodies(env.CONTROL_PLANE.fetch as unknown as ReturnType<typeof vi.fn>)
+    ).toEqual([
+      expect.objectContaining({
+        content: expect.stringContaining("[Ajan (U123)]: frontend backend help"),
+      }),
+    ]);
 
     slackFetch.mockRestore();
   });

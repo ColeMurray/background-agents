@@ -74,6 +74,7 @@ describe("handleTargetSelection", () => {
     vi.mocked(getPendingRequest).mockResolvedValue({
       message: "What is wrong in this screenshot?",
       userId: "U123",
+      unattributedPrompt: { forwardedMessages: ["Forwarded body"] },
       sourceMessage: { ts: "111.222" },
     });
     vi.mocked(getMessageDetails).mockResolvedValue({
@@ -97,7 +98,9 @@ describe("handleTargetSelection", () => {
     expect(startSessionAndSendPrompt).toHaveBeenCalledWith(
       env,
       expect.objectContaining({
-        messageText: "What is wrong in this screenshot?",
+        messageText:
+          "Slack messages forwarded with this request:\n---\nForwarded body\n---\n\n" +
+          "[Ajan (U123)]: What is wrong in this screenshot?",
         actor: {
           userId: "U123",
           senderLabel: "Ajan (U123)",
