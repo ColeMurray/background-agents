@@ -4,11 +4,14 @@ import {
   getChannelInfo,
   getMessageDetails,
   getThreadMessages,
+  getUserInfo,
   postMessage,
   resolveUserNames,
+  selectThreadWindow,
+  classifyThreadSpeaker,
   updateMessage,
 } from "@open-inspect/shared/slack";
-import type { CallbackContext } from "@open-inspect/shared";
+import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import type { SlackMessageAttachment, SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   IMAGE_ONLY_PROMPT_TEXT,
@@ -76,22 +79,25 @@ async function fetchThreadHistory(
   try {
     const threadResult = await getThreadMessages(env.SLACK_BOT_TOKEN, channel, threadTs, sinceTs);
     if (!threadResult.ok || !threadResult.messages) return undefined;
-    const relevant = threadResult.messages
-      .filter((m) => {
-        if (m.ts === excludeTs) return false;
-        if (!includeBotMessages && m.bot_id) return false;
-        // conversations.replies can still return the parent message when
-        // `oldest` is set, so re-check the boundary here.
-        if (sinceTs && parseFloat(m.ts) <= parseFloat(sinceTs)) return false;
-        return true;
-      })
-      .slice(-THREAD_HISTORY_MESSAGE_LIMIT);
+    // Window selection is shared with the channel-trigger path so the two do not
+    // drift again (`sinceTs` re-checks the boundary because conversations.replies
+    // can still return the parent message when `oldest` is set).
+    const relevant = selectThreadWindow(threadResult.messages, {
+      excludeTs,
+      sinceTs,
+      limit: THREAD_HISTORY_MESSAGE_LIMIT,
+      excludeBots: !includeBotMessages,
+    });
     if (relevant.length === 0) return [];
-    const uniqueUserIds = [...new Set(relevant.map((m) => m.user).filter(Boolean))] as string[];
+    const speakers = relevant.map((message) => classifyThreadSpeaker(message));
+    const uniqueUserIds = [
+      ...new Set(speakers.flatMap((speaker) => (speaker.kind === "user" ? [speaker.id] : []))),
+    ];
     const userNames = await resolveUserNames(env.SLACK_BOT_TOKEN, uniqueUserIds);
-    return relevant.map((m) => {
-      if (m.bot_id) return `[Bot]: ${m.text}`;
-      const name = m.user ? userNames.get(m.user) || m.user : "Unknown";
+    return relevant.map((m, index) => {
+      const speaker = speakers[index]!;
+      if (speaker.kind === "app") return `[Bot]: ${m.text}`;
+      const name = speaker.kind === "user" ? (userNames.get(speaker.id) ?? speaker.id) : "Unknown";
       return `[${name}]: ${m.text}`;
     });
   } catch {
@@ -154,6 +160,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     );
     return;
   }
+  const userInfo = await getUserInfo(env.SLACK_BOT_TOKEN, user);
+  const senderName = (userInfo.ok ? userInfo.user?.profile?.display_name || user : user)
+    .replace(/[[\]\r\n]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  const senderLabel = senderName && senderName !== user ? `${senderName} (${user})` : user;
   // A message with no text of its own still needs prompt content for the agent
   // to act on; what it carried instead decides which stand-in to use.
   const imageOnly = !messageText && !forwarded.hasBody;
@@ -162,7 +175,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     (forwarded.entries.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
   // Forwarded bodies lead: the user's own text ("deal with this") is the
   // instruction and reads as one when it comes last.
-  const promptText = formatForwardedContext(forwarded.entries) + requestText;
+  const forwardedContext = formatForwardedContext(forwarded.entries);
+  const promptText = forwardedContext + requestText;
+  const deliveredPromptText = forwardedContext + `[${senderLabel}]: ${requestText}`;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -191,7 +206,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
       const promptResult = await deliverPrompt(env, {
         sessionId: existingSession.sessionId,
-        content: channelContext + interimContext + promptText,
+        content: channelContext + interimContext + deliveredPromptText,
         authorId: `slack:${user}`,
         attachments: await prepareImageAttachments(env, images, traceId),
         imageOnly,
@@ -264,7 +279,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       return;
     }
     await storePendingRequest(env, channel, threadTs || ts, {
-      message: promptText,
+      message: deliveredPromptText,
       userId: user,
       previousMessages,
       channelName,
@@ -298,7 +313,7 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     target: result.target,
     channel,
     threadTs: threadKey,
-    messageText: promptText,
+    messageText: deliveredPromptText,
     userId: user,
     messageTs: ts,
     previousMessages,

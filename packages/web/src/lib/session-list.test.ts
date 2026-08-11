@@ -10,7 +10,7 @@ import {
   isUnarchivedSessionListKey,
   type SessionListResponse,
 } from "./session-list";
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
 
 function session(id: string, overrides: Partial<Session> = {}): Session {
   return {

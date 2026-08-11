@@ -7,28 +7,6 @@ const SESSION_READ_RETRY_MS = 2_000;
 const SESSION_READ_MAX_ATTEMPTS = 4;
 const MEANINGFUL_VISIBLE_HEIGHT_PX = 48;
 
-interface TerminalMessageReadAttemptState {
-  enabled: boolean;
-  attemptsComplete: boolean;
-  requestInFlight: boolean;
-  attemptCount: number;
-  intersecting: boolean;
-  documentVisible: boolean;
-  documentFocused: boolean;
-}
-
-export function shouldAttemptMarkMessageRead(state: TerminalMessageReadAttemptState): boolean {
-  return (
-    state.enabled &&
-    !state.attemptsComplete &&
-    !state.requestInFlight &&
-    state.attemptCount < SESSION_READ_MAX_ATTEMPTS &&
-    state.intersecting &&
-    state.documentVisible &&
-    state.documentFocused
-  );
-}
-
 export function TerminalMessageReadObserver({
   messageId,
   enabled,
@@ -51,15 +29,13 @@ export function TerminalMessageReadObserver({
 
   const attemptMarkMessageRead = useCallback(async () => {
     if (
-      !shouldAttemptMarkMessageRead({
-        enabled: enabledRef.current,
-        attemptsComplete: attemptsCompleteRef.current,
-        requestInFlight: requestInFlightRef.current,
-        attemptCount: attemptCountRef.current,
-        intersecting: intersectingRef.current,
-        documentVisible: document.visibilityState === "visible",
-        documentFocused: document.hasFocus(),
-      })
+      !enabledRef.current ||
+      attemptsCompleteRef.current ||
+      requestInFlightRef.current ||
+      attemptCountRef.current >= SESSION_READ_MAX_ATTEMPTS ||
+      !intersectingRef.current ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
     ) {
       return;
     }

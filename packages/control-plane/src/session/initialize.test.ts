@@ -31,6 +31,7 @@ describe("initializeSession", () => {
     spawnSource: "user",
     spawnDepth: 0,
     codeServerEnabled: false,
+    vncEnabled: true,
     sandboxSettings: {},
     automationId: null,
     automationRunId: null,
@@ -239,6 +240,7 @@ describe("initializeSession", () => {
     expect(body.scmTokenExpiresAt).toBe(1700000000000);
     expect(body.scmUserId).toBe("scm-1");
     expect(body.codeServerEnabled).toBe(false);
+    expect(body.vncEnabled).toBe(true);
     expect(body.sandboxSettings).toEqual({});
     expect(body.parentSessionId).toBeNull();
     expect(body.spawnSource).toBe("user");

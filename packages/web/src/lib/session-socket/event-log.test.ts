@@ -16,6 +16,10 @@ function completionEvent(messageId: string, timestamp = 2): SandboxEvent {
   return { type: "execution_complete", messageId, success: true, sandboxId: "sb-1", timestamp };
 }
 
+function compactionEvent(messageId: string, timestamp = 2): SandboxEvent {
+  return { type: "context_compacted", messageId, sandboxId: "sb-1", timestamp };
+}
+
 describe("toUiSandboxEvent", () => {
   it("keeps a numeric timestamp", () => {
     expect(toUiSandboxEvent(tokenEvent("msg-1", "hi", 42)).timestamp).toBe(42);
@@ -45,6 +49,24 @@ describe("collapseReplayTokenEvents", () => {
     expect(collapseReplayTokenEvents(events)).toEqual([
       tokenEvent("msg-1", "final", 2),
       completionEvent("msg-1", 3),
+    ]);
+  });
+
+  it("keeps final tokens from both sides of a compaction boundary", () => {
+    const events = [
+      tokenEvent("msg-1", "pre-partial", 1),
+      tokenEvent("msg-1", "before compaction", 2),
+      compactionEvent("msg-1", 3),
+      tokenEvent("msg-1", "post-partial", 4),
+      tokenEvent("msg-1", "after compaction", 5),
+      completionEvent("msg-1", 6),
+    ];
+
+    expect(collapseReplayTokenEvents(events)).toEqual([
+      tokenEvent("msg-1", "before compaction", 2),
+      compactionEvent("msg-1", 3),
+      tokenEvent("msg-1", "after compaction", 5),
+      completionEvent("msg-1", 6),
     ]);
   });
 
@@ -126,6 +148,26 @@ describe("ingestLiveSandboxEvent", () => {
     const result = ingestLiveSandboxEvent(pending, toolCall);
     expect(result.pending).toBe(pending);
     expect(result.append).toEqual([toolCall]);
+  });
+
+  it("flushes pending text before context compaction", () => {
+    const pending: PendingAssistantText = {
+      content: "in flight",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1,
+    };
+    const compaction: SandboxEvent = {
+      type: "context_compacted",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 2,
+    };
+
+    const result = ingestLiveSandboxEvent(pending, compaction);
+
+    expect(result.pending).toBeNull();
+    expect(result.append).toEqual([pendingToTokenEvent(pending), compaction]);
   });
 });
 

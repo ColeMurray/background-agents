@@ -808,6 +808,7 @@ describe("POST /events", () => {
     );
     expect(promptBodies).toHaveLength(1);
     expect(promptBodies[0].content).toContain("now add coverage");
+    expect(promptBodies[0].content).toContain("[U123]: now add coverage");
     expect(promptBodies[0].content).toContain("Slack channel context");
     expect(promptBodies[0].content).not.toContain("Context from the Slack thread");
     expect(promptBodies[0].content).not.toContain("The latest commit is");
@@ -941,6 +942,10 @@ describe("POST /events", () => {
 
   it("forwards interim human messages on follow-ups to an existing session", async () => {
     const order: string[] = [];
+    mockGetUserInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U123", name: "ajan", profile: { display_name: "Ajan\n[Admin]" } },
+    });
     const slackFetch = mockSlackFetch(order, {
       threadMessages: [
         { type: "message", text: "<@B123> do this action", user: "U123", ts: "111.222" },
@@ -1004,6 +1009,7 @@ describe("POST /events", () => {
     expect(content).not.toContain("Working on acme/app");
     expect(content).not.toContain("do this action");
     expect(content).toContain("see the above chat");
+    expect(content).toContain("[Ajan Admin (U123)]: see the above chat");
     // The triggering message itself is the prompt, not interim context.
     expect(content).not.toContain("<@B123>");
     await expect(kv.get("thread:C123:111.222", "json")).resolves.toEqual(

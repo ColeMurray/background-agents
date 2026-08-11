@@ -132,3 +132,13 @@ export function parsePrimaryBuildSha(repositoryShas: string): string | null {
     return null;
   }
 }
+
+/** Formats the ready-details line shared by both image families. */
+export function formatReadyDetails(
+  buildSha: string | null | undefined,
+  buildDurationSeconds: number | null | undefined
+): string {
+  const sha = buildSha ? buildSha.slice(0, 7) : "";
+  const duration = buildDurationSeconds ? `${Math.round(buildDurationSeconds)}s` : "";
+  return [sha, duration].filter(Boolean).join(" · ");
+}

@@ -7,6 +7,7 @@ import pytest
 from sandbox_runtime.constants import (
     CODE_SERVER_PORT_ENV_VAR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    NOVNC_PORT,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
@@ -99,16 +100,19 @@ class TestResolveAndSetupTunnels:
     @pytest.mark.asyncio
     async def test_returns_none_none_none_for_no_ports(self):
         sandbox = MagicMock()
-        cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+        cs_url, vnc_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
             sandbox,
             "sb-1",
             False,
             False,
+            False,
             [],
             code_server_port=CODE_SERVER_PORT,
+            novnc_port=NOVNC_PORT,
             ttyd_proxy_port=TTYD_PROXY_PORT,
         )
         assert cs_url is None
+        assert vnc_url is None
         assert ttyd_url is None
         assert extra is None
 
@@ -123,17 +127,20 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=tunnel_urls,
         ):
-            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, vnc_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
                 False,
+                False,
                 [3000],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
         assert cs_url is None
+        assert vnc_url is None
         assert ttyd_url is None
         assert extra == {3000: "https://tunnel-3000.example.com"}
 
@@ -152,17 +159,20 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, vnc_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 True,
                 False,
+                False,
                 [3000],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
         assert cs_url == "https://cs.example.com"
+        assert vnc_url is None
         assert ttyd_url is None
         assert extra == {3000: "https://tunnel-3000.example.com"}
 
@@ -178,17 +188,20 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, vnc_url, ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
                 False,
+                False,
                 [CODE_SERVER_PORT],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
         assert cs_url is None
+        assert vnc_url is None
         assert ttyd_url is None
         assert extra == {CODE_SERVER_PORT: "https://my-app.example.com"}
 
@@ -207,13 +220,15 @@ class TestResolveAndSetupTunnels:
             new_callable=AsyncMock,
             return_value=resolved,
         ):
-            cs_url, _ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
+            cs_url, _vnc_url, _ttyd_url, extra = await SandboxManager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 True,
                 False,
+                False,
                 [CODE_SERVER_PORT],
                 code_server_port=8081,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
@@ -280,8 +295,10 @@ class TestResolveAndSetupTunnelsWritesFile:
                 "sb-1",
                 False,
                 False,
+                False,
                 [3000],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
@@ -300,13 +317,15 @@ class TestResolveAndSetupTunnelsWritesFile:
             new_callable=AsyncMock,
             return_value={},
         ):
-            _cs, _ttyd, extra = await SandboxManager._resolve_and_setup_tunnels(
+            _cs, _vnc, _ttyd, extra = await SandboxManager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
                 False,
+                False,
                 [3000],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
@@ -329,8 +348,10 @@ class TestResolveAndSetupTunnelsWritesFile:
                 "sb-1",
                 True,
                 False,
+                False,
                 [],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
@@ -350,13 +371,15 @@ class TestResolveAndSetupTunnelsWritesFile:
             ),
             patch("src.sandbox.manager.log"),
         ):
-            _cs, _ttyd, extra = await SandboxManager._resolve_and_setup_tunnels(
+            _cs, _vnc, _ttyd, extra = await SandboxManager._resolve_and_setup_tunnels(
                 sandbox,
                 "sb-1",
                 False,
                 False,
+                False,
                 [3000],
                 code_server_port=CODE_SERVER_PORT,
+                novnc_port=NOVNC_PORT,
                 ttyd_proxy_port=TTYD_PROXY_PORT,
             )
 
@@ -384,7 +407,7 @@ class TestExpectedTunnelPortsEnvVar:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None)),
+            AsyncMock(return_value=(None, None, None, None)),
         )
 
         manager = SandboxManager()
@@ -416,7 +439,7 @@ class TestExpectedTunnelPortsEnvVar:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None)),
+            AsyncMock(return_value=(None, None, None, None)),
         )
 
         manager = SandboxManager()
@@ -450,7 +473,7 @@ class TestExpectedTunnelPortsEnvVar:
         monkeypatch.setattr(
             SandboxManager,
             "_resolve_and_setup_tunnels",
-            AsyncMock(return_value=(None, None, None)),
+            AsyncMock(return_value=(None, None, None, None)),
         )
 
         manager = SandboxManager()
@@ -468,42 +491,60 @@ class TestCollectExposedPorts:
 
     def test_no_ports_when_no_settings(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, False, None, CODE_SERVER_PORT, TTYD_PROXY_PORT
+            False, False, False, None, CODE_SERVER_PORT, NOVNC_PORT, TTYD_PROXY_PORT
         )
         assert exposed == []
         assert tunnel == []
 
     def test_code_server_only(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, False, None, CODE_SERVER_PORT, TTYD_PROXY_PORT
+            True, False, False, None, CODE_SERVER_PORT, NOVNC_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [CODE_SERVER_PORT]
         assert tunnel == []
 
     def test_tunnel_ports_only(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, False, {"tunnelPorts": [3000, 5173]}, CODE_SERVER_PORT, TTYD_PROXY_PORT
+            False,
+            False,
+            False,
+            {"tunnelPorts": [3000, 5173]},
+            CODE_SERVER_PORT,
+            NOVNC_PORT,
+            TTYD_PROXY_PORT,
         )
         assert exposed == [3000, 5173]
         assert tunnel == [3000, 5173]
 
     def test_combined_code_server_and_tunnels(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, False, {"tunnelPorts": [3000]}, CODE_SERVER_PORT, TTYD_PROXY_PORT
+            True,
+            False,
+            False,
+            {"tunnelPorts": [3000]},
+            CODE_SERVER_PORT,
+            NOVNC_PORT,
+            TTYD_PROXY_PORT,
         )
         assert exposed == [CODE_SERVER_PORT, 3000]
         assert tunnel == [3000]
 
     def test_terminal_only(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, True, None, CODE_SERVER_PORT, TTYD_PROXY_PORT
+            False, False, True, None, CODE_SERVER_PORT, NOVNC_PORT, TTYD_PROXY_PORT
         )
         assert exposed == [TTYD_PROXY_PORT]
         assert tunnel == []
 
     def test_deduplicates_ttyd_port_from_tunnels(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, True, {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}, CODE_SERVER_PORT, TTYD_PROXY_PORT
+            False,
+            False,
+            True,
+            {"tunnelPorts": [TTYD_PROXY_PORT, 3000]},
+            CODE_SERVER_PORT,
+            NOVNC_PORT,
+            TTYD_PROXY_PORT,
         )
         assert exposed == [TTYD_PROXY_PORT, 3000]
         assert tunnel == [3000]
@@ -512,8 +553,10 @@ class TestCollectExposedPorts:
         exposed, tunnel = SandboxManager._collect_exposed_ports(
             True,
             False,
+            False,
             {"tunnelPorts": [CODE_SERVER_PORT, 3000]},
             CODE_SERVER_PORT,
+            NOVNC_PORT,
             TTYD_PROXY_PORT,
         )
         assert exposed == [CODE_SERVER_PORT, 3000]
@@ -522,14 +565,26 @@ class TestCollectExposedPorts:
     def test_custom_code_server_port_frees_default_for_tunnel(self):
         # code-server moved to 8081 → the default 8080 is free as a user tunnel.
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            True, False, {"tunnelPorts": [CODE_SERVER_PORT]}, 8081, TTYD_PROXY_PORT
+            True,
+            False,
+            False,
+            {"tunnelPorts": [CODE_SERVER_PORT]},
+            8081,
+            NOVNC_PORT,
+            TTYD_PROXY_PORT,
         )
         assert exposed == [8081, CODE_SERVER_PORT]
         assert tunnel == [CODE_SERVER_PORT]
 
     def test_custom_terminal_port_frees_default_for_tunnel(self):
         exposed, tunnel = SandboxManager._collect_exposed_ports(
-            False, True, {"tunnelPorts": [TTYD_PROXY_PORT, 3000]}, CODE_SERVER_PORT, 7000
+            False,
+            False,
+            True,
+            {"tunnelPorts": [TTYD_PROXY_PORT, 3000]},
+            CODE_SERVER_PORT,
+            NOVNC_PORT,
+            7000,
         )
         assert exposed == [7000, TTYD_PROXY_PORT, 3000]
         assert tunnel == [TTYD_PROXY_PORT, 3000]
@@ -572,7 +627,7 @@ def _patch_sandbox_create(monkeypatch, captured: dict) -> None:
     monkeypatch.setattr(
         SandboxManager,
         "_resolve_and_setup_tunnels",
-        AsyncMock(return_value=(None, None, None)),
+        AsyncMock(return_value=(None, None, None, None)),
     )
 
 
@@ -580,22 +635,30 @@ class TestResolveServicePorts:
     """SandboxManager._resolve_service_ports tests."""
 
     def test_defaults_when_unset(self):
-        assert SandboxManager._resolve_service_ports(None) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
-        assert SandboxManager._resolve_service_ports({}) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+        assert SandboxManager._resolve_service_ports(None) == (
+            CODE_SERVER_PORT,
+            NOVNC_PORT,
+            TTYD_PROXY_PORT,
+        )
+        assert SandboxManager._resolve_service_ports({}) == (
+            CODE_SERVER_PORT,
+            NOVNC_PORT,
+            TTYD_PROXY_PORT,
+        )
 
     def test_uses_configured_ports(self):
         assert SandboxManager._resolve_service_ports(
-            {"codeServerPort": 9000, "terminalPort": 9001}
-        ) == (9000, 9001)
+            {"codeServerPort": 9000, "vncPort": 9001, "terminalPort": 9002}
+        ) == (9000, 9001, 9002)
 
     def test_falls_back_on_invalid(self):
         assert SandboxManager._resolve_service_ports(
-            {"codeServerPort": 0, "terminalPort": 99999}
-        ) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+            {"codeServerPort": 0, "vncPort": -1, "terminalPort": 99999}
+        ) == (CODE_SERVER_PORT, NOVNC_PORT, TTYD_PROXY_PORT)
         # strings and bools are not valid in-range ints
         assert SandboxManager._resolve_service_ports(
-            {"codeServerPort": "8081", "terminalPort": True}
-        ) == (CODE_SERVER_PORT, TTYD_PROXY_PORT)
+            {"codeServerPort": "8081", "vncPort": False, "terminalPort": True}
+        ) == (CODE_SERVER_PORT, NOVNC_PORT, TTYD_PROXY_PORT)
 
 
 class TestServicePortEnvVars:

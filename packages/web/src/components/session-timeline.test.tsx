@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { buildTimelineItems } from "@/lib/timeline-items";
@@ -127,6 +127,71 @@ describe("user message authors", () => {
       "src",
       "https://historical.example/avatar"
     );
+  });
+});
+
+describe("context compaction", () => {
+  function compaction(timestamp: number): SandboxEvent {
+    return {
+      type: "context_compacted",
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp,
+    };
+  }
+
+  it("renders a muted divider marker", () => {
+    render(
+      <EventItem
+        event={compaction(1)}
+        sessionId="session-1"
+        currentParticipantId={null}
+        participantProfiles={{}}
+        onOpenMedia={() => {}}
+      />
+    );
+
+    const marker = screen.getByText("Context compacted");
+    expect(marker.closest(".text-muted-foreground")).not.toBeNull();
+    expect(marker.parentElement?.querySelectorAll("[aria-hidden='true']")).toHaveLength(2);
+  });
+
+  it("keeps multiple markers and separates adjacent tool groups", () => {
+    const items = buildTimelineItems([
+      toolCall("call-1", "Read", "/workspace/one.ts"),
+      compaction(2),
+      toolCall("call-2", "Read", "/workspace/two.ts"),
+      compaction(3),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      "tool_group",
+      "single",
+      "tool_group",
+      "single",
+    ]);
+  });
+
+  it("keeps assistant segments on both sides of a marker", () => {
+    const token = (content: string, timestamp: number): SandboxEvent => ({
+      type: "token",
+      content,
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp,
+    });
+
+    const items = buildTimelineItems([
+      token("before compaction", 1),
+      compaction(2),
+      token("after compaction", 3),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "single", event: { type: "token", content: "before compaction" } },
+      { type: "single", event: { type: "context_compacted" } },
+      { type: "single", event: { type: "token", content: "after compaction" } },
+    ]);
   });
 });
 
@@ -466,7 +531,108 @@ function toolEvent(
   };
 }
 
+describe("timeline auto-scrolling", () => {
+  it("confines sub-task auto-scrolling to the timeline", () => {
+    const task = toolEvent("task", "task-call", 1, {
+      childSessionId: "child-1",
+      status: "running",
+    });
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[task]} />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+    });
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          task,
+          toolEvent("Read", "child-call", 2, {
+            isSubtask: true,
+            childSessionId: "child-1",
+            taskCallId: "task-call",
+          }),
+        ]}
+      />
+    );
+
+    expect(timeline.scrollTop).toBe(1_000);
+    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("does not move the timeline when the user has scrolled away from the bottom", () => {
+    const task = toolEvent("task", "task-call", 1, {
+      childSessionId: "child-1",
+      status: "running",
+    });
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[task]} />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 1_000 },
+      scrollTop: { configurable: true, value: 300, writable: true },
+    });
+    fireEvent.scroll(timeline);
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          task,
+          toolEvent("Read", "child-call", 2, {
+            isSubtask: true,
+            childSessionId: "child-1",
+            taskCallId: "task-call",
+          }),
+        ]}
+      />
+    );
+
+    expect(timeline.scrollTop).toBe(300);
+  });
+});
+
 describe("task activity grouping", () => {
+  it("pulses while a Task is running and stops after its completion update", () => {
+    const runningTask = toolEvent("task", "task-call", 1, {
+      args: { description: "Review code" },
+      status: "running",
+    });
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[runningTask]} />
+    );
+
+    const indicator = screen.getByRole("status");
+    expect(indicator).toHaveClass("sr-only");
+    expect(indicator).toHaveTextContent("Task in progress");
+    expect(indicator.closest("button")).toBeNull();
+    expect(container.querySelector("button [aria-hidden='true'].animate-pulse")).toHaveClass(
+      "bg-accent"
+    );
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          runningTask,
+          toolEvent("task", "task-call", 2, {
+            args: { description: "Review code" },
+            status: "completed",
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(container.querySelector("button [aria-hidden='true'].animate-pulse")).toBeNull();
+  });
+
   it("nests child tools beneath their Task and keeps parallel Tasks separate", () => {
     const groups = buildTimelineItems([
       toolEvent("task", "task-a", 1, { childSessionId: "child-a" }),

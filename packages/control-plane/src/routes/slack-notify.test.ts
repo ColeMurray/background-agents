@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
 import type { SqlDatabase } from "../db/sql-database";
@@ -320,6 +321,42 @@ describe("handleSlackNotify", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("splits a long message and lets Slack derive accessible fallback text", async () => {
+    seedActiveSession();
+    integrationStoreMock.getResolvedConfig.mockResolvedValue({
+      enabledRepos: null,
+      settings: { agentNotificationsEnabled: true, mentionsPolicy: "strip" },
+    });
+    mockSlackResponse({ body: { ok: true, channel: "C1", ts: "12345.67890" } });
+    mockSlackResponse({
+      body: { ok: true, permalink: "https://x.slack.com/archives/C1/p1", channel: "C1" },
+    });
+
+    // Findings then recommendations: the tail is the part a reader needs, and
+    // it is exactly what a hard cut used to remove.
+    const findings = Array.from({ length: 40 }, (_, i) => `Finding ${i}: ${"x".repeat(70)}`).join(
+      "\n\n"
+    );
+    const text = `${findings}\n\nRECOMMENDATION: do the thing.`;
+    expect(text.length).toBeGreaterThan(SECTION_TEXT_MAX_CHARS);
+
+    const res = await callHandler({ channel: "#ops", text });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { truncated: boolean }).truncated).toBe(false);
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as {
+      blocks: Array<{ type: string; text?: { text: string } }>;
+    };
+    expect(body).not.toHaveProperty("text");
+    const sections = body.blocks.filter((b) => b.type === "section");
+    expect(sections.length).toBeGreaterThan(1);
+    for (const section of sections) {
+      expect(section.text!.text.length).toBeLessThanOrEqual(SECTION_TEXT_MAX_CHARS);
+    }
+    // Nothing lost: the closing recommendation survives.
+    expect(sections.map((b) => b.text!.text).join("")).toContain("RECOMMENDATION: do the thing.");
+  });
+
   it("strips broadcasts, sanitizes links, applies mentions policy, and reports metadata", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
@@ -361,13 +398,14 @@ describe("handleSlackNotify", () => {
     expect(slackUrl).toContain("chat.postMessage");
     const sentBody = JSON.parse(slackCall[1].body as string) as {
       channel: string;
-      text: string;
+      blocks: Array<{ type: string; text?: { text: string } }>;
     };
     expect(sentBody.channel).toBe("#ops");
-    expect(sentBody.text).not.toContain("<!here>");
-    expect(sentBody.text).not.toContain("<@U999>");
-    expect(sentBody.text).toContain("https://evil");
-    expect(sentBody.text).not.toContain("|github.com>");
+    const sentText = sentBody.blocks.find((block) => block.type === "section")?.text?.text ?? "";
+    expect(sentText).not.toContain("<!here>");
+    expect(sentText).not.toContain("<@U999>");
+    expect(sentText).toContain("https://evil");
+    expect(sentText).not.toContain("|github.com>");
   });
 
   it("returns the success envelope (no events emitted) and logs attribution on success", async () => {

@@ -1,9 +1,9 @@
 "use client";
 
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -57,28 +57,20 @@ import {
   reconcileSessionReadState,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
+import { useSessionSnapshot } from "./session-snapshot-provider";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
 const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 
 export default function SessionPage() {
-  return (
-    <Suspense>
-      <SessionPageContent />
-    </Suspense>
-  );
-}
-
-function SessionPageContent() {
-  const params = useParams();
-  const searchParams = useSearchParams();
-  const sessionId = params.id as string;
-
+  const initialSnapshot = useSessionSnapshot();
+  const sessionId = initialSnapshot.session.id;
   const {
     connected,
     connecting,
-    replaying,
+    ready,
+    presenceSynced,
     authError,
     connectionError,
     sessionState,
@@ -93,21 +85,18 @@ function SessionPageContent() {
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId);
+  } = useSessionSocket(sessionId, initialSnapshot);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
     sessionId,
     participants,
     events
   );
 
-  const fallbackSessionInfo = useMemo(
-    () => ({
-      repoOwner: searchParams.get("repoOwner") || null,
-      repoName: searchParams.get("repoName") || null,
-      title: searchParams.get("title") || null,
-    }),
-    [searchParams]
-  );
+  const fallbackSessionInfo = {
+    repoOwner: initialSnapshot.session.repoOwner,
+    repoName: initialSnapshot.session.repoName,
+    title: initialSnapshot.session.title,
+  };
 
   const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);
   const {
@@ -207,7 +196,6 @@ function SessionPageContent() {
       ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
       : null);
 
-  const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
   const resolvedDiff = useMemo(
     () =>
       selectedDiff && diffState?.current
@@ -281,11 +269,10 @@ function SessionPageContent() {
             participantProfiles={profiles}
             isProcessing={isProcessing}
             loadingHistory={loadingHistory}
-            showSkeleton={showTimelineSkeleton}
+            showSkeleton={false}
             onLoadOlder={loadOlderEvents}
             onOpenMedia={setSelectedMediaArtifactId}
             terminalMessageReadObservationEnabled={
-              !replaying &&
               !loadingHistory &&
               !isDetailsOpen &&
               selectedMediaArtifactId === null &&
@@ -307,12 +294,12 @@ function SessionPageContent() {
   );
 
   return (
-    <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
+    <div className="h-full min-w-0 overflow-hidden flex flex-col">
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
-        connected={connected}
-        connecting={connecting}
+        connected={connected && ready}
+        connecting={connecting || (connected && !ready)}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
@@ -353,6 +340,7 @@ function SessionPageContent() {
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}
+                presenceSynced={presenceSynced}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -385,6 +373,7 @@ function SessionPageContent() {
               sessionId={sessionId}
               sessionState={sessionState}
               participants={profiledParticipants}
+              presenceSynced={presenceSynced}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -408,6 +397,7 @@ function SessionPageContent() {
           sessionId={sessionId}
           sessionState={sessionState}
           participants={profiledParticipants}
+          presenceSynced={presenceSynced}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}
@@ -463,8 +453,8 @@ function SessionPageContent() {
         }}
         prompt={{
           value: prompt,
-          isProcessing,
-          draftLocked: isSubmitting || sessionAttachments.isUploading,
+          isProcessing: ready && isProcessing,
+          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,

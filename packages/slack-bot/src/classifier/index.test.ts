@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CLASSIFIER_PROMPT_MAX_CHARS } from "@open-inspect/shared";
-import type { Env, Environment, RepoConfig } from "../types";
+import { CLASSIFIER_PROMPT_MAX_CHARS } from "@open-inspect/shared/types/target-classification";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 
 const {
   mockMessagesCreate,

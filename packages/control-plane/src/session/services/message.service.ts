@@ -1,6 +1,7 @@
 import type { ArtifactRow } from "../types";
-import type { SessionMessage } from "@open-inspect/shared";
-import type { ArtifactResponse, ListEventsResponse } from "../../types";
+import type { SessionMessage } from "@open-inspect/shared/types/sessions";
+import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
+import type { NormalizedArtifactResponse } from "../artifacts";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
@@ -44,16 +45,7 @@ export class MessageService {
     return this.eventStream.listEvents(request);
   }
 
-  listArtifacts(): {
-    artifacts: Array<{
-      id: string;
-      type: ArtifactRow["type"];
-      url: string | null;
-      metadata: Record<string, unknown> | null;
-      createdAt: number;
-      updatedAt: number;
-    }>;
-  } {
+  listArtifacts(): { artifacts: NormalizedArtifactResponse[] } {
     const artifacts = this.deps.repository.listArtifacts();
     return {
       artifacts: artifacts.map((artifact) => ({
@@ -67,7 +59,7 @@ export class MessageService {
     };
   }
 
-  getArtifact(artifactId: string): { artifact: ArtifactResponse | null } {
+  getArtifact(artifactId: string): { artifact: NormalizedArtifactResponse | null } {
     const artifact = this.deps.repository.getArtifactById(artifactId);
     if (!artifact) {
       return { artifact: null };

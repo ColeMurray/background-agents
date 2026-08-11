@@ -96,31 +96,51 @@ describe("POST /internal/unarchive", () => {
 });
 
 describe("POST /internal/prompt", () => {
-  it.each(["completed", "failed", "archived", "cancelled"])(
-    "reopens %s session back to active",
-    async (status) => {
-      const { stub } = await initSession({ userId: "user-1" });
+  it.each(["completed", "failed"])("reopens %s session back to active", async (status) => {
+    const { stub } = await initSession({ userId: "user-1" });
 
-      await runInDurableObject(stub, (instance: SessionDO) => {
-        instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
-      });
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+    });
 
-      const promptRes = await stub.fetch("http://internal/internal/prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: "Re-open session",
-          authorId: "user-1",
-          source: "web",
-        }),
-      });
-      expect(promptRes.status).toBe(200);
+    const promptRes = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Re-open session",
+        authorId: "user-1",
+        source: "web",
+      }),
+    });
+    expect(promptRes.status).toBe(200);
 
-      const stateRes = await stub.fetch("http://internal/internal/state");
-      const state = await stateRes.json<{ status: string }>();
-      expect(state.status).toBe("active");
-    }
-  );
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    const state = await stateRes.json<{ status: string }>();
+    expect(state.status).toBe("active");
+  });
+
+  it.each(["archived", "cancelled"])("rejects prompts for a %s session", async (status) => {
+    const { stub } = await initSession({ userId: "user-1" });
+
+    await runInDurableObject(stub, (instance: SessionDO) => {
+      instance.ctx.storage.sql.exec("UPDATE session SET status = ?", status);
+    });
+
+    const promptRes = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: "Re-open session",
+        authorId: "user-1",
+        source: "web",
+      }),
+    });
+    expect(promptRes.status).toBe(409);
+
+    const stateRes = await stub.fetch("http://internal/internal/state");
+    const state = await stateRes.json<{ status: string }>();
+    expect(state.status).toBe(status);
+  });
 });
 
 describe("POST /internal/update-title", () => {
