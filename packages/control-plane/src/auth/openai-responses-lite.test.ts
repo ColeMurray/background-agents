@@ -105,7 +105,7 @@ describe("OpenAI Responses Lite client", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer secret-access-token");
     expect(headers.get("ChatGPT-Account-Id")).toBe("account-123");
-    expect(headers.get("originator")).toBe("open-inspect");
+    expect(headers.get("originator")).toBe("opencode");
     expect(headers.get("session-id")).toBe("trace-123");
     expect(headers.get("x-client-request-id")).toBe("request-123");
     expect(headers.has("session_id")).toBe(false);

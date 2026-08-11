@@ -1,7 +1,7 @@
 import { waitForAbort } from "./bounded-json-sse";
 import { parseOpenAIResponsesLiteStream } from "./openai-responses-lite-stream";
 
-const RESPONSES_LITE_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 export const RESPONSES_LITE_TIMEOUT_MS = 30_000;
 
 export type OpenAIResponsesLiteFunctionRequest = {
@@ -29,7 +29,7 @@ function buildHeaders(request: OpenAIResponsesLiteFunctionRequest): Headers {
     authorization: `Bearer ${request.accessToken}`,
     Accept: "text/event-stream",
     "Content-Type": "application/json",
-    originator: "open-inspect",
+    originator: "opencode",
     "session-id": request.traceId,
     "x-client-request-id": request.requestId,
     "x-openai-internal-codex-responses-lite": "true",
@@ -73,7 +73,10 @@ function buildBody(request: OpenAIResponsesLiteFunctionRequest): string {
   });
 }
 
-/** Executes one forced function call against the subscription Responses Lite endpoint. */
+/**
+ * Executes one forced function call using Codex's internal Responses Lite mode.
+ * This is not the public OpenAI Responses API.
+ */
 export async function requestOpenAIResponsesLiteFunction(
   request: OpenAIResponsesLiteFunctionRequest
 ): Promise<OpenAIResponsesLiteResult> {
@@ -83,7 +86,7 @@ export async function requestOpenAIResponsesLiteFunction(
     let response: Response;
     try {
       response = await waitForAbort(
-        fetch(RESPONSES_LITE_ENDPOINT, {
+        fetch(CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT, {
           method: "POST",
           headers: buildHeaders(request),
           signal: abortController.signal,
