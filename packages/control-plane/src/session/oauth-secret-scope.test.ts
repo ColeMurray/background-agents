@@ -59,6 +59,15 @@ describe("resolveSessionOAuthSecretScope", () => {
     expect(ensureRepoId).toHaveBeenCalledWith(target);
   });
 
+  it("resolves an environment target without repository context", async () => {
+    const ensureRepoId = vi.fn();
+
+    await expect(
+      resolveSessionOAuthSecretScope(session({ environment_id: "env_1" }), ensureRepoId)
+    ).resolves.toEqual({ kind: "environment", environmentId: "env_1" });
+    expect(ensureRepoId).not.toHaveBeenCalled();
+  });
+
   it("returns no scope only when repository context is fully absent", async () => {
     const ensureRepoId = vi.fn();
 
