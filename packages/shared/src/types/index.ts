@@ -74,15 +74,17 @@ export {
   OPENAI_CLASSIFICATION_MODEL_ID,
   classificationModelSchema,
   targetClassificationDecisionSchema,
-  openAIClassifierInferenceRequestSchema,
-  classifierInferenceResponseSchema,
+  targetClassificationRequestSchema,
+  targetClassificationResponseSchema,
   targetClassificationJsonSchema,
+  buildTargetClassificationPrompt,
+  TargetClassificationPromptTooLongError,
 } from "./target-classification";
 export type {
   ClassificationModel,
   TargetClassificationDecision,
-  OpenAIClassifierInferenceRequest,
-  ClassifierInferenceResponse,
+  TargetClassificationRequest,
+  TargetClassificationResponse,
 } from "./target-classification";
 export {
   serverMessageSchema,

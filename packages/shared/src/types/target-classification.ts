@@ -58,21 +58,152 @@ export const targetClassificationDecisionSchema = z
 
 export type TargetClassificationDecision = z.infer<typeof targetClassificationDecisionSchema>;
 
-export const openAIClassifierInferenceRequestSchema = z
+const classificationIdSchema = z.string().trim().min(1).max(512);
+const classificationMetadataSchema = z.string().max(4_000);
+const classificationMetadataListSchema = z
+  .array(z.string().trim().min(1).max(256))
+  .max(100)
+  .optional();
+
+const targetClassificationTargetSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("repository"),
+      id: classificationIdSchema,
+      fullName: classificationIdSchema,
+      description: classificationMetadataSchema,
+      aliases: classificationMetadataListSchema,
+      keywords: classificationMetadataListSchema,
+      defaultBranch: classificationIdSchema,
+      private: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("environment"),
+      id: classificationIdSchema,
+      name: z.string().trim().min(1).max(200),
+      description: classificationMetadataSchema.nullable(),
+      repositories: z.array(classificationIdSchema).max(100),
+    })
+    .strict(),
+]);
+
+type TargetClassificationTarget = z.infer<typeof targetClassificationTargetSchema>;
+
+const targetClassificationContextSchema = z
   .object({
-    prompt: z.string().min(1).max(CLASSIFIER_PROMPT_MAX_CHARS),
+    channelId: z.string().trim().min(1).max(128),
+    channelName: z.string().trim().min(1).max(256).optional(),
+    channelDescription: classificationMetadataSchema.optional(),
+    inThread: z.boolean(),
+    previousMessages: z.array(classificationMetadataSchema).max(100).optional(),
   })
   .strict();
 
-export type OpenAIClassifierInferenceRequest = z.infer<
-  typeof openAIClassifierInferenceRequestSchema
->;
+type TargetClassificationContext = z.infer<typeof targetClassificationContextSchema>;
 
-export const classifierInferenceResponseSchema = z
-  .object({ decision: targetClassificationDecisionSchema })
+export const targetClassificationRequestSchema = z
+  .object({
+    message: z.string().min(1).max(CLASSIFIER_PROMPT_MAX_CHARS),
+    targets: z.array(targetClassificationTargetSchema).min(1).max(2_000),
+    context: targetClassificationContextSchema.optional(),
+  })
   .strict();
 
-export type ClassifierInferenceResponse = z.infer<typeof classifierInferenceResponseSchema>;
+export type TargetClassificationRequest = z.infer<typeof targetClassificationRequestSchema>;
+
+const PROMPT_TRUNCATION_MARKER = "[truncated]";
+
+function truncateWithMarker(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  if (maxChars <= PROMPT_TRUNCATION_MARKER.length) {
+    return PROMPT_TRUNCATION_MARKER.slice(0, Math.max(0, maxChars));
+  }
+  return `${value.slice(0, maxChars - PROMPT_TRUNCATION_MARKER.length)}${PROMPT_TRUNCATION_MARKER}`;
+}
+
+function buildRepositoryDescriptions(targets: readonly TargetClassificationTarget[]): string {
+  const repositories = targets.filter((target) => target.kind === "repository");
+  if (repositories.length === 0) return "No repositories are currently available.";
+  return repositories
+    .map(
+      (repository) => `
+- **${repository.id}** (${repository.fullName})
+  - Description: ${repository.description}
+  - Also known as: ${repository.aliases?.join(", ") || "N/A"}
+  - Keywords: ${repository.keywords?.join(", ") || "N/A"}
+  - Default branch: ${repository.defaultBranch}
+  - Private: ${repository.private ? "Yes" : "No"}`
+    )
+    .join("\n");
+}
+
+function buildEnvironmentSection(targets: readonly TargetClassificationTarget[]): string {
+  const environments = targets.filter((target) => target.kind === "environment");
+  if (environments.length === 0) return "";
+  const descriptions = environments
+    .map(
+      (environment) => `
+- **${environment.id}** ("${environment.name}")
+  - Description: ${environment.description || "N/A"}
+  - Repositories: ${environment.repositories.join(", ")}`
+    )
+    .join("\n");
+  return `
+## Available Environments
+
+Environments are saved multi-repository workspaces. Prefer an environment over a
+single repository when the message names it, or when the work spans several of
+its repositories.
+${descriptions}
+`;
+}
+
+function buildContextSection(context: TargetClassificationContext | undefined): string {
+  if (!context) return "";
+  return `
+## Context
+
+**Channel**: ${context.channelName ? `#${context.channelName}` : context.channelId}
+${context.channelDescription ? `**Channel Description**: ${context.channelDescription}` : ""}
+${context.inThread ? `**In Thread**: Yes` : "**In Thread**: No"}
+${
+  context.previousMessages?.length
+    ? `**Previous Messages in Thread**:
+${context.previousMessages.map((message) => `- ${message}`).join("\n")}`
+    : ""
+}`;
+}
+
+/** Builds the bounded provider prompt from validated, provider-neutral classification data. */
+export function buildTargetClassificationPrompt(request: TargetClassificationRequest): string {
+  const catalogAndContext = `## Available Repositories
+${buildRepositoryDescriptions(request.targets)}
+${buildEnvironmentSection(request.targets)}
+${buildContextSection(request.context)}`;
+  const userSection = `## User's Message\n${request.message}`;
+  const catalogBudget = CLASSIFIER_PROMPT_MAX_CHARS - userSection.length - 2;
+
+  if (catalogBudget >= 0 && catalogAndContext.length <= catalogBudget) {
+    return `${catalogAndContext}\n\n${userSection}`;
+  }
+  if (userSection.length <= CLASSIFIER_PROMPT_MAX_CHARS && catalogBudget >= 0) {
+    return `${truncateWithMarker(catalogAndContext, catalogBudget)}\n\n${userSection}`;
+  }
+  throw new TargetClassificationPromptTooLongError();
+}
+
+export class TargetClassificationPromptTooLongError extends Error {
+  constructor() {
+    super("This Slack message is too long to classify. Please shorten it and try again.");
+    this.name = "TargetClassificationPromptTooLongError";
+  }
+}
+
+export const targetClassificationResponseSchema = targetClassificationDecisionSchema;
+
+export type TargetClassificationResponse = z.infer<typeof targetClassificationResponseSchema>;
 
 const { $schema: _metaSchema, ...generatedDecisionJsonSchema } = z.toJSONSchema(
   targetClassificationDecisionSchema

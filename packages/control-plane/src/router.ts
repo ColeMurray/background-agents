@@ -41,7 +41,7 @@ import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
-import { classifierRoutes } from "./routes/classifier";
+import { targetClassificationRoutes } from "./routes/target-classifications";
 import { webhookRoutes } from "./webhooks";
 
 const logger = createLogger("router");
@@ -173,7 +173,7 @@ function isWebServiceAuthRoute(method: string, path: string): boolean {
 export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
-    path === "/internal/classifier/infer" ||
+    (method === "POST" && path === "/internal/target-classifications") ||
     /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     (method === "GET" && /^\/sessions\/[^/]+$/.test(path)) ||
@@ -332,7 +332,7 @@ const routes: Route[] = [
 
   ...browserAuthRoutes,
   ...signInProviderRoutes,
-  ...classifierRoutes,
+  ...targetClassificationRoutes,
 
   // Session management
   ...sessionRoutes,

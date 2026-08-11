@@ -7,7 +7,7 @@ const RESPONSES_SSE_LIMITS = {
   maxEvents: 1_000,
 };
 
-export type OpenAIResponsesStreamResult =
+type OpenAIResponsesStreamResult =
   | { kind: "completed"; output: unknown }
   | { kind: "upstream_error" }
   | { kind: "invalid_response" };

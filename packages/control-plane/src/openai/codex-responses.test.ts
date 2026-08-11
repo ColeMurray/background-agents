@@ -3,7 +3,7 @@ import {
   CODEX_RESPONSES_TIMEOUT_MS,
   requestOpenAICodexFunction,
   type OpenAICodexFunctionRequest,
-} from "./openai-codex-responses";
+} from "./codex-responses";
 
 const TOOL_NAME = "classify_target";
 const output = { targetId: "acme/api", confidence: "high" };

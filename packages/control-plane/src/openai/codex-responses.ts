@@ -1,5 +1,5 @@
 import { waitForAbort } from "./bounded-json-sse";
-import { parseOpenAIResponsesStream } from "./openai-responses-stream";
+import { parseOpenAIResponsesStream } from "./responses-stream";
 
 const CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 export const CODEX_RESPONSES_TIMEOUT_MS = 30_000;

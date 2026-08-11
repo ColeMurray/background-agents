@@ -337,28 +337,6 @@ export async function getRepoById(
 }
 
 /**
- * Build a description string for the given repos.
- * Used in the classification prompt.
- */
-export function buildRepoDescriptions(repos: RepoConfig[]): string {
-  if (repos.length === 0) {
-    return "No repositories are currently available.";
-  }
-
-  return repos
-    .map(
-      (repo) => `
-- **${repo.id}** (${repo.fullName})
-  - Description: ${repo.description}
-  - Also known as: ${repo.aliases?.join(", ") || "N/A"}
-  - Keywords: ${repo.keywords?.join(", ") || "N/A"}
-  - Default branch: ${repo.defaultBranch}
-  - Private: ${repo.private ? "Yes" : "No"}`
-    )
-    .join("\n");
-}
-
-/**
  * Clear this module's in-memory caches — repos and routing rules (for testing
  * or forced refresh). Environments have their own clear in
  * classifier/environments.ts.

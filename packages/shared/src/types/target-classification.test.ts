@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   CLASSIFIER_PROMPT_MAX_CHARS,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
-  openAIClassifierInferenceRequestSchema,
-  classifierInferenceResponseSchema,
+  targetClassificationRequestSchema,
+  targetClassificationResponseSchema,
   classificationModelSchema,
   OPENAI_CLASSIFICATION_MODEL_ID,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
+  buildTargetClassificationPrompt,
 } from "./target-classification";
 
 describe("target classification contracts", () => {
@@ -74,36 +75,50 @@ describe("target classification contracts", () => {
     );
   });
 
-  it("bounds inference prompts and wraps decisions at the service boundary", () => {
-    expect(
-      openAIClassifierInferenceRequestSchema.safeParse({
-        prompt: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1),
-      }).success
-    ).toBe(false);
-
-    expect(
-      openAIClassifierInferenceRequestSchema.safeParse({
-        prompt: "Route this request.",
-        systemPrompt: "Caller-selected policy",
-      }).success
-    ).toBe(false);
-
-    expect(
-      classifierInferenceResponseSchema.parse({
-        decision: {
-          targetId: null,
-          confidence: "low",
-          reasoning: "No target is clear.",
-          alternatives: [],
+  it("accepts bounded domain input and rejects raw prompt authority", () => {
+    const request = {
+      message: "Route this request.",
+      targets: [
+        {
+          kind: "repository" as const,
+          id: "acme/api",
+          fullName: "acme/api",
+          description: "Acme API",
+          defaultBranch: "main",
+          private: true,
         },
-      })
-    ).toEqual({
-      decision: {
-        targetId: null,
-        confidence: "low",
-        reasoning: "No target is clear.",
-        alternatives: [],
-      },
-    });
+      ],
+    };
+
+    expect(targetClassificationRequestSchema.parse(request)).toEqual(request);
+    expect(buildTargetClassificationPrompt(request)).toContain(
+      "## User's Message\nRoute this request."
+    );
+    expect(
+      targetClassificationRequestSchema.safeParse({
+        ...request,
+        message: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1),
+      }).success
+    ).toBe(false);
+
+    expect(
+      targetClassificationRequestSchema.safeParse({
+        ...request,
+        prompt: "Caller-authored prompt",
+      }).success
+    ).toBe(false);
+  });
+
+  it("returns the target classification directly", () => {
+    const classification = {
+      targetId: null,
+      confidence: "low" as const,
+      reasoning: "No target is clear.",
+      alternatives: [],
+    };
+    expect(targetClassificationResponseSchema.parse(classification)).toEqual(classification);
+    expect(targetClassificationResponseSchema.safeParse({ decision: classification }).success).toBe(
+      false
+    );
   });
 });

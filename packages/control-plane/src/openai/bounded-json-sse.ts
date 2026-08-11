@@ -1,4 +1,4 @@
-export type BoundedJsonSseLimits = {
+type BoundedJsonSseLimits = {
   maxTotalBytes: number;
   maxEventBytes: number;
   maxEvents: number;

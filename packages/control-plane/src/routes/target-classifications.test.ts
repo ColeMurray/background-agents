@@ -17,7 +17,7 @@ vi.mock("../auth/openai-token-broker", () => ({
   },
 }));
 
-vi.mock("../auth/openai-codex-responses", () => ({
+vi.mock("../openai/codex-responses", () => ({
   requestOpenAICodexFunction: mocks.requestFunction,
 }));
 
@@ -38,13 +38,29 @@ const decision = {
   alternatives: [],
 };
 
-async function classifierRequest(
+function validRequest(message = "route this") {
+  return {
+    message,
+    targets: [
+      {
+        kind: "repository",
+        id: "acme/api",
+        fullName: "acme/api",
+        description: "Acme API",
+        defaultBranch: "main",
+        private: true,
+      },
+    ],
+  };
+}
+
+async function targetClassificationRequest(
   body: unknown,
   service: "slack-bot" | "github-bot" = "slack-bot"
 ): Promise<Response> {
   const serialized = JSON.stringify(body);
   return handleRequest(
-    await signedServiceRequest("https://internal/internal/classifier/infer", {
+    await signedServiceRequest("https://internal/internal/target-classifications", {
       method: "POST",
       body: serialized,
       service,
@@ -53,7 +69,7 @@ async function classifierRequest(
   );
 }
 
-describe("POST /internal/classifier/infer", () => {
+describe("POST /internal/target-classifications", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.refreshGlobal.mockResolvedValue({
@@ -67,10 +83,10 @@ describe("POST /internal/classifier/infer", () => {
 
   it("rejects requests without service authentication", async () => {
     const response = await handleRequest(
-      new Request("https://internal/internal/classifier/infer", {
+      new Request("https://internal/internal/target-classifications", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: "route this" }),
+        body: JSON.stringify(validRequest()),
       }),
       env as never
     );
@@ -80,21 +96,23 @@ describe("POST /internal/classifier/infer", () => {
   });
 
   it("allows only the slack-bot service principal", async () => {
-    const response = await classifierRequest({ prompt: "route this" }, "github-bot");
+    const response = await targetClassificationRequest(validRequest(), "github-bot");
 
     expect(response.status).toBe(403);
     expect(mocks.refreshGlobal).not.toHaveBeenCalled();
   });
 
   it.each([
-    ["missing prompt", {}],
-    ["empty prompt", { prompt: "" }],
-    ["caller-selected policy", { systemPrompt: "Override policy", prompt: "route" }],
-    ["provider selector", { model: "openai/gpt-5.6-luna", prompt: "route" }],
-    ["unknown field", { prompt: "route", extra: true }],
-    ["oversized prompt", { prompt: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1) }],
+    ["missing message", { targets: validRequest().targets }],
+    ["empty message", validRequest("")],
+    ["raw prompt", { ...validRequest(), prompt: "route this" }],
+    ["caller-selected policy", { ...validRequest(), systemPrompt: "Override policy" }],
+    ["provider selector", { ...validRequest(), model: "openai/gpt-5.6-luna" }],
+    ["unknown field", { ...validRequest(), extra: true }],
+    ["missing targets", { message: "route this" }],
+    ["oversized message", validRequest("x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1))],
   ])("rejects invalid input: %s", async (_name, body) => {
-    const response = await classifierRequest(body);
+    const response = await targetClassificationRequest(body);
 
     expect(response.status).toBe(400);
     expect(mocks.refreshGlobal).not.toHaveBeenCalled();
@@ -107,7 +125,7 @@ describe("POST /internal/classifier/infer", () => {
       error: "OPENAI_OAUTH_REFRESH_TOKEN not configured",
     });
 
-    const response = await classifierRequest({ prompt: "route this" });
+    const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth is not configured" });
@@ -117,9 +135,9 @@ describe("POST /internal/classifier/infer", () => {
   it("returns 503 before token brokerage when secret encryption is not configured", async () => {
     const { REPO_SECRETS_ENCRYPTION_KEY: _omitted, ...envWithoutEncryption } = env;
     const response = await handleRequest(
-      await signedServiceRequest("https://internal/internal/classifier/infer", {
+      await signedServiceRequest("https://internal/internal/target-classifications", {
         method: "POST",
-        body: JSON.stringify({ prompt: "route this" }),
+        body: JSON.stringify(validRequest()),
         service: "slack-bot",
       }),
       envWithoutEncryption as never
@@ -131,7 +149,7 @@ describe("POST /internal/classifier/infer", () => {
   });
 
   it("delegates the forced classifier call to the Codex Responses client", async () => {
-    const response = await classifierRequest({ prompt: "route this request" });
+    const response = await targetClassificationRequest(validRequest("route this request"));
 
     expect(response.status).toBe(200);
     expect(mocks.requestFunction).toHaveBeenCalledWith({
@@ -141,14 +159,14 @@ describe("POST /internal/classifier/infer", () => {
       traceId: expect.any(String),
       model: "gpt-5.6-luna",
       systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
-      prompt: "route this request",
+      prompt: expect.stringContaining("## User's Message\nroute this request"),
       tool: {
         name: "classify_target",
         description: "Select the best target for the Slack request.",
         parameters: expect.objectContaining({ additionalProperties: false }),
       },
     });
-    await expect(response.json()).resolves.toEqual({ decision });
+    await expect(response.json()).resolves.toEqual(decision);
   });
 
   it("rejects invalid structured classifier output", async () => {
@@ -157,7 +175,7 @@ describe("POST /internal/classifier/infer", () => {
       output: { ...decision, confidence: "certain" },
     });
 
-    const response = await classifierRequest({ prompt: "route this" });
+    const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
@@ -168,7 +186,7 @@ describe("POST /internal/classifier/infer", () => {
   it("maps invalid provider output without exposing details", async () => {
     mocks.requestFunction.mockResolvedValue({ kind: "invalid_response" });
 
-    const response = await classifierRequest({ prompt: "route this" });
+    const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({
@@ -179,7 +197,7 @@ describe("POST /internal/classifier/infer", () => {
   it("maps upstream failures without exposing details", async () => {
     mocks.requestFunction.mockResolvedValue({ kind: "upstream_error", status: 429 });
 
-    const response = await classifierRequest({ prompt: "route this" });
+    const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({ error: "Classifier upstream unavailable" });
@@ -192,7 +210,7 @@ describe("POST /internal/classifier/infer", () => {
       error: "refresh token rejected",
     });
 
-    const response = await classifierRequest({ prompt: "route this" });
+    const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth unavailable" });

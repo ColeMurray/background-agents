@@ -13,17 +13,18 @@ import {
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
   OPENAI_CLASSIFICATION_MODEL_ID,
-  openAIClassifierInferenceRequestSchema,
-  classifierInferenceResponseSchema,
+  targetClassificationRequestSchema,
+  targetClassificationResponseSchema,
   classificationModelSchema,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
+  buildTargetClassificationPrompt,
+  TargetClassificationPromptTooLongError,
   type ClassificationModel,
   type TargetClassificationDecision,
+  type TargetClassificationRequest,
 } from "@open-inspect/shared/types/target-classification";
 import type { Env, ThreadContext, ClassificationResult } from "../types";
-import { buildRepoDescriptions } from "./repos";
-import { buildEnvironmentDescriptions } from "./environments";
 import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
@@ -34,7 +35,7 @@ import { signedControlPlaneFetch } from "../internal-auth";
 const log = createLogger("classifier");
 const DEFAULT_CLASSIFICATION_MODEL: ClassificationModel = ANTHROPIC_CLASSIFICATION_MODEL_ID;
 const ANTHROPIC_API_MODEL = "claude-haiku-4-5";
-const CLASSIFIER_INFERENCE_URL = "https://internal/internal/classifier/infer";
+const TARGET_CLASSIFICATIONS_URL = "https://internal/internal/target-classifications";
 const CLASSIFY_TARGET_INPUT_SCHEMA: Anthropic.Messages.Tool.InputSchema = {
   ...targetClassificationJsonSchema,
 };
@@ -47,87 +48,52 @@ const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
   input_schema: CLASSIFY_TARGET_INPUT_SCHEMA,
 };
 
-const PROMPT_TRUNCATION_MARKER = "[truncated]";
-const PROMPT_TOO_LONG_REASONING =
-  "This Slack message is too long to classify. Please shorten it and try again.";
-function truncateWithMarker(value: string, maxChars: number): string {
-  if (value.length <= maxChars) return value;
-  if (maxChars <= PROMPT_TRUNCATION_MARKER.length) {
-    return PROMPT_TRUNCATION_MARKER.slice(0, Math.max(0, maxChars));
-  }
-  return `${value.slice(0, maxChars - PROMPT_TRUNCATION_MARKER.length)}${PROMPT_TRUNCATION_MARKER}`;
-}
-
-function boundClassificationPrompt(catalogAndContext: string, message: string): string {
-  const userSection = `## User's Message\n${message}`;
-  const catalogBudget = CLASSIFIER_PROMPT_MAX_CHARS - userSection.length - 2;
-
-  if (catalogBudget >= 0 && catalogAndContext.length <= catalogBudget) {
-    return `${catalogAndContext}\n\n${userSection}`;
-  }
-
-  // Keep the current user message intact whenever the catalog/context
-  // is the part that made the generated prompt exceed the provider limit.
-  if (userSection.length <= CLASSIFIER_PROMPT_MAX_CHARS && catalogBudget >= 0) {
-    const boundedCatalog = truncateWithMarker(catalogAndContext, Math.max(0, catalogBudget));
-    return `${boundedCatalog}\n\n${userSection}`;
-  }
-
-  throw new ClassifierPromptTooLongError();
-}
-
-class ClassifierPromptTooLongError extends Error {
-  constructor() {
-    super(PROMPT_TOO_LONG_REASONING);
-    this.name = "ClassifierPromptTooLongError";
-  }
-}
-
-/**
- * Build the classification prompt for the LLM over the target catalog.
- */
-function buildClassificationPrompt(
+function createTargetClassificationRequest(
   message: string,
   catalog: TargetCatalog,
   context?: ThreadContext
-): string {
-  const repoDescriptions = buildRepoDescriptions(catalog.repos);
-
-  const environmentSection =
-    catalog.environments.length > 0
-      ? `
-## Available Environments
-
-Environments are saved multi-repository workspaces. Prefer an environment over a
-single repository when the message names it, or when the work spans several of
-its repositories.
-${buildEnvironmentDescriptions(catalog.environments)}
-`
-      : "";
-
-  let contextSection = "";
-
-  if (context) {
-    contextSection = `
-## Context
-
-**Channel**: ${context.channelName ? `#${context.channelName}` : context.channelId}
-${context.channelDescription ? `**Channel Description**: ${context.channelDescription}` : ""}
-${context.threadTs ? `**In Thread**: Yes` : "**In Thread**: No"}
-${
-  context.previousMessages?.length
-    ? `**Previous Messages in Thread**:
-${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
-    : ""
-}`;
+): TargetClassificationRequest {
+  const parsed = targetClassificationRequestSchema.safeParse({
+    message,
+    targets: [
+      ...catalog.repos.map((repository) => ({
+        kind: "repository" as const,
+        id: repository.id,
+        fullName: repository.fullName,
+        description: repository.description,
+        aliases: repository.aliases,
+        keywords: repository.keywords,
+        defaultBranch: repository.defaultBranch,
+        private: repository.private,
+      })),
+      ...catalog.environments.map((environment) => ({
+        kind: "environment" as const,
+        id: environment.id,
+        name: environment.name,
+        description: environment.description,
+        repositories: environment.repositories.map(
+          (repository) => `${repository.repoOwner}/${repository.repoName}`
+        ),
+      })),
+    ],
+    context: context
+      ? {
+          channelId: context.channelId,
+          channelName: context.channelName,
+          channelDescription: context.channelDescription,
+          inThread: Boolean(context.threadTs),
+          previousMessages: context.previousMessages,
+        }
+      : undefined,
+  });
+  if (!parsed.success) {
+    if (message.length > CLASSIFIER_PROMPT_MAX_CHARS) {
+      throw new TargetClassificationPromptTooLongError();
+    }
+    throw new Error("Invalid target classification input");
   }
-
-  const catalogAndContext = `## Available Repositories
-${repoDescriptions}
-${environmentSection}
-${contextSection}`;
-
-  return boundClassificationPrompt(catalogAndContext, message);
+  buildTargetClassificationPrompt(parsed.data);
+  return parsed.data;
 }
 
 /**
@@ -206,7 +172,9 @@ export class RepoClassifier {
     return this.client;
   }
 
-  private async inferWithAnthropic(prompt: string): Promise<TargetClassificationDecision> {
+  private async classifyWithAnthropic(
+    request: TargetClassificationRequest
+  ): Promise<TargetClassificationDecision> {
     const response = await this.getAnthropicClient().messages.create({
       model: ANTHROPIC_API_MODEL,
       max_tokens: 500,
@@ -221,7 +189,7 @@ export class RepoClassifier {
       messages: [
         {
           role: "user",
-          content: prompt,
+          content: buildTargetClassificationPrompt(request),
         },
       ],
     });
@@ -229,22 +197,16 @@ export class RepoClassifier {
     return extractStructuredResponse(response);
   }
 
-  private async inferWithControlPlane(
-    prompt: string,
+  private async classifyWithControlPlane(
+    request: TargetClassificationRequest,
     traceId?: string
   ): Promise<TargetClassificationDecision> {
-    const request = openAIClassifierInferenceRequestSchema.safeParse({
-      prompt,
-    });
-    if (!request.success) {
-      throw new Error("Invalid classifier inference request");
-    }
-    const body = JSON.stringify(request.data);
+    const body = JSON.stringify(request);
     const response = await signedControlPlaneFetch(
       this.env,
       {
         method: "POST",
-        url: CLASSIFIER_INFERENCE_URL,
+        url: TARGET_CLASSIFICATIONS_URL,
         body,
         traceId,
       },
@@ -252,26 +214,26 @@ export class RepoClassifier {
     );
 
     if (!response.ok) {
-      throw new Error(`Classifier inference request failed with ${response.status}`);
+      throw new Error(`Target classification request failed with ${response.status}`);
     }
 
-    const parsed = classifierInferenceResponseSchema.safeParse(await response.json());
+    const parsed = targetClassificationResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
-      throw new Error("Invalid classifier inference response");
+      throw new Error("Invalid target classification response");
     }
-    return parsed.data.decision;
+    return parsed.data;
   }
 
-  private async infer(
+  private async classifyWithModel(
     model: ClassificationModel,
-    prompt: string,
+    request: TargetClassificationRequest,
     traceId?: string
   ): Promise<TargetClassificationDecision> {
     if (model === ANTHROPIC_CLASSIFICATION_MODEL_ID) {
-      return this.inferWithAnthropic(prompt);
+      return this.classifyWithAnthropic(request);
     }
     if (model === OPENAI_CLASSIFICATION_MODEL_ID) {
-      return this.inferWithControlPlane(prompt, traceId);
+      return this.classifyWithControlPlane(request, traceId);
     }
     throw new Error(`Unsupported classifier model: ${model}`);
   }
@@ -422,12 +384,12 @@ export class RepoClassifier {
 
     // Use LLM for classification
     try {
-      const prompt = buildClassificationPrompt(message, catalog, context);
+      const request = createTargetClassificationRequest(message, catalog, context);
       const model = resolveClassificationModel(this.env.CLASSIFICATION_MODEL);
       if (!model) {
         throw new Error(`Unsupported classifier model: ${this.env.CLASSIFICATION_MODEL}`);
       }
-      const llmResult = await this.infer(model, prompt, traceId);
+      const llmResult = await this.classifyWithModel(model, request, traceId);
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 
@@ -469,8 +431,8 @@ export class RepoClassifier {
         target: null,
         confidence: "low",
         reasoning:
-          e instanceof ClassifierPromptTooLongError
-            ? PROMPT_TOO_LONG_REASONING
+          e instanceof TargetClassificationPromptTooLongError
+            ? e.message
             : "Could not classify a target from structured model output. Please pick one below.",
         // No basis to suggest specific targets on a classification failure;
         // the picker lets the user search the full list.
