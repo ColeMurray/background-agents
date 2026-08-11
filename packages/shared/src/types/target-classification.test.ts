@@ -68,7 +68,16 @@ describe("target classification contracts", () => {
     expect(
       classifierInferenceRequestSchema.safeParse({
         model: "openai/gpt-5.6-luna",
+        systemPrompt: "Classify the target.",
         prompt: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1),
+      }).success
+    ).toBe(false);
+
+    expect(
+      classifierInferenceRequestSchema.safeParse({
+        model: "openai/gpt-5.6-luna",
+        systemPrompt: "   ",
+        prompt: "Route this request.",
       }).success
     ).toBe(false);
 

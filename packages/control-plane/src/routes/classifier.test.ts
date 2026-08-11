@@ -1,4 +1,7 @@
-import { CLASSIFIER_PROMPT_MAX_CHARS, CLASSIFY_TARGET_TOOL_NAME } from "@open-inspect/shared";
+import {
+  CLASSIFIER_PROMPT_MAX_CHARS,
+  CLASSIFY_TARGET_TOOL_NAME,
+} from "@open-inspect/shared/types/target-classification";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as OpenAITokenRefreshModule from "../session/openai-token-refresh-service";
 import { handleRequest } from "../router";
@@ -35,6 +38,7 @@ const decision = {
   reasoning: "The request names the API.",
   alternatives: [],
 };
+const TEST_SYSTEM_PROMPT = "Classify the target using only the supplied data.";
 
 function functionCall(argumentsValue = JSON.stringify(decision)) {
   return {
@@ -97,7 +101,7 @@ async function classifierRequest(
   body: unknown,
   service: "slack-bot" | "github-bot" = "slack-bot"
 ): Promise<Response> {
-  const serialized = JSON.stringify(body);
+  const serialized = JSON.stringify({ systemPrompt: TEST_SYSTEM_PROMPT, ...(body as object) });
   return handleRequest(
     await signedServiceRequest("https://internal/internal/classifier/infer", {
       method: "POST",
@@ -145,6 +149,11 @@ describe("POST /internal/classifier/infer", () => {
   });
 
   it.each([
+    [
+      "missing system prompt",
+      { model: "openai/gpt-5.6-luna", systemPrompt: undefined, prompt: "route" },
+    ],
+    ["empty system prompt", { model: "openai/gpt-5.6-luna", systemPrompt: "", prompt: "route" }],
     ["missing prompt", { model: "openai/gpt-5.6-luna" }],
     ["empty prompt", { model: "openai/gpt-5.6-luna", prompt: "" }],
     ["unknown field", { model: "openai/gpt-5.6-luna", prompt: "route", extra: true }],
@@ -200,8 +209,10 @@ describe("POST /internal/classifier/infer", () => {
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer secret-access-token");
     expect(headers.get("ChatGPT-Account-Id")).toBe("account-123");
-    expect(headers.get("originator")).toBe("codex_cli_rs");
-    expect(headers.get("session_id")).toBeTruthy();
+    expect(headers.get("originator")).toBe("open-inspect");
+    expect(headers.get("session-id")).toBeTruthy();
+    expect(headers.get("x-client-request-id")).toBeTruthy();
+    expect(headers.has("session_id")).toBe(false);
     expect(headers.get("Accept")).toBe("text/event-stream");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
@@ -234,6 +245,11 @@ describe("POST /internal/classifier/infer", () => {
             ],
           },
         ],
+      },
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: TEST_SYSTEM_PROMPT }],
       },
       {
         type: "message",

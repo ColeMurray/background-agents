@@ -244,6 +244,30 @@ describe("OpenAITokenRefreshService", () => {
     });
   });
 
+  it("preserves the stored account id when refresh omits it", async () => {
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-old",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_stored",
+    };
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+    });
+
+    const result = await new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+
+    expect(result).toMatchObject({
+      ok: true,
+      accessToken: "global-access-new",
+      accountId: "acct_stored",
+    });
+    expect(mockState.globalWrites[0]).toMatchObject({
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_stored",
+    });
+  });
+
   it("retries a transient global persistence failure and returns success after saving", async () => {
     vi.useFakeTimers();
     mockState.globalSecrets = {

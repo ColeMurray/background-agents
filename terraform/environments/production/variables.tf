@@ -309,16 +309,11 @@ variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
   sensitive   = true
-  default     = ""
   nullable    = false
 
   validation {
-    condition = (
-      !var.enable_slack_bot ||
-      var.slack_classification_model != "anthropic/claude-haiku-4-5" ||
-      trimspace(var.anthropic_api_key) != ""
-    )
-    error_message = "anthropic_api_key must be non-blank when Slack uses Anthropic classification."
+    condition     = trimspace(var.anthropic_api_key) != ""
+    error_message = "anthropic_api_key must be non-blank."
   }
 }
 

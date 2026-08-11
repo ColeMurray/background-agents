@@ -29,6 +29,7 @@ variables {
   modal_token_secret = "test-modal-token-secret"
   modal_workspace    = "test-workspace"
   modal_api_secret   = "test-modal-api-secret"
+  anthropic_api_key  = "test-anthropic-key"
 
   web_platform      = "cloudflare"
   project_root      = "../../../"
@@ -219,6 +220,7 @@ run "slack_classification_anthropic_missing_key" {
     enable_slack_bot     = true
     slack_bot_token      = "test-slack-token"
     slack_signing_secret = "test-slack-signing-secret"
+    anthropic_api_key    = ""
   }
 
   expect_failures = [var.anthropic_api_key]

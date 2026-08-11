@@ -37,6 +37,7 @@ export type TargetClassificationDecision = z.infer<typeof targetClassificationDe
 export const classifierInferenceRequestSchema = z
   .object({
     model: classificationModelSchema,
+    systemPrompt: z.string().trim().min(1).max(CLASSIFIER_PROMPT_MAX_CHARS),
     prompt: z.string().min(1).max(CLASSIFIER_PROMPT_MAX_CHARS),
   })
   .strict();

@@ -4,7 +4,7 @@ import {
   classifierInferenceRequestSchema,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/target-classification";
 import { createLogger } from "../logger";
 import { OpenAITokenBroker } from "../session/openai-token-refresh-service";
 import type { Env } from "../types";
@@ -282,8 +282,9 @@ export async function handleClassifierInference(
     authorization: `Bearer ${tokenResult.accessToken}`,
     Accept: "text/event-stream",
     "Content-Type": "application/json",
-    originator: "codex_cli_rs",
-    session_id: ctx.trace_id,
+    originator: "open-inspect",
+    "session-id": ctx.trace_id,
+    "x-client-request-id": ctx.request_id,
     "x-openai-internal-codex-responses-lite": "true",
   });
   if (tokenResult.accountId) headers.set("ChatGPT-Account-Id", tokenResult.accountId);
@@ -320,6 +321,11 @@ export async function handleClassifierInference(
                     ],
                   },
                 ],
+              },
+              {
+                type: "message",
+                role: "developer",
+                content: [{ type: "input_text", text: parsedRequest.data.systemPrompt }],
               },
               {
                 type: "message",

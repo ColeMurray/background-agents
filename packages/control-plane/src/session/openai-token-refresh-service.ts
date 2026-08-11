@@ -32,7 +32,7 @@ type TokenSecretSource =
 
 type OpenAITokenState =
   | { type: "cached"; accessToken: string; expiresIn: number; accountId?: string }
-  | { type: "refresh"; refreshToken: string; source: TokenSecretSource };
+  | { type: "refresh"; refreshToken: string; source: TokenSecretSource; accountId?: string };
 
 export type OpenAITokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn?: number; accountId?: string }
@@ -128,6 +128,7 @@ export class OpenAITokenBroker {
       type: "refresh",
       refreshToken: secrets.OPENAI_OAUTH_REFRESH_TOKEN,
       source,
+      accountId: secrets.OPENAI_OAUTH_ACCOUNT_ID,
     };
   }
 
@@ -210,7 +211,7 @@ export class OpenAITokenBroker {
     tokenState: Extract<OpenAITokenState, { type: "refresh" }>
   ): Promise<OpenAITokenRefreshResult> {
     const tokens = await refreshOpenAIToken(tokenState.refreshToken);
-    const accountId = extractOpenAIAccountId(tokens);
+    const accountId = extractOpenAIAccountId(tokens) ?? tokenState.accountId;
     const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
 
     const secretsToWrite: Record<string, string> = {
