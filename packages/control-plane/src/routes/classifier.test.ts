@@ -17,8 +17,8 @@ vi.mock("../auth/openai-token-broker", () => ({
   },
 }));
 
-vi.mock("../auth/openai-responses-lite", () => ({
-  requestOpenAIResponsesLiteFunction: mocks.requestFunction,
+vi.mock("../auth/openai-codex-responses", () => ({
+  requestOpenAICodexFunction: mocks.requestFunction,
 }));
 
 const env = {
@@ -130,7 +130,7 @@ describe("POST /internal/classifier/infer", () => {
     expect(mocks.refreshGlobal).not.toHaveBeenCalled();
   });
 
-  it("delegates the forced classifier call to the Responses Lite client", async () => {
+  it("delegates the forced classifier call to the Codex Responses client", async () => {
     const response = await classifierRequest({ prompt: "route this request" });
 
     expect(response.status).toBe(200);

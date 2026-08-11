@@ -1,10 +1,10 @@
 import { waitForAbort } from "./bounded-json-sse";
-import { parseOpenAIResponsesLiteStream } from "./openai-responses-lite-stream";
+import { parseOpenAIResponsesStream } from "./openai-responses-stream";
 
 const CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
-export const RESPONSES_LITE_TIMEOUT_MS = 30_000;
+export const CODEX_RESPONSES_TIMEOUT_MS = 30_000;
 
-export type OpenAIResponsesLiteFunctionRequest = {
+export type OpenAICodexFunctionRequest = {
   accessToken: string;
   accountId?: string;
   requestId: string;
@@ -19,12 +19,12 @@ export type OpenAIResponsesLiteFunctionRequest = {
   };
 };
 
-export type OpenAIResponsesLiteResult =
+export type OpenAICodexResult =
   | { kind: "completed"; output: unknown }
   | { kind: "upstream_error"; status?: number }
   | { kind: "invalid_response" };
 
-function buildHeaders(request: OpenAIResponsesLiteFunctionRequest): Headers {
+function buildHeaders(request: OpenAICodexFunctionRequest): Headers {
   const headers = new Headers({
     authorization: `Bearer ${request.accessToken}`,
     Accept: "text/event-stream",
@@ -32,56 +32,36 @@ function buildHeaders(request: OpenAIResponsesLiteFunctionRequest): Headers {
     originator: "opencode",
     "session-id": request.traceId,
     "x-client-request-id": request.requestId,
-    "x-openai-internal-codex-responses-lite": "true",
   });
   if (request.accountId) headers.set("ChatGPT-Account-Id", request.accountId);
   return headers;
 }
 
-function buildBody(request: OpenAIResponsesLiteFunctionRequest): string {
+function buildBody(request: OpenAICodexFunctionRequest): string {
   return JSON.stringify({
     model: request.model,
+    instructions: request.systemPrompt,
     input: [
-      {
-        type: "additional_tools",
-        role: "developer",
-        tools: [
-          {
-            type: "namespace",
-            name: "functions",
-            description: "",
-            tools: [{ type: "function", ...request.tool, strict: true }],
-          },
-        ],
-      },
-      {
-        type: "message",
-        role: "developer",
-        content: [{ type: "input_text", text: request.systemPrompt }],
-      },
       {
         type: "message",
         role: "user",
         content: [{ type: "input_text", text: request.prompt }],
       },
     ],
+    tools: [{ type: "function", ...request.tool, strict: true }],
     tool_choice: "required",
     parallel_tool_calls: false,
-    reasoning: { context: "all_turns" },
     store: false,
     stream: true,
   });
 }
 
-/**
- * Executes one forced function call using Codex's internal Responses Lite mode.
- * This is not the public OpenAI Responses API.
- */
-export async function requestOpenAIResponsesLiteFunction(
-  request: OpenAIResponsesLiteFunctionRequest
-): Promise<OpenAIResponsesLiteResult> {
+/** Executes one standard Responses function call through the Codex subscription endpoint. */
+export async function requestOpenAICodexFunction(
+  request: OpenAICodexFunctionRequest
+): Promise<OpenAICodexResult> {
   const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), RESPONSES_LITE_TIMEOUT_MS);
+  const timeout = setTimeout(() => abortController.abort(), CODEX_RESPONSES_TIMEOUT_MS);
   try {
     let response: Response;
     try {
@@ -99,11 +79,7 @@ export async function requestOpenAIResponsesLiteFunction(
     }
 
     if (!response.ok) return { kind: "upstream_error", status: response.status };
-    return await parseOpenAIResponsesLiteStream(
-      response,
-      abortController.signal,
-      request.tool.name
-    );
+    return await parseOpenAIResponsesStream(response, abortController.signal, request.tool.name);
   } finally {
     clearTimeout(timeout);
   }

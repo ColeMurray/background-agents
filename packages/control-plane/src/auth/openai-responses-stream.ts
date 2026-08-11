@@ -1,19 +1,18 @@
 import { BoundedJsonSseAbortError, decodeBoundedJsonSse } from "./bounded-json-sse";
 
 const MAX_TOOL_ARGUMENT_BYTES = 32 * 1024;
-const RESPONSES_LITE_SSE_LIMITS = {
+const RESPONSES_SSE_LIMITS = {
   maxTotalBytes: 1024 * 1024,
   maxEventBytes: 64 * 1024,
   maxEvents: 1_000,
 };
 
-export type OpenAIResponsesLiteStreamResult =
+export type OpenAIResponsesStreamResult =
   | { kind: "completed"; output: unknown }
   | { kind: "upstream_error" }
   | { kind: "invalid_response" };
 
 type PendingFunctionCall = {
-  namespace?: string;
   name?: string;
   arguments: string;
   argumentBytes: number;
@@ -35,14 +34,12 @@ function functionCallFromItem(value: unknown, toolName: string): PendingFunction
   if (
     !isRecord(value) ||
     value.type !== "function_call" ||
-    (value.namespace !== undefined && value.namespace !== "functions") ||
     value.name !== toolName ||
     typeof value.arguments !== "string"
   ) {
     return null;
   }
   return {
-    namespace: typeof value.namespace === "string" ? value.namespace : undefined,
     name: value.name,
     arguments: value.arguments,
     argumentBytes: new TextEncoder().encode(value.arguments).byteLength,
@@ -50,12 +47,7 @@ function functionCallFromItem(value: unknown, toolName: string): PendingFunction
 }
 
 function parseFunctionArguments(call: PendingFunctionCall | null, toolName: string): unknown {
-  if (
-    !call ||
-    (call.namespace !== undefined && call.namespace !== "functions") ||
-    call.name !== toolName ||
-    call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES
-  ) {
+  if (!call || call.name !== toolName || call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) {
     return null;
   }
   try {
@@ -103,7 +95,6 @@ function applyFunctionCallDone(
   const call = state.pendingCalls.get(itemId) ?? { arguments: "", argumentBytes: 0 };
   call.arguments = event.arguments;
   call.argumentBytes = encoder.encode(event.arguments).byteLength;
-  if (typeof event.namespace === "string") call.namespace = event.namespace;
   if (typeof event.name === "string") call.name = event.name;
   if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
   state.pendingCalls.set(itemId, call);
@@ -124,7 +115,6 @@ function applyResponseEvent(
     if (id && event.item.type === "function_call") {
       const argumentsValue = typeof event.item.arguments === "string" ? event.item.arguments : "";
       state.pendingCalls.set(id, {
-        namespace: typeof event.item.namespace === "string" ? event.item.namespace : undefined,
         name: typeof event.item.name === "string" ? event.item.name : undefined,
         arguments: argumentsValue,
         argumentBytes: encoder.encode(argumentsValue).byteLength,
@@ -161,12 +151,12 @@ function resolveOutput(state: ResponseState, toolName: string): unknown {
   );
 }
 
-/** Reduces bounded Responses Lite events into one forced-function result. */
-export async function parseOpenAIResponsesLiteStream(
+/** Reduces bounded Responses events into one forced-function result. */
+export async function parseOpenAIResponsesStream(
   response: Response,
   signal: AbortSignal,
   toolName: string
-): Promise<OpenAIResponsesLiteStreamResult> {
+): Promise<OpenAIResponsesStreamResult> {
   const state: ResponseState = {
     pendingCalls: new Map(),
     outputItem: null,
@@ -175,7 +165,7 @@ export async function parseOpenAIResponsesLiteStream(
   const encoder = new TextEncoder();
 
   try {
-    for await (const event of decodeBoundedJsonSse(response, signal, RESPONSES_LITE_SSE_LIMITS)) {
+    for await (const event of decodeBoundedJsonSse(response, signal, RESPONSES_SSE_LIMITS)) {
       const action = applyResponseEvent(state, event, toolName, encoder);
       if (action === "upstream_error") return { kind: "upstream_error" };
       if (action === "invalid") return { kind: "invalid_response" };

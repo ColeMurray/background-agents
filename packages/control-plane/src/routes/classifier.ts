@@ -5,7 +5,7 @@ import {
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
 } from "@open-inspect/shared/types/target-classification";
-import { requestOpenAIResponsesLiteFunction } from "../auth/openai-responses-lite";
+import { requestOpenAICodexFunction } from "../auth/openai-codex-responses";
 import { OpenAITokenBroker } from "../auth/openai-token-broker";
 import { createLogger } from "../logger";
 import type { Env } from "../types";
@@ -50,7 +50,7 @@ export async function handleClassifierInference(
     );
   }
 
-  const result = await requestOpenAIResponsesLiteFunction({
+  const result = await requestOpenAICodexFunction({
     accessToken: tokenResult.accessToken,
     accountId: tokenResult.accountId,
     requestId: ctx.request_id,

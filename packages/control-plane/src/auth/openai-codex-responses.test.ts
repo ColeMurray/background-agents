@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  requestOpenAIResponsesLiteFunction,
-  RESPONSES_LITE_TIMEOUT_MS,
-  type OpenAIResponsesLiteFunctionRequest,
-} from "./openai-responses-lite";
+  CODEX_RESPONSES_TIMEOUT_MS,
+  requestOpenAICodexFunction,
+  type OpenAICodexFunctionRequest,
+} from "./openai-codex-responses";
 
 const TOOL_NAME = "classify_target";
 const output = { targetId: "acme/api", confidence: "high" };
@@ -12,7 +12,6 @@ function functionCall(argumentsValue = JSON.stringify(output)) {
   return {
     type: "function_call",
     call_id: "call-classify",
-    namespace: "functions",
     name: TOOL_NAME,
     arguments: argumentsValue,
   };
@@ -67,8 +66,8 @@ function openStreamResponse(
   );
 }
 
-function request(overrides: Partial<OpenAIResponsesLiteFunctionRequest> = {}) {
-  return requestOpenAIResponsesLiteFunction({
+function request(overrides: Partial<OpenAICodexFunctionRequest> = {}) {
+  return requestOpenAICodexFunction({
     accessToken: "secret-access-token",
     accountId: "account-123",
     requestId: "request-123",
@@ -85,7 +84,7 @@ function request(overrides: Partial<OpenAIResponsesLiteFunctionRequest> = {}) {
   });
 }
 
-describe("OpenAI Responses Lite client", () => {
+describe("OpenAI Codex Responses client", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(completedFunctionCall()));
   });
@@ -109,44 +108,27 @@ describe("OpenAI Responses Lite client", () => {
     expect(headers.get("session-id")).toBe("trace-123");
     expect(headers.get("x-client-request-id")).toBe("request-123");
     expect(headers.has("session_id")).toBe(false);
-    expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true");
+    expect(headers.has("x-openai-internal-codex-responses-lite")).toBe(false);
 
     const body = JSON.parse(String(init?.body));
     expect(body).toMatchObject({
       model: "gpt-5.6-luna",
+      instructions: "Classify the target.",
       tool_choice: "required",
       parallel_tool_calls: false,
-      reasoning: { context: "all_turns" },
       store: false,
       stream: true,
+      tools: [
+        {
+          type: "function",
+          name: TOOL_NAME,
+          description: "Select the target.",
+          parameters: { type: "object", additionalProperties: false },
+          strict: true,
+        },
+      ],
     });
-    expect(body).not.toHaveProperty("tools");
     expect(body.input).toEqual([
-      {
-        type: "additional_tools",
-        role: "developer",
-        tools: [
-          {
-            type: "namespace",
-            name: "functions",
-            description: "",
-            tools: [
-              {
-                type: "function",
-                name: TOOL_NAME,
-                description: "Select the target.",
-                parameters: { type: "object", additionalProperties: false },
-                strict: true,
-              },
-            ],
-          },
-        ],
-      },
-      {
-        type: "message",
-        role: "developer",
-        content: [{ type: "input_text", text: "Classify the target." }],
-      },
       {
         type: "message",
         role: "user",
@@ -214,13 +196,6 @@ describe("OpenAI Responses Lite client", () => {
       }),
     ],
     ["malformed arguments", completedFunctionCall("not-json")],
-    [
-      "wrong namespace",
-      fragmentedSseResponse({
-        type: "response.completed",
-        response: { output: [{ ...functionCall(), namespace: "other" }] },
-      }),
-    ],
     ["malformed SSE", new Response("event: response.completed\ndata: {not-json}\n\n")],
     ["oversized SSE event", new Response(`data: ${"x".repeat(70 * 1024)}\n\n`)],
     [
@@ -256,7 +231,7 @@ describe("OpenAI Responses Lite client", () => {
 
     const result = request();
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(RESPONSES_LITE_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(CODEX_RESPONSES_TIMEOUT_MS);
 
     await expect(result).resolves.toEqual({ kind: "upstream_error" });
     expect(cancel).toHaveBeenCalledOnce();
@@ -268,7 +243,7 @@ describe("OpenAI Responses Lite client", () => {
 
     const result = request();
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(RESPONSES_LITE_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(CODEX_RESPONSES_TIMEOUT_MS);
 
     await expect(result).resolves.toEqual({ kind: "upstream_error" });
     expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true);
