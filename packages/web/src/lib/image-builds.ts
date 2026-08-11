@@ -6,8 +6,8 @@
  */
 
 import {
-  imageBuildRecordViewSchema,
   imageBuildScopeKindSchema,
+  imageBuildStatusResponseSchema,
   type ImageBuildRecordView,
   type ImageBuildScopeKind,
   type ImageBuildStatus,
@@ -36,16 +36,14 @@ export const imageBuildEnabledRepoViewSchema = z.object({
 export type ImageBuildEnabledRepoView = z.infer<typeof imageBuildEnabledRepoViewSchema>;
 
 export const imageBuildsEnabledResponseSchema = z.object({
-  units: z.array(imageBuildUnitViewSchema).optional(),
+  units: z.array(imageBuildUnitViewSchema),
 });
 
 export const imageBuildsEnabledReposResponseSchema = z.object({
-  repos: z.array(imageBuildEnabledRepoViewSchema).optional(),
+  repos: z.array(imageBuildEnabledRepoViewSchema),
 });
 
-export const imageBuildsStatusResponseSchema = z.object({
-  images: z.array(imageBuildRecordViewSchema).optional(),
-});
+export const imageBuildsStatusResponseSchema = imageBuildStatusResponseSchema;
 
 /**
  * Response shape of GET /api/image-builds.

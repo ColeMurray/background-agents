@@ -6,6 +6,8 @@ import {
   foldImageBuildStatusByScope,
   imageBuildScopeKey,
   imageBuildEnabledRepoViewSchema,
+  imageBuildsEnabledReposResponseSchema,
+  imageBuildsEnabledResponseSchema,
   imageBuildUnitViewSchema,
   parsePrimaryBuildSha,
   repoImageBuildScopeId,
@@ -168,6 +170,11 @@ describe("image-build feed schemas", () => {
       }).success
     ).toBe(false);
     expect(imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme" }).success).toBe(false);
+  });
+
+  it("requires response arrays from the control-plane feed", () => {
+    expect(imageBuildsEnabledResponseSchema.safeParse({}).success).toBe(false);
+    expect(imageBuildsEnabledReposResponseSchema.safeParse({}).success).toBe(false);
   });
 });
 

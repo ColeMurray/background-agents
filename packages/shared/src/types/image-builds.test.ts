@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { imageBuildRecordViewSchema } from "./image-builds";
+import { imageBuildRecordViewSchema, imageBuildStatusResponseSchema } from "./image-builds";
 
 describe("imageBuildRecordViewSchema", () => {
   const validRecord = {
@@ -37,5 +37,29 @@ describe("imageBuildRecordViewSchema", () => {
     expect(
       imageBuildRecordViewSchema.safeParse({ ...validRecord, scope_id: undefined }).success
     ).toBe(false);
+  });
+});
+
+describe("imageBuildStatusResponseSchema", () => {
+  const validRecord = {
+    id: "build-1",
+    scope_kind: "repo",
+    scope_id: "acme/web",
+    provider: "modal",
+    status: "ready",
+    repositories_fingerprint: "fp-current",
+    repository_shas: "[]",
+    runtime_version: "60",
+    build_duration_seconds: null,
+    error_message: null,
+    created_at: 1700000000000,
+  };
+
+  it("parses the status response contract", () => {
+    expect(imageBuildStatusResponseSchema.safeParse({ images: [validRecord] }).success).toBe(true);
+  });
+
+  it("requires the images array", () => {
+    expect(imageBuildStatusResponseSchema.safeParse({}).success).toBe(false);
   });
 });

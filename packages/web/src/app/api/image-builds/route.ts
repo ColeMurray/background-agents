@@ -55,15 +55,15 @@ export async function GET() {
 
     // Serve the enabled scope identities and current fingerprints that the
     // status fold keys on.
-    const units = (parsedEnabled.data.units ?? []).map((unit) => ({
+    const units = parsedEnabled.data.units.map((unit) => ({
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,
       repositoriesFingerprint: unit.repositoriesFingerprint,
     }));
     // Persisted repo flags, unlike units, never drop a scope on a transient
     // resolution failure — the settings toggles read these.
-    const enabledRepos = parsedEnabledRepos.data.repos ?? [];
-    const images = excludeSupersededBuilds(parsedStatus.data.images ?? []);
+    const enabledRepos = parsedEnabledRepos.data.repos;
+    const images = excludeSupersededBuilds(parsedStatus.data.images);
 
     return NextResponse.json({ units, enabledRepos, images });
   } catch (error) {

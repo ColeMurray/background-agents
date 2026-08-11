@@ -62,3 +62,9 @@ export const imageBuildRecordViewSchema = z.object({
 });
 
 export type ImageBuildRecordView = z.infer<typeof imageBuildRecordViewSchema>;
+
+export const imageBuildStatusResponseSchema = z.object({
+  images: z.array(imageBuildRecordViewSchema),
+});
+
+export type ImageBuildStatusResponse = z.infer<typeof imageBuildStatusResponseSchema>;
