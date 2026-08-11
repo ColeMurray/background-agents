@@ -2,31 +2,36 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useEffect } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as ResizablePanels from "react-resizable-panels";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("react-resizable-panels", () => ({
-  Group: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  Panel: ({
-    children,
-    id,
-    defaultSize,
-    style,
-  }: {
-    children: React.ReactNode;
-    id: string;
-    defaultSize: string;
-    style?: React.CSSProperties;
-  }) => (
-    <div data-testid={id} data-default-size={defaultSize} style={style}>
-      {children}
-    </div>
-  ),
-  Separator: () => <div />,
-}));
+vi.mock("react-resizable-panels", async (importOriginal) => {
+  const actual = await importOriginal<typeof ResizablePanels>();
+  return {
+    ...actual,
+    Panel: ({ defaultSize, ...props }: React.ComponentProps<typeof actual.Panel>) => (
+      <actual.Panel {...props} defaultSize={defaultSize} data-default-size={defaultSize} />
+    ),
+  };
+});
 
-import { SessionDesktopLayout } from "./session-desktop-layout";
+import { SESSION_CHANGES_LAYOUT_ID, SessionDesktopLayout } from "./session-desktop-layout";
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("SessionDesktopLayout", () => {
   it("gives the changes panel most of the workspace when it opens", () => {
@@ -42,7 +47,7 @@ describe("SessionDesktopLayout", () => {
     expect(screen.getByTestId("session-changes")).toHaveAttribute("data-default-size", "55%");
   });
 
-  it("contains overflow within the session workspace panel", () => {
+  it("clips overflow on the real panel group and nested content wrapper", () => {
     render(
       <SessionDesktopLayout
         workspace={<main>timeline and terminal</main>}
@@ -51,10 +56,11 @@ describe("SessionDesktopLayout", () => {
       />
     );
 
-    expect(screen.getByTestId("session-main")).toHaveStyle({
+    expect(screen.getByTestId(SESSION_CHANGES_LAYOUT_ID)).toHaveStyle({ overflow: "clip" });
+    expect(screen.getByTestId("session-main").firstElementChild).toHaveStyle({
       minWidth: "0",
       minHeight: "0",
-      overflow: "hidden",
+      overflow: "clip",
     });
   });
 
