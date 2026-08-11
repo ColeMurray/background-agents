@@ -2,12 +2,13 @@ import { extractOpenAIAccountId, OpenAITokenRefreshError, refreshOpenAIToken } f
 import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "../db/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
+import { OAuthRefreshSingleFlight } from "./oauth-refresh-single-flight";
 
 const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const OPENAI_DEFAULT_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 const OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS = 3;
 const OPENAI_TOKEN_PERSIST_RETRY_DELAY_MS = 100;
-const OPENAI_CONCURRENT_ROTATION_DELAY_MS = 500;
+const OPENAI_CONCURRENT_ROTATION_POLL_DELAYS_MS = [100, 250, 500, 1_000] as const;
 const OPENAI_TOKEN_PERSIST_FAILURE =
   "OpenAI tokens rotated but could not be saved; reconnect OpenAI OAuth";
 
@@ -18,6 +19,10 @@ type OpenAITokenState =
 export type OpenAITokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn?: number; accountId?: string }
   | { ok: false; status: number; error: string };
+
+// Requests handled by the same Worker isolate share this coordinator. D1 rereads
+// below cover concurrent rotations performed by other isolates and Durable Objects.
+const openAIRefreshCoordinator = new OAuthRefreshSingleFlight<OpenAITokenRefreshResult>();
 
 /** Provider-level broker shared by session adapters and global OAuth consumers. */
 export class OpenAITokenBroker {
@@ -60,7 +65,7 @@ export class OpenAITokenBroker {
     }
 
     try {
-      return await this.attemptRefresh(tokenState);
+      return await this.refreshSingleFlight(tokenState);
     } catch (error) {
       if (error instanceof OpenAITokenRefreshError && error.status === 401) {
         return this.handleUnauthorizedRefresh(tokenState, scopes);
@@ -145,6 +150,14 @@ export class OpenAITokenBroker {
     };
   }
 
+  private refreshSingleFlight(
+    tokenState: Extract<OpenAITokenState, { type: "refresh" }>
+  ): Promise<OpenAITokenRefreshResult> {
+    return openAIRefreshCoordinator.run(tokenState.scope, tokenState.refreshToken, () =>
+      this.attemptRefresh(tokenState)
+    );
+  }
+
   private async persistRotatedTokens(
     scope: OAuthSecretScope,
     secrets: Record<string, string>
@@ -179,10 +192,21 @@ export class OpenAITokenBroker {
     this.log.warn("OpenAI refresh got 401, checking for concurrent rotation", {
       scope: tokenState.scope.kind,
     });
-    await new Promise((resolve) => setTimeout(resolve, OPENAI_CONCURRENT_ROTATION_DELAY_MS));
+    let observedRefreshToken = tokenState.refreshToken;
 
-    try {
-      const reread = await this.readTokenState(scopes);
+    for (const [pollIndex, delayMs] of OPENAI_CONCURRENT_ROTATION_POLL_DELAYS_MS.entries()) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+
+      let reread: OpenAITokenState | null;
+      try {
+        reread = await this.readTokenState(scopes);
+      } catch (error) {
+        this.log.error("Failed to reread OpenAI token state after 401", {
+          poll_attempt: pollIndex + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
       if (reread?.type === "cached") {
         this.log.info("Using cached access token from concurrent rotation");
         return {
@@ -192,14 +216,19 @@ export class OpenAITokenBroker {
           accountId: reread.accountId,
         };
       }
-      if (reread?.type === "refresh" && reread.refreshToken !== tokenState.refreshToken) {
+      if (reread?.type === "refresh" && reread.refreshToken !== observedRefreshToken) {
+        observedRefreshToken = reread.refreshToken;
         this.log.info("Detected concurrent token rotation, retrying");
-        return this.attemptRefresh(reread);
+        try {
+          return await this.refreshSingleFlight(reread);
+        } catch (error) {
+          if (error instanceof OpenAITokenRefreshError && error.status === 401) continue;
+          this.log.error("OpenAI token refresh retry failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return { ok: false, status: 502, error: "OpenAI token refresh failed" };
+        }
       }
-    } catch (error) {
-      this.log.error("Retry after 401 also failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
     }
     return { ok: false, status: 401, error: "OpenAI token refresh failed: unauthorized" };
   }

@@ -352,6 +352,120 @@ describe("OpenAITokenRefreshService", () => {
     expect(mockState.refreshImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("coalesces concurrent refreshes for the same scope and refresh token", async () => {
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    let resolveRefresh!: (tokens: {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+    }) => void;
+    mockState.refreshImpl.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      })
+    );
+    const firstBroker = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger());
+    const secondBroker = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger());
+
+    const first = firstBroker.refreshGlobal();
+    const second = secondBroker.refreshGlobal();
+    await vi.waitFor(() => expect(mockState.refreshImpl).toHaveBeenCalledOnce());
+    resolveRefresh({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+    });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      {
+        ok: true,
+        accessToken: "global-access-new",
+        expiresIn: 1800,
+        accountId: undefined,
+      },
+      {
+        ok: true,
+        accessToken: "global-access-new",
+        expiresIn: 1800,
+        accountId: undefined,
+      },
+    ]);
+    expect(mockState.refreshImpl).toHaveBeenCalledOnce();
+    expect(mockState.globalWrites).toHaveLength(1);
+  });
+
+  it("waits for a slow concurrent rotation from another isolate", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    mockState.refreshImpl.mockImplementationOnce(async () => {
+      setTimeout(() => {
+        mockState.globalSecrets = {
+          OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated",
+          OPENAI_OAUTH_ACCESS_TOKEN: "global-access-concurrent",
+          OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 60 * 60 * 1000),
+        };
+      }, 750);
+      throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+    });
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toMatchObject({
+      ok: true,
+      accessToken: "global-access-concurrent",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledOnce();
+  });
+
+  it("returns a bounded 401 when a concurrently rotated token is also rejected", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale" };
+    mockState.refreshImpl
+      .mockImplementationOnce(async () => {
+        mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated" };
+        throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockRejectedValueOnce(new OpenAITokenRefreshError("unauthorized", 401, "unauthorized"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      status: 401,
+      error: "OpenAI token refresh failed: unauthorized",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns a bounded failure when retrying a concurrently rotated token fails", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale" };
+    mockState.refreshImpl
+      .mockImplementationOnce(async () => {
+        mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated" };
+        throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockRejectedValueOnce(new Error("upstream connection failed"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      status: 502,
+      error: "OpenAI token refresh failed",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledTimes(2);
+  });
+
   it("returns 404 when refresh token is missing in repo and global secrets", async () => {
     const service = new OpenAITokenRefreshService(
       TEST_DB,
