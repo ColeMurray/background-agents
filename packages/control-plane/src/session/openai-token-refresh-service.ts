@@ -2,6 +2,7 @@ import { OpenAITokenBroker, type OpenAITokenRefreshResult } from "../auth/openai
 import type { OAuthSecretScope } from "../auth/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
+import { resolveSessionOAuthSecretScope } from "./oauth-secret-scope";
 import type { SessionRow } from "./types";
 
 export type { OpenAITokenRefreshResult } from "../auth/openai-token-broker";
@@ -22,7 +23,7 @@ export class OpenAITokenRefreshService {
   async refresh(session: SessionRow): Promise<OpenAITokenRefreshResult> {
     let sessionScope: OAuthSecretScope | null;
     try {
-      sessionScope = await this.resolveSessionScope(session);
+      sessionScope = await resolveSessionOAuthSecretScope(session, this.ensureRepoId);
     } catch (error) {
       this.log.error("Failed to resolve OpenAI token secret scope", {
         error: error instanceof Error ? error.message : String(error),
@@ -33,20 +34,5 @@ export class OpenAITokenRefreshService {
       ? [sessionScope, { kind: "global" }]
       : [{ kind: "global" }];
     return this.broker.refreshScopes(scopes);
-  }
-
-  private async resolveSessionScope(session: SessionRow): Promise<OAuthSecretScope | null> {
-    if (session.environment_id) {
-      return { kind: "environment", environmentId: session.environment_id };
-    }
-    if (session.repo_owner && session.repo_name) {
-      return {
-        kind: "repo",
-        repoId: await this.ensureRepoId(session),
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-      };
-    }
-    return null;
   }
 }

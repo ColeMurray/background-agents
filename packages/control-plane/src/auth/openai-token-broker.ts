@@ -4,6 +4,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
 
 const OPENAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
+const OPENAI_DEFAULT_TOKEN_LIFETIME_MS = 60 * 60 * 1000;
 const OPENAI_TOKEN_PERSIST_MAX_ATTEMPTS = 3;
 const OPENAI_TOKEN_PERSIST_RETRY_DELAY_MS = 100;
 const OPENAI_CONCURRENT_ROTATION_DELAY_MS = 500;
@@ -121,7 +122,11 @@ export class OpenAITokenBroker {
   ): Promise<OpenAITokenRefreshResult> {
     const tokens = await refreshOpenAIToken(tokenState.refreshToken);
     const accountId = extractOpenAIAccountId(tokens) ?? tokenState.accountId;
-    const expiresAt = Date.now() + (tokens.expires_in ?? 3600) * 1000;
+    const expiresAt =
+      Date.now() +
+      (tokens.expires_in === undefined
+        ? OPENAI_DEFAULT_TOKEN_LIFETIME_MS
+        : tokens.expires_in * 1000);
     const secretsToWrite: Record<string, string> = {
       OPENAI_OAUTH_REFRESH_TOKEN: tokens.refresh_token,
       OPENAI_OAUTH_ACCESS_TOKEN: tokens.access_token,

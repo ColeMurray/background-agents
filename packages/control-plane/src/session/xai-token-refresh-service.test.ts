@@ -212,7 +212,7 @@ describe("XaiTokenRefreshService", () => {
     });
 
     const result = service().refresh(session());
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.runAllTimersAsync();
 
     await expect(result).resolves.toMatchObject({ ok: true, accessToken: "concurrent-access" });
     expect(state.refresh).toHaveBeenCalledTimes(1);
@@ -241,7 +241,7 @@ describe("XaiTokenRefreshService", () => {
     });
     expect(log.error).toHaveBeenCalledWith(
       "xAI token refreshed but failed to persist rotated tokens",
-      { source: "repo", error: "write failed" }
+      { scope: "repo", error: "write failed" }
     );
   });
 });

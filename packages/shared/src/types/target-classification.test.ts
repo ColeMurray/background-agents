@@ -67,15 +67,14 @@ describe("target classification contracts", () => {
   it("bounds inference prompts and wraps decisions at the service boundary", () => {
     expect(
       openAIClassifierInferenceRequestSchema.safeParse({
-        systemPrompt: "Classify the target.",
         prompt: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1),
       }).success
     ).toBe(false);
 
     expect(
       openAIClassifierInferenceRequestSchema.safeParse({
-        systemPrompt: "   ",
         prompt: "Route this request.",
+        systemPrompt: "Caller-selected policy",
       }).success
     ).toBe(false);
 

@@ -104,7 +104,7 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
 
       - name: Post Validation Results
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |

@@ -335,7 +335,7 @@ describe("OpenAITokenRefreshService", () => {
     });
 
     const promise = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.runAllTimersAsync();
 
     await expect(promise).resolves.toMatchObject({
       ok: true,
@@ -476,7 +476,7 @@ describe("OpenAITokenRefreshService", () => {
     );
 
     const promise = service.refresh(createSession());
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.runAllTimersAsync();
     const result = await promise;
 
     expect(result).toEqual({

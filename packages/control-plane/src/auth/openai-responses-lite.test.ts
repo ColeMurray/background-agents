@@ -223,6 +223,20 @@ describe("OpenAI Responses Lite client", () => {
     ],
     ["malformed SSE", new Response("event: response.completed\ndata: {not-json}\n\n")],
     ["oversized SSE event", new Response(`data: ${"x".repeat(70 * 1024)}\n\n`)],
+    [
+      "oversized total stream",
+      new Response(
+        Array.from({ length: 20 }, () =>
+          sseEvent({ type: "response.created", padding: "x".repeat(55 * 1024) })
+        ).join("")
+      ),
+    ],
+    [
+      "too many SSE events",
+      new Response(
+        Array.from({ length: 1_001 }, () => sseEvent({ type: "response.created" })).join("")
+      ),
+    ],
   ])("returns invalid_response for %s", async (_name, response) => {
     vi.mocked(fetch).mockResolvedValueOnce(response);
     await expect(request()).resolves.toEqual({ kind: "invalid_response" });

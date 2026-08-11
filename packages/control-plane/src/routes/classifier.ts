@@ -1,5 +1,6 @@
 import {
   CLASSIFY_TARGET_TOOL_NAME,
+  TARGET_CLASSIFIER_SYSTEM_PROMPT,
   openAIClassifierInferenceRequestSchema,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
@@ -55,7 +56,7 @@ export async function handleClassifierInference(
     requestId: ctx.request_id,
     traceId: ctx.trace_id,
     model: OPENAI_MODEL,
-    systemPrompt: parsedRequest.data.systemPrompt,
+    systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
     prompt: parsedRequest.data.prompt,
     tool: {
       name: CLASSIFY_TARGET_TOOL_NAME,
@@ -74,11 +75,23 @@ export async function handleClassifierInference(
     return error("Classifier upstream unavailable", 502);
   }
   if (result.kind === "invalid_response") {
+    logger.warn("Classifier returned an unparsable response", {
+      event: "classifier.invalid_response",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
     return error("Classifier returned an invalid response", 502);
   }
 
   const decision = targetClassificationDecisionSchema.safeParse(result.output);
-  if (!decision.success) return error("Classifier returned an invalid response", 502);
+  if (!decision.success) {
+    logger.warn("Classifier decision failed schema validation", {
+      event: "classifier.invalid_decision",
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    });
+    return error("Classifier returned an invalid response", 502);
+  }
   return json({ decision: decision.data });
 }
 

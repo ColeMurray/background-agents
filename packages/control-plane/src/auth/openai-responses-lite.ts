@@ -29,6 +29,7 @@ type PendingFunctionCall = {
   namespace?: string;
   name?: string;
   arguments: string;
+  argumentBytes: number;
 };
 
 type StreamResult =
@@ -61,7 +62,7 @@ function waitForAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T>
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function functionCallFromItem(value: unknown, toolName: string): PendingFunctionCall | null {
@@ -78,6 +79,7 @@ function functionCallFromItem(value: unknown, toolName: string): PendingFunction
     namespace: typeof value.namespace === "string" ? value.namespace : undefined,
     name: value.name,
     arguments: value.arguments,
+    argumentBytes: new TextEncoder().encode(value.arguments).byteLength,
   };
 }
 
@@ -125,13 +127,14 @@ async function parseStream(
   let outputItem: unknown = null;
   let lineBuffer = "";
   let eventData = "";
+  let eventDataBytes = 0;
   let totalBytes = 0;
   let eventCount = 0;
 
   const processEvent = (): "continue" | "completed" | "upstream_error" | "invalid" => {
     if (!eventData) return "continue";
     eventCount += 1;
-    if (eventCount > MAX_SSE_EVENTS || encoder.encode(eventData).byteLength > MAX_SSE_EVENT_BYTES) {
+    if (eventCount > MAX_SSE_EVENTS || eventDataBytes > MAX_SSE_EVENT_BYTES) {
       return "invalid";
     }
 
@@ -151,6 +154,10 @@ async function parseStream(
           namespace: typeof event.item.namespace === "string" ? event.item.namespace : undefined,
           name: typeof event.item.name === "string" ? event.item.name : undefined,
           arguments: typeof event.item.arguments === "string" ? event.item.arguments : "",
+          argumentBytes:
+            typeof event.item.arguments === "string"
+              ? encoder.encode(event.item.arguments).byteLength
+              : 0,
         });
       }
       return "continue";
@@ -159,9 +166,10 @@ async function parseStream(
     if (event.type === "response.function_call_arguments.delta") {
       const itemId = typeof event.item_id === "string" ? event.item_id : null;
       if (!itemId || typeof event.delta !== "string") return "invalid";
-      const call = pendingCalls.get(itemId) ?? { arguments: "" };
+      const call = pendingCalls.get(itemId) ?? { arguments: "", argumentBytes: 0 };
       call.arguments += event.delta;
-      if (encoder.encode(call.arguments).byteLength > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
+      call.argumentBytes += encoder.encode(event.delta).byteLength;
+      if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
       pendingCalls.set(itemId, call);
       return "continue";
     }
@@ -169,11 +177,12 @@ async function parseStream(
     if (event.type === "response.function_call_arguments.done") {
       const itemId = typeof event.item_id === "string" ? event.item_id : null;
       if (!itemId || typeof event.arguments !== "string") return "invalid";
-      const call = pendingCalls.get(itemId) ?? { arguments: "" };
+      const call = pendingCalls.get(itemId) ?? { arguments: "", argumentBytes: 0 };
       call.arguments = event.arguments;
+      call.argumentBytes = encoder.encode(event.arguments).byteLength;
       if (typeof event.namespace === "string") call.namespace = event.namespace;
       if (typeof event.name === "string") call.name = event.name;
-      if (encoder.encode(call.arguments).byteLength > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
+      if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
       pendingCalls.set(itemId, call);
       return "continue";
     }
@@ -208,6 +217,7 @@ async function parseStream(
         if (line === "") {
           const result = processEvent();
           eventData = "";
+          eventDataBytes = 0;
           if (result === "upstream_error") return { kind: "upstream_error" };
           if (result === "invalid") return { kind: "invalid_response" };
           if (result === "completed") {
@@ -221,8 +231,9 @@ async function parseStream(
           }
         } else if (line.startsWith("data:")) {
           const data = line.slice(5).replace(/^ /, "");
+          eventDataBytes += (eventData ? 1 : 0) + encoder.encode(data).byteLength;
           eventData += eventData ? `\n${data}` : data;
-          if (encoder.encode(eventData).byteLength > MAX_SSE_EVENT_BYTES) {
+          if (eventDataBytes > MAX_SSE_EVENT_BYTES) {
             return { kind: "invalid_response" };
           }
         }

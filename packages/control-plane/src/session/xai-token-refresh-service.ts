@@ -2,6 +2,7 @@ import { refreshXaiToken, XaiTokenRefreshError } from "../auth/xai";
 import { ScopedOAuthSecretsStore, type OAuthSecretScope } from "../auth/scoped-oauth-secrets";
 import type { SqlDatabase } from "../db/sql-database";
 import type { Logger } from "../logger";
+import { resolveSessionOAuthSecretScope } from "./oauth-secret-scope";
 import type { SessionRow } from "./types";
 
 const XAI_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
@@ -10,7 +11,7 @@ const XAI_CONCURRENT_ROTATION_DELAY_MS = 500;
 
 type XaiTokenState =
   | { type: "cached"; accessToken: string; expiresIn: number }
-  | { type: "refresh"; refreshToken: string; source: OAuthSecretScope };
+  | { type: "refresh"; refreshToken: string; scope: OAuthSecretScope };
 
 export type XaiTokenRefreshResult =
   | { ok: true; accessToken: string; expiresIn: number }
@@ -62,7 +63,7 @@ export class XaiTokenRefreshService {
 
   private stateFromSecrets(
     secrets: Record<string, string>,
-    source: OAuthSecretScope
+    scope: OAuthSecretScope
   ): XaiTokenState | null {
     const refreshToken = secrets.XAI_OAUTH_REFRESH_TOKEN;
     if (!refreshToken) return null;
@@ -72,28 +73,13 @@ export class XaiTokenRefreshService {
     if (accessToken && expiresAt - now > XAI_TOKEN_REFRESH_BUFFER_MS) {
       return { type: "cached", accessToken, expiresIn: Math.floor((expiresAt - now) / 1000) };
     }
-    return { type: "refresh", refreshToken, source };
-  }
-
-  private async sessionSource(session: SessionRow): Promise<OAuthSecretScope | null> {
-    if (session.environment_id) {
-      return { kind: "environment", environmentId: session.environment_id };
-    }
-    if (session.repo_owner && session.repo_name) {
-      return {
-        kind: "repo",
-        repoId: await this.ensureRepoId(session),
-        repoOwner: session.repo_owner,
-        repoName: session.repo_name,
-      };
-    }
-    return null;
+    return { type: "refresh", refreshToken, scope };
   }
 
   private async readTokenState(session: SessionRow): Promise<XaiTokenState | null> {
-    const source = await this.sessionSource(session);
-    if (source) {
-      const state = this.stateFromSecrets(await this.secrets.read(source), source);
+    const scope = await resolveSessionOAuthSecretScope(session, this.ensureRepoId);
+    if (scope) {
+      const state = this.stateFromSecrets(await this.secrets.read(scope), scope);
       if (state) return state;
     }
     const globalSource = { kind: "global" } as const;
@@ -111,11 +97,11 @@ export class XaiTokenRefreshService {
       XAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + expiresIn * 1000),
     };
     try {
-      await this.secrets.write(state.source, secrets);
-      this.log.info("xAI tokens rotated and cached", { source: state.source.kind });
+      await this.secrets.write(state.scope, secrets);
+      this.log.info("xAI tokens rotated and cached", { scope: state.scope.kind });
     } catch (error) {
       this.log.error("xAI token refreshed but failed to persist rotated tokens", {
-        source: state.source.kind,
+        scope: state.scope.kind,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -127,7 +113,7 @@ export class XaiTokenRefreshService {
     readState: () => Promise<XaiTokenState | null>
   ): Promise<XaiTokenRefreshResult> {
     this.log.warn("xAI refresh was rejected, checking for concurrent rotation", {
-      source: state.source.kind,
+      scope: state.scope.kind,
     });
     await new Promise((resolve) => setTimeout(resolve, XAI_CONCURRENT_ROTATION_DELAY_MS));
     try {

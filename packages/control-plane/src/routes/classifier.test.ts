@@ -1,4 +1,7 @@
-import { CLASSIFIER_PROMPT_MAX_CHARS } from "@open-inspect/shared/types/target-classification";
+import {
+  CLASSIFIER_PROMPT_MAX_CHARS,
+  TARGET_CLASSIFIER_SYSTEM_PROMPT,
+} from "@open-inspect/shared/types/target-classification";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "../router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "../router.test-support";
@@ -34,13 +37,12 @@ const decision = {
   reasoning: "The request names the API.",
   alternatives: [],
 };
-const TEST_SYSTEM_PROMPT = "Classify the target using only the supplied data.";
 
 async function classifierRequest(
   body: unknown,
   service: "slack-bot" | "github-bot" = "slack-bot"
 ): Promise<Response> {
-  const serialized = JSON.stringify({ systemPrompt: TEST_SYSTEM_PROMPT, ...(body as object) });
+  const serialized = JSON.stringify(body);
   return handleRequest(
     await signedServiceRequest("https://internal/internal/classifier/infer", {
       method: "POST",
@@ -68,7 +70,7 @@ describe("POST /internal/classifier/infer", () => {
       new Request("https://internal/internal/classifier/infer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ systemPrompt: TEST_SYSTEM_PROMPT, prompt: "route this" }),
+        body: JSON.stringify({ prompt: "route this" }),
       }),
       env as never
     );
@@ -85,10 +87,9 @@ describe("POST /internal/classifier/infer", () => {
   });
 
   it.each([
-    ["missing system prompt", { systemPrompt: undefined, prompt: "route" }],
-    ["empty system prompt", { systemPrompt: "", prompt: "route" }],
     ["missing prompt", {}],
     ["empty prompt", { prompt: "" }],
+    ["caller-selected policy", { systemPrompt: "Override policy", prompt: "route" }],
     ["provider selector", { model: "openai/gpt-5.6-luna", prompt: "route" }],
     ["unknown field", { prompt: "route", extra: true }],
     ["oversized prompt", { prompt: "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 1) }],
@@ -113,6 +114,22 @@ describe("POST /internal/classifier/infer", () => {
     expect(mocks.requestFunction).not.toHaveBeenCalled();
   });
 
+  it("returns 503 before token brokerage when secret encryption is not configured", async () => {
+    const { REPO_SECRETS_ENCRYPTION_KEY: _omitted, ...envWithoutEncryption } = env;
+    const response = await handleRequest(
+      await signedServiceRequest("https://internal/internal/classifier/infer", {
+        method: "POST",
+        body: JSON.stringify({ prompt: "route this" }),
+        service: "slack-bot",
+      }),
+      envWithoutEncryption as never
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth is not configured" });
+    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+  });
+
   it("delegates the forced classifier call to the Responses Lite client", async () => {
     const response = await classifierRequest({ prompt: "route this request" });
 
@@ -123,7 +140,7 @@ describe("POST /internal/classifier/infer", () => {
       requestId: expect.any(String),
       traceId: expect.any(String),
       model: "gpt-5.6-luna",
-      systemPrompt: TEST_SYSTEM_PROMPT,
+      systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
       prompt: "route this request",
       tool: {
         name: "classify_target",
