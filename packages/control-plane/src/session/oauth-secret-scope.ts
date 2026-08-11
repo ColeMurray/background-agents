@@ -6,15 +6,22 @@ export async function resolveSessionOAuthSecretScope(
   session: SessionRow,
   ensureRepoId: (session: SessionRow) => Promise<number>
 ): Promise<OAuthSecretScope | null> {
+  const { repo_owner: repoOwner, repo_name: repoName } = session;
+  const hasRepoOwner = repoOwner !== null;
+  const hasRepoName = repoName !== null;
+  if (hasRepoOwner !== hasRepoName) {
+    throw new Error("Session has incomplete repository context");
+  }
+
   if (session.environment_id) {
     return { kind: "environment", environmentId: session.environment_id };
   }
-  if (session.repo_owner && session.repo_name) {
+  if (repoOwner !== null && repoName !== null) {
     return {
       kind: "repo",
       repoId: await ensureRepoId(session),
-      repoOwner: session.repo_owner,
-      repoName: session.repo_name,
+      repoOwner,
+      repoName,
     };
   }
   return null;

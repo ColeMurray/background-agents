@@ -20,10 +20,10 @@ Consider:
 ## Response Format
 
 Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
-- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
+- targetId: copy one canonical target id exactly from the catalog, or null if unclear. Never construct or truncate an id; preserve the complete repository owner, including any "/" characters
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
-- alternatives: other possible targets when confidence is not high`;
+- alternatives: copy other possible canonical target ids exactly from the catalog when confidence is not high`;
 
 export const ANTHROPIC_CLASSIFICATION_MODEL_ID = "anthropic/claude-haiku-4-5";
 export const OPENAI_CLASSIFICATION_MODEL_ID = "openai/gpt-5.6-luna";
@@ -42,7 +42,7 @@ export const targetClassificationDecisionSchema = z
     targetId: nonEmptyTrimmedStringSchema
       .nullable()
       .describe(
-        'A repository "owner/name" or an environment id ("env_…") if confident, otherwise null.'
+        'Copy one canonical target id exactly from the catalog if confident, otherwise null. Never construct or truncate an id; preserve the complete repository owner, including any "/" characters.'
       ),
     confidence: z.enum(["high", "medium", "low"]),
     reasoning: nonEmptyTrimmedStringSchema.describe(
@@ -50,7 +50,9 @@ export const targetClassificationDecisionSchema = z
     ),
     alternatives: z
       .array(nonEmptyTrimmedStringSchema)
-      .describe("Alternative target ids when confidence is not high."),
+      .describe(
+        "Other possible canonical target ids copied exactly from the catalog when confidence is not high."
+      ),
   })
   .strict();
 

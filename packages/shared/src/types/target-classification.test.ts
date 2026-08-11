@@ -6,6 +6,7 @@ import {
   classifierInferenceResponseSchema,
   classificationModelSchema,
   OPENAI_CLASSIFICATION_MODEL_ID,
+  TARGET_CLASSIFIER_SYSTEM_PROMPT,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
 } from "./target-classification";
@@ -62,6 +63,15 @@ describe("target classification contracts", () => {
       },
     });
     expect(targetClassificationJsonSchema).not.toHaveProperty("$schema");
+    expect(targetClassificationJsonSchema.properties?.targetId).toMatchObject({
+      description: expect.stringContaining("exactly from the catalog"),
+    });
+    expect(targetClassificationJsonSchema.properties?.alternatives).toMatchObject({
+      description: expect.stringContaining("exactly from the catalog"),
+    });
+    expect(TARGET_CLASSIFIER_SYSTEM_PROMPT).toContain(
+      "preserve the complete repository owner, including any"
+    );
   });
 
   it("bounds inference prompts and wraps decisions at the service boundary", () => {
