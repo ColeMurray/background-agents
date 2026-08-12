@@ -3,11 +3,13 @@ import {
   SecretDecryptionError,
   assertScopeKeyCapacity,
   decryptSecretRows,
+  decryptStoredSecret,
   encryptSecretEntries,
+  encryptSecretValue,
   prepareSecretsForWrite,
   toSecretMetadata,
 } from "./scoped-secrets";
-import type { SecretsWriteResult } from "./scoped-secrets";
+import type { SecretsWriteResult, StoredSecretValue } from "./scoped-secrets";
 import { normalizeKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 import type { SqlDatabase } from "./sql-database";
@@ -82,6 +84,41 @@ export class GlobalSecretsStore {
       }
       throw e;
     }
+  }
+
+  async getSecretWithCiphertext(key: string): Promise<StoredSecretValue | null> {
+    const row = await this.db
+      .prepare("SELECT encrypted_value FROM global_secrets WHERE key = ?")
+      .bind(normalizeKey(key))
+      .first<{ encrypted_value: string }>();
+    if (!row) return null;
+
+    try {
+      return await decryptStoredSecret(key, row.encrypted_value, this.encryptionKey);
+    } catch (e) {
+      if (e instanceof SecretDecryptionError) {
+        log.error("Failed to decrypt global secret", {
+          key: e.key,
+          error: e.cause instanceof Error ? e.cause.message : String(e.cause),
+        });
+        throw new Error(`Failed to decrypt global secret '${e.key}'`);
+      }
+      throw e;
+    }
+  }
+
+  async casUpdateSecret(key: string, expectedCiphertext: string, value: string): Promise<boolean> {
+    const encryptedValue = await encryptSecretValue(value, this.encryptionKey);
+    const result = await this.db
+      .prepare(
+        `UPDATE global_secrets
+         SET encrypted_value = ?, updated_at = ?
+         WHERE key = ? AND encrypted_value = ?`
+      )
+      .bind(encryptedValue, Date.now(), normalizeKey(key), expectedCiphertext)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async deleteSecret(key: string): Promise<boolean> {

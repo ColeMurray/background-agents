@@ -27,6 +27,28 @@ export class OpenAITokenRefreshError extends Error {
   }
 }
 
+const OPENAI_CONSUMED_REFRESH_TOKEN_ERRORS = new Set(["invalid_grant", "refresh_token_reused"]);
+
+const oauthErrorResponseSchema = z.object({ error: z.string() });
+
+/**
+ * Whether a refresh failure means the refresh token itself was rejected —
+ * expired, revoked, or already consumed by a concurrent rotation — rather than
+ * a transient upstream fault. OpenAI reports consumed refresh tokens as HTTP
+ * 400 with an OAuth `invalid_grant`/`refresh_token_reused` error code, not
+ * only as 401.
+ */
+export function isOpenAIRefreshTokenRejected(error: OpenAITokenRefreshError): boolean {
+  if (error.status === 401) return true;
+  if (error.status !== 400) return false;
+  try {
+    const parsed = oauthErrorResponseSchema.safeParse(JSON.parse(error.body));
+    return parsed.success && OPENAI_CONSUMED_REFRESH_TOKEN_ERRORS.has(parsed.data.error);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Refresh an OpenAI OAuth access token using a refresh token.
  */

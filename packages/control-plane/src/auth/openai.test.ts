@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { refreshOpenAIToken, extractOpenAIAccountId, OpenAITokenRefreshError } from "./openai";
+import {
+  refreshOpenAIToken,
+  extractOpenAIAccountId,
+  isOpenAIRefreshTokenRejected,
+  OpenAITokenRefreshError,
+} from "./openai";
 import type { OpenAITokenResponse } from "./openai";
 
 describe("openai", () => {
@@ -95,6 +100,39 @@ describe("openai", () => {
       globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
 
       await expect(refreshOpenAIToken("rt_any")).rejects.toThrow("fetch failed");
+    });
+  });
+
+  describe("isOpenAIRefreshTokenRejected", () => {
+    const refreshError = (status: number, body: string) =>
+      new OpenAITokenRefreshError("refresh failed", status, body);
+
+    it("treats any 401 as a rejected refresh token", () => {
+      expect(isOpenAIRefreshTokenRejected(refreshError(401, "unauthorized"))).toBe(true);
+    });
+
+    it.each(["invalid_grant", "refresh_token_reused"])(
+      "treats a 400 %s as a rejected refresh token",
+      (code) => {
+        const body = JSON.stringify({ error: code, error_description: "token consumed" });
+        expect(isOpenAIRefreshTokenRejected(refreshError(400, body))).toBe(true);
+      }
+    );
+
+    it("ignores a 400 with an unrelated error code", () => {
+      const body = JSON.stringify({ error: "invalid_request" });
+      expect(isOpenAIRefreshTokenRejected(refreshError(400, body))).toBe(false);
+    });
+
+    it("ignores a 400 with a non-JSON body", () => {
+      expect(isOpenAIRefreshTokenRejected(refreshError(400, "<html>Bad Request</html>"))).toBe(
+        false
+      );
+    });
+
+    it("ignores other statuses even with a consumed-token body", () => {
+      const body = JSON.stringify({ error: "invalid_grant" });
+      expect(isOpenAIRefreshTokenRejected(refreshError(500, body))).toBe(false);
     });
   });
 

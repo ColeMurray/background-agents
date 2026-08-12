@@ -55,15 +55,34 @@ describe("resolveSessionOAuthSecretScope", () => {
     { repo_owner: "acme", repo_name: null, environment_id: "env_1" },
     { repo_owner: "", repo_name: "web" },
     { repo_owner: "acme", repo_name: "" },
-    { repo_owner: "", repo_name: "" },
     { repo_owner: " ", repo_name: "web" },
-  ])("rejects incomplete or empty repository context", async (overrides) => {
+  ])("rejects a partial repository pair", async (overrides) => {
     const ensureRepoId = vi.fn();
 
     await expect(resolveSessionOAuthSecretScope(session(overrides), ensureRepoId)).rejects.toThrow(
       "Session has incomplete repository context"
     );
     expect(ensureRepoId).not.toHaveBeenCalled();
+  });
+
+  it("treats a fully blank repository pair as no repository context", async () => {
+    const ensureRepoId = vi.fn();
+
+    await expect(
+      resolveSessionOAuthSecretScope(session({ repo_owner: "", repo_name: " " }), ensureRepoId)
+    ).resolves.toBeNull();
+    expect(ensureRepoId).not.toHaveBeenCalled();
+  });
+
+  it("normalizes repository identifiers into the scope", async () => {
+    const ensureRepoId = vi.fn().mockResolvedValue(123);
+
+    await expect(
+      resolveSessionOAuthSecretScope(
+        session({ repo_owner: " Acme ", repo_name: "Web" }),
+        ensureRepoId
+      )
+    ).resolves.toEqual({ kind: "repo", repoId: 123, repoOwner: "acme", repoName: "web" });
   });
 
   it("resolves a complete historical repository target", async () => {

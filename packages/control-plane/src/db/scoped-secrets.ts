@@ -95,6 +95,12 @@ export async function encryptSecretEntries(
   return { entries, created, updated };
 }
 
+/** Encrypt a single validated secret value for a store's guarded write. */
+export async function encryptSecretValue(value: string, encryptionKey: string): Promise<string> {
+  validateValue(value);
+  return encryptToken(value, encryptionKey);
+}
+
 /** Map `key, created_at, updated_at` rows to the wire metadata shape. */
 export function toSecretMetadata(
   rows: Array<{ key: string; created_at: number; updated_at: number }>
@@ -127,6 +133,30 @@ export class SecretDecryptionError extends Error {
  * record. Pure crypto: on failure, throws `SecretDecryptionError`; logging is
  * the caller's concern.
  */
+/**
+ * One stored secret decrypted alongside the exact ciphertext it was read from.
+ * The ciphertext is the compare-and-swap comparand for rotation writes: values
+ * encrypt non-deterministically, so equality is only meaningful against the
+ * stored bytes, never against a re-encryption.
+ */
+export interface StoredSecretValue {
+  value: string;
+  ciphertext: string;
+}
+
+/** Decrypt one stored ciphertext, wrapping failures like `decryptSecretRows`. */
+export async function decryptStoredSecret(
+  key: string,
+  ciphertext: string,
+  encryptionKey: string
+): Promise<StoredSecretValue> {
+  try {
+    return { value: await decryptToken(ciphertext, encryptionKey), ciphertext };
+  } catch (e) {
+    throw new SecretDecryptionError(key, { cause: e });
+  }
+}
+
 export async function decryptSecretRows(
   rows: Array<{ key: string; encrypted_value: string }>,
   encryptionKey: string

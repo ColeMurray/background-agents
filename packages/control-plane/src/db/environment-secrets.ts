@@ -16,11 +16,13 @@ import {
   SecretDecryptionError,
   assertScopeKeyCapacity,
   decryptSecretRows,
+  decryptStoredSecret,
   encryptSecretEntries,
+  encryptSecretValue,
   prepareSecretsForWrite,
   toSecretMetadata,
 } from "./scoped-secrets";
-import type { SecretsWriteResult } from "./scoped-secrets";
+import type { SecretsWriteResult, StoredSecretValue } from "./scoped-secrets";
 import { normalizeKey, validateKey } from "./secrets-validation";
 import type { SecretMetadata } from "./secrets-validation";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
@@ -92,6 +94,52 @@ export class EnvironmentSecretsStore {
       }
       throw e;
     }
+  }
+
+  async getSecretWithCiphertext(
+    environmentId: string,
+    key: string
+  ): Promise<StoredSecretValue | null> {
+    const row = await this.db
+      .prepare(
+        "SELECT encrypted_value FROM environment_secrets WHERE environment_id = ? AND key = ?"
+      )
+      .bind(environmentId, normalizeKey(key))
+      .first<{ encrypted_value: string }>();
+    if (!row) return null;
+
+    try {
+      return await decryptStoredSecret(key, row.encrypted_value, this.encryptionKey);
+    } catch (e) {
+      if (e instanceof SecretDecryptionError) {
+        log.error("Failed to decrypt secret", {
+          environment_id: environmentId,
+          key: e.key,
+          error: e.cause instanceof Error ? e.cause.message : String(e.cause),
+        });
+        throw new Error(`Failed to decrypt secret '${e.key}'`);
+      }
+      throw e;
+    }
+  }
+
+  async casUpdateSecret(
+    environmentId: string,
+    key: string,
+    expectedCiphertext: string,
+    value: string
+  ): Promise<boolean> {
+    const encryptedValue = await encryptSecretValue(value, this.encryptionKey);
+    const result = await this.db
+      .prepare(
+        `UPDATE environment_secrets
+         SET encrypted_value = ?, updated_at = ?
+         WHERE environment_id = ? AND key = ? AND encrypted_value = ?`
+      )
+      .bind(encryptedValue, Date.now(), environmentId, normalizeKey(key), expectedCiphertext)
+      .run();
+
+    return (result.meta?.changes ?? 0) > 0;
   }
 
   async deleteSecret(environmentId: string, key: string): Promise<boolean> {

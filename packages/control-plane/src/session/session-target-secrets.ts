@@ -1,31 +1,30 @@
+import { normalizeOptionalRepositoryPair } from "@open-inspect/shared/types/repositories";
 import type { OAuthSecretScope } from "../db/scoped-oauth-secrets";
 import type { SecretSource } from "../db/secrets-validation";
 import type { SessionRepositoryEntry } from "./repository-target";
 import type { SessionRow } from "./types";
 
-/** Maps a session target to the secret scope that owns its provider OAuth credentials. */
+/**
+ * Maps a session target to the secret scope that owns its provider OAuth
+ * credentials. Repository identifiers follow the canonical
+ * `normalizeOptionalRepositoryPair` contract: values are trimmed and
+ * lowercased, a fully blank pair counts as absent (global scope), and a
+ * partial pair throws.
+ */
 export async function resolveSessionOAuthSecretScope(
   session: SessionRow,
   ensureRepoId: (session: SessionRow) => Promise<number>
 ): Promise<OAuthSecretScope | null> {
-  const { repo_owner: repoOwner, repo_name: repoName } = session;
-  const hasEmptyRepositoryIdentifier =
-    (repoOwner !== null && repoOwner.trim().length === 0) ||
-    (repoName !== null && repoName.trim().length === 0);
-  if (hasEmptyRepositoryIdentifier || (repoOwner === null) !== (repoName === null)) {
-    throw new Error("Session has incomplete repository context");
-  }
+  const pair = normalizeOptionalRepositoryPair(
+    { repoOwner: session.repo_owner, repoName: session.repo_name },
+    "Session has incomplete repository context"
+  );
 
   if (session.environment_id) {
     return { kind: "environment", environmentId: session.environment_id };
   }
-  if (repoOwner !== null && repoName !== null) {
-    return {
-      kind: "repo",
-      repoId: await ensureRepoId(session),
-      repoOwner,
-      repoName,
-    };
+  if (pair) {
+    return { kind: "repo", repoId: await ensureRepoId(session), ...pair };
   }
   return null;
 }
