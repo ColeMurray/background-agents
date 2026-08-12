@@ -7,6 +7,7 @@
  */
 
 import type { CallbackContext, SendPromptResponse } from "@open-inspect/shared/types/session-api";
+import type { VerifiedActorEvidence } from "@open-inspect/shared/types/session-api";
 import {
   notifyDroppedAttachments,
   uploadPreparedAttachments,
@@ -32,8 +33,7 @@ export interface DeliverPromptOptions {
   channel: string;
   threadTs: string;
   traceId?: string;
-  actorDisplayName?: string;
-  actorEmail?: string;
+  actorEvidence?: VerifiedActorEvidence;
 }
 
 export type DeliverPromptResult =
@@ -61,8 +61,7 @@ export async function deliverPrompt(
     channel,
     threadTs,
     traceId,
-    actorDisplayName,
-    actorEmail,
+    actorEvidence,
   } = options;
   const upload = await uploadPreparedAttachments(env, sessionId, attachments, traceId);
 
@@ -85,8 +84,7 @@ export async function deliverPrompt(
     callbackContext,
     attachments: upload.references,
     traceId,
-    actorDisplayName,
-    actorEmail,
+    actorEvidence,
   });
   if (!promptResult.ok) return promptResult;
   // Notify about dropped images only now that the session proved live —

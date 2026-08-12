@@ -41,6 +41,7 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => ({ userId: "user-1" }),
+        resolveOrCreateUser: async () => ({ id: "user-1" }),
         getIdentitiesForUser: async () => [],
       } as never;
     });
@@ -276,6 +277,7 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => ({ userId: "user-1" }),
+        resolveOrCreateUser: async () => ({ id: "user-1" }),
         getIdentitiesForUser: async () => [
           {
             provider: "github",
@@ -333,9 +335,13 @@ describe("handleCreateSession D1 ordering", () => {
     const response = await createSessionRequestWithBody(createEnv(initFetch), {
       title: "First-contact session",
       model: "anthropic/claude-haiku-4-5",
-      actorDisplayName: "Ada Lovelace",
-      actorEmail: "ada@example.com",
-      actorAvatarUrl: "https://avatars.example.com/ada.png",
+      verifiedActorEvidence: {
+        provider: "slack",
+        providerUserId: "U0123",
+        displayName: "Ada Lovelace",
+        verifiedEmail: "ada@example.com",
+        avatarUrl: "https://avatars.example.com/ada.png",
+      },
     });
 
     expect(response.status).toBe(201);

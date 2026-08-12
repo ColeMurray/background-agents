@@ -209,8 +209,12 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
           interimContext +
           formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
         authorId: `slack:${user}`,
-        actorDisplayName: actor.displayName,
-        actorEmail: actor.email,
+        actorEvidence: {
+          provider: "slack",
+          providerUserId: user,
+          displayName: actor.displayName,
+          verifiedEmail: actor.email,
+        },
         attachments: await prepareImageAttachments(env, images, traceId),
         imageOnly,
         callbackContext,

@@ -43,8 +43,8 @@ const SPAWNING_FORBIDDEN_FIELDS = [
  * Raw-body keys a caller may not send: identity comes from the principal,
  * SCM credentials from server-side enrichment. Checked against raw JSON
  * before Zod because every schema is strip-mode. Display-only fields
- * (authEmail/Name/AvatarUrl, actorDisplayName, scmLogin…) stay body-carried
- * by design.
+ * Display-only SCM fields stay body-carried by design. Provider-attested actor
+ * evidence is promoted into the principal and stripped during service auth.
  */
 const FORBIDDEN_IDENTITY_FIELDS: Record<IdentityRoute, readonly string[]> = {
   "session-create": SPAWNING_FORBIDDEN_FIELDS,
@@ -81,7 +81,7 @@ export interface DerivedIdentity {
   canonicalUserId: string | null;
   /**
    * The verified bot-asserted actor backing `participantUserId` — what
-   * `resolveCanonicalUserId` creates the canonical user from on first sight.
+   * `resolveAndReconcileActor` reconciles the canonical user from on each request.
    * Null for user principals (their `canonicalUserId` is always set) and for
    * userless service principals.
    */
@@ -192,14 +192,13 @@ export function applyIdentityEnforcement<R extends IdentityRoute>(
  * canonical user (web users) or a verified actor (bot assertions), so the
  * resolved id is never null.
  */
-export async function resolveCanonicalUserId(
+export async function resolveAndReconcileActor(
   userStore: UserStore,
   ctx: RequestContext,
-  enforced: DerivedIdentity & { participantUserId: string },
-  display: { displayName?: string; email?: string; avatarUrl?: string }
+  enforced: DerivedIdentity & { participantUserId: string }
 ): Promise<{ userId: string } | Response> {
-  if (enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
   const actor = enforced.actor;
+  if (!actor && enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
   if (!actor) {
     // Unreachable while deriveIdentity holds its invariant (a participant
     // without a canonical user is always actor-backed); fail closed rather
@@ -215,9 +214,12 @@ export async function resolveCanonicalUserId(
     const user = await userStore.resolveOrCreateUser({
       provider: actor.provider,
       providerUserId: actor.providerUserId,
-      displayName: display.displayName,
-      providerEmail: display.email,
-      avatarUrl: display.avatarUrl,
+      displayName:
+        ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.displayName : undefined,
+      providerEmail:
+        ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.verifiedEmail : undefined,
+      avatarUrl:
+        ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.avatarUrl : undefined,
     });
     return { userId: user.id };
   } catch (e) {

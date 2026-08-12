@@ -3,7 +3,7 @@ import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/sh
 import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
-import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
+import { applyIdentityEnforcement, resolveAndReconcileActor } from "../auth/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";
 import { EnvironmentStore } from "../db/environments";
@@ -115,11 +115,7 @@ async function handleCreateSession(
   // Resolve canonical user model ID (for D1 session index) from the verified
   // principal, failing closed; body display fields stay cosmetic.
   const userStore = new UserStore(ctx.db);
-  const resolution = await resolveCanonicalUserId(userStore, ctx, enforced, {
-    displayName: body.actorDisplayName,
-    email: body.actorEmail,
-    avatarUrl: body.actorAvatarUrl,
-  });
+  const resolution = await resolveAndReconcileActor(userStore, ctx, enforced);
   if (resolution instanceof Response) return resolution;
   const resolvedUserId = resolution.userId;
 

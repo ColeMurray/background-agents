@@ -87,6 +87,7 @@ describe("authenticate — service credentials", () => {
       kind: "service",
       service: "linear-bot",
       actor: null,
+      actorEvidence: null,
     });
     // The handler must still be able to read the body after hashing.
     expect(await result.request.json()).toEqual({ prompt: "hello" });
@@ -136,6 +137,55 @@ describe("authenticate — service credentials", () => {
         canonicalUserId: "user-1",
         participantUserId: "slack:U0123456",
       },
+      actorEvidence: null,
+    });
+  });
+
+  it("promotes matching signed actor evidence into the principal and strips it from the body", async () => {
+    const body = JSON.stringify({
+      content: "hello",
+      verifiedActorEvidence: {
+        provider: "slack",
+        providerUserId: "U0123456",
+        displayName: "Ada",
+        verifiedEmail: "ada@example.com",
+      },
+    });
+    const request = await signedRequest({
+      service: "slack-bot",
+      body,
+      actor: "slack:U0123456",
+    });
+
+    const result = await authenticate(request, createEnv(), createCtx());
+
+    expect(isAuthError(result)).toBe(false);
+    if (isAuthError(result)) return;
+    expect(result.principal).toMatchObject({
+      actorEvidence: {
+        provider: "slack",
+        providerUserId: "U0123456",
+        displayName: "Ada",
+        verifiedEmail: "ada@example.com",
+      },
+    });
+    expect(await result.request.json()).toEqual({ content: "hello" });
+  });
+
+  it("rejects signed actor evidence that does not match the asserted actor", async () => {
+    const body = JSON.stringify({
+      verifiedActorEvidence: { provider: "slack", providerUserId: "U-other" },
+    });
+    const request = await signedRequest({
+      service: "slack-bot",
+      body,
+      actor: "slack:U0123456",
+    });
+
+    await expect(authenticate(request, createEnv(), createCtx())).resolves.toEqual({
+      reason: "Unauthorized",
+      status: 401,
+      failedScheme: "per-service",
     });
   });
 

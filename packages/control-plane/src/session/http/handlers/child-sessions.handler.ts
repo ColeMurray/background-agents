@@ -6,8 +6,9 @@ import type { SessionMessenger } from "../../messenger";
 import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
 import type { MessageService } from "../../services/message.service";
-import { promptAuthorSchema, type SpawnContext } from "../../spawn-context";
-import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
+import type { SpawnContext } from "../../spawn-context";
+import { activePromptAuthorSchema, type ActivePromptAuthor } from "../../active-prompt-author";
+import type { ArtifactRow, ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
   buildChildSessionDetail,
@@ -41,6 +42,7 @@ export interface ChildSessionsHandlerDeps {
 
 export interface ChildSessionsHandler {
   getSpawnContext: () => Response;
+  getActivePromptAuthor: () => Response;
   getChildSummary: (url?: URL) => Response;
   parentPrompt: (request: Request) => Promise<Response>;
   childSessionUpdate: (request: Request) => Promise<Response>;
@@ -48,10 +50,32 @@ export interface ChildSessionsHandler {
 
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
-  author: promptAuthorSchema,
+  author: activePromptAuthorSchema,
 });
 
 export const MAX_PENDING_CHILD_PROMPTS = 10;
+
+function resolvePromptAuthorParticipant(
+  repository: ChildSessionsHandlerDeps["repository"]
+): ParticipantRow | Response {
+  const processingMessage = repository.getProcessingMessageAuthor();
+  if (!processingMessage) {
+    return Response.json(
+      { error: "No active prompt found. Child operations must be triggered by an active prompt." },
+      { status: 400 }
+    );
+  }
+  const participant = repository.getParticipantById(processingMessage.author_id);
+  if (!participant) return Response.json({ error: "Prompt author not found" }, { status: 401 });
+  return participant;
+}
+
+function toActivePromptAuthor(participant: ParticipantRow): ActivePromptAuthor {
+  return {
+    userId: participant.user_id,
+    ...(participant.canonical_user_id ? { canonicalUserId: participant.canonical_user_id } : {}),
+  };
+}
 
 export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): ChildSessionsHandler {
   return {
@@ -61,19 +85,8 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      const processingMessage = deps.repository.getProcessingMessageAuthor();
-      if (!processingMessage) {
-        return Response.json(
-          {
-            error: "No active prompt found. Child spawning must be triggered by an active prompt.",
-          },
-          { status: 400 }
-        );
-      }
-      const promptAuthor = deps.repository.getParticipantById(processingMessage.author_id);
-      if (!promptAuthor) {
-        return Response.json({ error: "Prompt author not found" }, { status: 401 });
-      }
+      const promptAuthor = resolvePromptAuthorParticipant(deps.repository);
+      if (promptAuthor instanceof Response) return promptAuthor;
       let sandboxTimeoutMs: number | undefined;
       try {
         sandboxTimeoutMs = parsePersistedSandboxSettings(session.sandbox_settings).sandboxTimeoutMs;
@@ -104,6 +117,12 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       };
 
       return Response.json(context);
+    },
+
+    getActivePromptAuthor(): Response {
+      if (!deps.getSession()) return Response.json({ error: "Session not found" }, { status: 404 });
+      const author = resolvePromptAuthorParticipant(deps.repository);
+      return author instanceof Response ? author : Response.json(toActivePromptAuthor(author));
     },
 
     getChildSummary(url?: URL): Response {
@@ -199,15 +218,6 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
             authorId: parsed.data.author.userId,
             canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
             source: "agent",
-            scmEnrichment: {
-              userId: parsed.data.author.scmUserId,
-              login: parsed.data.author.scmLogin,
-              name: parsed.data.author.scmName,
-              email: parsed.data.author.scmEmail,
-              accessTokenEncrypted: parsed.data.author.scmAccessTokenEncrypted,
-              refreshTokenEncrypted: parsed.data.author.scmRefreshTokenEncrypted,
-              tokenExpiresAt: parsed.data.author.scmTokenExpiresAt,
-            },
           })
         );
       } catch (error) {

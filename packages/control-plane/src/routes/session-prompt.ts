@@ -11,7 +11,7 @@ import {
 import {
   applyIdentityEnforcement,
   mayAttachCallbackContext,
-  resolveCanonicalUserId,
+  resolveAndReconcileActor,
 } from "../auth/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
@@ -97,20 +97,11 @@ async function handleSessionPrompt(
   }
 
   const userStore = new UserStore(ctx.db);
-  if (!canonicalUserId && enforcement.enforced.actor && authorId !== "anonymous") {
-    const resolution = await resolveCanonicalUserId(
-      userStore,
-      ctx,
-      {
-        ...enforcement.enforced,
-        participantUserId: authorId,
-      },
-      {
-        displayName: body.actorDisplayName,
-        email: body.actorEmail,
-        avatarUrl: body.actorAvatarUrl,
-      }
-    );
+  if (enforcement.enforced.actor && authorId !== "anonymous") {
+    const resolution = await resolveAndReconcileActor(userStore, ctx, {
+      ...enforcement.enforced,
+      participantUserId: authorId,
+    });
     if (resolution instanceof Response) return resolution;
     canonicalUserId = resolution.userId;
   }

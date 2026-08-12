@@ -93,8 +93,12 @@ export async function startSessionAndSendPrompt(
     branch,
     traceId,
     slackUserId: actor.userId,
-    actorDisplayName: actor.displayName,
-    actorEmail: actor.email,
+    actorEvidence: {
+      provider: "slack",
+      providerUserId: actor.userId,
+      displayName: actor.displayName,
+      verifiedEmail: actor.email,
+    },
   });
   if (!session) {
     await postMessage(
@@ -124,8 +128,12 @@ export async function startSessionAndSendPrompt(
     sessionId: session.sessionId,
     content,
     authorId: `slack:${actor.userId}`,
-    actorDisplayName: actor.displayName,
-    actorEmail: actor.email,
+    actorEvidence: {
+      provider: "slack",
+      providerUserId: actor.userId,
+      displayName: actor.displayName,
+      verifiedEmail: actor.email,
+    },
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,

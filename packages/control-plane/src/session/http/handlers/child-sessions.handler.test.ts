@@ -232,15 +232,6 @@ describe("createChildSessionsHandler", () => {
         authorId: "owner-1",
         canonicalUserId: "canonical-1",
         source: "agent",
-        scmEnrichment: {
-          userId: null,
-          login: null,
-          name: null,
-          email: null,
-          accessTokenEncrypted: null,
-          refreshTokenEncrypted: null,
-          tokenExpiresAt: null,
-        },
       });
     });
 
@@ -400,6 +391,27 @@ describe("createChildSessionsHandler", () => {
         scmAccessTokenEncrypted: "second-access",
       },
     });
+  });
+
+  it("returns a narrow active prompt author without encrypted credentials", async () => {
+    const { handler, getSession, repository } = createHandler();
+    getSession.mockReturnValue(createSession());
+    repository.getParticipantById.mockReturnValue(
+      createParticipant({
+        user_id: "slack:U2",
+        canonical_user_id: "canonical-2",
+        scm_access_token_encrypted: "secret-access",
+        scm_refresh_token_encrypted: "secret-refresh",
+      })
+    );
+
+    const response = handler.getActivePromptAuthor();
+
+    expect(response.status).toBe(200);
+    const body = await response.json<Record<string, unknown>>();
+    expect(body).toMatchObject({ userId: "slack:U2", canonicalUserId: "canonical-2" });
+    expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
+    expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
   });
 
   it("rejects spawn context when no prompt is processing", async () => {

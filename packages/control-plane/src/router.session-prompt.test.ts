@@ -203,8 +203,12 @@ describe("session prompt identity enrichment", () => {
     const response = await handleRequest(
       await slackPromptRequest({
         content: "Fix the bug",
-        actorDisplayName: "Second User",
-        actorEmail: "second@example.com",
+        verifiedActorEvidence: {
+          provider: "slack",
+          providerUserId: "U2",
+          displayName: "Second User",
+          verifiedEmail: "second@example.com",
+        },
       }),
       createEnv(sessionFetch) as never
     );
@@ -217,5 +221,37 @@ describe("session prompt identity enrichment", () => {
       providerEmail: "second@example.com",
       avatarUrl: undefined,
     });
+  });
+
+  it("reconciles a previously known verified Slack prompt author", async () => {
+    const resolveOrCreateUser = vi.fn(async () => ({ id: "canonical-refreshed" }));
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getIdentity: async () => ({ userId: "canonical-existing" }),
+        resolveOrCreateUser,
+      } as never;
+    });
+    const sessionFetch = vi.fn(async (request: Request) => {
+      await expect(request.json()).resolves.toMatchObject({
+        authorId: "slack:U2",
+        canonicalUserId: "canonical-refreshed",
+      });
+      return Response.json({ status: "queued" });
+    });
+
+    const response = await handleRequest(
+      await slackPromptRequest({
+        content: "Fix the bug",
+        verifiedActorEvidence: {
+          provider: "slack",
+          providerUserId: "U2",
+          verifiedEmail: "newly-available@example.com",
+        },
+      }),
+      createEnv(sessionFetch) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(resolveOrCreateUser).toHaveBeenCalledOnce();
   });
 });

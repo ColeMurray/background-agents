@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionIndexStore } from "../db/session-index";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import type { SessionRuntimeClient } from "../session/runtime-client";
-import type { SpawnContext } from "../session/spawn-context";
+import type { ActivePromptAuthor } from "../session/active-prompt-author";
 import type { Env } from "../types";
 import { handleCancelChild, handlePromptChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
@@ -18,16 +18,9 @@ function routeMatch(path: string, pattern: string): RegExpMatchArray {
   return match;
 }
 
-const defaultPromptAuthor: SpawnContext["promptAuthor"] = {
+const defaultPromptAuthor: ActivePromptAuthor = {
   userId: "user-1",
   canonicalUserId: "canonical-1",
-  scmUserId: null,
-  scmLogin: null,
-  scmName: null,
-  scmEmail: null,
-  scmAccessTokenEncrypted: null,
-  scmRefreshTokenEncrypted: null,
-  scmTokenExpiresAt: null,
 };
 
 function routeContext(
@@ -41,16 +34,8 @@ function routeContext(
     trace_id: "trace-id",
     sessionRuntime: {
       fetch: async (sessionId, path, init, search) => {
-        if (sessionId === "parent" && path === "/internal/spawn-context") {
-          return Response.json({
-            repoOwner: "acme",
-            repoName: "repo",
-            repoId: 1,
-            model: "anthropic/claude-sonnet-4-6",
-            reasoningEffort: null,
-            baseBranch: "main",
-            promptAuthor,
-          });
+        if (sessionId === "parent" && path === "/internal/active-prompt-author") {
+          return Response.json(promptAuthor);
         }
         return fetch(sessionId, path, init, search);
       },
@@ -146,25 +131,18 @@ describe("handlePromptChild", () => {
     const promptAuthor = {
       userId: "slack:U2",
       canonicalUserId: "canonical-2",
-      scmUserId: "222",
-      scmLogin: "second-user",
-      scmName: "Second User",
-      scmEmail: "second@example.com",
-      scmAccessTokenEncrypted: "second-access",
-      scmRefreshTokenEncrypted: "second-refresh",
-      scmTokenExpiresAt: 1234,
     };
     const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async (sessionId, path, init) => {
       expect(sessionId).toBe("child");
       expect(path).toBe("/internal/parent-prompt");
-      expect(JSON.parse(init?.body as string)).toMatchObject({
+      const forwarded = JSON.parse(init?.body as string) as Record<string, unknown>;
+      expect(forwarded).toMatchObject({
         author: {
           userId: "slack:U2",
           canonicalUserId: "canonical-2",
-          scmLogin: "second-user",
-          scmAccessTokenEncrypted: "second-access",
         },
       });
+      expect(forwarded.author).toEqual({ userId: "slack:U2", canonicalUserId: "canonical-2" });
       return Response.json({ messageId: "message-1", status: "queued" });
     });
 

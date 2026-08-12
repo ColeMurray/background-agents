@@ -9,6 +9,7 @@ import {
 } from "@open-inspect/shared/service-auth";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
+import { verifiedActorEvidenceSchema } from "@open-inspect/shared/types/session-api";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";
 import type { RequestContext } from "../../routes/shared";
@@ -157,6 +158,7 @@ export async function authenticateServiceRequest(
   recordNonce(service, verification.nonce, ctx);
 
   let resolvedActor = null;
+  let actorEvidence = null;
   if (actor !== "") {
     const parsed = parseActor(actor);
     if (!parsed || ASSERTION_RIGHTS[service] !== parsed.provider) {
@@ -179,6 +181,34 @@ export async function authenticateServiceRequest(
       canonicalUserId: identity?.userId ?? null,
       participantUserId: actor,
     };
+
+    if (bodyBuffer !== null && bodyBuffer.byteLength > 0) {
+      try {
+        const body = JSON.parse(new TextDecoder().decode(bodyBuffer)) as Record<string, unknown>;
+        if (body.verifiedActorEvidence !== undefined) {
+          const parsedEvidence = verifiedActorEvidenceSchema.safeParse(body.verifiedActorEvidence);
+          if (
+            !parsedEvidence.success ||
+            parsedEvidence.data.provider !== parsed.provider ||
+            parsedEvidence.data.providerUserId !== parsed.providerUserId
+          ) {
+            logger.warn("Verified actor evidence mismatch", {
+              event: "auth.actor_evidence_denied",
+              service,
+              actor,
+              request_id: ctx.request_id,
+              trace_id: ctx.trace_id,
+            });
+            return { reason: "Unauthorized", status: 401, failedScheme: "per-service" };
+          }
+          actorEvidence = parsedEvidence.data;
+          delete body.verifiedActorEvidence;
+          bodyBuffer = new TextEncoder().encode(JSON.stringify(body));
+        }
+      } catch {
+        // Route parsing remains authoritative for malformed JSON bodies.
+      }
+    }
   }
 
   // Rebuild requests whose body was consumed for signature verification.
@@ -192,7 +222,7 @@ export async function authenticateServiceRequest(
         });
 
   return {
-    principal: { kind: "service", service, actor: resolvedActor },
+    principal: { kind: "service", service, actor: resolvedActor, actorEvidence },
     request: handlerRequest,
   };
 }

@@ -134,8 +134,12 @@ describe("control plane client request payloads", () => {
         reasoningEffort: "high",
         branch: "feature/slack-images",
         slackUserId: "U123",
-        actorDisplayName: "Ada Lovelace",
-        actorEmail: "ada@example.com",
+        actorEvidence: {
+          provider: "slack",
+          providerUserId: "U123",
+          displayName: "Ada Lovelace",
+          verifiedEmail: "ada@example.com",
+        },
         traceId: "trace-1",
       })
     ).resolves.toEqual({ sessionId: "session-1", status: "created" });
@@ -152,8 +156,12 @@ describe("control plane client request payloads", () => {
       branch: "feature/slack-images",
       model: "openai/gpt-5.4",
       reasoningEffort: "high",
-      actorDisplayName: "Ada Lovelace",
-      actorEmail: "ada@example.com",
+      verifiedActorEvidence: {
+        provider: "slack",
+        providerUserId: "U123",
+        displayName: "Ada Lovelace",
+        verifiedEmail: "ada@example.com",
+      },
     });
   });
 
@@ -210,13 +218,21 @@ describe("control plane client request payloads", () => {
       sessionId: "session-1",
       content: "Fix it",
       authorId: "slack:U123",
-      actorDisplayName: "Ada Lovelace",
-      actorEmail: "ada@example.com",
+      actorEvidence: {
+        provider: "slack",
+        providerUserId: "U123",
+        displayName: "Ada Lovelace",
+        verifiedEmail: "ada@example.com",
+      },
     });
 
     expect(parseRequestBody(fetch)).toMatchObject({
-      actorDisplayName: "Ada Lovelace",
-      actorEmail: "ada@example.com",
+      verifiedActorEvidence: {
+        provider: "slack",
+        providerUserId: "U123",
+        displayName: "Ada Lovelace",
+        verifiedEmail: "ada@example.com",
+      },
     });
   });
 });

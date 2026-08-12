@@ -129,6 +129,13 @@ const SLACK_BOT_PRINCIPAL: Principal = {
     canonicalUserId: null,
     participantUserId: "slack:U0123",
   },
+  actorEvidence: {
+    provider: "slack",
+    providerUserId: "U0123",
+    displayName: "Alice",
+    verifiedEmail: "alice@corp.com",
+    avatarUrl: "https://avatars.test/alice.png",
+  },
 };
 
 function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
@@ -600,9 +607,6 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           ...validBody,
-          actorDisplayName: "Alice",
-          actorEmail: "alice@corp.com",
-          actorAvatarUrl: "https://avatars.test/alice.png",
         },
         principal: SLACK_BOT_PRINCIPAL,
       });

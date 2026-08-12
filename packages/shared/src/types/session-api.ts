@@ -97,6 +97,17 @@ export const callbackContextSchema = z.union([
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
+/** Provider-attested identity evidence bound to a signed service request body. */
+export const verifiedActorEvidenceSchema = z.strictObject({
+  provider: z.enum(["slack", "github", "linear"]),
+  providerUserId: z.string().min(1),
+  displayName: z.string().optional(),
+  verifiedEmail: z.string().optional(),
+  avatarUrl: z.string().optional(),
+});
+
+export type VerifiedActorEvidence = z.infer<typeof verifiedActorEvidenceSchema>;
+
 export const sendPromptRequestSchema = z.object({
   content: z.string().min(1),
   source: messageSourceSchema.optional(),
@@ -104,10 +115,6 @@ export const sendPromptRequestSchema = z.object({
   reasoningEffort: z.string().optional(),
   attachments: z.unknown().optional(),
   callbackContext: z.unknown().optional(),
-  // Cosmetic profile data for the actor asserted by trusted bot authentication.
-  actorDisplayName: z.string().optional(),
-  actorEmail: z.string().optional(),
-  actorAvatarUrl: z.string().optional(),
 });
 
 export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
@@ -214,9 +221,6 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     scmLogin: z.string().optional(),
     scmName: z.string().optional(),
     scmEmail: z.string().optional(),
-    actorDisplayName: z.string().optional(),
-    actorEmail: z.string().optional(),
-    actorAvatarUrl: z.string().optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",
