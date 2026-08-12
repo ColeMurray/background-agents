@@ -11,7 +11,7 @@ import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { useAttachmentDropZone } from "@/hooks/use-attachment-drop-zone";
 import { ATTACHMENT_ACCEPT, type PendingAttachment } from "@/hooks/use-session-attachments";
 import type { Artifact } from "@/types/session";
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 
 type SessionPromptComposerProps = {
   session: {

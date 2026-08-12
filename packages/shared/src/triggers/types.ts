@@ -170,6 +170,8 @@ export interface SlackAutomationEvent extends BaseAutomationEvent {
   source: "slack";
   channelId: string;
   channelName?: string;
+  /** Permalink to the triggering message, when Slack returned one. */
+  permalink?: string;
   /** Parent thread ts when the message is a thread reply. */
   threadTs?: string;
   /** The message's own ts (the triggering message). */
@@ -253,6 +255,7 @@ export const automationEventSchema = z.discriminatedUnion("source", [
     source: z.literal("slack"),
     channelId: z.string(),
     channelName: z.string().optional(),
+    permalink: z.string().optional(),
     threadTs: z.string().optional(),
     ts: z.string(),
     actorUserId: z.string(),

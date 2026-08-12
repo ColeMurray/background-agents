@@ -16,13 +16,13 @@ import {
   DEFAULT_MODEL,
   getReasoningConfig,
   isValidReasoningEffort,
+  resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
-import { resolveEnabledModel } from "@/lib/model-selection";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -209,7 +209,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   // is blocked — keeping display, reasoning, and the payload in agreement
   // without relying on a post-load effect.
   const resolvedModel = useMemo(
-    () => (loadingModels ? model : resolveEnabledModel(model, enabledModels)),
+    () =>
+      loadingModels
+        ? model
+        : resolveEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL }),
     [loadingModels, model, enabledModels]
   );
 

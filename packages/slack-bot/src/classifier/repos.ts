@@ -6,7 +6,7 @@
  * GitHub App installation to get the list of accessible repositories.
  */
 
-import type { Env, RepoConfig } from "../types";
+import type { Env } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
   normalizeRoutingRules,
@@ -16,6 +16,7 @@ import {
 import {
   controlPlaneReposResponseSchema,
   repoConfigSchema,
+  type RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createCachedResource } from "./cached-resource";

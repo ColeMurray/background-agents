@@ -57,7 +57,12 @@ function mentionsUser(text: string, userId: string): boolean {
  *
  * This is the structural pre-filter the bot applies before normalizing and
  * forwarding to the control plane. It drops:
- * - non-`message` events and any subtype (edits, joins, bot posts, …)
+ * - non-`message` events and any subtype other than `file_share` (edits, joins,
+ *   bot posts, …). A message that carries an attachment arrives as `file_share`
+ *   but is otherwise an ordinary message, and dropping it made the request that
+ *   opens a thread invisible whenever it came with a file. Only its text
+ *   triggers — the attachment is not forwarded to the session (matching
+ *   automation thread replies).
  * - DM (`im`) and group-DM (`mpim`) channels — handled by the DM path
  * - messages from the bot itself
  * - messages that @mention the bot — those are explicit requests dispatched by
@@ -81,7 +86,7 @@ export function isChannelTriggerCandidate(
   botUserId: string
 ): boolean {
   if (event.type !== "message") return false;
-  if (event.subtype) return false;
+  if (event.subtype && event.subtype !== "file_share") return false;
   if (event.bot_id) return false;
   if (event.channel_type !== "channel" && event.channel_type !== "group") return false;
   if (!event.text || !event.channel || !event.ts || !event.user) return false;

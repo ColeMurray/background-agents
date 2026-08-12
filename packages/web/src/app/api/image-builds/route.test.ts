@@ -199,6 +199,34 @@ describe("GET /api/image-builds feed", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ units: [], enabledRepos: [], images: [] });
   });
+
+  it("returns 502 when the control-plane feed has an invalid shape", async () => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") {
+        return Response.json({ units: [{ scopeKind: "repo", scopeId: "acme/web" }] });
+      }
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({ images: [] });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch image builds" });
+  });
+
+  it("returns 502 when the control-plane feed omits a required array", async () => {
+    vi.mocked(controlPlaneUserFetch).mockImplementation(async (path: string) => {
+      if (path === "/image-builds/enabled") return Response.json({});
+      if (path === "/image-builds/enabled-repos") return Response.json({ repos: [] });
+      return Response.json({ images: [] });
+    });
+
+    const response = await getFeed();
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "Failed to fetch image builds" });
+  });
 });
 
 describe("proxied control-plane paths", () => {

@@ -34,6 +34,91 @@ describe("D1 SessionIndexStore", () => {
     expect(session!.status).toBe("created");
   });
 
+  it("atomically admits only one concurrent terminal-child resume for one remaining slot", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    const create = (id: string, status: "active" | "completed") =>
+      store.create({
+        id,
+        title: null,
+        repoOwner: "acme",
+        repoName: "repo",
+        model: "anthropic/claude-haiku-4-5",
+        reasoningEffort: null,
+        baseBranch: "main",
+        status,
+        parentSessionId: id === "parent" ? null : "parent",
+        createdAt: now,
+        updatedAt: now,
+      });
+    await create("parent", "active");
+    await create("active-child", "active");
+    await create("terminal-child-1", "completed");
+    await create("terminal-child-2", "completed");
+
+    const results = await Promise.all([
+      store.acquireChildAdmissionLease("parent", "terminal-child-1", 2),
+      store.acquireChildAdmissionLease("parent", "terminal-child-2", 2),
+    ]);
+
+    expect(results.filter((result) => result !== null)).toHaveLength(1);
+    expect(results.filter((result) => result === null)).toHaveLength(1);
+  });
+
+  it("uses one admission authority for a concurrent spawn and resume", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: "parent",
+      title: null,
+      repoOwner: "acme",
+      repoName: "repo",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: "main",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const results = await Promise.all([
+      store.acquireChildAdmissionLease("parent", "new-spawn", 1),
+      store.acquireChildAdmissionLease("parent", "terminal-resume", 1),
+    ]);
+
+    expect(results.filter((result) => result !== null)).toHaveLength(1);
+    expect(results.filter((result) => result === null)).toHaveLength(1);
+  });
+
+  it("requires lease ownership to release child admission capacity", async () => {
+    const store = new SessionIndexStore(env.DB);
+    const now = Date.now();
+    await store.create({
+      id: "parent",
+      title: null,
+      repoOwner: "acme",
+      repoName: "repo",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: null,
+      baseBranch: "main",
+      status: "active",
+      createdAt: now,
+      updatedAt: now,
+    });
+    const lease = await store.acquireChildAdmissionLease("parent", "child-1", 1);
+    expect(lease).not.toBeNull();
+    expect(await store.acquireChildAdmissionLease("parent", "child-1", 1)).toBeNull();
+
+    await store.releaseChildAdmissionLease({
+      ...lease!,
+      token: "not-the-owner",
+    });
+    expect(await store.acquireChildAdmissionLease("parent", "child-2", 1)).toBeNull();
+
+    await store.releaseChildAdmissionLease(lease!);
+    expect(await store.acquireChildAdmissionLease("parent", "child-2", 1)).not.toBeNull();
+  });
+
   describe("isRepositoryAssociated", () => {
     it("matches the scalar primary and session_repositories rows case-insensitively", async () => {
       const store = new SessionIndexStore(env.DB);
@@ -530,27 +615,6 @@ describe("D1 SessionIndexStore", () => {
     it("listByParent returns empty array when no children exist", async () => {
       const children = await store.listByParent("nonexistent-parent");
       expect(children).toEqual([]);
-    });
-
-    it("countActiveChildren excludes completed/failed/archived/cancelled", async () => {
-      await store.create({
-        id: "child-session-failed",
-        title: "Child failed",
-        repoOwner: "owner",
-        repoName: "repo",
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: null,
-        baseBranch: null,
-        status: "failed",
-        parentSessionId: parentId,
-        spawnSource: "agent",
-        spawnDepth: 1,
-        createdAt: Date.now() + 2,
-        updatedAt: Date.now() + 2,
-      });
-
-      const count = await store.countActiveChildren(parentId);
-      expect(count).toBe(1); // child1 is "created" (active), child2 is "completed" (excluded)
     });
 
     it("countTotalChildren counts all children regardless of status", async () => {

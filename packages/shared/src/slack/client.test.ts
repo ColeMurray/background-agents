@@ -15,6 +15,7 @@ import {
   postMessage,
   publishView,
   removeReaction,
+  SLACK_USER_INFO_TIMEOUT_MS,
   updateMessage,
   uploadToExternalUrl,
 } from "./client";
@@ -572,6 +573,8 @@ describe("getUserInfo", () => {
   });
 
   it("fetches user info via GET with user query", async () => {
+    const timeoutSignal = new AbortController().signal;
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       jsonResponse({
         ok: true,
@@ -588,6 +591,8 @@ describe("getUserInfo", () => {
     }
     const [url] = fetchSpy.mock.calls[0]!;
     expect(url).toBe("https://slack.com/api/users.info?user=U1");
+    expect(timeoutSpy).toHaveBeenCalledWith(SLACK_USER_INFO_TIMEOUT_MS);
+    expect(fetchSpy.mock.calls[0]![1]?.signal).toBe(timeoutSignal);
   });
 
   it("returns Slack's error envelope on user_not_found", async () => {

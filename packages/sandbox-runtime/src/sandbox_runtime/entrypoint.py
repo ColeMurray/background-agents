@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import TypeVar
 
 import httpx
+from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+from cryptography.hazmat.primitives.ciphers import Cipher, modes
 
 from .constants import (
     BIN_INSTALL_DIR_ENV_VAR,
@@ -36,12 +38,20 @@ from .constants import (
     DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
     IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+    NOVNC_PORT,
+    NOVNC_PORT_ENV_VAR,
+    NOVNC_WEB_ROOT,
     REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
     TUNNEL_ENV_SANDBOX_ID_KEY,
+    VNC_DISPLAY,
+    VNC_PASSWORD_ENV_VAR,
+    VNC_PASSWORD_FILE_PATH,
+    VNC_PASSWORD_MAX_BYTES,
+    VNC_PORT,
 )
 from .diff_baseline import resolve_session_diff_baselines
 from .git_excludes import install_runtime_git_excludes
@@ -63,6 +73,15 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 # visible instead of silently dropped.
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 _ResultT = TypeVar("_ResultT")
+
+# This fixed-key VNC encoding is obfuscation, not encryption. Confidentiality
+# depends on the password file being created with mode 0o600.
+_VNC_PASSWORD_FILE_KEY = bytes((0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)) * 3
+
+
+def _encode_vnc_password(password: bytes) -> bytes:
+    encryptor = Cipher(TripleDES(_VNC_PASSWORD_FILE_KEY), modes.ECB()).encryptor()
+    return encryptor.update(password.ljust(VNC_PASSWORD_MAX_BYTES, b"\0")) + encryptor.finalize()
 
 
 @dataclass(frozen=True)
@@ -141,6 +160,11 @@ class SandboxSupervisor:
         self.code_server_process: asyncio.subprocess.Process | None = None
         self.ttyd_process: asyncio.subprocess.Process | None = None
         self.ttyd_proxy_process: asyncio.subprocess.Process | None = None
+        self.xvfb_process: asyncio.subprocess.Process | None = None
+        self.fluxbox_process: asyncio.subprocess.Process | None = None
+        self.x11vnc_process: asyncio.subprocess.Process | None = None
+        self.novnc_process: asyncio.subprocess.Process | None = None
+        self._vnc_restart_task: asyncio.Task[bool] | None = None
         self.shutdown_event = shutdown_event or asyncio.Event()
         self.git_sync_complete = asyncio.Event()
         self.opencode_ready = asyncio.Event()
@@ -153,6 +177,13 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
+        # Consume the credential before launching any child so OpenCode,
+        # code-server, ttyd, and the bridge cannot inherit it.
+        self._vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
+        if self._vnc_password:
+            # GUI processes launched by OpenCode, code-server, or ttyd must use
+            # the same display that the VNC sidecar exposes.
+            os.environ["DISPLAY"] = VNC_DISPLAY
         # Note: VCS credentials are no longer captured at sandbox start. Git
         # operations authenticate per-call via the system-wide credential
         # helper (`/usr/local/bin/oi-git-credentials`), which fetches fresh
@@ -1254,6 +1285,192 @@ class SandboxSupervisor:
         ):
             self.log.info("ttyd_proxy.stdout", line=line)
 
+    async def start_vnc(self) -> None:
+        """Start the optional desktop and browser-facing noVNC sidecar stack."""
+        password = self._vnc_password
+        if not password:
+            Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
+            self.log.info("vnc.skip", reason="no_password")
+            return
+
+        password_bytes = password.encode()
+        if len(password_bytes) > VNC_PASSWORD_MAX_BYTES:
+            raise ValueError(f"VNC password must not exceed {VNC_PASSWORD_MAX_BYTES} bytes")
+
+        self._clear_vnc_display_artifacts()
+
+        password_path = Path(VNC_PASSWORD_FILE_PATH)
+        password_path.unlink(missing_ok=True)
+        password_open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        password_fd = os.open(
+            password_path,
+            password_open_flags,
+            0o600,
+        )
+        try:
+            os.write(password_fd, _encode_vnc_password(password_bytes))
+        finally:
+            os.close(password_fd)
+
+        child_env = os.environ.copy()
+        display_env = {**child_env, "DISPLAY": VNC_DISPLAY}
+        xvfb_cmd = [
+            "Xvfb",
+            VNC_DISPLAY,
+            "-screen",
+            "0",
+            "1280x720x24",
+            "-nolisten",
+            "tcp",
+        ]
+        self.xvfb_process = await asyncio.create_subprocess_exec(
+            *xvfb_cmd,
+            env=child_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("xvfb", self.xvfb_process))
+
+        display_number = VNC_DISPLAY.removeprefix(":").split(".", maxsplit=1)[0]
+        display_socket = Path(f"/tmp/.X11-unix/X{display_number}")
+        if not await self._wait_for_path(display_socket, self.xvfb_process):
+            raise RuntimeError("Xvfb failed to become ready")
+
+        fluxbox_cmd = ["fluxbox"]
+        self.fluxbox_process = await asyncio.create_subprocess_exec(
+            *fluxbox_cmd,
+            env=display_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("fluxbox", self.fluxbox_process))
+
+        x11vnc_cmd = [
+            "x11vnc",
+            "-display",
+            VNC_DISPLAY,
+            "-rfbport",
+            str(VNC_PORT),
+            "-listen",
+            "127.0.0.1",
+            "-forever",
+            "-shared",
+            "-rfbauth",
+            VNC_PASSWORD_FILE_PATH,
+        ]
+        self.x11vnc_process = await asyncio.create_subprocess_exec(
+            *x11vnc_cmd,
+            env=display_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("x11vnc", self.x11vnc_process))
+        if not await self._wait_for_port(VNC_PORT):
+            raise RuntimeError("x11vnc failed to become ready")
+
+        novnc_port = _port_from_env(NOVNC_PORT_ENV_VAR, NOVNC_PORT)
+        novnc_cmd = [
+            "websockify",
+            "--web",
+            NOVNC_WEB_ROOT,
+            f"0.0.0.0:{novnc_port}",
+            f"127.0.0.1:{VNC_PORT}",
+        ]
+        self.novnc_process = await asyncio.create_subprocess_exec(
+            *novnc_cmd,
+            env=child_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("novnc", self.novnc_process))
+        self.log.info("vnc.started", display=VNC_DISPLAY, novnc_port=novnc_port)
+
+    def _clear_vnc_display_artifacts(self) -> None:
+        """Remove Xvfb lock/socket files that filesystem snapshots can retain."""
+        display_number = VNC_DISPLAY.removeprefix(":").split(".", maxsplit=1)[0]
+        for path in (
+            Path(f"/tmp/.X{display_number}-lock"),
+            Path(f"/tmp/.X11-unix/X{display_number}"),
+        ):
+            path.unlink(missing_ok=True)
+
+    async def _wait_for_path(
+        self,
+        path: Path,
+        process: asyncio.subprocess.Process,
+        timeout_seconds: float | None = None,
+    ) -> bool:
+        """Wait for a process-owned readiness path while ensuring it stays alive."""
+        timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while loop.time() < deadline:
+            if process.returncode is not None:
+                return False
+            if path.exists():
+                return True
+            await asyncio.sleep(0.1)
+        self.log.warn("path_readiness.timeout", path=str(path), timeout=timeout_seconds)
+        return False
+
+    async def _forward_vnc_logs(
+        self,
+        process_name: str,
+        process: asyncio.subprocess.Process,
+    ) -> None:
+        """Forward one VNC component's stdout without including credentials."""
+        if not process.stdout:
+            return
+        async for line in self._iter_process_lines(
+            process.stdout,
+            error_event=f"{process_name}.log_forward_error",
+        ):
+            self.log.info(f"{process_name}.stdout", line=line)
+
+    async def _stop_vnc(self) -> None:
+        """Stop the VNC stack in reverse dependency order and remove its secret."""
+        for process_name, process in (
+            ("novnc", self.novnc_process),
+            ("x11vnc", self.x11vnc_process),
+            ("fluxbox", self.fluxbox_process),
+            ("xvfb", self.xvfb_process),
+        ):
+            if process and process.returncode is None:
+                self.log.info(f"{process_name}.terminating")
+                with contextlib.suppress(ProcessLookupError):
+                    process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    await process.wait()
+            setattr(self, f"{process_name}_process", None)
+        Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
+        self._clear_vnc_display_artifacts()
+
+    async def _start_vnc_with_retries(self) -> bool:
+        """Restart VNC with bounded backoff after a monitored component crash."""
+        attempt = 0
+        while not self.shutdown_event.is_set():
+            try:
+                await self.start_vnc()
+                return True
+            except Exception as error:
+                attempt += 1
+                self.log.warn("vnc.start_failed", attempt=attempt, exc=error)
+                await self._stop_vnc()
+                if attempt > self.MAX_RESTARTS:
+                    self.log.warn("vnc.max_restarts", restart_count=attempt)
+                    return False
+                delay = min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX)
+                await asyncio.sleep(delay)
+        return False
+
     async def _wait_for_port(self, port: int, timeout_seconds: float | None = None) -> bool:
         timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
         """Wait for a service to start listening on a port. Returns True if ready."""
@@ -1463,6 +1680,7 @@ class SandboxSupervisor:
         code_server_restart_count = 0
         ttyd_restart_count = 0
         ttyd_proxy_restart_count = 0
+        vnc_restart_count = 0
 
         while not self.shutdown_event.is_set():
             # Check OpenCode process
@@ -1605,6 +1823,37 @@ class SandboxSupervisor:
                 else:
                     self.log.warn("ttyd_proxy.max_restarts", restart_count=ttyd_proxy_restart_count)
                     self.ttyd_proxy_process = None
+
+            # VNC components form one dependency stack; restart all of them if any exits.
+            crashed_vnc_process = next(
+                (
+                    (name, process)
+                    for name, process in (
+                        ("xvfb", self.xvfb_process),
+                        ("fluxbox", self.fluxbox_process),
+                        ("x11vnc", self.x11vnc_process),
+                        ("novnc", self.novnc_process),
+                    )
+                    if process and process.returncode is not None
+                ),
+                None,
+            )
+            if crashed_vnc_process and (
+                self._vnc_restart_task is None or self._vnc_restart_task.done()
+            ):
+                process_name, process = crashed_vnc_process
+                vnc_restart_count += 1
+                self.log.warn(
+                    "vnc.crash",
+                    component=process_name,
+                    exit_code=process.returncode,
+                    restart_count=vnc_restart_count,
+                )
+                await self._stop_vnc()
+                if vnc_restart_count <= self.MAX_RESTARTS:
+                    self._vnc_restart_task = asyncio.create_task(self._start_vnc_with_retries())
+                else:
+                    self.log.warn("vnc.max_restarts", restart_count=vnc_restart_count)
 
             await asyncio.sleep(1.0)
 
@@ -2097,6 +2346,15 @@ class SandboxSupervisor:
                 await self.shutdown_event.wait()
                 return True
 
+            # VNC must exist before repository start hooks so GUI applications can
+            # connect to DISPLAY. Like code-server, failure is best-effort and must
+            # not delay the core agent and bridge behind a retry loop.
+            try:
+                await self.start_vnc()
+            except Exception as e:
+                self.log.warn("vnc.start_failed", exc=e)
+                await self._stop_vnc()
+
             boot_result = await self._run_repository_boot(expected_tunnel_ports)
 
             # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
@@ -2108,7 +2366,6 @@ class SandboxSupervisor:
                     await starter()
                 except Exception as e:
                     self.log.warn(f"{sidecar_name}.start_failed", exc=e)
-
             if self.ttyd_process is not None:
                 ttyd_ready = await self._wait_for_port(
                     TTYD_PORT,
@@ -2178,6 +2435,11 @@ class SandboxSupervisor:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
 
+        if self._vnc_restart_task and not self._vnc_restart_task.done():
+            self._vnc_restart_task.cancel()
+            await asyncio.gather(self._vnc_restart_task, return_exceptions=True)
+        self._vnc_restart_task = None
+
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:
             self.bridge_process.terminate()
@@ -2215,6 +2477,9 @@ class SandboxSupervisor:
                 )
             except TimeoutError:
                 self.ttyd_process.kill()
+
+        # Terminate browser gateway before its desktop dependencies.
+        await self._stop_vnc()
 
         # Terminate OpenCode
         if self.opencode_process and self.opencode_process.returncode is None:

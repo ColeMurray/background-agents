@@ -7,6 +7,7 @@ import { SessionInternalPaths } from "./session/contracts";
 
 const integrationSettingsMocks = vi.hoisted(() => ({
   resolveCodeServerEnabled: vi.fn().mockResolvedValue(false),
+  resolveVncEnabled: vi.fn().mockResolvedValue(false),
   resolveSandboxSettings: vi.fn().mockResolvedValue({}),
 }));
 
@@ -74,8 +75,13 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       environmentId: "env_parent",
     }),
     getSpawnDepth: vi.fn().mockResolvedValue(0),
-    countActiveChildren: vi.fn().mockResolvedValue(0),
     countTotalChildren: vi.fn().mockResolvedValue(0),
+    acquireChildAdmissionLease: vi.fn().mockResolvedValue({
+      token: "lease-token",
+      childSessionId: "child-session",
+      expiresAt: Date.now() + 60_000,
+    }),
+    releaseChildAdmissionLease: vi.fn().mockResolvedValue(undefined),
     create: vi.fn().mockResolvedValue(undefined),
     updateStatus: vi.fn().mockResolvedValue(true),
   });
@@ -84,6 +90,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     vi.clearAllMocks();
     vi.mocked(getEffectiveEnabledModels).mockResolvedValue(["anthropic/claude-sonnet-4-6"]);
     integrationSettingsMocks.resolveCodeServerEnabled.mockResolvedValue(false);
+    integrationSettingsMocks.resolveVncEnabled.mockResolvedValue(false);
     integrationSettingsMocks.resolveSandboxSettings.mockResolvedValue({});
   });
 
@@ -167,7 +174,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     await expect(getInitBody(childStub)).resolves.toMatchObject({ reasoningEffort: "low" });
   });
 
-  it("clears an explicit reasoning effort incompatible with the resolved model", async () => {
+  it("rejects an explicit reasoning effort incompatible with the resolved model", async () => {
     const store = makeStore();
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
@@ -180,8 +187,60 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       reasoningEffort: "xhigh",
     });
 
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        'Invalid reasoning effort "xhigh" for model "anthropic/claude-sonnet-4-6". Valid efforts: low, medium, high, max',
+    });
+    expect(childStub.fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects "x-high" and reports the canonical "xhigh" value', async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    vi.mocked(getEffectiveEnabledModels).mockResolvedValue([
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.6-sol",
+    ]);
+    const { env, childStub } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env, {
+      title: "Child task",
+      prompt: "Do the thing",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "x-high",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error:
+        'Invalid reasoning effort "x-high" for model "openai/gpt-5.6-sol". Valid efforts: none, low, medium, high, xhigh',
+    });
+    expect(childStub.fetch).not.toHaveBeenCalled();
+  });
+
+  it('accepts canonical "xhigh" for a model that supports it', async () => {
+    const store = makeStore();
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    vi.mocked(getEffectiveEnabledModels).mockResolvedValue([
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.6-sol",
+    ]);
+    const { env, childStub } = makeSuccessfulEnv(spawnContext);
+
+    const response = await makeRequest(env, {
+      title: "Child task",
+      prompt: "Do the thing",
+      model: "openai/gpt-5.6-sol",
+      reasoningEffort: "xhigh",
+    });
+
     expect(response.status).toBe(201);
-    await expect(getInitBody(childStub)).resolves.toMatchObject({ reasoningEffort: null });
+    await expect(getInitBody(childStub)).resolves.toMatchObject({ reasoningEffort: "xhigh" });
   });
 
   it("returns 201 when child prompt enqueue succeeds", async () => {
@@ -459,7 +518,7 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("uses configured concurrent child session limit", async () => {
     const store = makeStore();
-    store.countActiveChildren.mockResolvedValue(2);
+    store.acquireChildAdmissionLease.mockResolvedValue(null);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;
     });
@@ -500,7 +559,6 @@ describe("handleSpawnChild prompt enqueue handling", () => {
 
   it("uses configured total child session limit", async () => {
     const store = makeStore();
-    store.countActiveChildren.mockResolvedValue(0);
     store.countTotalChildren.mockResolvedValue(4);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return store as never;

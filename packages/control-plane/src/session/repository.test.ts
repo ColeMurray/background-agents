@@ -71,12 +71,17 @@ function createMockSql() {
 describe("SessionRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
   let repo: SessionRepository;
+  let transactionSyncCalls: number;
 
   beforeEach(() => {
     mock = createMockSql();
+    transactionSyncCalls = 0;
     repo = new SessionRepository(
       mock.sql,
-      (closure) => closure(),
+      (closure) => {
+        transactionSyncCalls += 1;
+        return closure();
+      },
       new SessionAttachmentRepository(mock.sql)
     );
   });
@@ -132,6 +137,7 @@ describe("SessionRepository", () => {
         "created",
         null,
         "user",
+        0,
         0,
         0,
         null,
@@ -419,6 +425,8 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("modal_sandbox_id");
       expect(mock.calls[0].query).toContain("auth_token = NULL");
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
+      expect(mock.calls[0].query).toContain("vnc_url = NULL");
+      expect(mock.calls[0].query).toContain("vnc_password = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
   });
@@ -480,6 +488,24 @@ describe("SessionRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE sandbox SET last_spawn_error");
       expect(mock.calls[0].params).toEqual(["Failed to spawn sandbox", 123456]);
+    });
+  });
+
+  describe("VNC access", () => {
+    it("stores and clears VNC credentials", () => {
+      repo.updateSandboxVnc("https://vnc.test", "encrypted-password");
+      repo.clearSandboxVnc();
+
+      expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
+      expect(mock.calls[0].params).toEqual(["https://vnc.test", "encrypted-password"]);
+      expect(mock.calls[1].query).toContain("SET vnc_url = NULL, vnc_password = NULL");
+    });
+
+    it("can clear only the VNC URL", () => {
+      repo.clearSandboxVncUrl();
+
+      expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
+      expect(mock.calls[0].query).not.toContain("vnc_password");
     });
   });
 
@@ -681,11 +707,11 @@ describe("SessionRepository", () => {
       const message = { id: "msg-1", created_at: 1000 };
       // The query is dynamic, so we match by result
       mock.setData(
-        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`,
+        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         [message]
       );
       expect(repo.getNextPendingMessage()).toEqual(message);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
     });
   });
 
@@ -779,6 +805,30 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("status = ?");
       expect(mock.calls[0].query).toContain("completed_at");
       expect(mock.calls[0].params).toEqual(["completed", 3000, "msg-1"]);
+    });
+  });
+
+  describe("listPendingMessagesWithCreatedAt", () => {
+    it("returns pending messages in deterministic queue order", () => {
+      mock.setData(
+        `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`,
+        [{ id: "msg-1", created_at: 1000 }]
+      );
+
+      expect(repo.listPendingMessagesWithCreatedAt()).toEqual([{ id: "msg-1", created_at: 1000 }]);
+
+      expect(mock.calls[0].query).toContain("SELECT id, created_at FROM messages");
+      expect(mock.calls[0].query).toContain("WHERE status = 'pending'");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
+      expect(mock.calls[0].params).toEqual([]);
+    });
+  });
+
+  describe("getNextPendingMessage", () => {
+    it("uses rowid as the stable tie-breaker for equal timestamps", () => {
+      repo.getNextPendingMessage();
+
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
     });
   });
 
@@ -886,6 +936,31 @@ describe("SessionRepository", () => {
       expect(mock.calls[1].params[1]).toBe("token");
       expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
       expect(mock.calls[1].params[4]).toBe(2000);
+    });
+  });
+
+  describe("createContextCompactionEvent", () => {
+    it("atomically seals the current token and inserts the compaction marker", () => {
+      repo.createContextCompactionEvent({
+        id: "compaction-1",
+        type: "context_compacted",
+        data: '{"type":"context_compacted"}',
+        messageId: "msg-1",
+        createdAt: 1000,
+      });
+
+      expect(transactionSyncCalls).toBe(1);
+      expect(mock.calls).toHaveLength(2);
+      expect(mock.calls[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
+      expect(mock.calls[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO events");
+      expect(mock.calls[1].params).toEqual([
+        "compaction-1",
+        "context_compacted",
+        '{"type":"context_compacted"}',
+        "msg-1",
+        1000,
+      ]);
     });
   });
 
@@ -1101,21 +1176,6 @@ describe("SessionRepository", () => {
       expect(result.hasMore).toBe(true);
       expect(result.events.map((event) => event.id)).toEqual(["e2", "e3"]);
       expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
-    });
-  });
-
-  describe("getEventsForReplay", () => {
-    it("returns newest events in ascending order via DESC subquery", () => {
-      repo.getEventsForReplay(500);
-
-      expect(mock.calls.length).toBe(1);
-      // Inner subquery selects newest events via DESC
-      expect(mock.calls[0].query).toContain(
-        "ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
-      );
-      // Outer query re-sorts to chronological ASC for replay
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, timeline_sequence ASC");
-      expect(mock.calls[0].params).toEqual([500]);
     });
   });
 

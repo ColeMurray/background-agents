@@ -1,4 +1,4 @@
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
@@ -135,6 +135,19 @@ export class SessionSandboxEventProcessor {
       if (messageId) {
         this.repository.upsertTokenEvent(messageId, event, now);
       }
+      this.messenger.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
+    if (event.type === "context_compacted") {
+      const eventId = generateId();
+      this.repository.createContextCompactionEvent({
+        id: eventId,
+        type: event.type,
+        data: JSON.stringify(event),
+        messageId: event.messageId,
+        createdAt: now,
+      });
       this.messenger.broadcast({ type: "sandbox_event", event });
       return;
     }

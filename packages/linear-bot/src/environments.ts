@@ -7,8 +7,12 @@
  */
 
 import { z } from "zod";
-import { environmentSchema, listEnvironmentsResponseSchema } from "@open-inspect/shared";
-import type { Env, Environment } from "./types";
+import {
+  environmentSchema,
+  listEnvironmentsResponseSchema,
+  type Environment,
+} from "@open-inspect/shared/types/environments";
+import type { Env } from "./types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";
 

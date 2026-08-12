@@ -12,6 +12,7 @@ import { z } from "zod";
 import { computeHmacHex, timingSafeEqual } from "../auth";
 
 const SLACK_API_BASE = "https://slack.com/api";
+export const SLACK_USER_INFO_TIMEOUT_MS = 10_000;
 
 /**
  * Discriminated success/failure envelope returned by every Slack API method.
@@ -535,7 +536,12 @@ export function getUserInfo(
   token: string,
   userId: string
 ): Promise<SlackEnvelope<{ user: SlackUser }>> {
-  return slackGet(token, "users.info", { user: userId });
+  return slackGet(
+    token,
+    "users.info",
+    { user: userId },
+    AbortSignal.timeout(SLACK_USER_INFO_TIMEOUT_MS)
+  );
 }
 
 export function publishView(

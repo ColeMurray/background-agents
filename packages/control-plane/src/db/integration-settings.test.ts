@@ -707,6 +707,14 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings.enabled).toBe(true);
     });
 
+    it("applies VNC environment overrides", async () => {
+      await store.setGlobal("vnc", { defaults: { enabled: false } });
+      await store.setEnvironmentSettings("vnc", "env_1", { enabled: true });
+
+      const config = await store.getResolvedConfig("vnc", "acme/widgets", "env_1");
+      expect(config.settings.enabled).toBe(true);
+    });
+
     it("skips the environment layer for integrations that don't support it", async () => {
       await store.setGlobal("github", { defaults: { autoReviewOnOpen: true } });
 
@@ -719,9 +727,16 @@ describe("IntegrationSettingsStore", () => {
     it("declares environment support for exactly the session-scoped integrations", () => {
       expect(supportsEnvironmentSettings("sandbox")).toBe(true);
       expect(supportsEnvironmentSettings("code-server")).toBe(true);
+      expect(supportsEnvironmentSettings("vnc")).toBe(true);
       expect(supportsEnvironmentSettings("github")).toBe(false);
       expect(supportsEnvironmentSettings("linear")).toBe(false);
       expect(supportsEnvironmentSettings("slack")).toBe(false);
+    });
+
+    it("rejects a non-boolean VNC enabled setting", async () => {
+      await expect(
+        store.setRepoSettings("vnc", "acme/widgets", { enabled: "yes" } as never)
+      ).rejects.toThrow("enabled must be a boolean");
     });
   });
 

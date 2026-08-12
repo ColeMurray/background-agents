@@ -895,18 +895,6 @@ describe("SessionIndexStore", () => {
       });
     });
 
-    describe("countActiveChildren", () => {
-      it("excludes completed/failed/archived/cancelled", async () => {
-        const count = await store.countActiveChildren(parentId);
-        expect(count).toBe(1); // child-1 is "created", child-2 is "completed"
-      });
-
-      it("returns 0 when no children exist", async () => {
-        const count = await store.countActiveChildren("no-children");
-        expect(count).toBe(0);
-      });
-    });
-
     describe("countTotalChildren", () => {
       it("counts all children regardless of status", async () => {
         const count = await store.countTotalChildren(parentId);

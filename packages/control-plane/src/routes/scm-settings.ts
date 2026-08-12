@@ -6,7 +6,7 @@
  * drafts) for both GitHub and GitLab.
  */
 
-import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared/types/integrations";
 import { ScmSettingsStore, ScmSettingsValidationError } from "../db/scm-settings";
 import type { Env } from "../types";
 import { createLogger } from "../logger";

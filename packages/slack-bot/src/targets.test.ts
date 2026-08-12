@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Environment, RepoConfig } from "./types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import {
   branchPreferenceRepo,
   buildSessionTargetRequestFields,

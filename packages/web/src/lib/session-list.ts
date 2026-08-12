@@ -1,4 +1,4 @@
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
