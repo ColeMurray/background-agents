@@ -97,22 +97,6 @@ class _PromptState:
     def __post_init__(self) -> None:
         self.attribution = MessageAttribution(self.opencode_message_id)
 
-    @property
-    def allowed_assistant_msg_ids(self) -> set[str]:
-        return self.attribution.allowed_assistant_message_ids
-
-    @property
-    def user_message_ids(self) -> set[str]:
-        return self.attribution.user_message_ids
-
-    @property
-    def compaction_occurred(self) -> bool:
-        return self.attribution.compaction_occurred
-
-    @compaction_occurred.setter
-    def compaction_occurred(self, value: bool) -> None:
-        self.attribution.compaction_occurred = value
-
 
 class _Disposition(Enum):
     """What the stream loop should do after applying one SSE event."""
@@ -407,7 +391,7 @@ class OpenCodePromptStream:
                 role=role,
                 oc_msg_id=oc_msg_id,
                 parent_match=parent_matches,
-                compaction_occurred=state.compaction_occurred,
+                compaction_occurred=state.attribution.is_compacted,
                 is_compaction_summary=is_compaction_summary,
             )
 
@@ -769,7 +753,7 @@ class OpenCodePromptStream:
         self._log.debug(
             log_event,
             elapsed_s=round(time.time() - state.start_time, 1),
-            tracked_msgs=len(state.allowed_assistant_msg_ids),
+            tracked_msgs=state.attribution.allowed_assistant_count,
         )
 
     def _tool_call_event(

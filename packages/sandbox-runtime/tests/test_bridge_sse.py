@@ -114,10 +114,10 @@ def make_prompt_state(
         opencode_message_id=opencode_message_id,
         start_time=0.0,
     )
-    state.user_message_ids.add(opencode_message_id)
     if cumulative_text is not None:
         state.cumulative_text = cumulative_text
-    state.compaction_occurred = compaction_occurred
+    if compaction_occurred:
+        state.attribution.mark_compacted()
     return state
 
 

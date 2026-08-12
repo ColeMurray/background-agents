@@ -47,7 +47,6 @@ def make_state(opencode_message_id: str = "msg_test") -> _PromptState:
         opencode_message_id=opencode_message_id,
         start_time=time.time(),
     )
-    state.user_message_ids.add(opencode_message_id)
     return state
 
 
@@ -293,7 +292,7 @@ class TestApplySseEventDispositions:
             ),
         )
 
-        assert "oc-summary" not in state.allowed_assistant_msg_ids
+        assert not state.attribution.is_assistant_allowed("oc-summary")
         assert step.events == []
 
     def test_child_context_overflow_continues_without_error(self):
@@ -425,7 +424,7 @@ class TestApplySseEventDispositions:
 
     def test_late_child_part_keeps_message_ownership_after_task_completion(self):
         state = make_state()
-        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.attribution.allow_assistant("parent-msg")
         state.child_activity.associate(CHILD_SESSION_ID, "task-call")
         stream = make_stream()
 
@@ -479,7 +478,7 @@ class TestApplySseEventDispositions:
 
     def test_child_message_after_completion_keeps_completed_task_ownership(self):
         state = make_state()
-        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.attribution.allow_assistant("parent-msg")
         stream = make_stream()
 
         completed_task = stream._apply_sse_event(
@@ -630,7 +629,7 @@ class TestApplySseEventDispositions:
             state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
         )
 
-        assert state.compaction_occurred is True
+        assert state.attribution.is_compacted
         assert step.events == [{"type": "context_compacted", "messageId": "cp-msg-1"}]
         assert step.disposition is _Disposition.CONTINUE
 
@@ -658,7 +657,7 @@ class TestApplySseEventDispositions:
             state, sse("session.compacted", {"sessionID": CHILD_SESSION_ID})
         )
 
-        assert state.compaction_occurred is False
+        assert not state.attribution.is_compacted
         assert state.pending_overflow_error == "parent overflow"
         assert step.events == []
 
@@ -702,7 +701,7 @@ class TestApplySseEventDispositions:
             ),
         )
 
-        assert prior_assistant_id not in state.allowed_assistant_msg_ids
+        assert not state.attribution.is_assistant_allowed(prior_assistant_id)
         assert prior_assistant_id in state.pending_parts
         assert step.events == []
 
@@ -743,7 +742,7 @@ class TestApplySseEventDispositions:
             ),
         )
 
-        assert continuation_id in state.allowed_assistant_msg_ids
+        assert state.attribution.is_assistant_allowed(continuation_id)
         assert step.events == [
             {
                 "type": "token",
@@ -778,8 +777,8 @@ class TestApplySseEventDispositions:
                 ),
             )
 
-        assert same_ms_below_id not in state.allowed_assistant_msg_ids
-        assert same_ms_above_id in state.allowed_assistant_msg_ids
+        assert not state.attribution.is_assistant_allowed(same_ms_below_id)
+        assert state.attribution.is_assistant_allowed(same_ms_above_id)
 
     def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
         prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
@@ -828,7 +827,7 @@ class TestApplySseEventDispositions:
 
     def test_task_metadata_reemits_same_status_and_releases_buffered_child_activity(self):
         state = make_state()
-        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.attribution.allow_assistant("parent-msg")
         state.child_activity.track(CHILD_SESSION_ID)
         stream = make_stream()
 
