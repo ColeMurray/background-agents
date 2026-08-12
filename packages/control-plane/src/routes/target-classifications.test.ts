@@ -3,12 +3,6 @@ import {
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
 } from "@open-inspect/shared/types/target-classification";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  OpenAITokenNotConfiguredError,
-  OpenAITokenUnauthorizedError,
-} from "../auth/openai-token-broker";
-import type * as OpenAITokenBrokerModule from "../auth/openai-token-broker";
-import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "../openai/codex-errors";
 import { handleRequest } from "../router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "../router.test-support";
 
@@ -17,15 +11,11 @@ const mocks = vi.hoisted(() => ({
   requestFunction: vi.fn(),
 }));
 
-vi.mock("../auth/openai-token-broker", async (importOriginal) => {
-  const actual = await importOriginal<typeof OpenAITokenBrokerModule>();
-  return {
-    ...actual,
-    OpenAITokenBroker: class {
-      refreshGlobal = mocks.refreshGlobal;
-    },
-  };
-});
+vi.mock("../auth/openai-token-broker", () => ({
+  OpenAITokenBroker: class {
+    refreshGlobal = mocks.refreshGlobal;
+  },
+}));
 
 vi.mock("../openai/codex-responses", () => ({
   requestOpenAICodexFunction: mocks.requestFunction,
@@ -83,11 +73,12 @@ describe("POST /internal/target-classifications", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.refreshGlobal.mockResolvedValue({
+      ok: true,
       accessToken: "secret-access-token",
       expiresIn: 1800,
       accountId: "account-123",
     });
-    mocks.requestFunction.mockResolvedValue(decision);
+    mocks.requestFunction.mockResolvedValue({ kind: "completed", output: decision });
   });
 
   it("rejects requests without service authentication", async () => {
@@ -142,9 +133,11 @@ describe("POST /internal/target-classifications", () => {
   });
 
   it("returns 503 without configured global OAuth", async () => {
-    mocks.refreshGlobal.mockRejectedValue(
-      new OpenAITokenNotConfiguredError("OPENAI_OAUTH_REFRESH_TOKEN not configured")
-    );
+    mocks.refreshGlobal.mockResolvedValue({
+      ok: false,
+      status: 404,
+      error: "OPENAI_OAUTH_REFRESH_TOKEN not configured",
+    });
 
     const response = await targetClassificationRequest(validRequest());
 
@@ -191,7 +184,10 @@ describe("POST /internal/target-classifications", () => {
   });
 
   it("rejects invalid structured classifier output", async () => {
-    mocks.requestFunction.mockResolvedValue({ ...decision, confidence: "certain" });
+    mocks.requestFunction.mockResolvedValue({
+      kind: "completed",
+      output: { ...decision, confidence: "certain" },
+    });
 
     const response = await targetClassificationRequest(validRequest());
 
@@ -205,7 +201,7 @@ describe("POST /internal/target-classifications", () => {
     ["primary target", { ...decision, targetId: "acme/unknown" }],
     ["alternative", { ...decision, alternatives: ["acme/unknown"] }],
   ])("rejects a classifier decision with an unknown %s", async (_name, output) => {
-    mocks.requestFunction.mockResolvedValue(output);
+    mocks.requestFunction.mockResolvedValue({ kind: "completed", output });
 
     const response = await targetClassificationRequest(validRequest());
 
@@ -216,9 +212,7 @@ describe("POST /internal/target-classifications", () => {
   });
 
   it("maps invalid provider output without exposing details", async () => {
-    mocks.requestFunction.mockRejectedValue(
-      new InvalidOpenAICodexResponseError("sensitive provider output")
-    );
+    mocks.requestFunction.mockResolvedValue({ kind: "invalid_response" });
 
     const response = await targetClassificationRequest(validRequest());
 
@@ -229,9 +223,7 @@ describe("POST /internal/target-classifications", () => {
   });
 
   it("maps upstream failures without exposing details", async () => {
-    mocks.requestFunction.mockRejectedValue(
-      new OpenAICodexUpstreamError("sensitive upstream failure", 429)
-    );
+    mocks.requestFunction.mockResolvedValue({ kind: "upstream_error", status: 429 });
 
     const response = await targetClassificationRequest(validRequest());
 
@@ -239,17 +231,12 @@ describe("POST /internal/target-classifications", () => {
     await expect(response.json()).resolves.toEqual({ error: "Classifier upstream unavailable" });
   });
 
-  it("does not misclassify unexpected Codex client failures", async () => {
-    mocks.requestFunction.mockRejectedValue(new Error("unexpected client failure"));
-
-    const response = await targetClassificationRequest(validRequest());
-
-    expect(response.status).toBe(500);
-    await expect(response.text()).resolves.not.toContain("unexpected client failure");
-  });
-
   it("maps broker authorization failure to 502", async () => {
-    mocks.refreshGlobal.mockRejectedValue(new OpenAITokenUnauthorizedError("refresh rejected"));
+    mocks.refreshGlobal.mockResolvedValue({
+      ok: false,
+      status: 401,
+      error: "refresh token rejected",
+    });
 
     const response = await targetClassificationRequest(validRequest());
 

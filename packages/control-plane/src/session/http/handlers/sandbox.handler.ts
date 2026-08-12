@@ -7,13 +7,7 @@ import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
-import {
-  OpenAITokenNotConfiguredError,
-  OpenAITokenStorageError,
-  OpenAITokenUnauthorizedError,
-  OpenAITokenUpstreamError,
-  type OpenAIToken,
-} from "../../openai-token-refresh-service";
+import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
 import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
@@ -42,7 +36,7 @@ export interface SandboxHandlerDeps {
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
-  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>;
+  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
   refreshXaiToken: (session: SessionRow, log: Logger) => Promise<XaiTokenRefreshResult>;
   isManagedSecretsConfigured: () => boolean;
   getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
@@ -238,30 +232,16 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "Secrets not configured" }, { status: 500 });
       }
 
-      let token: OpenAIToken;
-      try {
-        token = await deps.refreshOpenAIToken(session, log);
-      } catch (error) {
-        if (error instanceof OpenAITokenNotConfiguredError) {
-          return Response.json({ error: error.message }, { status: 404 });
-        }
-        if (error instanceof OpenAITokenUnauthorizedError) {
-          return Response.json({ error: error.message }, { status: 401 });
-        }
-        if (error instanceof OpenAITokenStorageError) {
-          return Response.json({ error: error.message }, { status: 500 });
-        }
-        if (error instanceof OpenAITokenUpstreamError) {
-          return Response.json({ error: error.message }, { status: 502 });
-        }
-        throw error;
+      const result = await deps.refreshOpenAIToken(session, log);
+      if (!result.ok) {
+        return Response.json({ error: result.error }, { status: result.status });
       }
 
       return Response.json(
         {
-          access_token: token.accessToken,
-          expires_in: token.expiresIn,
-          account_id: token.accountId,
+          access_token: result.accessToken,
+          expires_in: result.expiresIn,
+          account_id: result.accountId,
         },
         { status: 200, headers: { "Cache-Control": "no-store" } }
       );

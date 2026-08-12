@@ -1,11 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../../logger";
-import {
-  OpenAITokenNotConfiguredError,
-  OpenAITokenStorageError,
-  OpenAITokenUnauthorizedError,
-  OpenAITokenUpstreamError,
-} from "../../openai-token-refresh-service";
 import type { SandboxRow, SessionRow } from "../../types";
 import { createSandboxHandler } from "./sandbox.handler";
 
@@ -494,36 +488,20 @@ describe("createSandboxHandler", () => {
     expect(await response.json()).toEqual({ error: "Secrets not configured" });
   });
 
-  it.each([
-    [OpenAITokenNotConfiguredError, 404, "OPENAI_OAUTH_REFRESH_TOKEN not configured"],
-    [OpenAITokenUnauthorizedError, 401, "OpenAI token refresh failed: unauthorized"],
-    [OpenAITokenStorageError, 500, "Failed to read token state"],
-    [
-      OpenAITokenStorageError,
-      500,
-      "OpenAI tokens rotated but could not be saved; reconnect OpenAI OAuth",
-    ],
-    [OpenAITokenUpstreamError, 502, "OpenAI token refresh failed"],
-  ])("maps %s to status %i", async (ErrorType, status, message) => {
+  it("returns mapped service error from openai token refresh", async () => {
     const { handler, getSession, isManagedSecretsConfigured, refreshOpenAIToken } = createHandler();
     getSession.mockReturnValue({ id: "session-1" } as SessionRow);
     isManagedSecretsConfigured.mockReturnValue(true);
-    refreshOpenAIToken.mockRejectedValue(new ErrorType(message));
+    refreshOpenAIToken.mockResolvedValue({
+      ok: false,
+      status: 502,
+      error: "OpenAI token refresh failed",
+    });
 
     const response = await handler.openaiTokenRefresh();
 
-    expect(response.status).toBe(status);
-    expect(await response.json()).toEqual({ error: message });
-  });
-
-  it("does not mask unexpected OpenAI token refresh failures", async () => {
-    const { handler, getSession, isManagedSecretsConfigured, refreshOpenAIToken } = createHandler();
-    getSession.mockReturnValue({ id: "session-1" } as SessionRow);
-    isManagedSecretsConfigured.mockReturnValue(true);
-    const unexpected = new Error("unexpected refresh failure");
-    refreshOpenAIToken.mockRejectedValue(unexpected);
-
-    await expect(handler.openaiTokenRefresh()).rejects.toBe(unexpected);
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({ error: "OpenAI token refresh failed" });
   });
 
   it("returns openai access token payload on success", async () => {
@@ -533,6 +511,7 @@ describe("createSandboxHandler", () => {
     getSession.mockReturnValue(session);
     isManagedSecretsConfigured.mockReturnValue(true);
     refreshOpenAIToken.mockResolvedValue({
+      ok: true,
       accessToken: "access-token",
       expiresIn: 3600,
       accountId: "acct_123",

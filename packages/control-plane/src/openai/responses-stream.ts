@@ -1,5 +1,4 @@
 import { BoundedJsonSseAbortError, decodeBoundedJsonSse } from "./bounded-json-sse";
-import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "./codex-errors";
 
 const MAX_TOOL_ARGUMENT_BYTES = 32 * 1024;
 const RESPONSES_SSE_LIMITS = {
@@ -7,6 +6,11 @@ const RESPONSES_SSE_LIMITS = {
   maxEventBytes: 64 * 1024,
   maxEvents: 1_000,
 };
+
+type OpenAIResponsesStreamResult =
+  | { kind: "completed"; output: unknown }
+  | { kind: "upstream_error" }
+  | { kind: "invalid_response" };
 
 type PendingFunctionCall = {
   name?: string;
@@ -19,6 +23,8 @@ type ResponseState = {
   outputItem: unknown;
   completedOutput: unknown;
 };
+
+type EventAction = "continue" | "completed" | "upstream_error" | "invalid";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,37 +78,31 @@ function applyFunctionCallDelta(
   state: ResponseState,
   event: Record<string, unknown>,
   encoder: TextEncoder
-): void {
+): EventAction {
   const itemId = typeof event.item_id === "string" ? event.item_id : null;
-  if (!itemId || typeof event.delta !== "string") {
-    throw new InvalidOpenAICodexResponseError("Invalid function-call argument delta");
-  }
+  if (!itemId || typeof event.delta !== "string") return "invalid";
   const call = state.pendingCalls.get(itemId) ?? { arguments: "", argumentBytes: 0 };
   call.arguments += event.delta;
   call.argumentBytes += encoder.encode(event.delta).byteLength;
-  if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) {
-    throw new InvalidOpenAICodexResponseError("Function-call arguments exceed the byte limit");
-  }
+  if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
   state.pendingCalls.set(itemId, call);
+  return "continue";
 }
 
 function applyFunctionCallDone(
   state: ResponseState,
   event: Record<string, unknown>,
   encoder: TextEncoder
-): void {
+): EventAction {
   const itemId = typeof event.item_id === "string" ? event.item_id : null;
-  if (!itemId || typeof event.arguments !== "string") {
-    throw new InvalidOpenAICodexResponseError("Invalid completed function-call arguments");
-  }
+  if (!itemId || typeof event.arguments !== "string") return "invalid";
   const call = state.pendingCalls.get(itemId) ?? { arguments: "", argumentBytes: 0 };
   call.arguments = event.arguments;
   call.argumentBytes = encoder.encode(event.arguments).byteLength;
   if (typeof event.name === "string") call.name = event.name;
-  if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) {
-    throw new InvalidOpenAICodexResponseError("Function-call arguments exceed the byte limit");
-  }
+  if (call.argumentBytes > MAX_TOOL_ARGUMENT_BYTES) return "invalid";
   state.pendingCalls.set(itemId, call);
+  return "continue";
 }
 
 function applyResponseEvent(
@@ -110,13 +110,9 @@ function applyResponseEvent(
   event: unknown,
   toolName: string,
   encoder: TextEncoder
-): boolean {
-  if (!isRecord(event) || typeof event.type !== "string") {
-    throw new InvalidOpenAICodexResponseError("Invalid OpenAI Responses event");
-  }
-  if (event.type === "error" || event.type === "response.failed") {
-    throw new OpenAICodexUpstreamError("OpenAI Responses stream reported an error");
-  }
+): EventAction {
+  if (!isRecord(event) || typeof event.type !== "string") return "invalid";
+  if (event.type === "error" || event.type === "response.failed") return "upstream_error";
 
   if (event.type === "response.output_item.added" && isRecord(event.item)) {
     const id = typeof event.item.id === "string" ? event.item.id : null;
@@ -128,30 +124,25 @@ function applyResponseEvent(
         argumentBytes: encoder.encode(argumentsValue).byteLength,
       });
     }
-    return false;
+    return "continue";
   }
 
   if (event.type === "response.function_call_arguments.delta") {
-    applyFunctionCallDelta(state, event, encoder);
-    return false;
+    return applyFunctionCallDelta(state, event, encoder);
   }
   if (event.type === "response.function_call_arguments.done") {
-    applyFunctionCallDone(state, event, encoder);
-    return false;
+    return applyFunctionCallDone(state, event, encoder);
   }
   if (event.type === "response.output_item.done") {
-    if (!isRecord(event.item) || event.item.type !== "function_call") return false;
+    if (!isRecord(event.item) || event.item.type !== "function_call") return "continue";
     state.outputItem = parseFunctionCallItem(event.item, toolName, encoder);
-    if (state.outputItem === null) {
-      throw new InvalidOpenAICodexResponseError("Invalid completed function-call output");
-    }
-    return false;
+    return state.outputItem === null ? "invalid" : "continue";
   }
   if (event.type === "response.completed") {
     state.completedOutput = extractCompletedOutput(event.response, toolName, encoder);
-    return true;
+    return "completed";
   }
-  return false;
+  return "continue";
 }
 
 function resolveOutput(state: ResponseState, toolName: string): unknown {
@@ -169,7 +160,7 @@ export async function parseOpenAIResponsesStream(
   response: Response,
   signal: AbortSignal,
   toolName: string
-): Promise<unknown> {
+): Promise<OpenAIResponsesStreamResult> {
   const state: ResponseState = {
     pendingCalls: new Map(),
     outputItem: null,
@@ -179,26 +170,19 @@ export async function parseOpenAIResponsesStream(
 
   try {
     for await (const event of decodeBoundedJsonSse(response, signal, RESPONSES_SSE_LIMITS)) {
-      if (applyResponseEvent(state, event, toolName, encoder)) {
+      const action = applyResponseEvent(state, event, toolName, encoder);
+      if (action === "upstream_error") return { kind: "upstream_error" };
+      if (action === "invalid") return { kind: "invalid_response" };
+      if (action === "completed") {
         const output = resolveOutput(state, toolName);
-        if (output === null) {
-          throw new InvalidOpenAICodexResponseError("OpenAI Responses stream has no tool output");
-        }
-        return output;
+        return output === null ? { kind: "invalid_response" } : { kind: "completed", output };
       }
     }
   } catch (error) {
-    if (error instanceof BoundedJsonSseAbortError || signal.aborted) {
-      throw new OpenAICodexUpstreamError("OpenAI Responses stream aborted", undefined, {
-        cause: error,
-      });
-    }
-    if (error instanceof OpenAICodexUpstreamError) throw error;
-    if (error instanceof InvalidOpenAICodexResponseError) throw error;
-    throw new InvalidOpenAICodexResponseError("Invalid OpenAI Responses stream", {
-      cause: error,
-    });
+    return error instanceof BoundedJsonSseAbortError || signal.aborted
+      ? { kind: "upstream_error" }
+      : { kind: "invalid_response" };
   }
 
-  throw new InvalidOpenAICodexResponseError("OpenAI Responses stream ended before completion");
+  return { kind: "invalid_response" };
 }
