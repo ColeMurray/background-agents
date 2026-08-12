@@ -138,6 +138,10 @@
       "import": "./dist/types/session-diffs.js",
       "types": "./dist/types/session-diffs.d.ts"
     },
+    "./types/prompts": {
+      "import": "./dist/types/prompts.js",
+      "types": "./dist/types/prompts.d.ts"
+    },
     "./types/analytics": {
       "import": "./dist/types/analytics.js",
       "types": "./dist/types/analytics.d.ts"

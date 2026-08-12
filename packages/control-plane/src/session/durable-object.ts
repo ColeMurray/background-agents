@@ -705,6 +705,7 @@ export class SessionDO extends DurableObject<Env> {
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
         () => this.messageQueue.processMessageQueue(),
+        () => this.messageQueue.broadcastPromptQueue(),
         (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
@@ -903,6 +904,7 @@ export class SessionDO extends DurableObject<Env> {
       config,
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
+        onSandboxTerminated: () => this.messageQueue.resumeAfterSandboxTermination(),
       },
       imageBuildLookup
     );
@@ -1282,10 +1284,14 @@ export class SessionDO extends DurableObject<Env> {
     try {
       const data = this.parseWebSocketMessage(message, "client", clientMessageSchema);
       if (!data) {
+        const invalidPrompt = this.readInvalidPrompt(message);
         this.safeSend(ws, {
           type: "error",
-          code: "INVALID_MESSAGE",
-          message: "Failed to process message",
+          code: invalidPrompt ? "INVALID_PROMPT" : "INVALID_MESSAGE",
+          message: invalidPrompt ? "Invalid prompt" : "Failed to process message",
+          ...(invalidPrompt?.clientRequestId
+            ? { clientRequestId: invalidPrompt.clientRequestId }
+            : {}),
         });
         return;
       }
@@ -1364,12 +1370,33 @@ export class SessionDO extends DurableObject<Env> {
     return result.data;
   }
 
+  private readInvalidPrompt(message: string): { clientRequestId?: string } | null {
+    try {
+      const raw = JSON.parse(message) as unknown;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const candidate = raw as Record<string, unknown>;
+      if (candidate.type !== "prompt") return null;
+      const clientRequestId = candidate.clientRequestId;
+      return typeof clientRequestId === "string" &&
+        clientRequestId.length > 0 &&
+        clientRequestId.length <= 128
+        ? { clientRequestId }
+        : {};
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Handle client subscription with token validation.
    */
   private async handleSubscribe(
     ws: WebSocket,
-    data: { token: string; clientId: string }
+    data: {
+      token: string;
+      clientId: string;
+      capabilities?: Array<"prompt_queue_updates">;
+    }
   ): Promise<void> {
     // Validate the WebSocket auth token
     if (!data.token) {
@@ -1443,6 +1470,7 @@ export class SessionDO extends DurableObject<Env> {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
+        capabilities: data.capabilities,
         ws,
       };
 
@@ -1492,7 +1520,12 @@ export class SessionDO extends DurableObject<Env> {
     this.wsManager.setClient(ws, client);
     const parsed = this.wsManager.classify(ws);
     if (parsed.kind === "client" && parsed.wsId) {
-      this.wsManager.persistClientMapping(parsed.wsId, client.participantId, client.clientId);
+      this.wsManager.persistClientMapping(
+        parsed.wsId,
+        client.participantId,
+        client.clientId,
+        client.capabilities
+      );
       this.log.debug("Stored ws_client_mapping", {
         ws_id: parsed.wsId,
         participant_id: client.participantId,
@@ -1527,6 +1560,7 @@ export class SessionDO extends DurableObject<Env> {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
+      capabilities: mapping.capabilities,
       ws,
     };
 
@@ -1546,6 +1580,7 @@ export class SessionDO extends DurableObject<Env> {
       model?: string;
       reasoningEffort?: string;
       attachments?: SessionAttachmentReference[];
+      clientRequestId?: string;
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, client, data);
@@ -1784,6 +1819,7 @@ export class SessionDO extends DurableObject<Env> {
         session: local.session,
         artifacts: this.messageService.listArtifacts().artifacts,
         timeline: this.eventStream.getReplay(),
+        promptQueue: this.repository.listPromptQueue(),
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });

@@ -40,6 +40,7 @@ function createSubscribedMessage(overrides: Partial<SubscribedMessage> = {}): Su
     participant: { participantId: "participant-1", name: "Test User" },
     timeline: { events: [], hasMore: false, cursor: null },
     spawnError: null,
+    promptQueue: [],
     ...overrides,
   };
 }
@@ -65,6 +66,7 @@ function createSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapsh
       cursor: { timestamp: 1, id: "event-1", sequence: 1 },
     },
     spawnError: null,
+    promptQueue: [],
     ...overrides,
   };
 }
@@ -85,6 +87,20 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 
 describe("sessionSocketReducer", () => {
   describe("snapshot", () => {
+    it("hydrates the authoritative prompt queue", () => {
+      const promptQueue = [
+        {
+          messageId: "message-1",
+          content: "Running",
+          status: "processing" as const,
+        },
+      ];
+      const state = createSessionSocketState({
+        ...createSnapshot(),
+        promptQueue,
+      } as SessionSnapshot);
+      expect(state.promptQueue).toEqual(promptQueue);
+    });
     it("initializes the rendered state before the socket connects", () => {
       const state = createSessionSocketState(createSnapshot());
 
@@ -142,6 +158,21 @@ describe("sessionSocketReducer", () => {
       expect(state.events.map((event) => event.type)).toEqual(["token", "execution_complete"]);
       expect(state.events[0]).toEqual(expect.objectContaining({ content: "Final" }));
     });
+  });
+
+  it("replaces the queue from a live prompt_queue_updated message", () => {
+    const queue = [
+      {
+        messageId: "message-2",
+        content: "Next",
+        status: "pending" as const,
+      },
+    ];
+    const state = reduce(
+      subscribedState(),
+      serverMessage({ type: "prompt_queue_updated", promptQueue: queue })
+    );
+    expect(state.promptQueue).toEqual(queue);
   });
 
   describe("subscribed", () => {

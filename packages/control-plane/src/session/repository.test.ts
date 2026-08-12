@@ -4,7 +4,7 @@
  * Uses a mock SqlStorage to verify SQL operations are called correctly.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SessionRepository } from "./repository";
 import {
   AttachmentClaimConflictError,
@@ -715,6 +715,41 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("prompt queue", () => {
+    it("returns null instead of position zero for a finished idempotent message", () => {
+      mock.setData(
+        `SELECT id FROM messages WHERE status IN ('pending', 'processing')
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`,
+        [{ id: "msg-other" }]
+      );
+      expect(repo.getUnfinishedMessagePosition("msg-complete")).toBeNull();
+    });
+
+    it("projects only fields needed to render the queue", () => {
+      vi.spyOn(repo, "listUnfinishedMessages").mockReturnValue([
+        {
+          id: "msg-legacy",
+          author_id: "part-1",
+          content: "continue",
+          source: "web",
+          model: null,
+          reasoning_effort: null,
+          attachments: "{bad json",
+          callback_context: null,
+          status: "pending",
+          error_message: null,
+          created_at: 1000,
+          started_at: null,
+          completed_at: null,
+        },
+      ]);
+
+      expect(repo.listPromptQueue()).toEqual([
+        { messageId: "msg-legacy", content: "continue", status: "pending" },
+      ]);
+    });
+  });
+
   describe("createMessage", () => {
     it("creates message with all fields", () => {
       repo.createMessage({
@@ -740,6 +775,8 @@ describe("SessionRepository", () => {
         null,
         "[]",
         '{"channel":"C123"}',
+        null,
+        null,
         "pending",
         1000,
       ]);
@@ -756,7 +793,7 @@ describe("SessionRepository", () => {
       createdAt: 1000,
     };
 
-    it("claims every upload and creates the message in one transaction", () => {
+    it("claims uploads and creates the message and event in one transaction", () => {
       let transactions = 0;
       repo = new SessionRepository(
         mock.sql,
@@ -768,12 +805,19 @@ describe("SessionRepository", () => {
       );
       mock.setDefaultRowsWritten(2);
 
-      repo.createMessageWithAttachments(message, ["up-1", "up-2"]);
+      repo.createMessageWithAttachments(message, ["up-1", "up-2"], {
+        id: "event-1",
+        type: "user_message",
+        data: "{}",
+        messageId: "msg-1",
+        createdAt: 1000,
+      });
 
       expect(transactions).toBe(1);
       expect(mock.calls[0].query).toContain("UPDATE attachments SET message_id");
       expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
       expect(mock.calls[1].query).toContain("INSERT INTO messages");
+      expect(mock.calls[2].query).toContain("INSERT INTO events");
     });
 
     it("fails before creating the message when not every upload can be claimed", () => {
@@ -1263,7 +1307,31 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO ws_client_mapping");
-      expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000]);
+      expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", null, 1000]);
+    });
+  });
+
+  describe("getWsClientMapping", () => {
+    it("restores persisted client capabilities", () => {
+      mock.setData(
+        `SELECT m.participant_id, m.client_id, m.capabilities, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+       FROM ws_client_mapping m
+       JOIN participants p ON m.participant_id = p.id
+       WHERE m.ws_id = ?`,
+        [
+          {
+            participant_id: "p-1",
+            client_id: "client-1",
+            capabilities: '["prompt_queue_updates"]',
+            user_id: "user-1",
+            canonical_user_id: null,
+            scm_name: null,
+            scm_login: null,
+          },
+        ]
+      );
+
+      expect(repo.getWsClientMapping("ws-1")?.capabilities).toEqual(["prompt_queue_updates"]);
     });
   });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SessionMessageQueue } from "./message-queue";
+import { fingerprintWebPrompt, SessionMessageQueue } from "./message-queue";
 import { AttachmentClaimConflictError } from "./session-attachment-repository";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
@@ -11,6 +11,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/websocket";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -72,6 +73,8 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    client_request_id: null,
+    request_fingerprint: null,
     status: "pending",
     error_message: null,
     created_at: 1000,
@@ -97,20 +100,37 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 const EXECUTION_TIMEOUT_MS = 60_000;
 
 function buildQueue() {
+  const log = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    child: vi.fn(),
+  };
   const repository = {
     createMessageWithAttachments: vi.fn(),
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
+    getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
+    getUnfinishedMessagePosition: vi.fn((): number | null => 1),
+    listUnfinishedMessages: vi.fn((): MessageRow[] => []),
+    listPromptQueue: vi.fn(() => []),
     getProcessingMessage: vi.fn(() => null as { id: string } | null),
+    getMessageAwaitingStopConfirmation: vi.fn(
+      () => null as { id: string; deadline: number } | null
+    ),
+    clearMessageAwaitingStopConfirmation: vi.fn(),
     getProcessingMessageWithCreatedAt: vi.fn(
       () => null as { id: string; created_at: number } | null
     ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
     updateMessageToProcessing: vi.fn(),
+    updateMessageToPending: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
     updateMessageCompletion: vi.fn(),
+    markMessageAwaitingStopConfirmation: vi.fn(),
     listPendingMessagesWithCreatedAt: vi.fn((): Array<{ id: string; created_at: number }> => []),
     upsertExecutionCompleteEvent: vi.fn(),
   };
@@ -143,6 +163,7 @@ function buildQueue() {
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
     updateLastActivity: vi.fn((_timestamp: number) => {}),
+    terminateUnresponsiveSandbox: vi.fn(async () => {}),
   };
   const waitUntil = vi.fn();
   const getAlarm = vi.fn(async () => null as number | null);
@@ -151,13 +172,7 @@ function buildQueue() {
 
   const queue = new SessionMessageQueue(
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
-    {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      child: vi.fn(),
-    },
+    log,
     repository as unknown as SessionRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
     wsManager as unknown as SessionWebSocketManager,
@@ -187,6 +202,7 @@ function buildQueue() {
     setAlarm,
     callbackService,
     recordTerminalMessage,
+    log,
   };
 }
 
@@ -259,6 +275,130 @@ describe("SessionMessageQueue", () => {
     expect(h.sessionStatus.transition).toHaveBeenCalledWith("active");
   });
 
+  it("deduplicates a correlated web prompt before attachment lookup or mutation", async () => {
+    const h = buildQueue();
+    h.repository.getMessageByClientRequestId.mockReturnValue(
+      createMessage({
+        id: "msg-existing",
+        client_request_id: "request-1",
+        request_fingerprint: fingerprintWebPrompt("part-1", {
+          content: "same",
+          model: "anthropic/claude-haiku-4-5",
+          reasoningEffort: "high",
+          attachments: [{ name: "shot.png", attachmentId: "up-1" }],
+        }),
+      })
+    );
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      clientRequestId: "request-1",
+      content: "same",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+      attachments: [{ name: "shot.png", attachmentId: "up-1" }],
+    });
+
+    expect(h.attachmentRepository.getUnreferenced).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.log.info).toHaveBeenCalledWith(
+      "prompt.enqueue",
+      expect.objectContaining({
+        outcome: "deduplicated",
+        queue_depth_before: 1,
+        queue_depth_after: 1,
+      })
+    );
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        type: "prompt_queued",
+        clientRequestId: "request-1",
+        messageId: "msg-existing",
+      })
+    );
+  });
+
+  it("returns a null position when retrying a completed correlated prompt", async () => {
+    const h = buildQueue();
+    h.repository.getMessageByClientRequestId.mockReturnValue(
+      createMessage({
+        id: "msg-complete",
+        status: "completed",
+        client_request_id: "request-complete",
+        request_fingerprint: fingerprintWebPrompt("part-1", { content: "same" }),
+      })
+    );
+    h.repository.getUnfinishedMessagePosition.mockReturnValue(null);
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      clientRequestId: "request-complete",
+      content: "same",
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prompt_queued", position: null })
+    );
+  });
+
+  it("rejects reuse of a web request ID with a different participant or payload", async () => {
+    const h = buildQueue();
+    h.repository.getMessageByClientRequestId.mockReturnValue(
+      createMessage({
+        id: "msg-existing",
+        author_id: "part-other",
+        client_request_id: "request-1",
+        request_fingerprint: "different",
+      })
+    );
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      clientRequestId: "request-1",
+      content: "changed",
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ code: "PROMPT_REQUEST_CONFLICT" })
+    );
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "prompt.enqueue",
+      expect.objectContaining({ outcome: "conflict", queue_depth_before: 1, queue_depth_after: 1 })
+    );
+  });
+
+  it("rejects the unfinished queue limit before attachments or message mutation", async () => {
+    const h = buildQueue();
+    h.repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      clientRequestId: "request-full",
+      content: "queued",
+      attachments: [{ name: "shot.png", attachmentId: "up-1" }],
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        code: "PROMPT_QUEUE_FULL",
+        clientRequestId: "request-full",
+      })
+    );
+    expect(h.attachmentRepository.getUnreferenced).not.toHaveBeenCalled();
+    expect(h.repository.createMessageWithAttachments).not.toHaveBeenCalled();
+    expect(h.log.warn).toHaveBeenCalledWith(
+      "prompt.enqueue",
+      expect.objectContaining({
+        outcome: "rejected",
+        reason: "queue_full",
+        queue_depth_before: MAX_UNFINISHED_PROMPTS,
+        queue_depth_after: MAX_UNFINISHED_PROMPTS,
+      })
+    );
+  });
+
   it("stores attachments and embeds content-free metadata in the user_message event", async () => {
     const h = buildQueue();
     h.attachmentRepository.getUnreferenced.mockReturnValue([
@@ -289,7 +429,8 @@ describe("SessionMessageQueue", () => {
           { name: "shot.png", attachmentId: "up-1", mimeType: "image/png" },
         ]),
       }),
-      ["up-1"]
+      ["up-1"],
+      expect.objectContaining({ type: "user_message", messageId: expect.any(String) })
     );
 
     expect(h.broadcast).toHaveBeenCalledWith({
@@ -299,7 +440,9 @@ describe("SessionMessageQueue", () => {
         attachments: [{ name: "shot.png", mimeType: "image/png", attachmentId: "up-1" }],
       }),
     });
-    const storedEvent = JSON.parse(h.repository.createEvent.mock.calls[0][0].data as string);
+    const storedEvent = JSON.parse(
+      h.repository.createMessageWithAttachments.mock.calls[0][2].data as string
+    );
     expect(storedEvent.attachments).toEqual([
       { name: "shot.png", mimeType: "image/png", attachmentId: "up-1" },
     ]);
@@ -452,6 +595,36 @@ describe("SessionMessageQueue", () => {
       expect.objectContaining({ type: "prompt", messageId: "msg-42" })
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: true });
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "prompt_queue_updated",
+      promptQueue: expect.any(Array),
+    });
+  });
+
+  it("requeues a prompt when sandbox send definitively fails", async () => {
+    const h = buildQueue();
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-unsent" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.wsManager.send.mockReturnValue(false);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-unsent");
+    expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+  });
+
+  it("records enqueue depth before and after without prompt content", async () => {
+    const h = buildQueue();
+    h.repository.getPendingOrProcessingCount.mockReturnValueOnce(2).mockReturnValueOnce(3);
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), { content: "secret" });
+
+    const enqueueLog = h.log.info.mock.calls.find(([event]) => event === "prompt.enqueue")?.[1];
+    expect(enqueueLog).toEqual(
+      expect.objectContaining({ outcome: "enqueued", queue_depth_before: 2, queue_depth_after: 3 })
+    );
+    expect(enqueueLog).not.toHaveProperty("content");
   });
 
   it("drops a persisted reasoning effort that the session model does not support", async () => {
@@ -647,6 +820,7 @@ describe("SessionMessageQueue", () => {
       "failed",
       expect.any(Number)
     );
+    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-9");
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-9",
       expect.objectContaining({ type: "execution_complete", success: false }),
@@ -661,6 +835,94 @@ describe("SessionMessageQueue", () => {
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
     expect(h.waitUntil).toHaveBeenCalledTimes(2);
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
+  });
+
+  it("waits for sandbox stop confirmation before dispatching the next prompt", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-running", status: "processing" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.stopExecution();
+
+    expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalledWith(
+      "msg-next",
+      expect.any(Number)
+    );
+    expect(h.wsManager.send).toHaveBeenCalledWith(expect.anything(), { type: "stop" });
+    expect(h.wsManager.send).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ type: "prompt", messageId: "msg-next" })
+    );
+    expect(h.setAlarm).toHaveBeenCalledOnce();
+  });
+
+  it("terminates the sandbox and resumes safely when stop cannot be sent", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-running", status: "processing" })
+    );
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue(null);
+
+    await h.queue.stopExecution();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("terminates the sandbox when the connected socket rejects the stop send", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(
+      createMessage({ id: "msg-running", status: "processing" })
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+    h.wsManager.send.mockReturnValue(false);
+
+    await h.queue.stopExecution();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+  });
+
+  it("terminates the sandbox after the bounded stop confirmation deadline", async () => {
+    const h = buildQueue();
+    h.repository.getMessageAwaitingStopConfirmation.mockReturnValue({
+      id: "msg-stopped",
+      deadline: Date.now() - 1,
+    });
+
+    await h.queue.recoverStopConfirmationTimeout();
+
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
+  });
+
+  it("clears the marker and resumes only after definitive sandbox termination", async () => {
+    const h = buildQueue();
+    h.repository.getMessageAwaitingStopConfirmation
+      .mockReturnValueOnce({ id: "msg-stopped", deadline: Date.now() - 1 })
+      .mockReturnValue(null);
+
+    await h.queue.resumeAfterSandboxTermination();
+
+    expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-stopped");
+  });
+
+  it("keeps queue dispatch blocked while a stopped prompt awaits confirmation", async () => {
+    const h = buildQueue();
+    h.repository.getMessageAwaitingStopConfirmation.mockReturnValue({
+      id: "msg-stopped",
+      deadline: Date.now() + 10_000,
+    });
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
+
+    expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalled();
   });
 
   it("suppresses session status reconcile when stopExecution is called with suppress flag", async () => {

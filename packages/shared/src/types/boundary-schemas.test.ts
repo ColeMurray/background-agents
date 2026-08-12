@@ -21,6 +21,7 @@ import {
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
 } from "./session-api";
+import { MAX_WEB_PROMPT_CHARS } from "./websocket";
 import {
   listEventsResponseSchema,
   sandboxEventSchema,
@@ -549,9 +550,10 @@ describe("boundary schemas", () => {
   });
 
   describe("clientMessageSchema", () => {
-    it("parses a valid prompt with attachments", () => {
+    it("parses a valid prompt with attachments and request correlation", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",
+        clientRequestId: "0190cc3e-95ca-7dd8-b0a7-55ca8456ee31",
         content: "Investigate the failing build",
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "high",
@@ -564,6 +566,42 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("keeps clientRequestId optional during rollout", () => {
+      expect(clientMessageSchema.safeParse({ type: "prompt", content: "Continue" }).success).toBe(
+        true
+      );
+    });
+
+    it("accepts prompt queue update capability negotiation on subscribe", () => {
+      expect(
+        clientMessageSchema.parse({
+          type: "subscribe",
+          token: "token",
+          clientId: "client-1",
+          capabilities: ["prompt_queue_updates"],
+        })
+      ).toMatchObject({ capabilities: ["prompt_queue_updates"] });
+    });
+
+    it("rejects blank and oversized prompts but accepts attachment-only prompts", () => {
+      expect(clientMessageSchema.safeParse({ type: "prompt", content: "  \n" }).success).toBe(
+        false
+      );
+      expect(
+        clientMessageSchema.safeParse({
+          type: "prompt",
+          content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1),
+        }).success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "prompt",
+          content: " \n",
+          attachments: [{ name: "evidence.png", attachmentId: "attachment-1" }],
+        }).success
+      ).toBe(true);
     });
 
     it("rejects inline and remote attachment sources", () => {
@@ -663,6 +701,7 @@ describe("boundary schemas", () => {
           },
         ],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: {
           events: [],
           hasMore: false,
@@ -693,6 +732,7 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: {
           events: [
             {
@@ -805,6 +845,7 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: {
           events: [{ eventId: "event-1", timelineSequence: 1, event }],
           hasMore: false,

@@ -6,6 +6,13 @@ import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
 
 const timelineSequenceSchema = z.number().int().nonnegative().safe();
 
+export const promptQueueItemSchema = z.object({
+  messageId: z.string(),
+  content: z.string(),
+  status: z.enum(["pending", "processing"]),
+});
+export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
+
 const sessionStateSchema = z.object({
   id: z.string(),
   title: z.string().nullable(),
@@ -106,6 +113,7 @@ export const sessionSnapshotSchema = z.object({
   artifacts: z.array(sessionArtifactSchema),
   timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
+  promptQueue: z.array(promptQueueItemSchema).default([]),
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 
@@ -116,7 +124,16 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
   }),
-  z.object({ type: z.literal("prompt_queued"), messageId: z.string(), position: z.number() }),
+  z.object({
+    type: z.literal("prompt_queued"),
+    clientRequestId: z.string().optional(),
+    messageId: z.string(),
+    position: z.number().int().positive().nullable(),
+  }),
+  z.object({
+    type: z.literal("prompt_queue_updated"),
+    promptQueue: z.array(promptQueueItemSchema),
+  }),
   z.object({ type: z.literal("sandbox_event"), event: sandboxEventSchema }),
   z.object({ type: z.literal("presence_sync"), participants: z.array(participantPresenceSchema) }),
   z.object({
@@ -168,7 +185,12 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("tunnel_urls"), urls: z.record(z.string(), z.string()) }),
   z.object({ type: z.literal("sandbox_dashboard_url"), url: z.string() }),
   z.object({ type: z.literal("sandbox_access_changed") }),
-  z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
+  z.object({
+    type: z.literal("error"),
+    code: z.string(),
+    message: z.string(),
+    clientRequestId: z.string().optional(),
+  }),
 ]);
 
 export const serverMessageSchema = serverMessageUnionSchema;

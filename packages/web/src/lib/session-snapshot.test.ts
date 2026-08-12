@@ -22,6 +22,7 @@ const snapshot = {
   },
   artifacts: [],
   timeline: { events: [], hasMore: false, cursor: null },
+  promptQueue: [],
 };
 
 describe("getSessionSnapshot", () => {
@@ -35,6 +36,16 @@ describe("getSessionSnapshot", () => {
       "/sessions/session%2Fone",
       expect.objectContaining({ cache: "no-store" })
     );
+  });
+
+  it("defaults a legacy snapshot without promptQueue to an empty queue", async () => {
+    const { promptQueue: _promptQueue, ...legacySnapshot } = snapshot;
+    mocks.controlPlaneUserFetch.mockResolvedValue(Response.json(legacySnapshot));
+
+    await expect(getSessionSnapshot("session/one")).resolves.toEqual({
+      ...legacySnapshot,
+      promptQueue: [],
+    });
   });
 
   it("preserves the upstream status for route-level handling", async () => {

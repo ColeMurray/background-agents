@@ -1,6 +1,7 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type {
   ParticipantPresence,
+  PromptQueueItem,
   ServerMessage,
   SessionSnapshot,
   SessionState,
@@ -31,6 +32,7 @@ export interface SessionSocketState {
   hasMoreHistory: boolean;
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
+  promptQueue: PromptQueueItem[];
 }
 
 export const initialSessionSocketState: SessionSocketState = {
@@ -44,6 +46,7 @@ export const initialSessionSocketState: SessionSocketState = {
   hasMoreHistory: false,
   loadingHistory: false,
   cursor: null,
+  promptQueue: [],
 };
 
 export type SessionSocketAction =
@@ -91,6 +94,7 @@ export function createSessionSocketState(snapshot: SessionSnapshot): SessionSock
     events: renderTimelineEvents(timelineEvents),
     hasMoreHistory: snapshot.timeline.hasMore,
     cursor: snapshot.timeline.cursor,
+    promptQueue: snapshot.promptQueue,
   };
 }
 
@@ -184,6 +188,7 @@ function reduceServerMessage(
         // A fetch_history dropped by a disconnect would otherwise leave this
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
+        promptQueue: message.promptQueue,
       };
     }
 
@@ -277,6 +282,9 @@ function reduceServerMessage(
         ...prev,
         isProcessing: message.isProcessing,
       }));
+
+    case "prompt_queue_updated":
+      return { ...state, promptQueue: message.promptQueue };
 
     case "error":
       // Reset loading state if a fetch_history request was rejected.

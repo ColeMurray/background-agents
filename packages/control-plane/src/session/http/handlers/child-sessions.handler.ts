@@ -1,4 +1,5 @@
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
@@ -47,8 +48,6 @@ export interface ChildSessionsHandler {
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
 });
-
-export const MAX_PENDING_CHILD_PROMPTS = 10;
 
 export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): ChildSessionsHandler {
   return {
@@ -175,7 +174,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
           { status: 409 }
         );
       }
-      if (deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
+      if (deps.repository.getPendingOrProcessingCount() >= MAX_UNFINISHED_PROMPTS) {
         return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
       }
 

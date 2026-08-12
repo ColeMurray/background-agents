@@ -1,15 +1,19 @@
 import { z } from "zod";
-import { sessionAttachmentReferencesSchema } from "./session-attachments";
+import { webPromptPayloadSchema } from "./prompts";
+
+export { MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
-  z.object({ type: z.literal("subscribe"), token: z.string(), clientId: z.string() }),
   z.object({
+    type: z.literal("subscribe"),
+    token: z.string(),
+    clientId: z.string(),
+    capabilities: z.array(z.literal("prompt_queue_updates")).optional(),
+  }),
+  webPromptPayloadSchema.extend({
     type: z.literal("prompt"),
-    content: z.string(),
-    model: z.string().optional(),
-    reasoningEffort: z.string().optional(),
-    attachments: sessionAttachmentReferencesSchema.optional(),
+    clientRequestId: z.string().min(1).max(128).optional(),
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),

@@ -266,6 +266,8 @@ export interface SlackAgentNotifyLookup {
 export interface LifecycleCallbacks {
   /** Called when the sandbox is being terminated (heartbeat stale, inactivity timeout). */
   onSandboxTerminating?: () => Promise<void>;
+  /** Called after the sandbox is terminal and cannot reconnect. */
+  onSandboxTerminated?: () => Promise<void>;
 }
 
 // ==================== Manager ====================
@@ -278,6 +280,7 @@ export interface LifecycleCallbacks {
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
   updateLastActivity(timestamp: number): void;
+  terminateUnresponsiveSandbox(): Promise<void>;
 }
 
 /**
@@ -348,6 +351,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         type: "sandbox_error",
         error: `Sandbox spawning temporarily disabled after ${circuitBreakerState.failureCount} failures. Try again in ${Math.ceil((cbDecision.waitTimeMs || 0) / 1000)} seconds.`,
       });
+      await this.callbacks.onSandboxTerminated?.();
       return;
     }
 
@@ -1206,6 +1210,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       }
 
       this.wsManager.closeSandboxWebSocket(1000, "Heartbeat stale");
+      await this.callbacks.onSandboxTerminated?.();
       return;
     }
 
@@ -1260,6 +1265,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         }
 
         this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
+        await this.callbacks.onSandboxTerminated?.();
 
         this.broadcaster.broadcast({
           type: "sandbox_warning",
@@ -1289,6 +1295,31 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         await this.alarmScheduler.scheduleAlarm(now + inactivityDecision.nextCheckMs);
         return;
     }
+  }
+
+  async terminateUnresponsiveSandbox(): Promise<void> {
+    const sandbox = this.storage.getSandbox();
+    if (!sandbox || isDeadSandboxStatus(sandbox.status)) {
+      await this.callbacks.onSandboxTerminated?.();
+      return;
+    }
+
+    this.storage.updateSandboxStatus("stale");
+    this.clearSandboxAccessState();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
+    if (this.canStopProviderSandbox()) {
+      try {
+        await this.stopProviderSandbox("stop_confirmation_timeout");
+      } catch (error) {
+        this.log.warn("Provider stop failed after missing stop confirmation", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      this.wsManager.sendToSandbox({ type: "shutdown" });
+    }
+    this.wsManager.closeSandboxWebSocket(1011, "Stop confirmation timed out");
+    await this.callbacks.onSandboxTerminated?.();
   }
 
   /**

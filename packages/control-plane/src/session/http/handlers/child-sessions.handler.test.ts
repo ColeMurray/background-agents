@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
-import { createChildSessionsHandler, MAX_PENDING_CHILD_PROMPTS } from "./child-sessions.handler";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import { createChildSessionsHandler } from "./child-sessions.handler";
 import { SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
@@ -273,7 +274,7 @@ describe("createChildSessionsHandler", () => {
       const { handler, getSession, repository, enqueuePrompt } = createHandler();
       getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
       repository.listParticipants.mockReturnValue([createParticipant()]);
-      repository.getPendingOrProcessingCount.mockReturnValue(MAX_PENDING_CHILD_PROMPTS);
+      repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
 
       const response = await handler.parentPrompt(
         request({ parentSessionId: "parent-1", content: "Continue" })

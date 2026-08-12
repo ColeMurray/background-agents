@@ -24,6 +24,8 @@ export type {
 
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
+export { MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS, webPromptPayloadSchema } from "./prompts";
+export type { WebPromptPayload } from "./prompts";
 
 export {
   MAX_TARGET_REPOSITORIES,
@@ -71,9 +73,11 @@ export {
   sessionSnapshotSchema,
   sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
+  promptQueueItemSchema,
 } from "./server-messages";
 export type {
   ParticipantPresence,
+  PromptQueueItem,
   ServerMessage,
   SessionSnapshot,
   SessionSnapshotState,

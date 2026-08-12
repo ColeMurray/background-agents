@@ -125,6 +125,7 @@ export interface ClientInfo {
   lastSeen: number;
   clientId: string;
   ws: WebSocket;
+  capabilities?: Array<"prompt_queue_updates">;
   lastFetchHistoryAt?: number;
 }
 

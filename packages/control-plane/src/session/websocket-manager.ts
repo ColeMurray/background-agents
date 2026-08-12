@@ -64,7 +64,14 @@ export interface SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null;
 
   /** Persist ws-to-participant mapping for hibernation survival. */
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    capabilities?: Array<"prompt_queue_updates">
+  ): void;
+
+  hasClientCapability(ws: WebSocket, capability: "prompt_queue_updates"): boolean;
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
   isClientSynchronizing(ws: WebSocket): boolean;
@@ -236,13 +243,27 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     return this.repository.getWsClientMapping(parsed.wsId);
   }
 
-  persistClientMapping(wsId: string, participantId: string, clientId: string): void {
+  persistClientMapping(
+    wsId: string,
+    participantId: string,
+    clientId: string,
+    capabilities?: Array<"prompt_queue_updates">
+  ): void {
     this.repository.upsertWsClientMapping({
       wsId,
       participantId,
       clientId,
+      capabilities,
       createdAt: Date.now(),
     });
+  }
+
+  hasClientCapability(ws: WebSocket, capability: "prompt_queue_updates"): boolean {
+    return (
+      this.clients.get(ws)?.capabilities?.includes(capability) ??
+      this.recoverClientMapping(ws)?.capabilities?.includes(capability) ??
+      false
+    );
   }
 
   setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {

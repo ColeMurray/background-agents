@@ -12,6 +12,7 @@ function harness(sandboxSocket: WebSocket | null = null) {
       }
     ),
     getSandboxSocket: vi.fn(() => sandboxSocket),
+    hasClientCapability: vi.fn((ws: WebSocket) => ws === clientSockets[0]),
     send,
   } as unknown as SessionWebSocketManager;
   return { messenger: new SessionMessengerImpl(wsManager), wsManager, clientSockets, send };
@@ -38,6 +39,18 @@ describe("SessionMessengerImpl", () => {
 
     expect(messenger.sendToSandbox({ type: "refresh_diff" })).toBe(true);
     expect(send).toHaveBeenCalledWith(sandboxSocket, { type: "refresh_diff" });
+  });
+
+  it("only emits prompt queue updates to clients that negotiated them", () => {
+    const { messenger, clientSockets, send } = harness();
+    const message = { type: "prompt_queue_updated", promptQueue: [] } satisfies Parameters<
+      typeof messenger.broadcast
+    >[0];
+
+    messenger.broadcast(message);
+
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(clientSockets[0], message);
   });
 
   it("reports failure when no sandbox is connected", () => {

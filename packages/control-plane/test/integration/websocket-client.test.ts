@@ -6,9 +6,11 @@ import {
   collectMessages,
   seedEvents,
   queryDO,
+  seedMessage,
   waitForSandboxStatus,
 } from "./helpers";
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
   it("upgrade returns 101 with webSocket", async () => {
@@ -189,7 +191,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
 
     // Back-date the token past the 24-hour TTL
     const expiredAt = Date.now() - 24 * 60 * 60 * 1000 - 1;
-    await queryDO(
+    await queryDO<unknown>(
       stub,
       "UPDATE participants SET ws_token_created_at = ? WHERE user_id = ?",
       expiredAt,
@@ -436,6 +438,162 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     expect(rows[0].content).toBe("Hello from WS test");
     expect(rows[0].source).toBe("web");
 
+    ws.close();
+  });
+
+  it("deduplicates a correlated prompt and restores its authoritative queue in snapshots", async () => {
+    const name = `ws-client-idempotent-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const request = {
+      type: "prompt",
+      clientRequestId: crypto.randomUUID(),
+      content: "Only once",
+      model: "anthropic/claude-haiku-4-5",
+      reasoningEffort: "high",
+    };
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const collector = collectMessages(ws, {
+        until: (message) => message.type === "prompt_queued",
+        timeoutMs: 2000,
+      });
+      ws.send(JSON.stringify(request));
+      const messages = await collector;
+      expect(messages.find((message) => message.type === "prompt_queued")).toMatchObject({
+        clientRequestId: request.clientRequestId,
+      });
+    }
+
+    const counts = await queryDO<{ messages: number; events: number }>(
+      stub,
+      `SELECT (SELECT COUNT(*) FROM messages) AS messages,
+              (SELECT COUNT(*) FROM events WHERE type = 'user_message') AS events`
+    );
+    expect(counts[0]).toEqual({ messages: 1, events: 1 });
+
+    ws.close();
+    const reconnect = await openClientWs(name, { subscribe: true });
+    const subscribed = reconnect.messages!.find((message) => message.type === "subscribed") as {
+      promptQueue: Array<Record<string, unknown>>;
+    };
+    expect(subscribed.promptQueue).toEqual([
+      expect.objectContaining({ content: "Only once", status: "pending" }),
+    ]);
+    expect(subscribed.promptQueue[0]).not.toHaveProperty("model");
+    expect(subscribed.promptQueue[0]).not.toHaveProperty("reasoningEffort");
+    reconnect.ws.close();
+  });
+
+  it("gates prompt queue updates to clients that negotiated the capability", async () => {
+    const name = `ws-client-queue-capability-${Date.now()}`;
+    await initNamedSession(name);
+    const legacy = await openClientWs(name, { subscribe: true, userId: "legacy-user" });
+    const current = await openClientWs(name, {
+      subscribe: true,
+      userId: "current-user",
+      capabilities: ["prompt_queue_updates"],
+    });
+    const legacyMessages = collectMessages(legacy.ws, { timeoutMs: 250 });
+    const currentMessages = collectMessages(current.ws, {
+      until: (message) => message.type === "prompt_queue_updated",
+      timeoutMs: 2000,
+    });
+
+    current.ws.send(JSON.stringify({ type: "prompt", content: "Negotiated update" }));
+
+    expect((await currentMessages).map((message) => message.type)).toContain(
+      "prompt_queue_updated"
+    );
+    expect((await legacyMessages).map((message) => message.type)).not.toContain(
+      "prompt_queue_updated"
+    );
+    legacy.ws.close();
+    current.ws.close();
+  });
+
+  it("rejects an idempotency conflict without creating duplicate work", async () => {
+    const name = `ws-client-conflict-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const clientRequestId = crypto.randomUUID();
+    const first = collectMessages(ws, {
+      until: (message) => message.type === "prompt_queued",
+      timeoutMs: 2000,
+    });
+    ws.send(JSON.stringify({ type: "prompt", clientRequestId, content: "First" }));
+    await first;
+
+    const conflict = collectMessages(ws, {
+      until: (message) => message.type === "error",
+      timeoutMs: 2000,
+    });
+    ws.send(JSON.stringify({ type: "prompt", clientRequestId, content: "Changed" }));
+    expect((await conflict).find((message) => message.type === "error")).toMatchObject({
+      code: "PROMPT_REQUEST_CONFLICT",
+    });
+    expect(
+      (await queryDO<{ count: number }>(stub, "SELECT COUNT(*) AS count FROM messages"))[0].count
+    ).toBe(1);
+    ws.close();
+  });
+
+  it("enforces the unfinished queue limit before creating another message", async () => {
+    const name = `ws-client-queue-full-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const [{ id: participantId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    for (let index = 0; index < MAX_UNFINISHED_PROMPTS; index++) {
+      await seedMessage(stub, {
+        id: `message-${index}`,
+        authorId: participantId,
+        content: `Prompt ${index}`,
+        source: "web",
+        status: index === 0 ? "processing" : "pending",
+        createdAt: Date.now() + index,
+        startedAt: index === 0 ? Date.now() : undefined,
+      });
+    }
+
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const collector = collectMessages(ws, {
+      until: (message) => message.type === "error",
+      timeoutMs: 2000,
+    });
+    ws.send(JSON.stringify({ type: "prompt", content: "One too many" }));
+    expect((await collector).find((message) => message.type === "error")).toMatchObject({
+      code: "PROMPT_QUEUE_FULL",
+    });
+    const [{ count }] = await queryDO<{ count: number }>(
+      stub,
+      "SELECT COUNT(*) AS count FROM messages"
+    );
+    expect(count).toBe(MAX_UNFINISHED_PROMPTS);
+    ws.close();
+  });
+
+  it.each([
+    ["blank", "  \n"],
+    ["oversized", "x".repeat(64_001)],
+  ])("returns correlated INVALID_PROMPT for a %s prompt", async (_case, content) => {
+    const name = `ws-client-invalid-prompt-${_case}-${Date.now()}`;
+    await initNamedSession(name);
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const clientRequestId = crypto.randomUUID();
+    const collector = collectMessages(ws, {
+      until: (message) => message.type === "error",
+      timeoutMs: 2000,
+    });
+
+    ws.send(JSON.stringify({ type: "prompt", clientRequestId, content }));
+
+    expect((await collector).find((message) => message.type === "error")).toMatchObject({
+      type: "error",
+      code: "INVALID_PROMPT",
+      clientRequestId,
+    });
     ws.close();
   });
 

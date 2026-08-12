@@ -312,4 +312,54 @@ describe("applyMigrations", () => {
     expect(migration).toBeDefined();
     expect(migration?.run).toContain("CREATE TABLE IF NOT EXISTS session_diff");
   });
+
+  it("adds prompt idempotency columns and index for fresh and migrated sessions", () => {
+    const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
+      ");"
+    )[0];
+    expect(messagesTable).toContain("client_request_id TEXT");
+    expect(messagesTable).toContain("request_fingerprint TEXT");
+    expect(SCHEMA_SQL).toContain(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id"
+    );
+
+    const migration = MIGRATIONS.find((entry) => entry.id === 40);
+    expect(typeof migration?.run).toBe("function");
+    const db = new DatabaseSync(":memory:");
+    const sql: SqlStorage = {
+      exec(query: string): SqlResult {
+        db.exec(query);
+        return { toArray: () => [], one: () => null };
+      },
+    };
+    try {
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY)");
+      const run = migration!.run as (sql: SqlStorage) => void;
+      run(sql);
+      expect(() => run(sql)).not.toThrow();
+      expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "client_request_id", type: "TEXT" }),
+          expect.objectContaining({ name: "request_fingerprint", type: "TEXT" }),
+        ])
+      );
+      expect(
+        db
+          .prepare("PRAGMA index_list(messages)")
+          .all()
+          .some((row) => row.name === "idx_messages_client_request_id")
+      ).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists WebSocket capabilities for fresh and migrated sessions", () => {
+    expect(SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS ws_client_mapping")[1]).toContain(
+      "capabilities TEXT"
+    );
+    expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
+      "ADD COLUMN capabilities TEXT"
+    );
+  });
 });

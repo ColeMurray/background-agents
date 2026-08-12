@@ -102,6 +102,8 @@ export interface MessageRow {
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
+  client_request_id?: string | null;
+  request_fingerprint?: string | null;
   status: MessageStatus;
   error_message: string | null;
   created_at: number;

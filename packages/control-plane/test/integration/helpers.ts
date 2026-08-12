@@ -343,7 +343,12 @@ export function collectMessages(
  */
 export async function openClientWs(
   sessionName: string,
-  opts?: { subscribe?: boolean; userId?: string; canonicalUserId?: string }
+  opts?: {
+    subscribe?: boolean;
+    userId?: string;
+    canonicalUserId?: string;
+    capabilities?: Array<"prompt_queue_updates">;
+  }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
@@ -385,6 +390,7 @@ export async function openClientWs(
       type: "subscribe",
       token,
       clientId: `test-client-${Date.now()}`,
+      capabilities: opts.capabilities,
     })
   );
 

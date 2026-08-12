@@ -83,6 +83,30 @@ describe("useSessionAttachments", () => {
     expect(uploaded.map((attachment) => attachment.attachmentId)).toEqual(["up-1", "up-2"]);
   });
 
+  it("reuses all uploaded references for another attempt in the same mounted session", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ attachmentId: "up-1", mimeType: "image/png" }, { status: 201 })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => {
+      result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
+    });
+
+    let first: Awaited<ReturnType<typeof result.current.uploadAll>> = [];
+    let retry: Awaited<ReturnType<typeof result.current.uploadAll>> = [];
+    await act(async () => {
+      first = await result.current.uploadAll("session-1");
+      retry = await result.current.uploadAll("session-1");
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(retry).toEqual(first);
+  });
+
   it("enforces the attachment limit across back-to-back additions", () => {
     vi.spyOn(URL, "createObjectURL").mockImplementation((file) => `blob:${file}`);
     const { result } = renderHook(() => useSessionAttachments());

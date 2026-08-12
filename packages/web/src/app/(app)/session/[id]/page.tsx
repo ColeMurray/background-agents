@@ -52,12 +52,18 @@ import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import {
+  promptRequestSignature,
+  resolvePromptRequestIdentity,
+  type PromptRequestIdentity,
+} from "@/lib/prompt-request-id";
+import {
   classifySessionReadAttempt,
   markMessageRead,
   reconcileSessionReadState,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
 import { useSessionSnapshot } from "./session-snapshot-provider";
+import { getWebPromptLengthError } from "@/lib/web-prompt-validation";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -79,6 +85,7 @@ export default function SessionPage() {
     artifacts,
     currentParticipantId,
     isProcessing,
+    promptQueue,
     loadingHistory,
     sendPrompt,
     stopExecution,
@@ -112,17 +119,18 @@ export default function SessionPage() {
     sessionAttachments,
     inputRef,
     isSubmitting,
+    submitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
   } = usePromptInput(
     sessionId,
-    isProcessing,
     sendPrompt,
     sendTyping,
     selectedModel,
     reasoningEffort,
-    loadingEnabledModels
+    loadingEnabledModels,
+    sessionState?.status ?? "created"
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
@@ -272,6 +280,7 @@ export default function SessionPage() {
             currentParticipantId={currentParticipantId}
             participantProfiles={profiles}
             isProcessing={isProcessing}
+            promptQueue={promptQueue}
             loadingHistory={loadingHistory}
             showSkeleton={false}
             onLoadOlder={loadOlderEvents}
@@ -459,6 +468,7 @@ export default function SessionPage() {
           value: prompt,
           isProcessing: ready && isProcessing,
           draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
+          submitError,
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
@@ -638,19 +648,24 @@ function useModelSelection(sessionState: SessionState) {
  */
 function usePromptInput(
   sessionId: string,
-  isProcessing: boolean,
   sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
   sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
   selectedModel: string,
   reasoningEffort: string | undefined,
-  loadingEnabledModels: boolean
+  loadingEnabledModels: boolean,
+  sessionStatus: NonNullable<SessionState>["status"]
 ) {
   const [prompt, setPrompt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
+  const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
+  const attachmentDraftSignature = sessionAttachments.attachments
+    .map((attachment) => attachment.id)
+    .join("\u0000");
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -660,6 +675,9 @@ function usePromptInput(
   }, []);
 
   useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
+  useEffect(() => {
+    retryRequestRef.current = null;
+  }, [selectedModel, reasoningEffort, attachmentDraftSignature]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -667,7 +685,8 @@ function usePromptInput(
     if (
       submitInFlightRef.current ||
       (!prompt.trim() && !hasAttachments) ||
-      isProcessing ||
+      sessionStatus === "archived" ||
+      sessionStatus === "cancelled" ||
       loadingEnabledModels ||
       sessionAttachments.isUploading
     ) {
@@ -676,26 +695,55 @@ function usePromptInput(
 
     submitInFlightRef.current = true;
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
+      const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
+      const promptLengthError = getWebPromptLengthError(content);
+      if (promptLengthError) {
+        setSubmitError(promptLengthError);
+        return;
+      }
+
       let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {
           attachments = await sessionAttachments.uploadAll(sessionId);
-        } catch {
+        } catch (error) {
+          setSubmitError(error instanceof Error ? error.message : "Failed to upload attachments");
           return;
         }
       }
 
       // Drop any queued typing indicator — the prompt supersedes it
       clearTypingTimeout();
-      const accepted = await sendPrompt(
-        prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+      const signature = promptRequestSignature({
+        content,
+        model: selectedModel,
+        reasoningEffort,
+        attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
+      });
+      const requestIdentity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
+      retryRequestRef.current = requestIdentity;
+      const result = await sendPrompt(
+        content,
         selectedModel,
         reasoningEffort,
-        attachments
+        attachments,
+        requestIdentity.clientRequestId
       );
-      if (!accepted) return;
+      if (!result.ok) {
+        setSubmitError(
+          result.message ??
+            (result.reason === "timeout"
+              ? "Confirmation timed out. Retry while this page is open to reuse the same request."
+              : result.reason === "disconnected"
+                ? "Disconnected before confirmation. Retry on this page after reconnecting."
+                : "The prompt could not be queued.")
+        );
+        return;
+      }
 
+      retryRequestRef.current = null;
       setPrompt("");
       sessionAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
@@ -717,6 +765,8 @@ function usePromptInput(
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setPrompt(e.target.value);
+    setSubmitError(null);
+    retryRequestRef.current = null;
 
     // Send typing indicator (debounced)
     clearTypingTimeout();
@@ -730,6 +780,7 @@ function usePromptInput(
     sessionAttachments,
     inputRef,
     isSubmitting,
+    submitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
