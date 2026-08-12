@@ -645,6 +645,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {usesSingleRepository && (
         <div>
           <label
+            id="automation-branch-label"
             htmlFor="automation-branch"
             className="block text-sm font-medium text-foreground mb-1.5"
           >
@@ -652,6 +653,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </label>
           <Combobox
             id="automation-branch"
+            labelId="automation-branch-label"
             value={baseBranch}
             onChange={setBaseBranch}
             items={branches.map((b) => ({
@@ -682,6 +684,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Model */}
       <div>
         <label
+          id="automation-model-label"
           htmlFor="automation-model"
           className="block text-sm font-medium text-foreground mb-1.5"
         >
@@ -689,6 +692,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </label>
         <Combobox
           id="automation-model"
+          labelId="automation-model-label"
           value={resolvedModel}
           onChange={(nextModel) => {
             setModel(nextModel);
@@ -765,6 +769,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </div>
           <div>
             <label
+              id="automation-timezone-label"
               htmlFor="automation-timezone"
               className="block text-sm font-medium text-foreground mb-1.5"
             >
@@ -772,6 +777,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
             </label>
             <Combobox
               id="automation-timezone"
+              labelId="automation-timezone-label"
               value={scheduleTz}
               onChange={setScheduleTz}
               items={TIMEZONE_GROUPS}
