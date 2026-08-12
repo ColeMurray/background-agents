@@ -8,6 +8,7 @@ import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
+import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -79,6 +80,14 @@ export async function handlePromptChild(
     return error("Child session not found", 404);
   }
 
+  const spawnContextResponse = await ctx.sessionRuntime.fetch(
+    parentId,
+    SessionInternalPaths.spawnContext
+  );
+  if (!spawnContextResponse.ok) return spawnContextResponse;
+  const spawnContext = spawnContextSchema.safeParse(await spawnContextResponse.json());
+  if (!spawnContext.success) return error("Failed to get parent session context", 500);
+
   let admissionLease: ChildAdmissionLease | null = null;
   if (childSession.status === "completed" || childSession.status === "failed") {
     const parentSession = await sessionStore.get(parentId);
@@ -106,7 +115,11 @@ export async function handlePromptChild(
   const response = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.parentPrompt, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ parentSessionId: parentId, content: parsed.data.content }),
+    body: JSON.stringify({
+      parentSessionId: parentId,
+      content: parsed.data.content,
+      author: spawnContext.data.promptAuthor,
+    }),
   });
   if (response.ok) {
     let messageId: string | undefined;

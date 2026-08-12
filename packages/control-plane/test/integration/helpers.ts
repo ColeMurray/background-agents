@@ -287,6 +287,7 @@ export async function initNamedSession(
     model?: string;
     reasoningEffort?: string;
     userId?: string;
+    canonicalUserId?: string;
     scmLogin?: string;
     parentSessionId?: string;
     spawnSource?: string;

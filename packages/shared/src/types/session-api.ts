@@ -104,6 +104,10 @@ export const sendPromptRequestSchema = z.object({
   reasoningEffort: z.string().optional(),
   attachments: z.unknown().optional(),
   callbackContext: z.unknown().optional(),
+  // Cosmetic profile data for the actor asserted by trusted bot authentication.
+  actorDisplayName: z.string().optional(),
+  actorEmail: z.string().optional(),
+  actorAvatarUrl: z.string().optional(),
 });
 
 export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;

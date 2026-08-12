@@ -32,6 +32,8 @@ export interface DeliverPromptOptions {
   channel: string;
   threadTs: string;
   traceId?: string;
+  actorDisplayName?: string;
+  actorEmail?: string;
 }
 
 export type DeliverPromptResult =
@@ -59,6 +61,8 @@ export async function deliverPrompt(
     channel,
     threadTs,
     traceId,
+    actorDisplayName,
+    actorEmail,
   } = options;
   const upload = await uploadPreparedAttachments(env, sessionId, attachments, traceId);
 
@@ -81,6 +85,8 @@ export async function deliverPrompt(
     callbackContext,
     attachments: upload.references,
     traceId,
+    actorDisplayName,
+    actorEmail,
   });
   if (!promptResult.ok) return promptResult;
   // Notify about dropped images only now that the session proved live —

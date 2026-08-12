@@ -6,7 +6,7 @@ import type { SessionMessenger } from "../../messenger";
 import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
 import type { MessageService } from "../../services/message.service";
-import type { SpawnContext } from "../../spawn-context";
+import { promptAuthorSchema, type SpawnContext } from "../../spawn-context";
 import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
@@ -26,6 +26,8 @@ export interface ChildSessionsHandlerDeps {
     | "getLatestTerminalMessage"
     | "getEventTimelinePage"
     | "getPendingOrProcessingCount"
+    | "getProcessingMessageAuthor"
+    | "getParticipantById"
   >;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
@@ -46,6 +48,7 @@ export interface ChildSessionsHandler {
 
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
+  author: promptAuthorSchema,
 });
 
 export const MAX_PENDING_CHILD_PROMPTS = 10;
@@ -58,10 +61,18 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      const participants = deps.repository.listParticipants();
-      const owner = participants.find((participant) => participant.role === "owner");
-      if (!owner) {
-        return Response.json({ error: "No owner participant found" }, { status: 404 });
+      const processingMessage = deps.repository.getProcessingMessageAuthor();
+      if (!processingMessage) {
+        return Response.json(
+          {
+            error: "No active prompt found. Child spawning must be triggered by an active prompt.",
+          },
+          { status: 400 }
+        );
+      }
+      const promptAuthor = deps.repository.getParticipantById(processingMessage.author_id);
+      if (!promptAuthor) {
+        return Response.json({ error: "Prompt author not found" }, { status: 401 });
       }
       let sandboxTimeoutMs: number | undefined;
       try {
@@ -77,16 +88,18 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         reasoningEffort: session.reasoning_effort ?? null,
         baseBranch: session.base_branch,
         sandboxTimeoutMs,
-        owner: {
-          userId: owner.user_id,
-          ...(owner.canonical_user_id ? { canonicalUserId: owner.canonical_user_id } : {}),
-          scmUserId: owner.scm_user_id,
-          scmLogin: owner.scm_login,
-          scmName: owner.scm_name,
-          scmEmail: owner.scm_email,
-          scmAccessTokenEncrypted: owner.scm_access_token_encrypted,
-          scmRefreshTokenEncrypted: owner.scm_refresh_token_encrypted,
-          scmTokenExpiresAt: owner.scm_token_expires_at,
+        promptAuthor: {
+          userId: promptAuthor.user_id,
+          ...(promptAuthor.canonical_user_id
+            ? { canonicalUserId: promptAuthor.canonical_user_id }
+            : {}),
+          scmUserId: promptAuthor.scm_user_id,
+          scmLogin: promptAuthor.scm_login,
+          scmName: promptAuthor.scm_name,
+          scmEmail: promptAuthor.scm_email,
+          scmAccessTokenEncrypted: promptAuthor.scm_access_token_encrypted,
+          scmRefreshTokenEncrypted: promptAuthor.scm_refresh_token_encrypted,
+          scmTokenExpiresAt: promptAuthor.scm_token_expires_at,
         },
       };
 
@@ -179,20 +192,22 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
       }
 
-      const owner = deps.repository
-        .listParticipants()
-        .find((participant) => participant.role === "owner");
-      if (!owner) {
-        return Response.json({ error: "No owner participant found" }, { status: 500 });
-      }
-
       try {
         return Response.json(
           await deps.messageService.enqueuePrompt({
             content: parsed.data.content,
-            authorId: owner.user_id,
-            canonicalUserId: owner.canonical_user_id ?? undefined,
+            authorId: parsed.data.author.userId,
+            canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
             source: "agent",
+            scmEnrichment: {
+              userId: parsed.data.author.scmUserId,
+              login: parsed.data.author.scmLogin,
+              name: parsed.data.author.scmName,
+              email: parsed.data.author.scmEmail,
+              accessTokenEncrypted: parsed.data.author.scmAccessTokenEncrypted,
+              refreshTokenEncrypted: parsed.data.author.scmRefreshTokenEncrypted,
+              tokenExpiresAt: parsed.data.author.scmTokenExpiresAt,
+            },
           })
         );
       } catch (error) {

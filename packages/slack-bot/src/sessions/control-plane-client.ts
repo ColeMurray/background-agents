@@ -117,10 +117,21 @@ export interface SendPromptOptions {
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
+  actorDisplayName?: string;
+  actorEmail?: string;
 }
 
 export async function sendPrompt(env: Env, options: SendPromptOptions): Promise<SendPromptResult> {
-  const { sessionId, content, authorId, callbackContext, attachments, traceId } = options;
+  const {
+    sessionId,
+    content,
+    authorId,
+    callbackContext,
+    attachments,
+    traceId,
+    actorDisplayName,
+    actorEmail,
+  } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
@@ -129,6 +140,8 @@ export async function sendPrompt(env: Env, options: SendPromptOptions): Promise<
       content,
       source: "slack",
       callbackContext,
+      actorDisplayName,
+      actorEmail,
       ...(attachments?.length ? { attachments } : {}),
     });
     const response = await signedControlPlaneFetch(

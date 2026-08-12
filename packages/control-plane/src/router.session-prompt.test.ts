@@ -51,6 +51,15 @@ function userPromptRequest(body: Record<string, unknown>): Promise<Request> {
   });
 }
 
+function slackPromptRequest(body: Record<string, unknown>): Promise<Request> {
+  return signedServiceRequest("https://test.local/sessions/session-1/prompt", {
+    method: "POST",
+    body: JSON.stringify(body),
+    service: "slack-bot",
+    actor: "slack:U2",
+  });
+}
+
 function createEnv(sessionFetch: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const statement = {
     bind: vi.fn(() => statement),
@@ -173,5 +182,40 @@ describe("session prompt identity enrichment", () => {
       error: "Field 'authorId' is not accepted from verified callers",
     });
     expect(sessionFetch).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes a previously unseen verified Slack prompt author", async () => {
+    const resolveOrCreateUser = vi.fn(async () => ({ id: "canonical-2" }));
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getIdentity: async () => null,
+        resolveOrCreateUser,
+      } as never;
+    });
+    const sessionFetch = vi.fn(async (request: Request) => {
+      await expect(request.json()).resolves.toMatchObject({
+        authorId: "slack:U2",
+        canonicalUserId: "canonical-2",
+      });
+      return Response.json({ status: "queued" });
+    });
+
+    const response = await handleRequest(
+      await slackPromptRequest({
+        content: "Fix the bug",
+        actorDisplayName: "Second User",
+        actorEmail: "second@example.com",
+      }),
+      createEnv(sessionFetch) as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(resolveOrCreateUser).toHaveBeenCalledWith({
+      provider: "slack",
+      providerUserId: "U2",
+      displayName: "Second User",
+      providerEmail: "second@example.com",
+      avatarUrl: undefined,
+    });
   });
 });

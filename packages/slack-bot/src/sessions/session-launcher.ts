@@ -124,6 +124,8 @@ export async function startSessionAndSendPrompt(
     sessionId: session.sessionId,
     content,
     authorId: `slack:${actor.userId}`,
+    actorDisplayName: actor.displayName,
+    actorEmail: actor.email,
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,

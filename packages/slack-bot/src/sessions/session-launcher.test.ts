@@ -174,6 +174,8 @@ describe("startSessionAndSendPrompt", () => {
         "Context from the Slack thread:\n---\n[Alice]: Earlier request\n[Bot]: Earlier response\n---\n\n" +
         "Fix the failing deploy",
       authorId: "slack:U123",
+      actorDisplayName: "Display Name",
+      actorEmail: "user@example.com",
       attachments: { files: [], dropped: [] },
       imageOnly: false,
       callbackContext: {

@@ -8,7 +8,11 @@ import {
   sessionAttachmentReferencesSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
-import { applyIdentityEnforcement, mayAttachCallbackContext } from "../auth/identity-enforcement";
+import {
+  applyIdentityEnforcement,
+  mayAttachCallbackContext,
+  resolveCanonicalUserId,
+} from "../auth/identity-enforcement";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { SessionIndexStore } from "../db/session-index";
 import { UserStore } from "../db/user-store";
@@ -92,15 +96,37 @@ async function handleSessionPrompt(
     });
   }
 
+  const userStore = new UserStore(ctx.db);
+  if (!canonicalUserId && enforcement.enforced.actor && authorId !== "anonymous") {
+    const resolution = await resolveCanonicalUserId(
+      userStore,
+      ctx,
+      {
+        ...enforcement.enforced,
+        participantUserId: authorId,
+      },
+      {
+        displayName: body.actorDisplayName,
+        email: body.actorEmail,
+        avatarUrl: body.actorAvatarUrl,
+      }
+    );
+    if (resolution instanceof Response) return resolution;
+    canonicalUserId = resolution.userId;
+  }
+
   let enrichment: GitHubEnrichment | undefined;
   const parsed = parseAuthorId(authorId);
   if (authorId !== "anonymous") {
     try {
-      const userStore = new UserStore(ctx.db);
       let userId: string | undefined;
       if (parsed) {
-        const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
-        userId = identity?.userId;
+        if (canonicalUserId) {
+          userId = canonicalUserId;
+        } else {
+          const identity = await userStore.getIdentity(parsed.provider, parsed.providerUserId);
+          userId = identity?.userId;
+        }
       } else {
         userId = (await userStore.getUserById(authorId))?.id;
       }

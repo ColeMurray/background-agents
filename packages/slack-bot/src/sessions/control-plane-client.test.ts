@@ -202,6 +202,23 @@ describe("control plane client request payloads", () => {
       source: "slack",
     });
   });
+
+  it("sends prompt actor profile metadata for canonical attribution", async () => {
+    const fetch = vi.fn(async () => okJson({ messageId: "message-1", status: "queued" }));
+
+    await sendPrompt(makeEnv(fetch), {
+      sessionId: "session-1",
+      content: "Fix it",
+      authorId: "slack:U123",
+      actorDisplayName: "Ada Lovelace",
+      actorEmail: "ada@example.com",
+    });
+
+    expect(parseRequestBody(fetch)).toMatchObject({
+      actorDisplayName: "Ada Lovelace",
+      actorEmail: "ada@example.com",
+    });
+  });
 });
 
 describe("service credential headers", () => {
