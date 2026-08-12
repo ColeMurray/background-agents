@@ -565,10 +565,15 @@ export class SessionMessageQueue {
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
     this.assertPromptableSession();
-    const queueDepthBefore = this.repository.getPendingOrProcessingCount();
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
       requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
+    }
+
+    // Keep the idempotency lookup, capacity check, and insert in one synchronous
+    // turn so concurrent WebSocket requests cannot race between them.
+    const queueDepthBefore = this.repository.getPendingOrProcessingCount();
+    if (data.clientRequestId) {
       const existing = this.repository.getMessageByClientRequestId(data.clientRequestId);
       if (existing) {
         if (

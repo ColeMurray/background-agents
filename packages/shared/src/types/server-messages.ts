@@ -114,7 +114,7 @@ export const sessionSnapshotSchema = z.object({
   artifacts: z.array(sessionArtifactSchema),
   timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
-  promptQueue: z.array(promptQueueItemSchema).default([]),
+  promptQueue: z.array(promptQueueItemSchema),
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 

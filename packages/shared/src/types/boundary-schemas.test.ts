@@ -784,6 +784,7 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: { events: [], hasMore: false, cursor: null },
       });
 

@@ -190,22 +190,6 @@ describe("useSessionSocket", () => {
     });
   });
 
-  it("accepts a legacy subscribed snapshot without promptQueue", async () => {
-    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
-    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
-    const socket = FakeWebSocket.instances[0];
-    const { promptQueue: _promptQueue, ...legacySubscribed } = createSubscribedMessage();
-
-    act(() => {
-      socket.open();
-      socket.receive(legacySubscribed);
-    });
-
-    await waitFor(() => expect(result.current.ready).toBe(true));
-    expect(result.current.promptQueue).toEqual([]);
-    expect(socket.readyState).toBe(FakeWebSocket.OPEN);
-  });
-
   it("sends correlated prompts without feature negotiation", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));

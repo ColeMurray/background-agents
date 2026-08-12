@@ -38,16 +38,6 @@ describe("getSessionSnapshot", () => {
     );
   });
 
-  it("defaults a legacy snapshot without promptQueue to an empty queue", async () => {
-    const { promptQueue: _promptQueue, ...legacySnapshot } = snapshot;
-    mocks.controlPlaneUserFetch.mockResolvedValue(Response.json(legacySnapshot));
-
-    await expect(getSessionSnapshot("session/one")).resolves.toEqual({
-      ...legacySnapshot,
-      promptQueue: [],
-    });
-  });
-
   it("preserves the upstream status for route-level handling", async () => {
     mocks.controlPlaneUserFetch.mockResolvedValue(new Response(null, { status: 404 }));
     await expect(getSessionSnapshot("missing")).rejects.toEqual(new SessionSnapshotError(404));

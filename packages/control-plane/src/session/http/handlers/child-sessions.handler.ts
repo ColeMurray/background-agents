@@ -1,10 +1,13 @@
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
-import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
 import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
-import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";
+import {
+  isPromptableSessionStatus,
+  PromptQueueFullError,
+  SessionNotPromptableError,
+} from "../../message-queue";
 import type { SessionRepository } from "../../repository";
 import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
@@ -215,10 +218,6 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
           { status: 409 }
         );
       }
-      if (deps.repository.getPendingOrProcessingCount() >= MAX_UNFINISHED_PROMPTS) {
-        return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
-      }
-
       try {
         return Response.json(
           await deps.messageService.enqueuePrompt({
@@ -238,8 +237,13 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
           })
         );
       } catch (error) {
-        if (!(error instanceof SessionNotPromptableError)) throw error;
-        return Response.json({ error: error.message }, { status: 409 });
+        if (error instanceof SessionNotPromptableError) {
+          return Response.json({ error: error.message }, { status: 409 });
+        }
+        if (error instanceof PromptQueueFullError) {
+          return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
+        }
+        throw error;
       }
     },
 

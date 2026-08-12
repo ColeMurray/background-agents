@@ -159,16 +159,6 @@ describe("session view contracts", () => {
     ).toEqual(promptQueue);
   });
 
-  it("defaults promptQueue for snapshots produced before queued prompts", () => {
-    expect(
-      sessionSnapshotSchema.parse({
-        session: snapshotState,
-        artifacts: [],
-        timeline: { events: [], hasMore: false, cursor: null },
-      }).promptQueue
-    ).toEqual([]);
-  });
-
   it("echoes prompt request correlation", () => {
     expect(
       serverMessageSchema.parse({

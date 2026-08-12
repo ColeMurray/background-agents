@@ -64,7 +64,6 @@ import {
   SessionReadRequestError,
 } from "@/lib/session-read-state";
 import { useSessionSnapshot } from "./session-snapshot-provider";
-import { getWebPromptLengthError } from "@/lib/web-prompt-validation";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -700,12 +699,6 @@ function usePromptInput(
     setSubmitError(null);
     try {
       const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
-      const promptLengthError = getWebPromptLengthError(content);
-      if (promptLengthError) {
-        setSubmitError(promptLengthError);
-        return;
-      }
-
       let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {

@@ -674,20 +674,13 @@ describe("sessionSocketReducer", () => {
   });
 
   describe("local actions", () => {
-    it("optimistically marks the session as processing on prompt_sent", () => {
-      const state = reduce(subscribedState(), { type: "prompt_sent" });
-      expect(state.sessionState?.isProcessing).toBe(true);
-    });
-
     it("keeps the socket unready when it closes", () => {
       const state = reduce(initialSessionSocketState, { type: "socket_closed" });
       expect(state.ready).toBe(false);
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {
-      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }), {
-        type: "prompt_sent",
-      });
+      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }));
       expect(state.sessionState).toBeNull();
     });
   });

@@ -56,8 +56,6 @@ export type SessionSocketAction =
   | { type: "events_appended"; events: SandboxEvent[] }
   /** A fetch_history request was sent. */
   | { type: "history_requested" }
-  /** A prompt was sent; optimistically mark the session as processing. */
-  | { type: "prompt_sent" }
   /** The socket closed (clean or not). */
   | { type: "socket_closed" };
 
@@ -326,10 +324,6 @@ export function sessionSocketReducer(
 
     case "history_requested":
       return { ...state, loadingHistory: true };
-
-    case "prompt_sent":
-      // Optimistic: the server confirms with a processing_status message.
-      return updateSessionState(state, (prev) => ({ ...prev, isProcessing: true }));
 
     case "socket_closed":
       return {

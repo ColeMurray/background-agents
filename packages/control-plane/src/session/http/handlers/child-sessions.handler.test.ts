@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_CHILD_FOLLOW_UP_PROMPT_CHARS } from "@open-inspect/shared/types/session-api";
-import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import { createChildSessionsHandler } from "./child-sessions.handler";
-import { SessionNotPromptableError } from "../../message-queue";
+import { PromptQueueFullError, SessionNotPromptableError } from "../../message-queue";
 import {
   FINAL_RESPONSE_EVENT_PAGE_LIMIT,
   FINAL_RESPONSE_MAX_EVENTS,
@@ -127,8 +126,11 @@ function createMessage(overrides: Partial<MessageRow> = {}): MessageRow {
     reasoning_effort: null,
     attachments: null,
     callback_context: null,
+    client_request_id: null,
+    request_fingerprint: null,
     status: "completed",
     error_message: null,
+    stop_confirmation_deadline: null,
     created_at: 1,
     started_at: 2,
     completed_at: 3,
@@ -301,7 +303,7 @@ describe("createChildSessionsHandler", () => {
       const { handler, getSession, repository, enqueuePrompt } = createHandler();
       getSession.mockReturnValue(createSession({ parent_session_id: "parent-1" }));
       repository.listParticipants.mockReturnValue([createParticipant()]);
-      repository.getPendingOrProcessingCount.mockReturnValue(MAX_UNFINISHED_PROMPTS);
+      enqueuePrompt.mockRejectedValue(new PromptQueueFullError());
 
       const response = await handler.parentPrompt(
         request({ parentSessionId: "parent-1", content: "Continue" })
@@ -309,7 +311,7 @@ describe("createChildSessionsHandler", () => {
 
       expect(response.status).toBe(429);
       await expect(response.json()).resolves.toEqual({ error: "Child prompt queue is full" });
-      expect(enqueuePrompt).not.toHaveBeenCalled();
+      expect(enqueuePrompt).toHaveBeenCalledOnce();
     });
 
     it("maps a promptability race to 409", async () => {

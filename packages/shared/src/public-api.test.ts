@@ -15,18 +15,4 @@ describe("package root compatibility", () => {
       shared.RepositoryPairValidationError
     );
   });
-
-  it("exports the canonical blank prompt validation contract", () => {
-    expect(shared.isBlankPrompt({ content: " \n" })).toBe(true);
-    expect(
-      shared.isBlankPrompt({
-        content: " ",
-        attachments: [{ name: "shot.png", attachmentId: "attachment-1" }],
-      })
-    ).toBe(false);
-    expect(shared.BLANK_PROMPT_MESSAGE).toBe(
-      "Prompt content must not be blank without attachments"
-    );
-    expect(shared.clientRequestIdSchema.safeParse("request-1").success).toBe(true);
-  });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { promptRequestSignature, resolvePromptRequestIdentity } from "@/lib/prompt-request-id";
+import { promptRequestSignature, resolvePromptRequestIdentity } from "./prompt-request-id";
 
-describe("session page prompt request identity", () => {
+describe("prompt request identity", () => {
   it("reuses the request ID for an unchanged retry and replaces it after draft settings change", () => {
     vi.spyOn(globalThis.crypto, "randomUUID")
       .mockReturnValueOnce("request-1")
