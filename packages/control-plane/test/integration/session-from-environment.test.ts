@@ -8,8 +8,10 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
-import type { SessionState } from "@open-inspect/shared";
-import { sessionSnapshotSchema } from "@open-inspect/shared/types/server-messages";
+import {
+  sessionSnapshotSchema,
+  type SessionState,
+} from "@open-inspect/shared/types/server-messages";
 import type { SessionDO } from "../../src/session/durable-object";
 import { EnvironmentStore } from "../../src/db/environments";
 import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";

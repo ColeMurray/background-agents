@@ -33,6 +33,7 @@ import {
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
 import {
+  formatAttributedRequest,
   formatChannelContext,
   formatForwardedContext,
   formatInterimThreadContext,
@@ -48,6 +49,7 @@ import {
 import { buildTargetClarificationBlocks } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
+import { resolveSlackActorIdentity, type SlackActorIdentity } from "../user-identity";
 
 const log = createLogger("handler");
 const THREAD_HISTORY_MESSAGE_LIMIT = 10;
@@ -167,7 +169,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
     (forwarded.entries.length > 0 ? FORWARD_ONLY_PROMPT_TEXT : IMAGE_ONLY_PROMPT_TEXT);
   // Forwarded bodies lead: the user's own text ("deal with this") is the
   // instruction and reads as one when it comes last.
-  const promptText = formatForwardedContext(forwarded.entries) + requestText;
+  const forwardedContext = formatForwardedContext(forwarded.entries);
+  const promptText = forwardedContext + requestText;
+  let actor: SlackActorIdentity | undefined;
 
   if (threadTs) {
     const existingSession = await lookupThreadSession(env, channel, threadTs);
@@ -186,17 +190,24 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
         : "";
       // The session already has its own turns, so only forward the human
       // discussion that happened in the thread since the last prompt.
-      const interimMessages = existingSession.lastPromptTs
-        ? await fetchThreadHistory(env, channel, threadTs, {
-            excludeTs: ts,
-            sinceTs: existingSession.lastPromptTs,
-            includeBotMessages: false,
-          })
-        : undefined;
+      const [resolvedActor, interimMessages] = await Promise.all([
+        resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user),
+        existingSession.lastPromptTs
+          ? fetchThreadHistory(env, channel, threadTs, {
+              excludeTs: ts,
+              sinceTs: existingSession.lastPromptTs,
+              includeBotMessages: false,
+            })
+          : Promise.resolve(undefined),
+      ]);
+      actor = resolvedActor;
       const interimContext = interimMessages ? formatInterimThreadContext(interimMessages) : "";
       const promptResult = await deliverPrompt(env, {
         sessionId: existingSession.sessionId,
-        content: channelContext + interimContext + promptText,
+        content:
+          channelContext +
+          interimContext +
+          formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
         authorId: `slack:${user}`,
         attachments: await prepareImageAttachments(env, images, traceId),
         imageOnly,
@@ -269,8 +280,9 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
       return;
     }
     await storePendingRequest(env, channel, threadTs || ts, {
-      message: promptText,
+      message: requestText,
       userId: user,
+      unattributedPrompt: { forwardedMessages: forwarded.entries },
       previousMessages,
       channelName,
       channelDescription,
@@ -299,12 +311,13 @@ async function handleIncomingMessage(params: IncomingMessageParams): Promise<voi
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
   scheduleStartingStatus(scheduleBackground, env, channel, threadKey, traceId);
+  actor ??= await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, user);
   const sessionResult = await startSessionAndSendPrompt(env, {
     target: result.target,
     channel,
     threadTs: threadKey,
-    messageText: promptText,
-    userId: user,
+    messageText: formatAttributedRequest(actor.senderLabel, requestText, forwarded.entries),
+    actor,
     messageTs: ts,
     previousMessages,
     channelName,

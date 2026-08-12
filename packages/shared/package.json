@@ -34,6 +34,14 @@
       "import": "./dist/app-name.js",
       "types": "./dist/app-name.d.ts"
     },
+    "./http-body": {
+      "import": "./dist/http-body.js",
+      "types": "./dist/http-body.d.ts"
+    },
+    "./regex": {
+      "import": "./dist/regex.js",
+      "types": "./dist/regex.d.ts"
+    },
     "./user-id": {
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"

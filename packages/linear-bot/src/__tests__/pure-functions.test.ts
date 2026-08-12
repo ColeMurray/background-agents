@@ -7,7 +7,7 @@ import {
 import { isValidPayload } from "../callbacks";
 import { buildOAuthSuccessHtml } from "../index";
 import { matchExplicitRepo } from "../target-resolution";
-import type { RepoConfig } from "../types";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { CompletionCallback } from "../types";
 
 describe("buildOAuthSuccessHtml", () => {

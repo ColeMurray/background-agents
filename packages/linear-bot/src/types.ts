@@ -81,20 +81,6 @@ export const teamRepoMappingSchema = z.record(z.string(), z.array(staticTargetCo
 export type TeamRepoMapping = z.infer<typeof teamRepoMappingSchema>;
 
 /**
- * Dynamic repo config from control plane.
- */
-export type {
-  RepoConfig,
-  RepoMetadata,
-  ControlPlaneRepo,
-  ControlPlaneReposResponse,
-} from "@open-inspect/shared/types/repository-catalog";
-export type {
-  Environment,
-  ListEnvironmentsResponse,
-} from "@open-inspect/shared/types/environments";
-
-/**
  * Project→target mapping stored in KV under "config:project-repos".
  */
 export const projectRepoMappingSchema = z.record(
@@ -156,17 +142,6 @@ export interface ToolCallCallback {
   context: LinearCallbackContext;
   signature: string;
 }
-
-// ─── Classification Types ────────────────────────────────────────────────────
-
-export type {
-  ClassificationResult,
-  ConfidenceLevel,
-} from "@open-inspect/shared/types/repository-catalog";
-
-// ─── Event / Artifact Types ──────────────────────────────────────────────────
-
-export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 

@@ -8,7 +8,8 @@ import {
 } from "./webhook-handler";
 import { clearEnvironmentsLocalCache } from "./environments";
 import { clearReposLocalCache } from "./classifier/repos";
-import type { AgentSessionWebhook, Env, Environment } from "./types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { AgentSessionWebhook, Env } from "./types";
 import {
   createFakeKV,
   createLinearFetchMock,

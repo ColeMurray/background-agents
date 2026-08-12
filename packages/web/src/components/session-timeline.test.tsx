@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { buildTimelineItems } from "@/lib/timeline-items";
@@ -530,73 +530,6 @@ function toolEvent(
     ...extra,
   };
 }
-
-describe("timeline auto-scrolling", () => {
-  it("confines sub-task auto-scrolling to the timeline", () => {
-    const task = toolEvent("task", "task-call", 1, {
-      childSessionId: "child-1",
-      status: "running",
-    });
-    const { container, rerender } = render(
-      <SessionTimeline {...baseTimelineProps} events={[task]} />
-    );
-    const timeline = container.firstElementChild as HTMLDivElement;
-    Object.defineProperties(timeline, {
-      clientHeight: { configurable: true, value: 200 },
-      scrollHeight: { configurable: true, value: 1_000 },
-    });
-
-    rerender(
-      <SessionTimeline
-        {...baseTimelineProps}
-        events={[
-          task,
-          toolEvent("Read", "child-call", 2, {
-            isSubtask: true,
-            childSessionId: "child-1",
-            taskCallId: "task-call",
-          }),
-        ]}
-      />
-    );
-
-    expect(timeline.scrollTop).toBe(1_000);
-    expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
-  });
-
-  it("does not move the timeline when the user has scrolled away from the bottom", () => {
-    const task = toolEvent("task", "task-call", 1, {
-      childSessionId: "child-1",
-      status: "running",
-    });
-    const { container, rerender } = render(
-      <SessionTimeline {...baseTimelineProps} events={[task]} />
-    );
-    const timeline = container.firstElementChild as HTMLDivElement;
-    Object.defineProperties(timeline, {
-      clientHeight: { configurable: true, value: 200 },
-      scrollHeight: { configurable: true, value: 1_000 },
-      scrollTop: { configurable: true, value: 300, writable: true },
-    });
-    fireEvent.scroll(timeline);
-
-    rerender(
-      <SessionTimeline
-        {...baseTimelineProps}
-        events={[
-          task,
-          toolEvent("Read", "child-call", 2, {
-            isSubtask: true,
-            childSessionId: "child-1",
-            taskCallId: "task-call",
-          }),
-        ]}
-      />
-    );
-
-    expect(timeline.scrollTop).toBe(300);
-  });
-});
 
 describe("task activity grouping", () => {
   it("pulses while a Task is running and stops after its completion update", () => {

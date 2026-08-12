@@ -3,9 +3,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { SessionState } from "@open-inspect/shared";
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
-import type { ServerMessage, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
+import type {
+  ServerMessage,
+  SessionSnapshot,
+  SessionState,
+} from "@open-inspect/shared/types/server-messages";
 import type * as SwrModule from "swr";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { useSessionSocket } from "./use-session-socket";

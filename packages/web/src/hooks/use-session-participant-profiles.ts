@@ -1,6 +1,6 @@
 "use client";
 
-import type { ParticipantPresence } from "@open-inspect/shared";
+import type { ParticipantPresence } from "@open-inspect/shared/types/server-messages";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import {
   sessionParticipantProfilesResponseSchema,

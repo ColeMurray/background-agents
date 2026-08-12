@@ -42,16 +42,6 @@ export interface Env {
 }
 
 /**
- * Repository configuration for the classifier.
- */
-export type {
-  RepoConfig,
-  RepoMetadata,
-  ControlPlaneRepo,
-  ControlPlaneReposResponse,
-} from "@open-inspect/shared/types/repository-catalog";
-
-/**
  * Thread context for classification.
  */
 export interface ThreadContext {
@@ -81,8 +71,6 @@ export interface ClassificationResult {
   needsClarification: boolean;
 }
 
-export type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
-export type { Environment } from "@open-inspect/shared/types/environments";
 export type { SlackSessionTarget } from "../targets";
 
 /**
@@ -179,8 +167,3 @@ export interface ToolCallCallback {
   signature: string;
   context: SlackCallbackContext;
 }
-
-/**
- * Event response from control-plane events API.
- */
-export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";

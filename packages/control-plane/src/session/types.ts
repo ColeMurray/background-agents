@@ -2,7 +2,7 @@
  * Session-specific type definitions.
  */
 
-import type { ResolvedSessionAttachment } from "../types";
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
   SessionStatus,
   SandboxStatus,

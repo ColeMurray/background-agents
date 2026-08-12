@@ -132,7 +132,7 @@ export function SessionTimeline({
     }
   }, [events]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (didPrependRef.current) {
       didPrependRef.current = false;
       return;
@@ -141,7 +141,7 @@ export function SessionTimeline({
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events]);
+  }, [events, isProcessing]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);

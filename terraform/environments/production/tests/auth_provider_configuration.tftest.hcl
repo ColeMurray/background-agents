@@ -191,3 +191,16 @@ run "combined_with_github_only_admission" {
 
   expect_failures = [terraform_data.sign_in_provider_gate]
 }
+
+run "anthropic_api_key_blank" {
+  command = plan
+
+  variables {
+    enable_slack_bot     = true
+    slack_bot_token      = "test-slack-token"
+    slack_signing_secret = "test-slack-signing-secret"
+    anthropic_api_key    = ""
+  }
+
+  expect_failures = [var.anthropic_api_key]
+}

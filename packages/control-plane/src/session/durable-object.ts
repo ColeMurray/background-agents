@@ -12,6 +12,7 @@ import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
 import {
   sessionSnapshotSchema,
+  type ServerMessage,
   type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
@@ -54,7 +55,8 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import type { Env, ClientInfo, ServerMessage, SessionRepositoryState } from "../types";
+import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
+import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
