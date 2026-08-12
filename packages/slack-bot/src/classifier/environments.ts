@@ -8,14 +8,11 @@
  * like rules targeting an inaccessible repository.
  */
 
-import { z } from "zod";
 import { environmentSchema, listEnvironmentsResponseSchema } from "@open-inspect/shared";
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { Env } from "../types";
 import { createCachedResource } from "./cached-resource";
 import { fetchControlPlaneJson } from "./control-plane";
-
-const environmentsSchema = z.array(environmentSchema);
 
 const environments = createCachedResource<Environment[]>({
   name: "environments",
@@ -26,9 +23,14 @@ const environments = createCachedResource<Environment[]>({
     // last-known-good copy instead of overwriting it with an empty list.
     return listEnvironmentsResponseSchema.parse(body).environments;
   },
+  // Validate the cached copy entry by entry: one malformed environment costs
+  // itself, not every other environment stored alongside it.
   deserialize: (cached) => {
-    const result = environmentsSchema.safeParse(cached);
-    return result.success ? result.data : null;
+    if (!Array.isArray(cached)) return null;
+    return cached.flatMap((entry) => {
+      const result = environmentSchema.safeParse(entry);
+      return result.success ? [result.data] : [];
+    });
   },
   fallback: [],
 });

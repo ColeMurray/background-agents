@@ -9,18 +9,52 @@
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
-import { issueSessionSchema, projectRepoMappingSchema, teamRepoMappingSchema } from "./types";
+import { z } from "zod";
+import { issueSessionSchema, projectTargetSchema, teamTargetsSchema } from "./types";
 import type { UserPreferences } from "@open-inspect/shared/types/session-api";
 import type { Env, TeamRepoMapping, ProjectRepoMapping, IssueSession } from "./types";
 import { createLogger } from "./logger";
 
 const log = createLogger("kv-store");
 
+const configRecordSchema = z.record(z.string(), z.unknown());
+
+/**
+ * Validate an operator-managed config record one key at a time.
+ *
+ * A malformed entry costs its own key and nothing else: rejecting the whole
+ * record would drop every valid mapping too, and each dropped team or project
+ * falls through to the classification heuristics, which can route its issues
+ * at an unintended repository. Rejected keys are logged so the typo that
+ * caused it is findable.
+ */
+function parseConfigEntries<T>(
+  data: unknown,
+  entrySchema: z.ZodType<T>,
+  configKey: string
+): Record<string, T> {
+  const record = configRecordSchema.safeParse(data);
+  if (!record.success) return {};
+
+  const mapping: Record<string, T> = {};
+  const rejectedKeys: string[] = [];
+  for (const [key, value] of Object.entries(record.data)) {
+    const entry = entrySchema.safeParse(value);
+    if (entry.success) mapping[key] = entry.data;
+    else rejectedKeys.push(key);
+  }
+
+  if (rejectedKeys.length > 0) {
+    log.warn("kv.config_entries_rejected", { config_key: configKey, rejected_keys: rejectedKeys });
+  }
+  return mapping;
+}
+
 export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
+  const configKey = "config:team-repos";
   try {
-    const data = await env.LINEAR_KV.get("config:team-repos", "json");
-    const result = teamRepoMappingSchema.safeParse(data);
-    if (result.success) return result.data;
+    const data = await env.LINEAR_KV.get(configKey, "json");
+    return parseConfigEntries(data, teamTargetsSchema, configKey);
   } catch (e) {
     log.debug("kv.get_team_repo_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),
@@ -30,10 +64,10 @@ export async function getTeamRepoMapping(env: Env): Promise<TeamRepoMapping> {
 }
 
 export async function getProjectRepoMapping(env: Env): Promise<ProjectRepoMapping> {
+  const configKey = "config:project-repos";
   try {
-    const data = await env.LINEAR_KV.get("config:project-repos", "json");
-    const result = projectRepoMappingSchema.safeParse(data);
-    if (result.success) return result.data;
+    const data = await env.LINEAR_KV.get(configKey, "json");
+    return parseConfigEntries(data, projectTargetSchema, configKey);
   } catch (e) {
     log.debug("kv.get_project_repo_mapping_failed", {
       error: e instanceof Error ? e.message : String(e),

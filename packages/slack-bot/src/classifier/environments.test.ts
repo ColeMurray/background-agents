@@ -91,7 +91,7 @@ describe("getAvailableEnvironments", () => {
   it("ignores malformed environments in the KV fallback", async () => {
     const env = {
       SLACK_KV: {
-        get: vi.fn().mockResolvedValue([{ id: "env_bad" }]),
+        get: vi.fn().mockResolvedValue([TEST_ENVIRONMENT, { id: "env_bad" }]),
         put: vi.fn().mockResolvedValue(undefined),
       },
       CONTROL_PLANE: {
@@ -100,7 +100,7 @@ describe("getAvailableEnvironments", () => {
       SERVICE_AUTH_SECRET: "test-secret",
     } as unknown as Env;
 
-    expect(await getAvailableEnvironments(env, "trace")).toEqual([]);
+    expect(await getAvailableEnvironments(env, "trace")).toEqual([TEST_ENVIRONMENT]);
   });
 });
 
