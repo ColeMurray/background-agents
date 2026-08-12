@@ -624,6 +624,21 @@ describe("automation route handlers", () => {
       );
     });
 
+    it("creates a bot automation without canonical attribution when reconciliation fails", async () => {
+      mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: null });
+      mockUserStore.resolveOrCreateUser.mockRejectedValueOnce(new Error("D1 unavailable"));
+
+      const res = await callRoute("POST", "/automations", {
+        body: validBody,
+        principal: SLACK_BOT_PRINCIPAL,
+      });
+
+      expect(res.status).toBe(201);
+      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ created_by: "slack:U0123", user_id: null })
+      );
+    });
+
     it("rejects forbidden body identity fields", async () => {
       const res = await callRoute("POST", "/automations", {
         body: { ...validBody, scmUserId: "12345" },

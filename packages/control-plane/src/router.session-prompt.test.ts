@@ -254,4 +254,29 @@ describe("session prompt identity enrichment", () => {
     expect(response.status).toBe(200);
     expect(resolveOrCreateUser).toHaveBeenCalledOnce();
   });
+
+  it("keeps a known canonical author when reconciliation is unavailable", async () => {
+    vi.mocked(UserStore).mockImplementation(function () {
+      return {
+        getIdentity: async () => ({ userId: "canonical-existing" }),
+        resolveOrCreateUser: async () => {
+          throw new Error("D1 unavailable");
+        },
+      } as never;
+    });
+    const sessionFetch = vi.fn(async (request: Request) => {
+      await expect(request.json()).resolves.toMatchObject({
+        authorId: "slack:U2",
+        canonicalUserId: "canonical-existing",
+      });
+      return Response.json({ status: "queued" });
+    });
+
+    const response = await handleRequest(
+      await slackPromptRequest({ content: "Fix the bug" }),
+      createEnv(sessionFetch) as never
+    );
+
+    expect(response.status).toBe(200);
+  });
 });

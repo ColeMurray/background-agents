@@ -112,12 +112,12 @@ async function handleCreateSession(
   const participantUserId = enforced.participantUserId;
   const spawnSource = enforced.spawnSource ?? undefined;
 
-  // Resolve canonical user model ID (for D1 session index) from the verified
-  // principal, failing closed; body display fields stay cosmetic.
+  // Canonical attribution is best-effort. The provider-qualified participant
+  // still identifies the prompt author when D1 reconciliation is unavailable.
   const userStore = new UserStore(ctx.db);
   const resolution = await resolveAndReconcileActor(userStore, ctx, enforced);
   if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution.userId;
+  const resolvedUserId = resolution.ok ? resolution.userId : (enforced.canonicalUserId ?? null);
 
   const githubDeployment = resolveScmProviderFromEnv(env.SCM_PROVIDER) === "github";
   let scmLogin = body.scmLogin;
@@ -134,7 +134,7 @@ async function handleCreateSession(
   // Auth only when SCM enrichment is needed. Transitional callers retain the
   // legacy D1 lookup. A user without a linked GitHub account uses the GitHub
   // App bot fallback; account linking is intentionally deferred.
-  if (githubDeployment) {
+  if (githubDeployment && resolvedUserId) {
     try {
       const enrichment = await resolveGitHubEnrichmentForRequest(
         env,

@@ -102,7 +102,7 @@ export const verifiedActorEvidenceSchema = z.strictObject({
   provider: z.enum(["slack", "github", "linear"]),
   providerUserId: z.string().min(1),
   displayName: z.string().optional(),
-  verifiedEmail: z.string().optional(),
+  verifiedEmail: z.email().optional(),
   avatarUrl: z.string().optional(),
 });
 

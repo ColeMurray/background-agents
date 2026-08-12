@@ -215,7 +215,7 @@ describe("resolveAndReconcileActor", () => {
       actor: null,
       spawnSource: "user",
     });
-    expect(result).toEqual({ userId: "canon-1" });
+    expect(result).toEqual({ ok: true, userId: "canon-1" });
   });
 
   it("creates the user from the VERIFIED actor when unseen", async () => {
@@ -227,7 +227,7 @@ describe("resolveAndReconcileActor", () => {
       actor: SLACK_ACTOR,
       spawnSource: "slack-bot",
     });
-    expect(result).toEqual({ userId: "canon-new" });
+    expect(result).toEqual({ ok: true, userId: "canon-new" });
     expect(resolveOrCreateUser).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "slack", providerUserId: "U0123", displayName: "Dana" })
     );
@@ -246,7 +246,7 @@ describe("resolveAndReconcileActor", () => {
       }
     );
 
-    expect(result).toEqual({ userId: "canon-reconciled" });
+    expect(result).toEqual({ ok: true, userId: "canon-reconciled" });
     expect(resolveOrCreateUser).toHaveBeenCalledOnce();
   });
 
@@ -264,8 +264,8 @@ describe("resolveAndReconcileActor", () => {
     expect(userStore.resolveOrCreateUser).not.toHaveBeenCalled();
   });
 
-  it("fails closed with a 500 when resolution throws", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  it("returns a best-effort failure when reconciliation throws", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const userStore = {
       resolveOrCreateUser: vi.fn(async () => {
         throw new Error("d1 down");
@@ -277,8 +277,7 @@ describe("resolveAndReconcileActor", () => {
       actor: SLACK_ACTOR,
       spawnSource: "slack-bot",
     });
-    expect(result).toBeInstanceOf(Response);
-    expect((result as Response).status).toBe(500);
+    expect(result).toEqual({ ok: false });
   });
 });
 

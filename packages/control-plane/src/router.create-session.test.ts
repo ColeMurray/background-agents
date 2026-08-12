@@ -356,7 +356,7 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).toHaveBeenCalledOnce();
   });
 
-  it("fails closed without creating the session when actor resolution is unavailable", async () => {
+  it("creates the session without canonical attribution when actor reconciliation is unavailable", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
@@ -376,12 +376,9 @@ describe("handleCreateSession D1 ordering", () => {
       model: "anthropic/claude-haiku-4-5",
     });
 
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: "Failed to resolve session identity",
-    });
-    expect(create).not.toHaveBeenCalled();
-    expect(initFetch).not.toHaveBeenCalled();
+    expect(response.status).toBe(201);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: null }));
+    expect(initFetch).toHaveBeenCalledOnce();
   });
 
   it("preserves non-GitHub SCM display identity without GitHub enrichment", async () => {

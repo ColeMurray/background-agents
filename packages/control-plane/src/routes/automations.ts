@@ -448,12 +448,11 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // Resolve the canonical user model ID fail-closed from the verified
-  // principal — the scheduler replays user_id as session identity at fire
-  // time, so an automation must never be created with lost attribution.
+  // Canonical attribution is best-effort. The scheduler retains its fallback
+  // for rows created while identity storage is temporarily unavailable.
   const resolution = await resolveAndReconcileActor(new UserStore(ctx.db), ctx, enforced);
   if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution.userId;
+  const resolvedUserId = resolution.ok ? resolution.userId : (enforced.canonicalUserId ?? null);
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);

@@ -182,11 +182,9 @@ export function applyIdentityEnforcement<R extends IdentityRoute>(
 }
 
 /**
- * Resolve the canonical `users.id` for a spawning route, creating the user
- * from the VERIFIED actor when the CP has not seen them before (display
- * fields may come from the body — they are cosmetic, never identity). Fails
- * closed with a 500 rather than writing anonymous attribution. Shared by
- * session-create and automation-create so the two routes cannot drift.
+ * Reconcile the canonical `users.id` from verified actor evidence. Storage
+ * outages are distinguishable so routes can preserve their existing
+ * best-effort behavior without weakening invalid-principal handling.
  *
  * Takes the requires-user enforced shape: every participant is backed by a
  * canonical user (web users) or a verified actor (bot assertions), so the
@@ -196,9 +194,11 @@ export async function resolveAndReconcileActor(
   userStore: UserStore,
   ctx: RequestContext,
   enforced: DerivedIdentity & { participantUserId: string }
-): Promise<{ userId: string } | Response> {
+): Promise<{ ok: true; userId: string } | { ok: false } | Response> {
   const actor = enforced.actor;
-  if (!actor && enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
+  if (!actor && enforced.canonicalUserId) {
+    return { ok: true, userId: enforced.canonicalUserId };
+  }
   if (!actor) {
     // Unreachable while deriveIdentity holds its invariant (a participant
     // without a canonical user is always actor-backed); fail closed rather
@@ -221,15 +221,15 @@ export async function resolveAndReconcileActor(
       avatarUrl:
         ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.avatarUrl : undefined,
     });
-    return { userId: user.id };
+    return { ok: true, userId: user.id };
   } catch (e) {
-    logger.error("Failed to resolve verified actor identity", {
+    logger.warn("Failed to reconcile verified actor identity", {
       error: e instanceof Error ? e : String(e),
       provider: actor.provider,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return error("Failed to resolve session identity", 500);
+    return { ok: false };
   }
 }
 

@@ -103,7 +103,7 @@ async function handleSessionPrompt(
       participantUserId: authorId,
     });
     if (resolution instanceof Response) return resolution;
-    canonicalUserId = resolution.userId;
+    if (resolution.ok) canonicalUserId = resolution.userId;
   }
 
   let enrichment: GitHubEnrichment | undefined;
