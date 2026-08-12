@@ -74,6 +74,15 @@ variable "queue_bindings" {
   default = []
 }
 
+variable "vpc_networks" {
+  description = "List of Workers VPC Network bindings"
+  type = list(object({
+    binding_name = string
+    network_id   = string
+  }))
+  default = []
+}
+
 variable "plain_text_bindings" {
   description = "List of plain text environment variable bindings"
   type = list(object({

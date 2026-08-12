@@ -15,6 +15,7 @@ export interface Env {
   // Service bindings
   SLACK_BOT?: Fetcher; // Optional - only if slack-bot is deployed
   LINEAR_BOT?: Fetcher; // Optional - only if linear-bot is deployed
+  EGRESS?: Fetcher; // VPC egress proxy for chatgpt.com Codex requests
 
   // Durable Objects
   SCHEDULER?: DurableObjectNamespace; // SchedulerDO for automation engine

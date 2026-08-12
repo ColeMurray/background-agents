@@ -79,6 +79,15 @@ module "control_plane_worker" {
 
   enable_service_bindings = var.enable_service_bindings
 
+  # OpenAI Slack classification runs before a target is known, so the control
+  # plane needs an account-wide Workers VPC Network binding for public egress.
+  vpc_networks = var.enable_slack_bot && var.slack_classification_model == "openai/gpt-5.6-luna" ? [
+    {
+      binding_name = "EGRESS"
+      network_id   = "cf1:network"
+    }
+  ] : []
+
   plain_text_bindings = concat(
     [
       { name = "WEB_APP_URL", value = local.web_app_url },

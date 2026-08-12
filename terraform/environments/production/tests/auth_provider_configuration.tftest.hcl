@@ -20,6 +20,7 @@ variables {
   github_app_id               = "1"
   github_app_private_key      = "test-private-key"
   github_app_installation_id  = "1"
+  anthropic_api_key           = "test-anthropic-key"
   token_encryption_key        = "test-token-key"
   repo_secrets_encryption_key = "test-repo-key"
   nextauth_secret             = "test-browser-auth-secret-with-32-characters"
@@ -29,7 +30,6 @@ variables {
   modal_token_secret = "test-modal-token-secret"
   modal_workspace    = "test-workspace"
   modal_api_secret   = "test-modal-api-secret"
-  anthropic_api_key  = "test-anthropic-key"
 
   web_platform      = "cloudflare"
   project_root      = "../../../"
@@ -207,9 +207,10 @@ run "slack_classification_anthropic" {
     condition = (
       var.slack_classification_model == "anthropic/claude-haiku-4-5" &&
       module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"] == "anthropic/claude-haiku-4-5" &&
-      contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+      contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      length(module.control_plane_worker.vpc_network_binding_network_ids) == 0
     )
-    error_message = "Anthropic Slack classification must use the canonical model binding and bind ANTHROPIC_API_KEY."
+    error_message = "Anthropic Slack classification must use the canonical model, bind ANTHROPIC_API_KEY, and omit EGRESS."
   }
 }
 
@@ -217,10 +218,11 @@ run "slack_classification_anthropic_missing_key" {
   command = plan
 
   variables {
-    enable_slack_bot     = true
-    slack_bot_token      = "test-slack-token"
-    slack_signing_secret = "test-slack-signing-secret"
-    anthropic_api_key    = ""
+    enable_slack_bot        = true
+    enable_service_bindings = false
+    slack_bot_token         = "test-slack-token"
+    slack_signing_secret    = "test-slack-signing-secret"
+    anthropic_api_key       = ""
   }
 
   expect_failures = [var.anthropic_api_key]
@@ -235,15 +237,31 @@ run "slack_classification_openai" {
     slack_bot_token            = "test-slack-token"
     slack_signing_secret       = "test-slack-signing-secret"
     slack_classification_model = "openai/gpt-5.6-luna"
+    anthropic_api_key          = ""
   }
 
   assert {
     condition = (
-      var.slack_classification_model == "openai/gpt-5.6-luna" &&
       module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"] == "openai/gpt-5.6-luna" &&
-      !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY")
+      !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
+      module.control_plane_worker.vpc_network_binding_network_ids["EGRESS"] == "cf1:network"
     )
-    error_message = "OpenAI Slack classification must use the canonical model binding without ANTHROPIC_API_KEY."
+    error_message = "OpenAI Slack classification must omit ANTHROPIC_API_KEY and attach the cf1:network EGRESS binding."
+  }
+}
+
+run "openai_classification_without_slack" {
+  command = plan
+
+  variables {
+    enable_slack_bot           = false
+    slack_classification_model = "openai/gpt-5.6-luna"
+    anthropic_api_key          = ""
+  }
+
+  assert {
+    condition     = length(module.control_plane_worker.vpc_network_binding_network_ids) == 0
+    error_message = "The control-plane EGRESS binding must be omitted when Slack is disabled."
   }
 }
 

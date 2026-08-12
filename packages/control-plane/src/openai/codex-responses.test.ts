@@ -8,6 +8,7 @@ import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "./cod
 
 const TOOL_NAME = "classify_target";
 const output = { targetId: "acme/api", confidence: "high" };
+const mockEgressFetch = vi.fn();
 
 function functionCall(argumentsValue = JSON.stringify(output)) {
   return {
@@ -68,26 +69,36 @@ function openStreamResponse(
 }
 
 function request(overrides: Partial<OpenAICodexFunctionRequest> = {}) {
-  return requestOpenAICodexFunction({
-    accessToken: "secret-access-token",
-    accountId: "account-123",
-    requestId: "request-123",
-    traceId: "trace-123",
-    model: "gpt-5.6-luna",
-    systemPrompt: "Classify the target.",
-    prompt: "route this request",
-    tool: {
-      name: TOOL_NAME,
-      description: "Select the target.",
-      parameters: { type: "object", additionalProperties: false },
+  return requestOpenAICodexFunction(
+    {
+      accessToken: "secret-access-token",
+      accountId: "account-123",
+      requestId: "request-123",
+      traceId: "trace-123",
+      model: "gpt-5.6-luna",
+      systemPrompt: "Classify the target.",
+      prompt: "route this request",
+      tool: {
+        name: TOOL_NAME,
+        description: "Select the target.",
+        parameters: { type: "object", additionalProperties: false },
+      },
+      ...overrides,
     },
-    ...overrides,
-  });
+    { fetch: mockEgressFetch } as never
+  );
 }
 
 describe("OpenAI Codex Responses client", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(completedFunctionCall()));
+    mockEgressFetch.mockReset();
+    mockEgressFetch.mockResolvedValue(completedFunctionCall());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => {
+        throw new Error("global fetch must not be used");
+      })
+    );
   });
 
   afterEach(() => {
@@ -98,8 +109,9 @@ describe("OpenAI Codex Responses client", () => {
   it("sends a correlated forced-function request and parses fragmented SSE", async () => {
     await expect(request()).resolves.toEqual(output);
 
-    const [url, init] = vi.mocked(fetch).mock.calls[0];
+    const [url, init] = mockEgressFetch.mock.calls[0];
     expect(url).toBe("https://chatgpt.com/backend-api/codex/responses");
+    expect(fetch).not.toHaveBeenCalled();
     expect(init?.method).toBe("POST");
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     const headers = new Headers(init?.headers);
@@ -138,8 +150,31 @@ describe("OpenAI Codex Responses client", () => {
     ]);
   });
 
+  it("fails clearly without EGRESS and never falls back to global fetch", async () => {
+    await expect(
+      requestOpenAICodexFunction(
+        {
+          accessToken: "secret-access-token",
+          requestId: "request-123",
+          traceId: "trace-123",
+          model: "gpt-5.6-luna",
+          systemPrompt: "Classify the target.",
+          prompt: "route this request",
+          tool: {
+            name: TOOL_NAME,
+            description: "Select the target.",
+            parameters: { type: "object", additionalProperties: false },
+          },
+        },
+        undefined
+      )
+    ).rejects.toMatchObject({ message: "EGRESS binding is not configured" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mockEgressFetch).not.toHaveBeenCalled();
+  });
+
   it("uses output_item.done when response.completed has no output", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
+    mockEgressFetch.mockResolvedValueOnce(
       fragmentedSseResponse(
         { type: "response.output_item.done", item: functionCall() },
         { type: "response.completed", response: { id: "resp-classify", output: [] } }
@@ -151,7 +186,7 @@ describe("OpenAI Codex Responses client", () => {
 
   it("falls back to streamed function-call arguments", async () => {
     const argumentsValue = JSON.stringify(output);
-    vi.mocked(fetch).mockResolvedValueOnce(
+    mockEgressFetch.mockResolvedValueOnce(
       fragmentedSseResponse(
         {
           type: "response.output_item.added",
@@ -175,7 +210,7 @@ describe("OpenAI Codex Responses client", () => {
   });
 
   it("rejects malformed authoritative output instead of a completed fallback", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
+    mockEgressFetch.mockResolvedValueOnce(
       fragmentedSseResponse(
         { type: "response.output_item.done", item: functionCall("not-json") },
         {
@@ -214,12 +249,12 @@ describe("OpenAI Codex Responses client", () => {
       ),
     ],
   ])("rejects invalid output for %s", async (_name, response) => {
-    vi.mocked(fetch).mockResolvedValueOnce(response);
+    mockEgressFetch.mockResolvedValueOnce(response);
     await expect(request()).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
   it("rejects when the stream ends before a terminal event", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
+    mockEgressFetch.mockResolvedValueOnce(
       fragmentedSseResponse({ type: "response.created", response: { id: "resp-classify" } })
     );
 
@@ -227,7 +262,7 @@ describe("OpenAI Codex Responses client", () => {
   });
 
   it.each(["response.failed", "error"])("sanitizes %s events", async (type) => {
-    vi.mocked(fetch).mockResolvedValueOnce(
+    mockEgressFetch.mockResolvedValueOnce(
       fragmentedSseResponse({ type, error: { message: "upstream secret details" } })
     );
     await expect(request()).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
@@ -236,11 +271,11 @@ describe("OpenAI Codex Responses client", () => {
   it("times out a stream whose reader and cancellation never finish", async () => {
     vi.useFakeTimers();
     const cancel = vi.fn(() => new Promise<void>(() => undefined));
-    vi.mocked(fetch).mockResolvedValueOnce(openStreamResponse(undefined, cancel));
+    mockEgressFetch.mockResolvedValueOnce(openStreamResponse(undefined, cancel));
 
     const result = request();
     const rejection = expect(result).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockEgressFetch).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(CODEX_RESPONSES_TIMEOUT_MS);
 
     await rejection;
@@ -249,15 +284,15 @@ describe("OpenAI Codex Responses client", () => {
 
   it("times out even when fetch ignores abort", async () => {
     vi.useFakeTimers();
-    vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    mockEgressFetch.mockImplementationOnce(() => new Promise<Response>(() => undefined));
 
     const result = request();
     const rejection = expect(result).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(mockEgressFetch).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(CODEX_RESPONSES_TIMEOUT_MS);
 
     await rejection;
-    expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(mockEgressFetch.mock.calls[0][1]?.signal?.aborted).toBe(true);
   });
 
   it("ignores cancellation failures and releases the stream lock", async () => {
@@ -269,7 +304,7 @@ describe("OpenAI Codex Responses client", () => {
       }),
       cancel
     );
-    vi.mocked(fetch).mockResolvedValueOnce(response);
+    mockEgressFetch.mockResolvedValueOnce(response);
 
     await expect(request()).resolves.toEqual(output);
     expect(cancel).toHaveBeenCalledOnce();
@@ -277,9 +312,7 @@ describe("OpenAI Codex Responses client", () => {
   });
 
   it("throws an upstream error for non-OK responses without reading their body", async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(
-      new Response("upstream secret details", { status: 429 })
-    );
+    mockEgressFetch.mockResolvedValueOnce(new Response("upstream secret details", { status: 429 }));
     const error = await request().catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(OpenAICodexUpstreamError);
     expect(error).toMatchObject({ status: 429 });
@@ -287,7 +320,7 @@ describe("OpenAI Codex Responses client", () => {
 
   it("omits the account header when no account id is available", async () => {
     await request({ accountId: undefined });
-    const headers = new Headers(vi.mocked(fetch).mock.calls[0][1]?.headers);
+    const headers = new Headers(mockEgressFetch.mock.calls[0][1]?.headers);
     expect(headers.has("ChatGPT-Account-Id")).toBe(false);
   });
 });

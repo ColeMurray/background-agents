@@ -15,8 +15,8 @@ import {
 } from "../auth/openai-token-broker";
 import type { SqlDatabase } from "../db/sql-database";
 import { createLogger } from "../logger";
-import { requestOpenAICodexFunction } from "../openai/codex-responses";
 import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "../openai/codex-errors";
+import { requestOpenAICodexFunction } from "../openai/codex-responses";
 
 const logger = createLogger("target-classifications");
 const OPENAI_MODEL = "gpt-5.6-luna";
@@ -29,6 +29,7 @@ export class InvalidTargetClassificationResponseError extends Error {}
 type TargetClassificationServiceContext = {
   db: SqlDatabase;
   encryptionKey: string;
+  egress: Fetcher;
   requestId: string;
   traceId: string;
 };
@@ -49,20 +50,23 @@ export async function createTargetClassification(
 
   let output: unknown;
   try {
-    output = await requestOpenAICodexFunction({
-      accessToken: token.accessToken,
-      accountId: token.accountId,
-      requestId: context.requestId,
-      traceId: context.traceId,
-      model: OPENAI_MODEL,
-      systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
-      prompt: buildTargetClassificationPrompt(request),
-      tool: {
-        name: CLASSIFY_TARGET_TOOL_NAME,
-        description: "Select the best target for the Slack request.",
-        parameters: targetClassificationJsonSchema,
+    output = await requestOpenAICodexFunction(
+      {
+        accessToken: token.accessToken,
+        accountId: token.accountId,
+        requestId: context.requestId,
+        traceId: context.traceId,
+        model: OPENAI_MODEL,
+        systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
+        prompt: buildTargetClassificationPrompt(request),
+        tool: {
+          name: CLASSIFY_TARGET_TOOL_NAME,
+          description: "Select the best target for the Slack request.",
+          parameters: targetClassificationJsonSchema,
+        },
       },
-    });
+      context.egress
+    );
   } catch (error) {
     if (error instanceof OpenAICodexUpstreamError) {
       logger.warn("Classifier upstream unavailable", {

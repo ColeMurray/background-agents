@@ -72,7 +72,7 @@ common examples:
 | `ANTHROPIC_API_KEY`          | Required for Claude models when using the **Daytona** or **Vercel** sandbox provider (Modal injects this automatically via its own secrets mechanism) |
 | `DEEPSEEK_API_KEY`           | Required for DeepSeek models with any sandbox provider                                                                                                |
 | `ZHIPU_API_KEY`              | Required for Z.AI Coding Plan GLM models with any sandbox provider                                                                                    |
-| `OPENAI_OAUTH_REFRESH_TOKEN` | Managed ChatGPT OAuth; **global** scope is required for Slack target classification because its repository/environment target is not known yet        |
+| `OPENAI_OAUTH_REFRESH_TOKEN` | Managed ChatGPT OAuth; **global** scope is required for Slack target classification because its target is not known yet                               |
 | `OPENAI_OAUTH_ACCOUNT_ID`    | Optional ChatGPT account ID for managed OAuth; it can be populated after the first refresh                                                            |
 
 > **Daytona and Vercel sandbox users**: If you plan to use Claude models, you must add
@@ -158,8 +158,9 @@ provider marker and requests short-lived access through its session-authenticate
 OpenAI Slack target classification uses this same managed ChatGPT OAuth transport. Store
 `OPENAI_OAUTH_REFRESH_TOKEN` in **global** secrets before switching the deployment's
 `slack_classification_model` to `openai/gpt-5.6-luna`: classification runs before a repository or
-environment is known, so repository and environment tokens cannot be used. No `OPENAI_API_KEY` is
-needed.
+environment is known, so repository and environment tokens cannot be used. Terraform places the
+Workers VPC `EGRESS` binding on the control plane only; the Slack Worker receives neither an
+`OPENAI_API_KEY` nor an OAuth secret.
 
 ### Secrets and prebuilt images
 
@@ -190,7 +191,7 @@ from it, even after you rotate the secret. Two guidelines:
 | `XAI_OAUTH_REFRESH_TOKEN`    | Any                                                                                           | SuperGrok access ([setup guide](GROK_MODELS.md))             |
 | `DATABASE_URL`               | Repo                                                                                          | Database connection string                                   |
 | `AWS_ACCESS_KEY_ID`          | Repo                                                                                          | AWS credentials for a specific project                       |
-| `STRIPE_SECRET_KEY`          | Repo                                                                                          | Stripe API key for a specific project                        |
+| `STRIPE_SECRET_KEY`          | Repo                                                                                          | API key for a specific project                               |
 
 ---
 

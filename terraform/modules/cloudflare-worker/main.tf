@@ -34,6 +34,12 @@ locals {
       name       = queue.binding_name
       queue_name = queue.queue_name
     }],
+    # Workers VPC Network bindings
+    [for vpc in var.vpc_networks : {
+      type       = "vpc_network"
+      name       = vpc.binding_name
+      network_id = vpc.network_id
+    }],
     # Plain text bindings (environment variables)
     [for pt in var.plain_text_bindings : {
       type = "plain_text"

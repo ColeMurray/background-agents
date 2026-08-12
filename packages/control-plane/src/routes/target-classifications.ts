@@ -35,11 +35,15 @@ export async function handleCreateTargetClassification(
   if (!env.REPO_SECRETS_ENCRYPTION_KEY) {
     return error("OpenAI OAuth is not configured", 503);
   }
+  if (!env.EGRESS) {
+    return error("Classifier egress is not configured", 503);
+  }
 
   try {
     const classification = await createTargetClassification(parsedRequest.data, {
       db: ctx.db,
       encryptionKey: env.REPO_SECRETS_ENCRYPTION_KEY,
+      egress: env.EGRESS,
       requestId: ctx.request_id,
       traceId: ctx.trace_id,
     });

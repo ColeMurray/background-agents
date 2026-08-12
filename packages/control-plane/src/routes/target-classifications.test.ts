@@ -31,10 +31,13 @@ vi.mock("../openai/codex-responses", () => ({
   requestOpenAICodexFunction: mocks.requestFunction,
 }));
 
+const egress = { fetch: vi.fn() };
+
 const env = {
   ...TEST_SERVICE_SECRETS,
   REPO_SECRETS_ENCRYPTION_KEY: "encryption-key",
   SCM_PROVIDER: "github",
+  EGRESS: egress,
   DB: {
     prepare: vi.fn(),
     batch: vi.fn(),
@@ -169,24 +172,46 @@ describe("POST /internal/target-classifications", () => {
     expect(mocks.refreshGlobal).not.toHaveBeenCalled();
   });
 
+  it("returns 503 before token brokerage when EGRESS is not configured", async () => {
+    const { EGRESS: _omitted, ...envWithoutEgress } = env;
+    const response = await handleRequest(
+      await signedServiceRequest("https://internal/internal/target-classifications", {
+        method: "POST",
+        body: JSON.stringify(validRequest()),
+        service: "slack-bot",
+      }),
+      envWithoutEgress as never
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Classifier egress is not configured",
+    });
+    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+    expect(mocks.requestFunction).not.toHaveBeenCalled();
+  });
+
   it("delegates the forced classifier call to the Codex Responses client", async () => {
     const response = await targetClassificationRequest(validRequest("route this request"));
 
     expect(response.status).toBe(200);
-    expect(mocks.requestFunction).toHaveBeenCalledWith({
-      accessToken: "secret-access-token",
-      accountId: "account-123",
-      requestId: expect.any(String),
-      traceId: expect.any(String),
-      model: "gpt-5.6-luna",
-      systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
-      prompt: expect.stringContaining("## User's Message\nroute this request"),
-      tool: {
-        name: "classify_target",
-        description: "Select the best target for the Slack request.",
-        parameters: expect.objectContaining({ additionalProperties: false }),
+    expect(mocks.requestFunction).toHaveBeenCalledWith(
+      {
+        accessToken: "secret-access-token",
+        accountId: "account-123",
+        requestId: expect.any(String),
+        traceId: expect.any(String),
+        model: "gpt-5.6-luna",
+        systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
+        prompt: expect.stringContaining("## User's Message\nroute this request"),
+        tool: {
+          name: "classify_target",
+          description: "Select the best target for the Slack request.",
+          parameters: expect.objectContaining({ additionalProperties: false }),
+        },
       },
-    });
+      egress
+    );
     await expect(response.json()).resolves.toEqual(decision);
   });
 

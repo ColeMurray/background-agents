@@ -1,5 +1,5 @@
 import { waitForAbort } from "./bounded-json-sse";
-import { OpenAICodexUpstreamError } from "./codex-errors";
+import { OpenAICodexConfigurationError, OpenAICodexUpstreamError } from "./codex-errors";
 import { parseOpenAIResponsesStream } from "./responses-stream";
 
 const CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
@@ -13,11 +13,7 @@ export type OpenAICodexFunctionRequest = {
   model: string;
   systemPrompt: string;
   prompt: string;
-  tool: {
-    name: string;
-    description: string;
-    parameters: object;
-  };
+  tool: { name: string; description: string; parameters: object };
 };
 
 function buildHeaders(request: OpenAICodexFunctionRequest): Headers {
@@ -52,17 +48,22 @@ function buildBody(request: OpenAICodexFunctionRequest): string {
   });
 }
 
-/** Executes one standard Responses function call through the Codex subscription endpoint. */
+/** Executes one Responses function call via the required VPC egress binding. */
 export async function requestOpenAICodexFunction(
-  request: OpenAICodexFunctionRequest
+  request: OpenAICodexFunctionRequest,
+  egress: Fetcher | undefined
 ): Promise<unknown> {
+  if (!egress) {
+    throw new OpenAICodexConfigurationError("EGRESS binding is not configured");
+  }
+
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), CODEX_RESPONSES_TIMEOUT_MS);
   try {
     let response: Response;
     try {
       response = await waitForAbort(
-        fetch(CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT, {
+        egress.fetch(CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT, {
           method: "POST",
           headers: buildHeaders(request),
           signal: abortController.signal,
