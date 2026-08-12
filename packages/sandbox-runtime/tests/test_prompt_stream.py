@@ -644,6 +644,115 @@ class TestApplySseEventDispositions:
         assert state.pending_overflow_error == "parent overflow"
         assert step.events == []
 
+    def test_post_compaction_prior_prompt_message_is_not_accepted(self):
+        """The compaction fallback must not claim messages that predate the
+        prompt (IDs below the prompt's user message): forwarding them would
+        replay prior turns' text as current output."""
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-prior",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "msg_a-prior-turn",
+                        "text": "Stale text from an earlier turn",
+                    }
+                },
+            ),
+        )
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg_a-prior-turn",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg_a-prior-user",
+                    }
+                },
+            ),
+        )
+
+        assert "msg_a-prior-turn" not in state.allowed_assistant_msg_ids
+        assert "msg_a-prior-turn" in state.pending_parts
+        assert step.events == []
+
+    def test_post_compaction_later_message_is_accepted(self):
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg_x-continuation",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg_x-continue-user",
+                    }
+                },
+            ),
+        )
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "text",
+                        "id": "part-continuation",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "msg_x-continuation",
+                        "text": "Continuing after compaction",
+                    }
+                },
+            ),
+        )
+
+        assert "msg_x-continuation" in state.allowed_assistant_msg_ids
+        assert step.events == [
+            {
+                "type": "token",
+                "content": "Continuing after compaction",
+                "messageId": "cp-msg-1",
+            }
+        ]
+
+    def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
+        stream = make_stream()
+        state = make_state()
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        step = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "msg_a-prior-turn",
+                        "role": "assistant",
+                        "sessionID": PARENT_SESSION_ID,
+                        "parentID": "msg_a-prior-user",
+                        "error": {"name": "SomeError", "data": {"message": "Old failure"}},
+                    }
+                },
+            ),
+        )
+
+        assert step.events == []
+
     def test_session_created_tracks_direct_children_only(self):
         state = make_state()
         stream = make_stream()

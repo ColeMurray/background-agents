@@ -88,8 +88,8 @@ class _PromptState:
     pending_parts_total: int = 0
     pending_drop_logged: bool = False
     child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
-    # Compaction tracking: after compaction, parentID changes so we must
-    # accept all non-summary assistant messages from the parent session
+    # Compaction tracking: after compaction, parentID changes so acceptance
+    # falls back to non-summary assistant messages created after this prompt
     compaction_occurred: bool = False
     correlated_compaction_summary_ids: set[str] = field(default_factory=set)
     emitted_error_messages: set[str] = field(default_factory=set)
@@ -405,7 +405,10 @@ class OpenCodePromptStream:
                 belongs_to_prompt = (
                     parent_matches
                     or oc_msg_id in state.correlated_compaction_summary_ids
-                    or (state.compaction_occurred and not is_compaction_summary)
+                    or (
+                        not is_compaction_summary
+                        and self._compaction_fallback_accepts(state, oc_msg_id)
+                    )
                 )
                 if belongs_to_prompt and info.get("error"):
                     error_event = self._parent_error_event_once(state, info["error"])
@@ -418,11 +421,14 @@ class OpenCodePromptStream:
                         events.append(error_event)
 
                 # Accept if: parentID matches our message, OR compaction
-                # happened — but never the compaction summary itself, whose
-                # text is internal context, not assistant output. Its parentID
-                # is the compaction user message, so parentID alone cannot
-                # exclude it.
-                if not is_compaction_summary and (parent_matches or state.compaction_occurred):
+                # happened and the message postdates this prompt — but never
+                # the compaction summary itself, whose text is internal
+                # context, not assistant output. Its parentID is the
+                # compaction user message, so parentID alone cannot exclude
+                # it.
+                if not is_compaction_summary and (
+                    parent_matches or self._compaction_fallback_accepts(state, oc_msg_id)
+                ):
                     state.allowed_assistant_msg_ids.add(oc_msg_id)
                     events.extend(self._drain_pending_parts(state, oc_msg_id, is_subtask=False))
 
@@ -449,6 +455,21 @@ class OpenCodePromptStream:
                 return self._drain_pending_parts(state, oc_msg_id, is_subtask=True)
 
         return []
+
+    @staticmethod
+    def _compaction_fallback_accepts(state: _PromptState, oc_msg_id: str) -> bool:
+        """Whether the post-compaction fallback may claim an assistant message.
+
+        Compaction rewrites the message chain, so parentID correlation stops
+        matching and acceptance falls back to unparented assistant messages.
+        OpenCode also reports the session's full history (over SSE and from
+        the message-list API), so the fallback must be scoped to messages
+        created during this prompt or prior turns' output would be replayed
+        as current output. Ascending OpenCode IDs order by creation time,
+        making an ID comparison against this prompt's user message exactly
+        that scope.
+        """
+        return state.compaction_occurred and oc_msg_id > state.opencode_message_id
 
     def _on_part_updated(self, state: _PromptState, props: dict[str, Any]) -> list[dict[str, Any]]:
         """Forward parts of authorized messages; buffer parts that arrive early."""
@@ -929,8 +950,12 @@ class OpenCodePromptStream:
         Accepts an assistant message when its parentID matches one of the
         prompt's user message IDs, when it was already authorized during SSE
         streaming, or after compaction, which rewrites the message chain.
-        The compaction summary itself is never accepted: its text is internal
-        context, and its parentID (the compaction user message) matches.
+        The compaction fallback is limited to messages created after this
+        prompt's user message: the API returns the whole session history, and
+        re-emitting prior turns' text here would overwrite this prompt's
+        final output with stale messages. The compaction summary itself is
+        never accepted: its text is internal context, and its parentID (the
+        compaction user message) matches.
         """
         if not state.opencode_session_id:
             return
@@ -954,10 +979,13 @@ class OpenCodePromptStream:
                 is_compaction_summary = info.get("summary") is True
 
                 # Accept if: parentID matches, was tracked during SSE, or
-                # compaction occurred — but never the compaction summary
-                # itself; its parentID (the compaction user message) matches.
+                # compaction occurred and the message postdates this prompt —
+                # never the compaction summary itself; its parentID (the
+                # compaction user message) matches.
                 should_accept = not is_compaction_summary and (
-                    parent_matches or in_tracked_set or state.compaction_occurred
+                    parent_matches
+                    or in_tracked_set
+                    or self._compaction_fallback_accepts(state, msg_id)
                 )
                 if not should_accept:
                     continue

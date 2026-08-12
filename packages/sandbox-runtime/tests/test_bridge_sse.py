@@ -1064,6 +1064,70 @@ class TestFetchFinalMessageState:
         assert len(events) == 1
         assert events[0]["content"] == "Assistant response"
 
+    @pytest.mark.asyncio
+    async def test_compaction_fallback_skips_prior_prompt_messages(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        """After compaction the API's full-history response must not replay
+        prior turns' text: their parts were never streamed this prompt, so
+        every one of them reads as "longer than sent" and the last re-emitted
+        part would overwrite this prompt's final output. Only messages created
+        after this prompt's user message are eligible."""
+        bridge = bridge_with_mock_client
+
+        all_messages = [
+            {
+                "info": {
+                    "id": "msg_0001prior1",
+                    "role": "assistant",
+                    "parentID": "msg_0001prior0",
+                },
+                "parts": [{"id": "part-prior", "type": "text", "text": "Prior turn final report"}],
+            },
+            {
+                "info": {
+                    "id": "msg_0003summary",
+                    "role": "assistant",
+                    "parentID": "msg_0003compaction",
+                    "summary": True,
+                },
+                "parts": [{"id": "part-summary", "type": "text", "text": "Internal summary"}],
+            },
+            {
+                "info": {
+                    "id": "msg_0004continue",
+                    "role": "assistant",
+                    "parentID": "msg_0004synthetic",
+                },
+                "parts": [
+                    {
+                        "id": "part-continue",
+                        "type": "text",
+                        "text": "Final answer after compaction",
+                    }
+                ],
+            },
+        ]
+
+        bridge.http_client.get = AsyncMock(return_value=MockResponse(200, all_messages))
+
+        # The continuation's text was partially streamed before idle.
+        cumulative_text = {"part-continue": "Final answer"}
+
+        events = []
+        state = make_prompt_state(
+            "cp-msg-1",
+            "msg_0002prompt",
+            cumulative_text=cumulative_text,
+            compaction_occurred=True,
+        )
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+            events.append(event)
+
+        assert len(events) == 1
+        assert events[0]["content"] == "Final answer after compaction"
+        assert events[0]["messageId"] == "cp-msg-1"
+
 
 class TestExtractErrorMessage:
     """Tests for _extract_error_message static method."""
