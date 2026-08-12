@@ -527,7 +527,7 @@ describe("OpenAITokenRefreshService", () => {
     expect(mockState.refreshImpl).toHaveBeenNthCalledWith(2, "rotated-refresh");
   });
 
-  it("throws an unauthorized error when the post-401 secret reread fails", async () => {
+  it("continues polling after a transient post-401 secret reread failure", async () => {
     vi.useFakeTimers();
     mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "stale-refresh" };
     mockState.refreshImpl.mockRejectedValue(
@@ -542,6 +542,24 @@ describe("OpenAITokenRefreshService", () => {
     await vi.runAllTimersAsync();
 
     await rejection;
+  });
+
+  it("throws a storage error when post-401 secret rereads keep failing", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "stale-refresh" };
+    mockState.refreshImpl.mockRejectedValue(
+      new OpenAITokenRefreshError("unauthorized", 401, "unauthorized")
+    );
+    mockState.globalReadImpl
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error("D1 reread failed"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const rejection = expect(result).rejects.toThrow(OpenAITokenStorageError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(mockState.globalReadImpl).toHaveBeenCalledTimes(5);
   });
 
   it("throws a secrets-read error when repository scope resolution fails", async () => {

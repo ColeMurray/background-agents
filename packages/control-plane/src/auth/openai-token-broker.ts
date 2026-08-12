@@ -204,6 +204,9 @@ export class OpenAITokenBroker {
           poll_attempt: pollIndex + 1,
           error: error instanceof Error ? error.message : String(error),
         });
+        if (pollIndex === OPENAI_CONCURRENT_ROTATION_POLL_DELAYS_MS.length - 1) {
+          throw new OpenAITokenStorageError("Failed to read token state", { cause: error });
+        }
         continue;
       }
       if (reread?.type === "cached") {
