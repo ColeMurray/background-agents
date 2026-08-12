@@ -43,6 +43,7 @@ const QUERY_PATTERNS = {
   SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
   DELETE_SESSION_REPOS: /^DELETE FROM session_repositories WHERE session_id = \?$/,
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
+  SELECT_EXISTS: /^SELECT 1 AS ok FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
@@ -87,6 +88,11 @@ class FakeD1Database {
     if (QUERY_PATTERNS.SELECT_BY_ID.test(normalized)) {
       const id = args[0] as string;
       return this.rows.get(id) ?? null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_EXISTS.test(normalized)) {
+      const id = args[0] as string;
+      return this.rows.has(id) ? { ok: 1 } : null;
     }
 
     if (QUERY_PATTERNS.SELECT_COUNT.test(normalized)) {
@@ -576,6 +582,15 @@ describe("SessionIndexStore", () => {
     it("returns null when not found", async () => {
       const result = await store.get("nonexistent");
       expect(result).toBeNull();
+    });
+  });
+
+  describe("exists", () => {
+    it("returns whether the session exists without loading it", async () => {
+      await store.create(makeSession());
+
+      await expect(store.exists("test-id")).resolves.toBe(true);
+      await expect(store.exists("nonexistent")).resolves.toBe(false);
     });
   });
 

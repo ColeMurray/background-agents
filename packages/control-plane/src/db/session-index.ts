@@ -218,6 +218,14 @@ function normalizeSessionRepository(session: SessionEntry): {
 export class SessionIndexStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  async exists(id: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("SELECT 1 AS ok FROM sessions WHERE id = ?")
+      .bind(id)
+      .first<{ ok: number }>();
+    return result !== null;
+  }
+
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);
 

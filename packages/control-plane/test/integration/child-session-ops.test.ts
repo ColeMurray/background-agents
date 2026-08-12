@@ -5,6 +5,7 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import {
   initNamedSession,
+  initNamedSessionDO,
   seedSandboxAuth,
   queryDO,
   seedEvents,
@@ -27,7 +28,7 @@ describe("Child session operations (list, get, cancel)", () => {
     const childName = `child-ops-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
     // Create parent DO
-    const { stub: parentStub } = await initNamedSession(pName, {
+    const { stub: parentStub } = await initNamedSessionDO(pName, {
       repoOwner: "acme",
       repoName: "web-app",
       userId: "user-1",
@@ -53,7 +54,7 @@ describe("Child session operations (list, get, cancel)", () => {
     });
 
     // Create child DO
-    const { stub: childStub } = await initNamedSession(childName, {
+    const { stub: childStub } = await initNamedSessionDO(childName, {
       repoOwner: "acme",
       repoName: "web-app",
       userId: "user-1",
@@ -107,7 +108,7 @@ describe("Child session operations (list, get, cancel)", () => {
     prefix: string
   ): Promise<string> {
     const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    await initNamedSession(id, { repoOwner: "acme", repoName: "web-app" });
+    await initNamedSessionDO(id, { repoOwner: "acme", repoName: "web-app" });
     const now = Date.now();
     await store.create({
       id,
@@ -245,7 +246,7 @@ describe("Child session operations (list, get, cancel)", () => {
 
       // Create a different "parent" session with sandbox auth
       const fakeName = `fake-parent-${Date.now()}`;
-      const { stub: fakeStub } = await initNamedSession(fakeName, {
+      const { stub: fakeStub } = await initNamedSessionDO(fakeName, {
         repoOwner: "acme",
         repoName: "web-app",
       });
@@ -458,7 +459,7 @@ describe("Child session operations (list, get, cancel)", () => {
 
       // Create a different parent with sandbox auth
       const fakeName = `fake-cancel-${Date.now()}`;
-      const { stub: fakeStub } = await initNamedSession(fakeName, {
+      const { stub: fakeStub } = await initNamedSessionDO(fakeName, {
         repoOwner: "acme",
         repoName: "web-app",
       });
@@ -722,7 +723,7 @@ describe("Child session operations (list, get, cancel)", () => {
     it("returns 404 without touching a child owned by another parent", async () => {
       const { childName, childStub } = await setupParentAndChild();
       const fakeName = `fake-prompt-${Date.now()}`;
-      const { stub: fakeStub } = await initNamedSession(fakeName);
+      const { stub: fakeStub } = await initNamedSessionDO(fakeName);
       const fakeToken = `sb-tok-fake-prompt-${Date.now()}`;
       await seedSandboxAuth(fakeStub, { authToken: fakeToken, sandboxId: "sb-fake-prompt" });
       const store = new SessionIndexStore(env.DB);
@@ -765,7 +766,7 @@ describe("Child session operations (list, get, cancel)", () => {
   describe("POST /internal/child-session-update", () => {
     it("broadcasts child_session_update to authenticated clients", async () => {
       const pName = parentName();
-      await initNamedSession(pName, { repoOwner: "acme", repoName: "web-app" });
+      await initNamedSessionDO(pName, { repoOwner: "acme", repoName: "web-app" });
 
       // Seed D1 row so WS token generation works
       const store = new SessionIndexStore(env.DB);

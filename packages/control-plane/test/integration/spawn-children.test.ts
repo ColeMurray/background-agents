@@ -4,7 +4,7 @@ import type { SessionDO } from "../../src/session/durable-object";
 import { ModelPreferencesStore } from "../../src/db/model-preferences";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
+import { initNamedSessionDO, queryDO, seedMessage, seedSandboxAuth } from "./helpers";
 
 describe("POST /sessions/:parentId/children — spawn child", () => {
   beforeEach(cleanD1Tables);
@@ -25,7 +25,7 @@ describe("POST /sessions/:parentId/children — spawn child", () => {
     reasoningEffort?: string | null;
   }) {
     const parentName = `parent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const { stub } = await initNamedSession(parentName, {
+    const { stub } = await initNamedSessionDO(parentName, {
       repoOwner: "acme",
       repoName: "web-app",
       ...(opts?.repoId != null && { repoId: opts.repoId }),
