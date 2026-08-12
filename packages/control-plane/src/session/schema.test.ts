@@ -56,6 +56,17 @@ function createDatabaseSql(db: DatabaseSync): SqlStorage {
   };
 }
 
+function expectClientRequestIdIndex(db: DatabaseSync): void {
+  expect(db.prepare("PRAGMA index_list(messages)").all()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ name: "idx_messages_client_request_id", unique: 1 }),
+    ])
+  );
+  expect(db.prepare("PRAGMA index_info(idx_messages_client_request_id)").all()).toEqual([
+    expect.objectContaining({ name: "client_request_id" }),
+  ]);
+}
+
 describe("applyMigrations", () => {
   let mock: ReturnType<typeof createMockSql>;
 
@@ -344,12 +355,7 @@ describe("applyMigrations", () => {
           expect.objectContaining({ name: "request_fingerprint", type: "TEXT" }),
         ])
       );
-      expect(
-        db
-          .prepare("PRAGMA index_list(messages)")
-          .all()
-          .some((row) => row.name === "idx_messages_client_request_id")
-      ).toBe(true);
+      expectClientRequestIdIndex(db);
     } finally {
       db.close();
     }
@@ -406,6 +412,7 @@ describe("applyMigrations", () => {
           "idx_messages_client_request_id",
         ])
       );
+      expectClientRequestIdIndex(db);
     } finally {
       db.close();
     }
