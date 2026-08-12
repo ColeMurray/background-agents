@@ -12,7 +12,6 @@ import {
 } from "@/lib/session-socket/event-log";
 import { createSessionSocketState, sessionSocketReducer } from "@/lib/session-socket/reducer";
 import { swrKeysToRevalidate } from "@/lib/session-socket/swr-revalidation";
-import { PROMPT_SUBMISSION_UPGRADE_MESSAGE } from "@/lib/prompt-submission-capability";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type {
@@ -22,7 +21,6 @@ import type {
   SessionSnapshot,
   SessionState,
 } from "@open-inspect/shared/types/server-messages";
-import { CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION } from "@open-inspect/shared/types/server-messages";
 
 const PROMPT_SUBSCRIPTION_TIMEOUT_MS = 5_000;
 const PROMPT_ACK_TIMEOUT_MS = 15_000;
@@ -55,7 +53,6 @@ interface UseSessionSocketReturn {
   currentParticipantId: string | null;
   isProcessing: boolean;
   promptQueue: PromptQueueItem[];
-  canSubmitPrompt: boolean;
   hasMoreHistory: boolean;
   loadingHistory: boolean;
   sendPrompt: (
@@ -75,7 +72,7 @@ export type QueuePromptResult =
   | { ok: true; clientRequestId: string; messageId: string; position: number | null }
   | {
       ok: false;
-      reason: "rejected" | "disconnected" | "timeout" | "unsupported";
+      reason: "rejected" | "disconnected" | "timeout";
       message?: string;
     };
 
@@ -98,7 +95,6 @@ export function useSessionSocket(
     createSessionSocketState
   );
   const subscribedRef = useRef(false);
-  const correlatedPromptEnqueueRef = useRef(false);
   // Buffers streamed assistant text in a ref so token events (which arrive at
   // high frequency) don't re-render; the text is appended on completion.
   const pendingTextRef = useRef<PendingAssistantText | null>(null);
@@ -152,9 +148,6 @@ export function useSessionSocket(
       if (message.type === "subscribed") {
         console.log("WebSocket subscribed to session");
         pendingTextRef.current = null;
-        correlatedPromptEnqueueRef.current =
-          (message.capabilities?.correlated_prompt_enqueue ?? 0) >=
-          CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION;
         void refreshSandboxAccess();
         if (message.spawnError && message.session.sandboxStatus === "failed") {
           console.error("Sandbox spawn error:", message.spawnError);
@@ -198,7 +191,6 @@ export function useSessionSocket(
 
   const handleClose = useCallback(() => {
     subscribedRef.current = false;
-    correlatedPromptEnqueueRef.current = false;
     settleSubscriptionWaiters(false);
     settlePendingPrompt({ ok: false, reason: "disconnected" });
     dispatch({ type: "socket_closed" });
@@ -267,14 +259,6 @@ export function useSessionSocket(
       if (pendingPromptRef.current) {
         console.error("A prompt is already waiting for acknowledgement");
         return { ok: false, reason: "rejected", message: "A prompt is awaiting confirmation" };
-      }
-
-      if (!correlatedPromptEnqueueRef.current) {
-        return {
-          ok: false,
-          reason: "unsupported",
-          message: PROMPT_SUBMISSION_UPGRADE_MESSAGE,
-        };
       }
 
       console.log("Sending prompt", {
@@ -363,7 +347,6 @@ export function useSessionSocket(
     currentParticipantId: state.currentParticipantId,
     isProcessing,
     promptQueue: state.promptQueue,
-    canSubmitPrompt: state.ready && state.supportsCorrelatedPromptEnqueue,
     hasMoreHistory,
     loadingHistory,
     sendPrompt,

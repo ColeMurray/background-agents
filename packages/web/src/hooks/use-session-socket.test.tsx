@@ -99,7 +99,6 @@ function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedM
     },
     spawnError: null,
     promptQueue: [],
-    capabilities: { correlated_prompt_enqueue: 1 },
   };
 }
 
@@ -207,24 +206,25 @@ describe("useSessionSocket", () => {
     expect(socket.readyState).toBe(FakeWebSocket.OPEN);
   });
 
-  it("refuses correlated prompts when an old subscribed server omits the capability", async () => {
+  it("sends correlated prompts without feature negotiation", async () => {
     const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
-    const { capabilities: _capabilities, ...legacySubscribed } = createSubscribedMessage();
 
     act(() => {
       socket.open();
-      socket.receive(legacySubscribed);
+      socket.receive(createSubscribedMessage());
     });
 
     await waitFor(() => expect(result.current.ready).toBe(true));
-    expect(result.current.canSubmitPrompt).toBe(false);
-    await expect(result.current.sendPrompt("Do not duplicate this")).resolves.toMatchObject({
-      ok: false,
-      reason: "unsupported",
+    void result.current.sendPrompt("Correlate this");
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "prompt",
+        clientRequestId: "client-id",
+        content: "Correlate this",
+      });
     });
-    expect(socket.sentMessages.filter((message) => message.type === "prompt")).toEqual([]);
   });
 
   it("ignores unrelated acknowledgements and errors while a correlated prompt is pending", async () => {

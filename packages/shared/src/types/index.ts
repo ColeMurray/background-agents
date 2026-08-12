@@ -82,8 +82,6 @@ export {
   sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
   promptQueueItemSchema,
-  CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION,
-  serverCapabilitiesSchema,
 } from "./server-messages";
 export type {
   ParticipantPresence,
@@ -93,7 +91,6 @@ export type {
   SessionSnapshotState,
   SessionState,
   SessionTimelineEvent,
-  ServerCapabilities,
 } from "./server-messages";
 
 export {

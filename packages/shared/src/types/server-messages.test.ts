@@ -169,29 +169,7 @@ describe("session view contracts", () => {
     ).toEqual([]);
   });
 
-  it("advertises versioned server capabilities while accepting old snapshots", () => {
-    const snapshot = {
-      session: snapshotState,
-      artifacts: [],
-      timeline: { events: [], hasMore: false, cursor: null },
-    };
-
-    expect(sessionSnapshotSchema.parse(snapshot).capabilities).toBeUndefined();
-    expect(
-      sessionSnapshotSchema.parse({
-        ...snapshot,
-        capabilities: { correlated_prompt_enqueue: 1 },
-      }).capabilities
-    ).toEqual({ correlated_prompt_enqueue: 1 });
-    expect(
-      sessionSnapshotSchema.parse({
-        ...snapshot,
-        capabilities: { correlated_prompt_enqueue: 2 },
-      }).capabilities
-    ).toEqual({ correlated_prompt_enqueue: 2 });
-  });
-
-  it("echoes optional prompt request correlation during rollout", () => {
+  it("echoes prompt request correlation", () => {
     expect(
       serverMessageSchema.parse({
         type: "prompt_queued",
@@ -214,7 +192,7 @@ describe("session view contracts", () => {
         messageId: "message-1",
         position: 1,
       }).success
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("parses correlated prompt rejections", () => {

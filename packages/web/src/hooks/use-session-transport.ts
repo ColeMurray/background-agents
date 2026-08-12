@@ -181,7 +181,6 @@ export function useSessionTransport(
         type: "subscribe",
         token: wsTokenRef.current,
         clientId: crypto.randomUUID(),
-        capabilities: ["prompt_queue_updates"],
       })
     );
   }, []);

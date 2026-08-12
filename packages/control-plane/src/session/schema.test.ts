@@ -354,21 +354,12 @@ describe("applyMigrations", () => {
     }
   });
 
-  it("persists WebSocket capabilities for fresh and migrated sessions", () => {
-    expect(SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS ws_client_mapping")[1]).toContain(
-      "capabilities TEXT"
-    );
-    expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
-      "ADD COLUMN capabilities TEXT"
-    );
-  });
-
   it("adds a dedicated nullable stop confirmation deadline for fresh and migrated sessions", () => {
     const messagesTable = SCHEMA_SQL.split("CREATE TABLE IF NOT EXISTS messages")[1]?.split(
       ");"
     )[0];
     expect(messagesTable).toContain("stop_confirmation_deadline INTEGER");
-    expect(MIGRATIONS.find((entry) => entry.id === 42)?.run).toContain(
+    expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
       "ADD COLUMN stop_confirmation_deadline INTEGER"
     );
   });

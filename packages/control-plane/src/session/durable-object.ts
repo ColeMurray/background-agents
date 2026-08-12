@@ -1388,7 +1388,6 @@ export class SessionDO extends DurableObject<Env> {
     data: {
       token: string;
       clientId: string;
-      capabilities?: Array<"prompt_queue_updates">;
     }
   ): Promise<void> {
     // Validate the WebSocket auth token
@@ -1463,7 +1462,6 @@ export class SessionDO extends DurableObject<Env> {
         status: "active",
         lastSeen: Date.now(),
         clientId: data.clientId,
-        capabilities: data.capabilities,
         ws,
       };
 
@@ -1513,12 +1511,7 @@ export class SessionDO extends DurableObject<Env> {
     this.wsManager.setClient(ws, client);
     const parsed = this.wsManager.classify(ws);
     if (parsed.kind === "client" && parsed.wsId) {
-      this.wsManager.persistClientMapping(
-        parsed.wsId,
-        client.participantId,
-        client.clientId,
-        client.capabilities
-      );
+      this.wsManager.persistClientMapping(parsed.wsId, client.participantId, client.clientId);
       this.log.debug("Stored ws_client_mapping", {
         ws_id: parsed.wsId,
         participant_id: client.participantId,
@@ -1553,7 +1546,6 @@ export class SessionDO extends DurableObject<Env> {
       status: "active",
       lastSeen: Date.now(),
       clientId: mapping.client_id || `client-${Date.now()}`,
-      capabilities: mapping.capabilities,
       ws,
     };
 
@@ -1573,7 +1565,7 @@ export class SessionDO extends DurableObject<Env> {
       model?: string;
       reasoningEffort?: string;
       attachments?: SessionAttachmentReference[];
-      clientRequestId?: string;
+      clientRequestId: string;
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, client, data);
@@ -1813,7 +1805,6 @@ export class SessionDO extends DurableObject<Env> {
         artifacts: this.messageService.listArtifacts().artifacts,
         timeline: this.eventStream.getReplay(),
         promptQueue: this.repository.listPromptQueue(),
-        capabilities: { correlated_prompt_enqueue: 1 },
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });

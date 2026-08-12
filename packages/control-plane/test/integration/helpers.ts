@@ -348,7 +348,6 @@ export async function openClientWs(
     subscribe?: boolean;
     userId?: string;
     canonicalUserId?: string;
-    capabilities?: Array<"prompt_queue_updates">;
   }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
@@ -391,7 +390,6 @@ export async function openClientWs(
       type: "subscribe",
       token,
       clientId: `test-client-${Date.now()}`,
-      capabilities: opts.capabilities,
     })
   );
 

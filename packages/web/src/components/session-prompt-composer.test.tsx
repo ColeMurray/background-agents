@@ -42,14 +42,12 @@ function ComposerHarness({
   isUploading = false,
   status = "active",
   submitError = null,
-  submissionDisabledMessage = null,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
   isUploading?: boolean;
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
-  submissionDisabledMessage?: string | null;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -68,7 +66,6 @@ function ComposerHarness({
         isProcessing,
         draftLocked: isUploading,
         submitError,
-        submissionDisabledMessage,
         inputRef,
         onSubmit: vi.fn(),
         onChange: (event) => setValue(event.target.value),
@@ -157,20 +154,6 @@ describe("SessionPromptComposer", () => {
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();
-  });
-
-  it("disables submission with a clear message for an old server", () => {
-    render(
-      <ComposerHarness
-        initialValue="Keep this draft"
-        submissionDisabledMessage="Prompt submission requires a newer server version."
-      />
-    );
-
-    expect(screen.getByTitle(/Send/)).toBeDisabled();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Prompt submission requires a newer server version."
-    );
   });
 
   it("shows an inline submission error", () => {

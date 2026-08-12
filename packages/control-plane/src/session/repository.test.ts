@@ -1330,14 +1330,14 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO ws_client_mapping");
-      expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", null, 1000]);
+      expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000]);
     });
   });
 
   describe("getWsClientMapping", () => {
-    it("restores persisted client capabilities", () => {
+    it("restores a persisted client mapping", () => {
       mock.setData(
-        `SELECT m.participant_id, m.client_id, m.capabilities, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+        `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,
@@ -1345,7 +1345,6 @@ describe("SessionRepository", () => {
           {
             participant_id: "p-1",
             client_id: "client-1",
-            capabilities: '["prompt_queue_updates"]',
             user_id: "user-1",
             canonical_user_id: null,
             scm_name: null,
@@ -1354,7 +1353,11 @@ describe("SessionRepository", () => {
         ]
       );
 
-      expect(repo.getWsClientMapping("ws-1")?.capabilities).toEqual(["prompt_queue_updates"]);
+      expect(repo.getWsClientMapping("ws-1")).toMatchObject({
+        participant_id: "p-1",
+        client_id: "client-1",
+        user_id: "user-1",
+      });
     });
   });
 

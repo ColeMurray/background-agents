@@ -7,12 +7,6 @@ import { clientRequestIdSchema } from "./prompts";
 
 const timelineSequenceSchema = z.number().int().nonnegative().safe();
 
-export const CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION = 1;
-export const serverCapabilitiesSchema = z.object({
-  correlated_prompt_enqueue: z.number().int().positive().optional(),
-});
-export type ServerCapabilities = z.infer<typeof serverCapabilitiesSchema>;
-
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),
   content: z.string(),
@@ -121,7 +115,6 @@ export const sessionSnapshotSchema = z.object({
   timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
   promptQueue: z.array(promptQueueItemSchema).default([]),
-  capabilities: serverCapabilitiesSchema.optional(),
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 
@@ -134,7 +127,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("prompt_queued"),
-    clientRequestId: clientRequestIdSchema.optional(),
+    clientRequestId: clientRequestIdSchema,
     messageId: z.string(),
     position: z.number().int().positive().nullable(),
   }),

@@ -9,11 +9,10 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("subscribe"),
     token: z.string(),
     clientId: z.string(),
-    capabilities: z.array(z.literal("prompt_queue_updates")).optional(),
   }),
   webPromptPayloadSchema.extend({
     type: z.literal("prompt"),
-    clientRequestId: clientRequestIdSchema.optional(),
+    clientRequestId: clientRequestIdSchema,
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),

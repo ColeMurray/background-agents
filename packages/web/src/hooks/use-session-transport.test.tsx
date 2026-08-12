@@ -101,7 +101,6 @@ describe("useSessionTransport", () => {
         type: "subscribe",
         token: "ws-token",
         clientId: "00000000-0000-0000-0000-000000000000",
-        capabilities: ["prompt_queue_updates"],
       },
     ]);
     await waitFor(() => {

@@ -24,12 +24,6 @@ export class SessionMessengerImpl implements SessionMessenger {
 
   broadcast(message: ServerMessage): void {
     this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
-      if (
-        message.type === "prompt_queue_updated" &&
-        !this.wsManager.hasClientCapability(ws, "prompt_queue_updates")
-      ) {
-        return;
-      }
       this.wsManager.send(ws, message);
     });
   }

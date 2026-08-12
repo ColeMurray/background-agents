@@ -33,7 +33,9 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       ws.addEventListener("close", (evt) => resolve({ code: evt.code }));
     });
 
-    ws.send(JSON.stringify({ type: "prompt", content: "hello" }));
+    ws.send(
+      JSON.stringify({ type: "prompt", clientRequestId: crypto.randomUUID(), content: "hello" })
+    );
 
     // Unsubscribed sockets have no client mapping — the DO closes them
     // with 4002 and never enqueues the prompt.
@@ -421,7 +423,13 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       timeoutMs: 2000,
     });
 
-    ws.send(JSON.stringify({ type: "prompt", content: "Hello from WS test" }));
+    ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: crypto.randomUUID(),
+        content: "Hello from WS test",
+      })
+    );
 
     const messages = await collector;
     const queued = messages.find((m) => m.type === "prompt_queued") as Record<string, unknown>;
@@ -476,42 +484,41 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const reconnect = await openClientWs(name, { subscribe: true });
     const subscribed = reconnect.messages!.find((message) => message.type === "subscribed") as {
       promptQueue: Array<Record<string, unknown>>;
-      capabilities?: { correlated_prompt_enqueue?: number };
     };
     expect(subscribed.promptQueue).toEqual([
       expect.objectContaining({ content: "Only once", status: "pending" }),
     ]);
-    expect(subscribed.capabilities).toEqual({ correlated_prompt_enqueue: 1 });
     expect(subscribed.promptQueue[0]).not.toHaveProperty("model");
     expect(subscribed.promptQueue[0]).not.toHaveProperty("reasoningEffort");
     reconnect.ws.close();
   });
 
-  it("gates prompt queue updates to clients that negotiated the capability", async () => {
-    const name = `ws-client-queue-capability-${Date.now()}`;
+  it("broadcasts prompt queue updates to every subscribed client", async () => {
+    const name = `ws-client-queue-updates-${Date.now()}`;
     await initNamedSession(name);
-    const legacy = await openClientWs(name, { subscribe: true, userId: "legacy-user" });
-    const current = await openClientWs(name, {
-      subscribe: true,
-      userId: "current-user",
-      capabilities: ["prompt_queue_updates"],
+    const first = await openClientWs(name, { subscribe: true, userId: "first-user" });
+    const second = await openClientWs(name, { subscribe: true, userId: "second-user" });
+    const firstMessages = collectMessages(first.ws, {
+      until: (message) => message.type === "prompt_queue_updated",
+      timeoutMs: 2000,
     });
-    const legacyMessages = collectMessages(legacy.ws, { timeoutMs: 250 });
-    const currentMessages = collectMessages(current.ws, {
+    const secondMessages = collectMessages(second.ws, {
       until: (message) => message.type === "prompt_queue_updated",
       timeoutMs: 2000,
     });
 
-    current.ws.send(JSON.stringify({ type: "prompt", content: "Negotiated update" }));
+    second.ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: crypto.randomUUID(),
+        content: "Shared update",
+      })
+    );
 
-    expect((await currentMessages).map((message) => message.type)).toContain(
-      "prompt_queue_updated"
-    );
-    expect((await legacyMessages).map((message) => message.type)).not.toContain(
-      "prompt_queue_updated"
-    );
-    legacy.ws.close();
-    current.ws.close();
+    expect((await firstMessages).map((message) => message.type)).toContain("prompt_queue_updated");
+    expect((await secondMessages).map((message) => message.type)).toContain("prompt_queue_updated");
+    first.ws.close();
+    second.ws.close();
   });
 
   it("rejects an idempotency conflict without creating duplicate work", async () => {
@@ -564,7 +571,13 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       until: (message) => message.type === "error",
       timeoutMs: 2000,
     });
-    ws.send(JSON.stringify({ type: "prompt", content: "One too many" }));
+    ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: crypto.randomUUID(),
+        content: "One too many",
+      })
+    );
     expect((await collector).find((message) => message.type === "error")).toMatchObject({
       code: "PROMPT_QUEUE_FULL",
     });

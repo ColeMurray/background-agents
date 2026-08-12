@@ -93,7 +93,7 @@ export class PromptRequestConflictError extends Error {
 
 export async function fingerprintWebPrompt(
   participantId: string,
-  data: PromptMessageData
+  data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments">
 ): Promise<string> {
   const canonicalRequest = JSON.stringify({
     participantId,

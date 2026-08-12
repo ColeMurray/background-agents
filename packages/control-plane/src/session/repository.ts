@@ -55,7 +55,6 @@ export interface WsClientMappingResult {
   scm_login: string | null;
   /** Dormant legacy column may still be present on older mapping fixtures. */
   auth_name?: string | null;
-  capabilities?: Array<"prompt_queue_updates">;
 }
 
 /**
@@ -245,7 +244,6 @@ export interface WsClientMappingData {
   wsId: string;
   participantId: string;
   clientId: string;
-  capabilities?: Array<"prompt_queue_updates">;
   createdAt: number;
 }
 
@@ -1181,43 +1179,24 @@ export class SessionRepository {
 
   upsertWsClientMapping(data: WsClientMappingData): void {
     this.sql.exec(
-      `INSERT OR REPLACE INTO ws_client_mapping (ws_id, participant_id, client_id, capabilities, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO ws_client_mapping (ws_id, participant_id, client_id, created_at)
+       VALUES (?, ?, ?, ?)`,
       data.wsId,
       data.participantId,
       data.clientId,
-      data.capabilities ? JSON.stringify(data.capabilities) : null,
       data.createdAt
     );
   }
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, m.capabilities, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+      `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,
       wsId
     );
-    const row = this.rows<
-      Omit<WsClientMappingResult, "capabilities"> & { capabilities: string | null }
-    >(result)[0];
-    if (!row) return null;
-    let capabilities: Array<"prompt_queue_updates"> | undefined;
-    if (row.capabilities) {
-      try {
-        const parsed = JSON.parse(row.capabilities) as unknown;
-        if (Array.isArray(parsed) && parsed.includes("prompt_queue_updates")) {
-          capabilities = ["prompt_queue_updates"];
-        }
-      } catch {
-        capabilities = undefined;
-      }
-    }
-    return {
-      ...row,
-      capabilities,
-    };
+    return this.rows<WsClientMappingResult>(result)[0] ?? null;
   }
 
   hasWsClientMapping(wsId: string): boolean {

@@ -186,7 +186,6 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   ws_id TEXT PRIMARY KEY,
   participant_id TEXT NOT NULL,
   client_id TEXT,
-  capabilities TEXT,
   created_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
@@ -528,11 +527,6 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
   },
   {
     id: 41,
-    description: "Persist WebSocket client capabilities",
-    run: `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT`,
-  },
-  {
-    id: 42,
     description: "Add dedicated stop confirmation deadline",
     run: `ALTER TABLE messages ADD COLUMN stop_confirmation_deadline INTEGER`,
   },

@@ -614,9 +614,9 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("keeps clientRequestId optional during rollout", () => {
+    it("requires clientRequestId for prompt correlation", () => {
       expect(clientMessageSchema.safeParse({ type: "prompt", content: "Continue" }).success).toBe(
-        true
+        false
       );
     });
 
@@ -634,17 +634,6 @@ describe("boundary schemas", () => {
       ).toBe(false);
     });
 
-    it("accepts prompt queue update capability negotiation on subscribe", () => {
-      expect(
-        clientMessageSchema.parse({
-          type: "subscribe",
-          token: "token",
-          clientId: "client-1",
-          capabilities: ["prompt_queue_updates"],
-        })
-      ).toMatchObject({ capabilities: ["prompt_queue_updates"] });
-    });
-
     it("rejects blank and oversized prompts but accepts attachment-only prompts", () => {
       expect(clientMessageSchema.safeParse({ type: "prompt", content: "  \n" }).success).toBe(
         false
@@ -652,12 +641,14 @@ describe("boundary schemas", () => {
       expect(
         clientMessageSchema.safeParse({
           type: "prompt",
+          clientRequestId: "request-oversized",
           content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1),
         }).success
       ).toBe(false);
       expect(
         clientMessageSchema.safeParse({
           type: "prompt",
+          clientRequestId: "request-attachment-only",
           content: " \n",
           attachments: [{ name: "evidence.png", attachmentId: "attachment-1" }],
         }).success
@@ -671,6 +662,7 @@ describe("boundary schemas", () => {
       ]) {
         const result = clientMessageSchema.safeParse({
           type: "prompt",
+          clientRequestId: "request-source",
           content: "Look",
           attachments: [attachment],
         });
@@ -681,6 +673,7 @@ describe("boundary schemas", () => {
     it("rejects prompts with more than six attachments", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",
+        clientRequestId: "request-attachments",
         content: "Compare these",
         attachments: Array.from({ length: 7 }, (_, index) => ({
           name: `${index}.png`,
@@ -699,6 +692,7 @@ describe("boundary schemas", () => {
         expect(
           clientMessageSchema.safeParse({
             type: "prompt",
+            clientRequestId: "request-attachment-bounds",
             content: "Look",
             attachments: [attachment],
           }).success
@@ -768,16 +762,12 @@ describe("boundary schemas", () => {
           cursor: null,
         },
         spawnError: null,
-        capabilities: { correlated_prompt_enqueue: 1 },
       });
 
       expect(result.success).toBe(true);
-      if (result.success && result.data.type === "subscribed") {
-        expect(result.data.capabilities?.correlated_prompt_enqueue).toBe(1);
-      }
     });
 
-    it("accepts subscribed snapshots from servers without capability advertisement", () => {
+    it("accepts subscribed snapshots", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
         session: {

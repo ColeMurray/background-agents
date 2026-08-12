@@ -97,7 +97,6 @@ function createMockRepository() {
     wsId: string;
     participantId: string;
     clientId: string;
-    capabilities?: Array<"prompt_queue_updates">;
     createdAt: number;
   }> = [];
 
@@ -109,14 +108,12 @@ function createMockRepository() {
       wsId: string;
       participantId: string;
       clientId: string;
-      capabilities?: Array<"prompt_queue_updates">;
       createdAt: number;
     }) => {
       upsertCalls.push(data);
       mappings.set(data.wsId, {
         participant_id: data.participantId,
         client_id: data.clientId,
-        capabilities: data.capabilities,
         user_id: `user-${data.participantId}`,
         scm_name: null,
         auth_name: null,
@@ -560,33 +557,14 @@ describe("SessionWebSocketManagerImpl", () => {
     it("calls repository.upsertWsClientMapping", () => {
       const { manager, mockRepo } = createManager();
 
-      manager.persistClientMapping("ws-1", "part-1", "client-1", ["prompt_queue_updates"]);
+      manager.persistClientMapping("ws-1", "part-1", "client-1");
 
       expect(mockRepo.upsertCalls).toHaveLength(1);
       expect(mockRepo.upsertCalls[0]).toMatchObject({
         wsId: "ws-1",
         participantId: "part-1",
         clientId: "client-1",
-        capabilities: ["prompt_queue_updates"],
       });
-    });
-  });
-
-  describe("hasClientCapability", () => {
-    it("restores a negotiated capability from the mapping after hibernation", () => {
-      const { manager, sockets, mockRepo } = createManager();
-      const ws = createFakeWebSocket();
-      sockets.set(ws, ["wsid:ws-42"]);
-      mockRepo.addMapping("ws-42", {
-        participant_id: "part-1",
-        client_id: "client-1",
-        user_id: "user-1",
-        scm_name: null,
-        scm_login: null,
-        capabilities: ["prompt_queue_updates"],
-      });
-
-      expect(manager.hasClientCapability(ws, "prompt_queue_updates")).toBe(true);
     });
   });
 
