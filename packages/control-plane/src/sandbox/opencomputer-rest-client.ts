@@ -136,16 +136,30 @@ export interface OpenComputerSetSecretParams {
   allowedHosts?: string[];
 }
 
-const openComputerTunnelApiResponseSchema = z.object({
-  url: z.string().optional(),
-  hostname: z.string().optional(),
-});
+/**
+ * A tunnel response has to carry a reachable address: OpenComputer answers
+ * either with a full `url` or with a bare `hostname` that becomes an https URL.
+ * A response with neither (`{}`, or empty strings) is not a tunnel — turning it
+ * into `url: ""` would hand code-server, VNC, and custom tunnel access a blank
+ * address as if validation had passed. The invariant therefore lives in the
+ * schema, and the normalized `url` is its output.
+ */
+const openComputerTunnelApiResponseSchema = z
+  .object({
+    url: z.string().optional(),
+    hostname: z.string().optional(),
+  })
+  .transform((response, ctx) => {
+    const hostname = response.hostname?.trim();
+    const url = response.url?.trim() || (hostname ? `https://${hostname}` : "");
+    if (!url) {
+      ctx.addIssue("Expected a non-empty url or hostname");
+      return z.NEVER;
+    }
+    return { ...response, url };
+  });
 
-type OpenComputerTunnelApiResponse = z.infer<typeof openComputerTunnelApiResponseSchema>;
-
-export interface OpenComputerTunnelResponse extends OpenComputerTunnelApiResponse {
-  url: string;
-}
+export type OpenComputerTunnelResponse = z.infer<typeof openComputerTunnelApiResponseSchema>;
 
 export class OpenComputerNotFoundError extends Error {
   constructor(message: string) {
@@ -236,6 +250,14 @@ const RUNTIME_LOG_BOOTSTRAP =
   `sudo chown "$(id -u):$(id -g)" ${RUNTIME_LOG_PATH}; ` +
   `ln -sf ${RUNTIME_LOG_PATH} ${LEGACY_RUNTIME_LOG_PATH}`;
 
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+interface RequestOptions {
+  body?: unknown;
+  /** Caller-owned cancellation, combined with the per-call timeout. */
+  signal?: AbortSignal;
+}
+
 export class OpenComputerRestClient {
   private readonly baseUrl: string;
   private readonly paths: OpenComputerApiPaths;
@@ -265,13 +287,12 @@ export class OpenComputerRestClient {
     }
 
     try {
-      const response = await this.request<OpenComputerSandboxApiResponse>(
+      const response = await this.requestJson(
         "POST",
         this.paths.sandboxes,
         TIMEOUT_CREATE_MS,
-        body,
-        undefined,
-        openComputerSandboxApiResponseSchema
+        openComputerSandboxApiResponseSchema,
+        { body }
       );
       return this.normalizeSandbox(response);
     } finally {
@@ -296,13 +317,12 @@ export class OpenComputerRestClient {
       body.secretStore = params.secretStore;
     }
 
-    const response = await this.request<OpenComputerSandboxApiResponse>(
+    const response = await this.requestJson(
       "POST",
       this.expandPath(this.paths.sandboxFromCheckpoint, { checkpointId: params.checkpointId }),
       TIMEOUT_CREATE_MS,
-      body,
-      undefined,
-      openComputerSandboxApiResponseSchema
+      openComputerSandboxApiResponseSchema,
+      { body }
     );
     return this.normalizeSandbox(response);
   }
@@ -310,36 +330,29 @@ export class OpenComputerRestClient {
   async createSecretStore(
     params: OpenComputerCreateSecretStoreParams
   ): Promise<OpenComputerSecretStoreResponse> {
-    return await this.request<OpenComputerSecretStoreResponse>(
+    return await this.requestJson(
       "POST",
       this.paths.secretStores,
       TIMEOUT_SECRET_STORE_MS,
-      {
-        name: params.name,
-        egressAllowlist: params.egressAllowlist,
-      },
-      undefined,
-      openComputerSecretStoreResponseSchema
+      openComputerSecretStoreResponseSchema,
+      { body: { name: params.name, egressAllowlist: params.egressAllowlist } }
     );
   }
 
   async setSecret(params: OpenComputerSetSecretParams): Promise<void> {
-    await this.request<void>(
+    await this.requestVoid(
       "PUT",
       this.expandPath(this.paths.secret, {
         id: params.storeId,
         name: params.name,
       }),
       TIMEOUT_SECRET_STORE_MS,
-      {
-        value: params.value,
-        allowedHosts: params.allowedHosts,
-      }
+      { body: { value: params.value, allowedHosts: params.allowedHosts } }
     );
   }
 
   async deleteSecretStore(id: string): Promise<void> {
-    await this.request<void>(
+    await this.requestVoid(
       "DELETE",
       this.expandPath(this.paths.secretStore, { id }),
       TIMEOUT_SECRET_STORE_MS
@@ -347,31 +360,33 @@ export class OpenComputerRestClient {
   }
 
   async getSandbox(id: string): Promise<OpenComputerSandboxResponse> {
-    const response = await this.request<OpenComputerSandboxApiResponse>(
+    const response = await this.requestJson(
       "GET",
       this.expandPath(this.paths.sandbox, { id }),
       TIMEOUT_GET_MS,
-      undefined,
-      undefined,
       openComputerSandboxApiResponseSchema
     );
     return this.normalizeSandbox(response);
   }
 
-  async wakeSandbox(id: string): Promise<OpenComputerSandboxResponse | void> {
-    const response = await this.request<OpenComputerSandboxApiResponse | void>(
+  /**
+   * Wake a hibernated sandbox. OpenComputer answers either with the woken
+   * sandbox or with an empty success, so an absent body is a legitimate result
+   * and the caller re-reads state it already holds. A body that is present must
+   * still describe a sandbox.
+   */
+  async wakeSandbox(id: string): Promise<OpenComputerSandboxResponse | undefined> {
+    const response = await this.requestOptionalJson(
       "POST",
       this.expandPath(this.paths.wake, { id }),
       TIMEOUT_WAKE_MS,
-      undefined,
-      undefined,
       openComputerSandboxApiResponseSchema
     );
-    return response ? this.normalizeSandbox(response) : response;
+    return response ? this.normalizeSandbox(response) : undefined;
   }
 
   async hibernateSandbox(id: string): Promise<void> {
-    await this.request<void>(
+    await this.requestVoid(
       "POST",
       this.expandPath(this.paths.hibernate, { id }),
       TIMEOUT_HIBERNATE_MS
@@ -379,8 +394,8 @@ export class OpenComputerRestClient {
   }
 
   async setSandboxTimeout(id: string, timeoutSeconds: number): Promise<void> {
-    await this.request<void>("POST", this.expandPath(this.paths.timeout, { id }), TIMEOUT_GET_MS, {
-      timeout: timeoutSeconds,
+    await this.requestVoid("POST", this.expandPath(this.paths.timeout, { id }), TIMEOUT_GET_MS, {
+      body: { timeout: timeoutSeconds },
     });
   }
 
@@ -392,24 +407,25 @@ export class OpenComputerRestClient {
     const params = new URLSearchParams();
     if (options?.deleteSecretStore) params.set("deleteSecretStore", "true");
     const query = params.toString() ? `?${params.toString()}` : "";
-    await this.request<void>(
+    await this.requestVoid(
       "DELETE",
       `${this.expandPath(this.paths.sandbox, { id })}${query}`,
       TIMEOUT_GET_MS,
-      undefined,
-      signal
+      { signal }
     );
   }
 
   async startRuntime(id: string, extraEnv: Record<string, string> = {}): Promise<void> {
     const exports = this.shellExportEnv(extraEnv);
-    await this.request<void>("POST", this.expandPath(this.paths.exec, { id }), TIMEOUT_EXEC_MS, {
-      cmd: "sh",
-      args: [
-        "-c",
-        `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
-      ],
-      timeout: RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS / 1000,
+    await this.requestVoid("POST", this.expandPath(this.paths.exec, { id }), TIMEOUT_EXEC_MS, {
+      body: {
+        cmd: "sh",
+        args: [
+          "-c",
+          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports}nohup python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1 & echo $!`,
+        ],
+        timeout: RUNTIME_ENTRYPOINT_EXEC_TIMEOUT_MS / 1000,
+      },
     });
   }
 
@@ -419,20 +435,21 @@ export class OpenComputerRestClient {
     extraEnv: Record<string, string> = {}
   ): Promise<OpenComputerExecResult> {
     const exports = this.shellExportEnv(extraEnv);
-    return await this.request<OpenComputerExecResult>(
+    return await this.requestJson(
       "POST",
       this.expandPath(this.paths.exec, { id }),
       TIMEOUT_BUILD_EXEC_MS,
+      openComputerExecResultSchema,
       {
-        cmd: "sh",
-        args: [
-          "-c",
-          `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
-        ],
-        timeout: timeoutSeconds,
-      },
-      undefined,
-      openComputerExecResultSchema
+        body: {
+          cmd: "sh",
+          args: [
+            "-c",
+            `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
+          ],
+          timeout: timeoutSeconds,
+        },
+      }
     );
   }
 
@@ -442,43 +459,39 @@ export class OpenComputerRestClient {
     options: OpenComputerCreateCheckpointOptions = {},
     signal?: AbortSignal
   ): Promise<OpenComputerCheckpointResponse> {
-    return await this.request<OpenComputerCheckpointResponse>(
+    return await this.requestJson(
       "POST",
       this.expandPath(this.paths.checkpoints, { id }),
       TIMEOUT_CHECKPOINT_MS,
+      openComputerCheckpointResponseSchema,
       {
-        name,
-        kind: options.kind ?? OPENCOMPUTER_CHECKPOINT_KIND,
-        retentionPolicy: options.retentionPolicy ?? OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
-      },
-      signal,
-      openComputerCheckpointResponseSchema
+        body: {
+          name,
+          kind: options.kind ?? OPENCOMPUTER_CHECKPOINT_KIND,
+          retentionPolicy: options.retentionPolicy ?? OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
+        },
+        signal,
+      }
     );
   }
 
   async deleteCheckpoint(id: string, checkpointId: string, signal?: AbortSignal): Promise<void> {
-    await this.request<void>(
+    await this.requestVoid(
       "DELETE",
       this.expandPath(this.paths.checkpoint, { id, checkpointId }),
       TIMEOUT_CHECKPOINT_MS,
-      undefined,
-      signal
+      { signal }
     );
   }
 
   async getTunnelUrl(id: string, port: number): Promise<OpenComputerTunnelResponse> {
-    const response = await this.request<OpenComputerTunnelApiResponse>(
+    return await this.requestJson(
       "POST",
       this.expandPath(this.paths.tunnel, { id, port: String(port) }),
       TIMEOUT_TUNNEL_MS,
-      { port },
-      undefined,
-      openComputerTunnelApiResponseSchema
+      openComputerTunnelApiResponseSchema,
+      { body: { port } }
     );
-    return {
-      ...response,
-      url: response.url ?? (response.hostname ? `https://${response.hostname}` : ""),
-    };
   }
 
   private getHeaders(): Record<string, string> {
@@ -489,19 +502,97 @@ export class OpenComputerRestClient {
     };
   }
 
-  private async request<T>(
-    method: "GET" | "POST" | "PUT" | "DELETE",
+  /**
+   * Request whose success body is required: it must be JSON and must satisfy
+   * `schema`, otherwise the call fails as an invalid response. The value type
+   * comes from the schema, so validating the body is the only way to produce
+   * one — a caller cannot opt out of it.
+   */
+  private requestJson<T>(
+    method: HttpMethod,
     path: string,
     timeoutMs: number,
-    body?: unknown,
-    externalSignal?: AbortSignal,
-    responseSchema?: z.ZodType<T>
+    schema: z.ZodType<T>,
+    options?: RequestOptions
+  ): Promise<T> {
+    return this.send(method, path, timeoutMs, options, async (response) =>
+      this.parseJson(schema, await response.text(), response.status)
+    );
+  }
+
+  /**
+   * Request whose success body is optional. Only `wake` is like this: it answers
+   * either with the woken sandbox or with an empty success. An empty body yields
+   * `undefined`; anything else still has to satisfy `schema`, so a malformed
+   * sandbox fails the call instead of masquerading as the empty case.
+   */
+  private requestOptionalJson<T>(
+    method: HttpMethod,
+    path: string,
+    timeoutMs: number,
+    schema: z.ZodType<T>,
+    options?: RequestOptions
+  ): Promise<T | undefined> {
+    return this.send(method, path, timeoutMs, options, async (response) => {
+      const text = await response.text();
+      if (text.trim() === "") return undefined;
+      return this.parseJson(schema, text, response.status);
+    });
+  }
+
+  /**
+   * Command whose success body carries nothing we act on. OpenComputer answers
+   * some of these with 204 and others with a status blob; both are discarded, so
+   * neither shape can fail the call.
+   */
+  private requestVoid(
+    method: HttpMethod,
+    path: string,
+    timeoutMs: number,
+    options?: RequestOptions
+  ): Promise<void> {
+    return this.send<void>(method, path, timeoutMs, options, () => {});
+  }
+
+  /**
+   * Validate a required body. OpenComputer does not always label JSON responses
+   * with `application/json`, so the text is parsed regardless of content type; a
+   * missing, non-JSON, or non-conforming body is a protocol violation and is
+   * reported as one instead of reaching the caller.
+   */
+  private parseJson<T>(schema: z.ZodType<T>, text: string, status: number): T {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new OpenComputerApiError("Invalid OpenComputer API response", status);
+    }
+
+    const parsed = schema.safeParse(payload);
+    if (!parsed.success) {
+      throw new OpenComputerApiError("Invalid OpenComputer API response", status);
+    }
+    return parsed.data;
+  }
+
+  /**
+   * Issue the request under `timeoutMs` and hand a successful response to
+   * `consume`. The timeout stays armed while `consume` reads the body so an
+   * abort raised there is translated like any other (see the catch below).
+   */
+  private async send<T>(
+    method: HttpMethod,
+    path: string,
+    timeoutMs: number,
+    options: RequestOptions | undefined,
+    consume: (response: Response) => T | Promise<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      const externalSignal = options?.signal;
       const init: RequestInit = {
         method,
         headers: this.getHeaders(),
@@ -509,7 +600,7 @@ export class OpenComputerRestClient {
           ? AbortSignal.any([controller.signal, externalSignal])
           : controller.signal,
       };
-      if (body !== undefined) init.body = JSON.stringify(body);
+      if (options?.body !== undefined) init.body = JSON.stringify(options.body);
 
       const response = await fetch(url, init);
 
@@ -523,20 +614,7 @@ export class OpenComputerRestClient {
         throw new OpenComputerApiError(text || response.statusText, response.status);
       }
 
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        const data = await response.json();
-        if (responseSchema) {
-          const parsed = responseSchema.safeParse(data);
-          if (!parsed.success) {
-            throw new OpenComputerApiError("Invalid OpenComputer API response", response.status);
-          }
-          return parsed.data;
-        }
-      }
-      // SAFETY: Call sites without a response schema are typed as void endpoints;
-      // any JSON body is intentionally ignored to preserve the existing contract.
-      return undefined as T;
+      return await consume(response);
     } catch (error) {
       // The per-call timeout fires controller.abort(); the resulting AbortError
       // — from fetch OR a body read — must surface as an attributed timeout so

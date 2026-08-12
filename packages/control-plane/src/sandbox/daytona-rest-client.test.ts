@@ -214,6 +214,59 @@ describe("DaytonaRestClient", () => {
     });
   });
 
+  // Endpoints that return a value must produce one or fail. A success that
+  // carries no parsable body used to fall through as `undefined`, handing
+  // callers a value that violated the declared return type.
+  describe("required response bodies", () => {
+    it("rejects a success with no body", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(emptyResponse(200));
+
+      await expect(client.getSandbox("sb-1")).rejects.toMatchObject({
+        name: "DaytonaApiError",
+        message: "Invalid Daytona API response",
+      });
+    });
+
+    it("rejects a non-JSON success body", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(new Response("OK", { status: 200 }));
+
+      await expect(client.createSandbox({ name: "test", snapshot: "snap" })).rejects.toMatchObject({
+        name: "DaytonaApiError",
+      });
+    });
+
+    it("reports invalid JSON as an API error rather than a parser error", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(
+        new Response('{"url": ', { status: 200, headers: { "content-type": "application/json" } })
+      );
+
+      await expect(client.getSignedPreviewUrl("sb-1", 8080, 3900)).rejects.toMatchObject({
+        name: "DaytonaApiError",
+        message: "Invalid Daytona API response",
+      });
+    });
+
+    it("parses a JSON body that arrives without a JSON content type", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(
+        new Response(JSON.stringify({ id: "sb-1", state: "started" }), { status: 200 })
+      );
+
+      await expect(client.getSandbox("sb-1")).resolves.toEqual({ id: "sb-1", state: "started" });
+    });
+
+    it("commands ignore whatever a success body contains", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(jsonResponse({ unexpected: "payload" }));
+
+      await expect(client.startSandbox("sb-1")).resolves.toBeUndefined();
+      await expect(client.recoverSandbox("sb-1")).resolves.toBeUndefined();
+    });
+  });
+
   describe("response schemas", () => {
     it("parses a valid sandbox response with an optional recoverable flag", () => {
       expect(
