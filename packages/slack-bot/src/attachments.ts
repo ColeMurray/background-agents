@@ -21,7 +21,7 @@ import {
   sessionAttachmentIdSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
-import { readBodyCapped } from "@open-inspect/shared";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";

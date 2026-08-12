@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
 import type { SlackSessionTarget } from "../targets";
+import type { SlackActorIdentity } from "../user-identity";
 import { startSessionAndSendPrompt } from "./session-launcher";
 import { getAvailableModels } from "../app-home/models";
 import { getUserRepoBranchPreference } from "../branch-preferences";
@@ -9,7 +10,7 @@ import { createSession } from "./control-plane-client";
 import { getSlackSettings } from "../slack-settings";
 import { deliverPrompt } from "./prompt-delivery";
 import { buildThreadSession, storeThreadSession } from "./thread-session-store";
-import { getUserInfo, postMessage } from "@open-inspect/shared/slack";
+import { postMessage } from "@open-inspect/shared/slack";
 import {
   notifyDroppedAttachments,
   prepareImageAttachments,
@@ -17,7 +18,6 @@ import {
 } from "../attachments";
 
 vi.mock("@open-inspect/shared/slack", () => ({
-  getUserInfo: vi.fn(),
   postMessage: vi.fn(),
 }));
 
@@ -98,6 +98,13 @@ const environmentTarget: SlackSessionTarget = {
   },
 };
 
+const actor: SlackActorIdentity = {
+  userId: "U123",
+  senderLabel: "Display Name (U123)",
+  displayName: "Display Name",
+  email: "user@example.com",
+};
+
 describe("startSessionAndSendPrompt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -114,15 +121,6 @@ describe("startSessionAndSendPrompt", () => {
       branch: "user-default-branch",
     });
     vi.mocked(getUserRepoBranchPreference).mockResolvedValue("repo-override-branch");
-    vi.mocked(getUserInfo).mockResolvedValue({
-      ok: true,
-      user: {
-        id: "U123",
-        name: "fallback-name",
-        real_name: "Real Name",
-        profile: { display_name: "Display Name", email: "user@example.com" },
-      },
-    } as Awaited<ReturnType<typeof getUserInfo>>);
     vi.mocked(createSession).mockResolvedValue({ sessionId: "session-1", status: "created" });
     vi.mocked(prepareImageAttachments).mockResolvedValue({ files: [], dropped: [] });
     vi.mocked(deliverPrompt).mockResolvedValue({ ok: true, data: { messageId: "message-1" } });
@@ -146,7 +144,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "Fix the failing deploy",
-        userId: "U123",
+        actor,
         previousMessages: ["[Alice]: Earlier request", "[Bot]: Earlier response"],
         channelName: "engineering",
         channelDescription: "Build and deploy discussion",
@@ -219,7 +217,7 @@ describe("startSessionAndSendPrompt", () => {
       channel: "C123",
       threadTs: "111.222",
       messageText: "Fix the failing deploy",
-      userId: "U123",
+      actor,
       traceId: "trace-1",
     });
 
@@ -241,7 +239,7 @@ describe("startSessionAndSendPrompt", () => {
       channel: "C123",
       threadTs: "111.222",
       messageText: "Inspect production",
-      userId: "U123",
+      actor,
     });
 
     expect(getUserRepoBranchPreference).not.toHaveBeenCalled();
@@ -268,7 +266,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "Fix it",
-        userId: "U123",
+        actor,
       })
     ).resolves.toBeNull();
 
@@ -292,7 +290,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "Fix it",
-        userId: "U123",
+        actor,
       })
     ).resolves.toBeNull();
 
@@ -327,7 +325,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "What is wrong in this screenshot?",
-        userId: "U123",
+        actor,
         images,
         traceId: "trace-1",
       })
@@ -361,7 +359,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "See the attached image(s).",
-        userId: "U123",
+        actor,
         images: [
           {
             id: "F1",
@@ -409,7 +407,7 @@ describe("startSessionAndSendPrompt", () => {
         channel: "C123",
         threadTs: "111.222",
         messageText: "See the attached image(s).",
-        userId: "U123",
+        actor,
         images: [
           {
             id: "F1",

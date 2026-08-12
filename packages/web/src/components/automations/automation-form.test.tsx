@@ -2,7 +2,7 @@
 /// <reference types="@testing-library/jest-dom" />
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import type { ReactNode } from "react";
 import { MAX_AUTOMATION_REPOSITORIES } from "@open-inspect/shared/types/automations";
@@ -106,9 +106,28 @@ const singleRepository = [
 ];
 
 const openRepositoryPicker = () =>
-  fireEvent.click(screen.getByRole("button", { name: "Repository selection" }));
+  fireEvent.click(screen.getByRole("button", { name: "Repository Configuration" }));
 
 describe("automation cron submission", () => {
+  it("groups conditions under an accessible name", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Watch Sentry",
+          triggerType: "sentry",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Triage the alert.",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("group", { name: /Conditions/ })).toBeInTheDocument();
+  });
+
   it("clears the propagated cron when custom input becomes invalid", () => {
     const onChange = vi.fn();
 
@@ -150,6 +169,51 @@ describe("automation cron submission", () => {
     fireEvent.submit(container.querySelector("form")!);
 
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("exposes trigger choices as a named radio group with selection state", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review the repo.",
+          triggerType: "schedule",
+        }}
+      />
+    );
+
+    const group = screen.getByRole("radiogroup", { name: "Trigger Type" });
+    expect(within(group).getByRole("radio", { name: /Schedule/ })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: /Sentry/ })).not.toBeChecked();
+
+    fireEvent.click(within(group).getByRole("radio", { name: /Sentry/ }));
+
+    expect(within(group).getByRole("radio", { name: /Sentry/ })).toBeChecked();
+    expect(within(group).getByRole("radio", { name: /Schedule/ })).not.toBeChecked();
+  });
+
+  it("names the repository picker with its visible label", () => {
+    render(
+      <AutomationForm
+        mode="create"
+        submitting={false}
+        onSubmit={vi.fn()}
+        initialValues={{
+          name: "Daily review",
+          repositories: singleRepository,
+          model: "openai/gpt-5.4",
+          instructions: "Review the repo.",
+        }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Repository Configuration" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repository selection" })).toBeNull();
   });
 
   it("requires event type when trigger source exposes event type selector", () => {
@@ -624,7 +688,7 @@ describe("repository selection", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /GitHub Event/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /GitHub Event/ }));
 
     expect(
       screen.getByText("Repository-scoped triggers need exactly one repository.")

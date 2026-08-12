@@ -16,13 +16,13 @@ import {
   DEFAULT_MODEL,
   getReasoningConfig,
   isValidReasoningEffort,
+  resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
-import { resolveEnabledModel } from "@/lib/model-selection";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -209,7 +209,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   // is blocked — keeping display, reasoning, and the payload in agreement
   // without relying on a post-load effect.
   const resolvedModel = useMemo(
-    () => (loadingModels ? model : resolveEnabledModel(model, enabledModels)),
+    () =>
+      loadingModels
+        ? model
+        : resolveEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL }),
     [loadingModels, model, enabledModels]
   );
 
@@ -371,16 +374,25 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Trigger Type */}
       {mode === "create" ? (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div
+            id="automation-trigger-type-label"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Trigger Type
+          </div>
           <FieldDescription className="my-1">
             Scheduled automations run on a repeating timer. Other types run when the connected
             service sends an event (for example a GitHub webhook or Sentry alert).
           </FieldDescription>
-          <TriggerTypeSelector value={triggerType} onChange={setTriggerType} />
+          <TriggerTypeSelector
+            value={triggerType}
+            onChange={setTriggerType}
+            labelledBy="automation-trigger-type-label"
+          />
         </div>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</label>
+          <div className="block text-sm font-medium text-foreground mb-1.5">Trigger Type</div>
           <div className="text-sm text-muted-foreground px-3 py-2 border border-border-muted rounded-md bg-muted/30">
             {{
               schedule: "Schedule",
@@ -420,15 +432,20 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Repository Configuration */}
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">
+        <label
+          id="automation-repository-configuration-label"
+          htmlFor="automation-repository-configuration"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
           Repository Configuration
         </label>
         <Popover open={repoDropdownOpen} onOpenChange={setRepoDropdownOpen}>
           <PopoverTrigger asChild>
             <button
+              id="automation-repository-configuration"
               type="button"
               className="flex w-full items-center gap-2 rounded-sm border border-border bg-input px-3 py-2 text-sm text-foreground transition hover:border-foreground/20 focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-              aria-label="Repository selection"
+              aria-labelledby="automation-repository-configuration-label"
             >
               {selectedEnvironmentIds.length > 0 && selectedRepoNames.length === 0 ? (
                 <BoxIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -824,11 +841,11 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
 
       {/* Conditions (for non-schedule types) */}
       {!isSchedule && TRIGGER_TYPE_TO_SOURCE[triggerType] && (
-        <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">
+        <fieldset className="m-0 min-w-0 border-0 p-0">
+          <legend className="block text-sm font-medium text-foreground mb-1.5">
             Conditions
             <span className="text-xs text-muted-foreground ml-1 font-normal">(optional)</span>
-          </label>
+          </legend>
           <ConditionBuilder
             conditions={conditions}
             onChange={setConditions}
@@ -843,7 +860,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               Slack triggers require at least one Slack Channel condition.
             </p>
           )}
-        </div>
+        </fieldset>
       )}
 
       {/* Instructions */}

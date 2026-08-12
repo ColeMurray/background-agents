@@ -2,18 +2,17 @@
  * Session-specific type definitions.
  */
 
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
-  ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
-  ArtifactType,
-  EventType,
-} from "../types";
+} from "@open-inspect/shared/types/sessions";
+import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
+import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
 
 // Database row types (match SQLite schema)
@@ -45,6 +44,7 @@ export interface SessionRow {
   spawn_source: SpawnSource;
   spawn_depth: number;
   code_server_enabled: number; // 0 = disabled (default), 1 = enabled
+  vnc_enabled: number; // 0 = disabled (default), 1 = enabled
   total_cost: number; // Running aggregate of step_finish event costs
   sandbox_settings: string | null; // JSON blob of SandboxSettings
   environment_id: string | null; // Launch environment provenance; NULL for repo-launched/ad-hoc sessions
@@ -154,6 +154,8 @@ export interface SandboxRow {
   last_spawn_error_at: number | null;
   code_server_url: string | null;
   code_server_password: string | null;
+  vnc_url: string | null;
+  vnc_password: string | null;
   tunnel_urls: string | null; // JSON mapping of port -> tunnel URL
   ttyd_url: string | null;
   ttyd_token: string | null;

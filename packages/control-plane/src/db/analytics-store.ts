@@ -5,7 +5,7 @@ import type {
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import type { SqlDatabase } from "./sql-database";
 
 /** Spawn sources that represent direct human-initiated sessions. */

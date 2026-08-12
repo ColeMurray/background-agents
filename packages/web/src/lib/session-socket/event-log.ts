@@ -3,17 +3,18 @@ import type { SandboxEvent } from "@/types/session";
 /**
  * The displayable event log built from raw sandbox events.
  *
- * Token events carry the full accumulated text (not incremental deltas), so
- * the log must show exactly one final token per message: collapsed after the
- * fact during replay (`collapseReplayTokenEvents`), and buffered until the
- * execution completes on the live path (`ingestLiveSandboxEvent`).
+ * Token events carry the full accumulated text for one assistant segment (not
+ * incremental deltas), so the log keeps one final token per segment. Context
+ * compaction ends the current segment before another starts for the same
+ * message.
  */
 
 export type AssistantTokenEvent = Extract<SandboxEvent, { type: "token" }>;
 
 /**
- * The latest streamed assistant text for an in-flight message. Only the most
- * recent token needs to be retained because each one supersedes the last.
+ * The latest streamed assistant text for an in-flight segment. Only the most
+ * recent token within that segment needs to be retained because it supersedes
+ * the last.
  */
 export type PendingAssistantText = Pick<
   AssistantTokenEvent,
@@ -32,43 +33,61 @@ function isRenderableTokenEvent(event: SandboxEvent): event is AssistantTokenEve
 }
 
 /**
- * Replay should show one final token per message, independent of tied storage
- * ordering between token and completion.
+ * Replay should show one final token per compaction-delimited segment,
+ * independent of tied storage ordering between token and completion.
  */
 export function collapseReplayTokenEvents(events: SandboxEvent[]): SandboxEvent[] {
-  const tokenByMessageId = new Map<string, AssistantTokenEvent>();
+  const tokenBySegment = new Map<string, AssistantTokenEvent>();
+  const segmentByMessageId = new Map<string, number>();
+  const segmentKey = (messageId: string) =>
+    JSON.stringify([messageId, segmentByMessageId.get(messageId) ?? 0]);
 
   for (const event of events) {
     if (isRenderableTokenEvent(event)) {
-      tokenByMessageId.set(event.messageId, event);
+      tokenBySegment.set(segmentKey(event.messageId), event);
+    } else if (event.type === "context_compacted") {
+      segmentByMessageId.set(event.messageId, (segmentByMessageId.get(event.messageId) ?? 0) + 1);
     }
   }
 
-  if (tokenByMessageId.size === 0) {
+  if (tokenBySegment.size === 0) {
     return events;
   }
 
   const result: SandboxEvent[] = [];
-  const emittedTokenMessageIds = new Set<string>();
+  const emittedSegments = new Set<string>();
+  segmentByMessageId.clear();
+
+  const emitSegmentToken = (messageId: string) => {
+    const key = segmentKey(messageId);
+    const token = tokenBySegment.get(key);
+    if (token && !emittedSegments.has(key)) {
+      result.push(token);
+      emittedSegments.add(key);
+    }
+  };
 
   for (const evt of events) {
     if (isRenderableTokenEvent(evt)) {
       continue;
     }
 
+    if (evt.type === "context_compacted") {
+      emitSegmentToken(evt.messageId);
+      result.push(evt);
+      segmentByMessageId.set(evt.messageId, (segmentByMessageId.get(evt.messageId) ?? 0) + 1);
+      continue;
+    }
+
     if (evt.type === "execution_complete") {
-      const token = tokenByMessageId.get(evt.messageId);
-      if (token && !emittedTokenMessageIds.has(evt.messageId)) {
-        result.push(token);
-        emittedTokenMessageIds.add(evt.messageId);
-      }
+      emitSegmentToken(evt.messageId);
     }
 
     result.push(evt);
   }
 
-  for (const [messageId, token] of tokenByMessageId) {
-    if (!emittedTokenMessageIds.has(messageId)) {
+  for (const [key, token] of tokenBySegment) {
+    if (!emittedSegments.has(key)) {
       result.push(token);
     }
   }
@@ -109,6 +128,13 @@ export function ingestLiveSandboxEvent(
     return {
       pending: null,
       append: pending ? [pendingToTokenEvent(pending), event] : [event],
+    };
+  }
+
+  if (event.type === "context_compacted" && pending?.messageId === event.messageId) {
+    return {
+      pending: null,
+      append: [pendingToTokenEvent(pending), event],
     };
   }
 

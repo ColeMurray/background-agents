@@ -1,5 +1,5 @@
 import type { SandboxEvent } from "@/types/session";
-import { toolCallIdentityKey } from "@open-inspect/shared";
+import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
 
 export type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -86,6 +86,7 @@ function dedupeEvents(events: SandboxEvent[]): SandboxEvent[] {
       tokenIndexes.set(event.messageId, result.length);
       result.push(event);
     } else {
+      if (event.type === "context_compacted") tokenIndexes.delete(event.messageId);
       result.push(event);
     }
   }

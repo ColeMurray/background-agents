@@ -1,20 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   automationRepositoriesInputSchema,
-  createSessionRequestSchema,
-  MAX_AUTOMATION_REPOSITORIES,
-  MAX_SESSION_REPOSITORIES,
   MAX_TARGET_REPOSITORIES,
   decodeRepositoryPathSegments,
   encodeRepositoryPathSegments,
   formatRepositoryFullName,
   parseRepositoryFullName,
   prArtifactBelongsToRepo,
-  sandboxEventSchema,
   serverMessageSchema,
   sessionRepositoriesInputSchema,
   toRepositoryRef,
 } from "./index";
+import { sandboxEventSchema } from "./sandbox-events";
+import { createSessionRequestSchema } from "./session-api";
 
 describe("repository full names", () => {
   it("round-trips a repository with a nested owner namespace", () => {
@@ -42,13 +40,6 @@ describe("repository full names", () => {
     ["group%ZZsubgroup", "web"],
   ])("rejects a non-canonical repository API path (%s/%s)", (owner, name) => {
     expect(decodeRepositoryPathSegments(owner, name)).toBeNull();
-  });
-});
-
-describe("MAX_TARGET_REPOSITORIES aliases", () => {
-  it("keeps automation and session caps as the same constant", () => {
-    expect(MAX_AUTOMATION_REPOSITORIES).toBe(MAX_TARGET_REPOSITORIES);
-    expect(MAX_SESSION_REPOSITORIES).toBe(MAX_TARGET_REPOSITORIES);
   });
 });
 

@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { AutomationTriggerType } from "@open-inspect/shared/triggers";
 import {
   automationTemplates,
-  getVisibleCategories,
+  TEMPLATE_CATEGORIES,
   type AutomationTemplate,
   type TemplateCategory,
 } from "@/lib/automation-templates";
@@ -104,7 +104,9 @@ function TemplateCard({ template }: { template: AutomationTemplate }) {
 }
 
 export function TemplateGallery() {
-  const categories = getVisibleCategories();
+  const categories = TEMPLATE_CATEGORIES.filter((candidate) =>
+    automationTemplates.some((template) => template.categories.includes(candidate.id))
+  );
   const [category, setCategory] = useState<TemplateCategory>(categories[0]?.id ?? "popular");
 
   const activeLabel = categories.find((c) => c.id === category)?.label ?? "";

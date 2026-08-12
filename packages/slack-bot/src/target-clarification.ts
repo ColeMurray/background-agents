@@ -10,6 +10,8 @@
 
 import { getAvailableRepos, filterReposByQuery } from "./classifier/repos";
 import { getEnvironmentById } from "./classifier/environments";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { loadTargetCatalog, type TargetCatalog } from "./classifier/catalog";
 import { MAX_REPO_SUGGESTION_OPTIONS } from "./app-home/constants";
 import { plainTextOption } from "./slack-options";
@@ -23,7 +25,7 @@ import type {
   SlackSelectOptionGroup,
   SlackStaticSelectElement,
 } from "./slack-blocks";
-import type { Env, Environment, RepoConfig } from "./types";
+import type { Env } from "./types";
 
 /**
  * Action ID for the target picker shown when the classifier can't decide what

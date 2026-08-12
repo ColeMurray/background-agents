@@ -11,6 +11,7 @@ import {
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
+  type VncSettings,
 } from "@open-inspect/shared/types/integrations";
 import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
@@ -448,6 +449,18 @@ async function handleGetResolvedConfig(
     });
   }
 
+  if (id === "vnc") {
+    const vncSettings = settings as VncSettings;
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        enabled: vncSettings.enabled ?? false,
+        enabledRepos,
+      },
+    });
+  }
+
   if (id === "sandbox") {
     const sandboxSettings = settings as SandboxSettings;
     return json({
@@ -511,7 +524,7 @@ export const integrationSettingsRoutes: Route[] = [
     handler: handleDeleteRepoSettings,
   },
   // Integration settings — per-environment (design §13.5; sandbox and
-  // code-server only)
+  // code-server, and VNC only)
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),

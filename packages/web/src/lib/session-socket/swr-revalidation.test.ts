@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { swrKeysToRevalidate } from "./swr-revalidation";
 
 const SESSION_ID = "session-1";
@@ -72,6 +72,37 @@ describe("swrKeysToRevalidate", () => {
         SESSION_ID
       )
     ).toEqual([`/api/sessions/${SESSION_ID}/diff`]);
+  });
+
+  it("revalidates client-only data when the authoritative snapshot arrives", () => {
+    expect(
+      swrKeysToRevalidate(
+        {
+          type: "subscribed",
+          session: {
+            id: SESSION_ID,
+            title: null,
+            repoOwner: null,
+            repoName: null,
+            baseBranch: null,
+            branchName: null,
+            status: "active",
+            sandboxStatus: "ready",
+            messageCount: 0,
+            createdAt: 1,
+          },
+          artifacts: [],
+          participantId: "participant-1",
+          participant: { participantId: "participant-1", name: "User" },
+          timeline: { events: [], hasMore: false, cursor: null },
+        },
+        SESSION_ID
+      )
+    ).toEqual([
+      `/api/sessions/${SESSION_ID}/diff`,
+      `/api/sessions/${SESSION_ID}/children`,
+      `/api/sessions/${SESSION_ID}/participant-profiles`,
+    ]);
   });
 
   it("returns nothing for view-only messages", () => {

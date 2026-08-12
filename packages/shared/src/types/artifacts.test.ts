@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  sessionArtifactSchema,
-  toDisplayStatus,
-  type PullRequestArtifactMetadata,
-  type PullRequestStatus,
-} from "./artifacts";
+import { sessionArtifactSchema, toDisplayStatus } from "./artifacts";
 
 describe("toDisplayStatus", () => {
   it("maps merged lifecycle to merged", () => {
@@ -52,32 +47,5 @@ describe("sessionArtifactSchema.updatedAt", () => {
 
   it("rejects a non-numeric updatedAt", () => {
     expect(sessionArtifactSchema.safeParse({ ...base, updatedAt: "later" }).success).toBe(false);
-  });
-});
-
-describe("PullRequestArtifactMetadata", () => {
-  it("is structurally compatible with the untyped artifact metadata record", () => {
-    // The DO stores metadata as Record<string, unknown>; the typed shape must
-    // round-trip through that boundary without a cast at write sites.
-    const metadata: PullRequestArtifactMetadata = {
-      number: 7,
-      lifecycleState: "open",
-      isDraft: true,
-      head: "open-inspect/session-1",
-      base: "main",
-      headSha: "abc123",
-      repoOwner: "acme",
-      repoName: "web",
-      repositoryExternalId: "9001",
-      providerUpdatedAt: 1_700_000_000_000,
-    };
-    const record: Record<string, unknown> = { ...metadata };
-    expect(record.number).toBe(7);
-
-    const status: PullRequestStatus = {
-      lifecycleState: metadata.lifecycleState,
-      isDraft: metadata.isDraft,
-    };
-    expect(toDisplayStatus(status)).toBe("draft");
   });
 });

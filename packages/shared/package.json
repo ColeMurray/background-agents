@@ -34,6 +34,14 @@
       "import": "./dist/app-name.js",
       "types": "./dist/app-name.d.ts"
     },
+    "./http-body": {
+      "import": "./dist/http-body.js",
+      "types": "./dist/http-body.d.ts"
+    },
+    "./regex": {
+      "import": "./dist/regex.js",
+      "types": "./dist/regex.d.ts"
+    },
     "./user-id": {
       "import": "./dist/user-id.js",
       "types": "./dist/user-id.d.ts"
@@ -105,6 +113,22 @@
     "./types/server-messages": {
       "import": "./dist/types/server-messages.js",
       "types": "./dist/types/server-messages.d.ts"
+    },
+    "./types/sandbox-events": {
+      "import": "./dist/types/sandbox-events.js",
+      "types": "./dist/types/sandbox-events.d.ts"
+    },
+    "./types/sessions": {
+      "import": "./dist/types/sessions.js",
+      "types": "./dist/types/sessions.d.ts"
+    },
+    "./types/artifacts": {
+      "import": "./dist/types/artifacts.js",
+      "types": "./dist/types/artifacts.d.ts"
+    },
+    "./types/session-api": {
+      "import": "./dist/types/session-api.js",
+      "types": "./dist/types/session-api.d.ts"
     },
     "./types/session-attachments": {
       "import": "./dist/types/session-attachments.js",
