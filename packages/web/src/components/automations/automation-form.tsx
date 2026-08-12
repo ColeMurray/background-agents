@@ -759,14 +759,14 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Schedule fields (only for schedule type) */}
       {isSchedule && (
         <>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Schedule</label>
+          <fieldset>
+            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
             <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
             <FieldDescription>
               How often this automation runs. Use a preset or a five-field cron expression (minute,
               hour, day of month, month, day of week).
             </FieldDescription>
-          </div>
+          </fieldset>
           <div>
             <label
               id="automation-timezone-label"
