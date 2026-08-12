@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { webPromptPayloadSchema } from "./prompts";
+import { clientRequestIdSchema, webPromptPayloadSchema } from "./prompts";
 
-export { MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
+export { clientRequestIdSchema, MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS } from "./prompts";
 
 export const clientMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ping") }),
@@ -13,7 +13,7 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }),
   webPromptPayloadSchema.extend({
     type: z.literal("prompt"),
-    clientRequestId: z.string().min(1).max(128).optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
   }),
   z.object({ type: z.literal("stop") }),
   z.object({ type: z.literal("typing") }),

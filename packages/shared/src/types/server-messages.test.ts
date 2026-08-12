@@ -169,6 +169,28 @@ describe("session view contracts", () => {
     ).toEqual([]);
   });
 
+  it("advertises versioned server capabilities while accepting old snapshots", () => {
+    const snapshot = {
+      session: snapshotState,
+      artifacts: [],
+      timeline: { events: [], hasMore: false, cursor: null },
+    };
+
+    expect(sessionSnapshotSchema.parse(snapshot).capabilities).toBeUndefined();
+    expect(
+      sessionSnapshotSchema.parse({
+        ...snapshot,
+        capabilities: { correlated_prompt_enqueue: 1 },
+      }).capabilities
+    ).toEqual({ correlated_prompt_enqueue: 1 });
+    expect(
+      sessionSnapshotSchema.parse({
+        ...snapshot,
+        capabilities: { correlated_prompt_enqueue: 2 },
+      }).capabilities
+    ).toEqual({ correlated_prompt_enqueue: 2 });
+  });
+
   it("echoes optional prompt request correlation during rollout", () => {
     expect(
       serverMessageSchema.parse({

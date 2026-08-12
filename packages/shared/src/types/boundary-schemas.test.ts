@@ -620,6 +620,20 @@ describe("boundary schemas", () => {
       );
     });
 
+    it("rejects invalid prompt request correlation identifiers", () => {
+      expect(
+        clientMessageSchema.safeParse({ type: "prompt", content: "Continue", clientRequestId: "" })
+          .success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "prompt",
+          content: "Continue",
+          clientRequestId: "x".repeat(129),
+        }).success
+      ).toBe(false);
+    });
+
     it("accepts prompt queue update capability negotiation on subscribe", () => {
       expect(
         clientMessageSchema.parse({
@@ -754,6 +768,33 @@ describe("boundary schemas", () => {
           cursor: null,
         },
         spawnError: null,
+        capabilities: { correlated_prompt_enqueue: 1 },
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success && result.data.type === "subscribed") {
+        expect(result.data.capabilities?.correlated_prompt_enqueue).toBe(1);
+      }
+    });
+
+    it("accepts subscribed snapshots from servers without capability advertisement", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "subscribed",
+        session: {
+          id: "session-1",
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "active",
+          sandboxStatus: "ready",
+          messageCount: 0,
+          createdAt: 123,
+        },
+        artifacts: [],
+        participantId: "participant-1",
+        timeline: { events: [], hasMore: false, cursor: null },
       });
 
       expect(result.success).toBe(true);

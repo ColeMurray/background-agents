@@ -3,8 +3,15 @@ import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
+import { clientRequestIdSchema } from "./prompts";
 
 const timelineSequenceSchema = z.number().int().nonnegative().safe();
+
+export const CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION = 1;
+export const serverCapabilitiesSchema = z.object({
+  correlated_prompt_enqueue: z.number().int().positive().optional(),
+});
+export type ServerCapabilities = z.infer<typeof serverCapabilitiesSchema>;
 
 export const promptQueueItemSchema = z.object({
   messageId: z.string(),
@@ -114,6 +121,7 @@ export const sessionSnapshotSchema = z.object({
   timeline: sessionTimelineSchema,
   spawnError: z.string().nullable().optional(),
   promptQueue: z.array(promptQueueItemSchema).default([]),
+  capabilities: serverCapabilitiesSchema.optional(),
 });
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
 
@@ -126,7 +134,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("prompt_queued"),
-    clientRequestId: z.string().optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
     messageId: z.string(),
     position: z.number().int().positive().nullable(),
   }),
@@ -189,7 +197,7 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     type: z.literal("error"),
     code: z.string(),
     message: z.string(),
-    clientRequestId: z.string().optional(),
+    clientRequestId: clientRequestIdSchema.optional(),
   }),
 ]);
 

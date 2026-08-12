@@ -24,9 +24,15 @@ export type {
   SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
-export { clientMessageSchema } from "./websocket";
+export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
-export { MAX_UNFINISHED_PROMPTS, MAX_WEB_PROMPT_CHARS, webPromptPayloadSchema } from "./prompts";
+export {
+  BLANK_PROMPT_MESSAGE,
+  MAX_UNFINISHED_PROMPTS,
+  MAX_WEB_PROMPT_CHARS,
+  isBlankPrompt,
+  webPromptPayloadSchema,
+} from "./prompts";
 export type { WebPromptPayload } from "./prompts";
 
 export {
@@ -76,6 +82,8 @@ export {
   sessionSnapshotStateSchema,
   sessionTimelineEventSchema,
   promptQueueItemSchema,
+  CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION,
+  serverCapabilitiesSchema,
 } from "./server-messages";
 export type {
   ParticipantPresence,
@@ -85,6 +93,7 @@ export type {
   SessionSnapshotState,
   SessionState,
   SessionTimelineEvent,
+  ServerCapabilities,
 } from "./server-messages";
 
 export {

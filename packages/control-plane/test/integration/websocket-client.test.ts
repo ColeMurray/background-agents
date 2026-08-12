@@ -476,10 +476,12 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     const reconnect = await openClientWs(name, { subscribe: true });
     const subscribed = reconnect.messages!.find((message) => message.type === "subscribed") as {
       promptQueue: Array<Record<string, unknown>>;
+      capabilities?: { correlated_prompt_enqueue?: number };
     };
     expect(subscribed.promptQueue).toEqual([
       expect.objectContaining({ content: "Only once", status: "pending" }),
     ]);
+    expect(subscribed.capabilities).toEqual({ correlated_prompt_enqueue: 1 });
     expect(subscribed.promptQueue[0]).not.toHaveProperty("model");
     expect(subscribed.promptQueue[0]).not.toHaveProperty("reasoningEffort");
     reconnect.ws.close();

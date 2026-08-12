@@ -64,6 +64,7 @@ import {
 } from "@/lib/session-read-state";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 import { getWebPromptLengthError } from "@/lib/web-prompt-validation";
+import { getPromptSubmissionDisabledMessage } from "@/lib/prompt-submission-capability";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
@@ -86,6 +87,7 @@ export default function SessionPage() {
     currentParticipantId,
     isProcessing,
     promptQueue,
+    canSubmitPrompt,
     loadingHistory,
     sendPrompt,
     stopExecution,
@@ -130,6 +132,7 @@ export default function SessionPage() {
     selectedModel,
     reasoningEffort,
     loadingEnabledModels,
+    canSubmitPrompt,
     sessionState?.status ?? "created"
   );
 
@@ -469,6 +472,7 @@ export default function SessionPage() {
           isProcessing: ready && isProcessing,
           draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
           submitError,
+          submissionDisabledMessage: getPromptSubmissionDisabledMessage(ready, canSubmitPrompt),
           inputRef,
           onSubmit: handleSubmit,
           onChange: handleInputChange,
@@ -653,6 +657,7 @@ function usePromptInput(
   selectedModel: string,
   reasoningEffort: string | undefined,
   loadingEnabledModels: boolean,
+  canSubmitPrompt: boolean,
   sessionStatus: NonNullable<SessionState>["status"]
 ) {
   const [prompt, setPrompt] = useState("");
@@ -687,6 +692,7 @@ function usePromptInput(
       (!prompt.trim() && !hasAttachments) ||
       sessionStatus === "archived" ||
       sessionStatus === "cancelled" ||
+      !canSubmitPrompt ||
       loadingEnabledModels ||
       sessionAttachments.isUploading
     ) {

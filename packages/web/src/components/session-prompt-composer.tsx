@@ -28,6 +28,7 @@ type SessionPromptComposerProps = {
     isProcessing: boolean;
     draftLocked: boolean;
     submitError: string | null;
+    submissionDisabledMessage: string | null;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
     onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -59,7 +60,8 @@ export function SessionPromptComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
   const sessionPromptable = session.status !== "archived" && session.status !== "cancelled";
-  const sendDisabled = !hasContent || prompt.draftLocked || !sessionPromptable;
+  const sendDisabled =
+    !hasContent || prompt.draftLocked || !sessionPromptable || !!prompt.submissionDisabledMessage;
   // Keep the complete draft stable while its attachments upload and until
   // the server confirms that the matching prompt was queued.
   const attachmentsLocked = prompt.draftLocked;
@@ -220,12 +222,12 @@ export function SessionPromptComposer({
             {/* Right side - Agent label */}
             <span className="hidden sm:inline text-sm text-muted-foreground">build agent</span>
           </div>
-          {prompt.submitError && (
+          {(prompt.submitError || prompt.submissionDisabledMessage) && (
             <p
               role="alert"
               className="border-t border-destructive-border px-4 py-2 text-sm text-destructive"
             >
-              {prompt.submitError}
+              {prompt.submitError || prompt.submissionDisabledMessage}
             </p>
           )}
         </div>

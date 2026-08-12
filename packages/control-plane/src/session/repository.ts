@@ -41,7 +41,6 @@ type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
-const STOP_AWAITING_CONFIRMATION = "stop_awaiting_confirmation";
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
 
 /**
@@ -797,27 +796,23 @@ export class SessionRepository {
 
   getMessageAwaitingStopConfirmation(): { id: string; deadline: number } | null {
     const result = this.sql.exec(
-      `SELECT id, completed_at FROM messages WHERE error_message = ? LIMIT 1`,
-      STOP_AWAITING_CONFIRMATION
+      `SELECT id, stop_confirmation_deadline FROM messages
+       WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`
     );
-    const row = (result.toArray() as Array<{ id: string; completed_at: number }>)[0];
-    return row ? { id: row.id, deadline: row.completed_at + STOP_CONFIRMATION_TIMEOUT_MS } : null;
+    const row = (result.toArray() as Array<{ id: string; stop_confirmation_deadline: number }>)[0];
+    return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
   }
 
-  markMessageAwaitingStopConfirmation(messageId: string): void {
+  markMessageAwaitingStopConfirmation(messageId: string, deadline: number): void {
     this.sql.exec(
-      `UPDATE messages SET error_message = ? WHERE id = ?`,
-      STOP_AWAITING_CONFIRMATION,
+      `UPDATE messages SET stop_confirmation_deadline = ? WHERE id = ?`,
+      deadline,
       messageId
     );
   }
 
   clearMessageAwaitingStopConfirmation(messageId: string): void {
-    this.sql.exec(
-      `UPDATE messages SET error_message = NULL WHERE id = ? AND error_message = ?`,
-      messageId,
-      STOP_AWAITING_CONFIRMATION
-    );
+    this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
   }
 
   getProcessingMessageWithCreatedAt(): { id: string; created_at: number } | null {
@@ -940,11 +935,17 @@ export class SessionRepository {
     );
   }
 
-  updateMessageCompletion(messageId: string, status: MessageStatus, completedAt: number): void {
+  updateMessageCompletion(
+    messageId: string,
+    status: MessageStatus,
+    completedAt: number,
+    errorMessage: string | null = null
+  ): void {
     this.sql.exec(
-      `UPDATE messages SET status = ?, completed_at = ? WHERE id = ?`,
+      `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
       status,
       completedAt,
+      errorMessage,
       messageId
     );
   }

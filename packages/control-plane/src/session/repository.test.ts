@@ -842,13 +842,36 @@ describe("SessionRepository", () => {
   });
 
   describe("updateMessageCompletion", () => {
-    it("sets status and completedAt", () => {
+    it("sets status and completedAt without an error for normal completion", () => {
       repo.updateMessageCompletion("msg-1", "completed", 3000);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("status = ?");
       expect(mock.calls[0].query).toContain("completed_at");
-      expect(mock.calls[0].params).toEqual(["completed", 3000, "msg-1"]);
+      expect(mock.calls[0].query).toContain("error_message = ?");
+      expect(mock.calls[0].params).toEqual(["completed", 3000, null, "msg-1"]);
+    });
+
+    it("persists a failed completion reason", () => {
+      repo.updateMessageCompletion("msg-1", "failed", 3000, "Agent failed");
+
+      expect(mock.calls[0].params).toEqual(["failed", 3000, "Agent failed", "msg-1"]);
+    });
+  });
+
+  describe("stop confirmation deadline", () => {
+    it("marks, reads, and clears the dedicated deadline without changing error_message", () => {
+      const query = `SELECT id, stop_confirmation_deadline FROM messages
+       WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;
+      mock.setData(query, [{ id: "msg-1", stop_confirmation_deadline: 5000 }]);
+
+      repo.markMessageAwaitingStopConfirmation("msg-1", 5000);
+      expect(mock.calls[0].query).toContain("SET stop_confirmation_deadline = ?");
+      expect(mock.calls[0].query).not.toContain("error_message");
+      expect(repo.getMessageAwaitingStopConfirmation()).toEqual({ id: "msg-1", deadline: 5000 });
+      repo.clearMessageAwaitingStopConfirmation("msg-1");
+      expect(mock.calls[2].query).toContain("SET stop_confirmation_deadline = NULL");
+      expect(mock.calls[2].query).not.toContain("error_message");
     });
   });
 

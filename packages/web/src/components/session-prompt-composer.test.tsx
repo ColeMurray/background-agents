@@ -17,10 +17,18 @@ vi.mock("@/components/attachment-preview-strip", () => ({
   AttachmentPreviewStrip: () => null,
 }));
 vi.mock("@/components/reasoning-effort-pills", () => ({
-  ReasoningEffortPills: () => null,
+  ReasoningEffortPills: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled}>
+      Reasoning
+    </button>
+  ),
 }));
 vi.mock("@/components/ui/combobox", () => ({
-  Combobox: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Combobox: ({ children, disabled }: { children: React.ReactNode; disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model">
+      {children}
+    </button>
+  ),
 }));
 
 afterEach(() => {
@@ -34,12 +42,14 @@ function ComposerHarness({
   isUploading = false,
   status = "active",
   submitError = null,
+  submissionDisabledMessage = null,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
   isUploading?: boolean;
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
+  submissionDisabledMessage?: string | null;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -58,6 +68,7 @@ function ComposerHarness({
         isProcessing,
         draftLocked: isUploading,
         submitError,
+        submissionDisabledMessage,
         inputRef,
         onSubmit: vi.fn(),
         onChange: (event) => setValue(event.target.value),
@@ -141,9 +152,25 @@ describe("SessionPromptComposer", () => {
   it("keeps model controls editable while processing and blocks terminal sessions", () => {
     const { rerender } = render(<ComposerHarness initialValue="Follow up" isProcessing />);
     expect(screen.getByTitle("Queue follow-up; runs after the current prompt")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeEnabled();
 
     rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
     expect(screen.getByTitle(/Send/)).toBeDisabled();
+  });
+
+  it("disables submission with a clear message for an old server", () => {
+    render(
+      <ComposerHarness
+        initialValue="Keep this draft"
+        submissionDisabledMessage="Prompt submission requires a newer server version."
+      />
+    );
+
+    expect(screen.getByTitle(/Send/)).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Prompt submission requires a newer server version."
+    );
   });
 
   it("shows an inline submission error", () => {

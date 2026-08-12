@@ -172,7 +172,7 @@ export function SessionTimeline({
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events, isProcessing]);
+  }, [events, isProcessing, promptQueue]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);

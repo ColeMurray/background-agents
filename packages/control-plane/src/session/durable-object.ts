@@ -10,6 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
+import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import {
   sessionSnapshotSchema,
   type ServerMessage,
@@ -811,13 +812,7 @@ export class SessionDO extends DurableObject<Env> {
     // WebSocket manager adapter — thin delegation to wsManager
     const wsManager: WebSocketManager = {
       getSandboxWebSocket: () => this.wsManager.getSandboxSocket(),
-      closeSandboxWebSocket: (code, reason) => {
-        const ws = this.wsManager.getSandboxSocket();
-        if (ws) {
-          this.wsManager.close(ws, code, reason);
-          this.wsManager.clearSandboxSocket();
-        }
-      },
+      detachSandboxWebSocket: (code, reason) => this.wsManager.detachSandboxSocket(code, reason),
       sendToSandbox: (message) => {
         const ws = this.wsManager.getSandboxSocket();
         return ws ? this.wsManager.send(ws, message) : false;
@@ -1378,12 +1373,8 @@ export class SessionDO extends DurableObject<Env> {
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
       const candidate = raw as Record<string, unknown>;
       if (candidate.type !== "prompt") return null;
-      const clientRequestId = candidate.clientRequestId;
-      return typeof clientRequestId === "string" &&
-        clientRequestId.length > 0 &&
-        clientRequestId.length <= 128
-        ? { clientRequestId }
-        : {};
+      const clientRequestId = clientRequestIdSchema.safeParse(candidate.clientRequestId);
+      return clientRequestId.success ? { clientRequestId: clientRequestId.data } : {};
     } catch {
       return null;
     }
@@ -1822,6 +1813,7 @@ export class SessionDO extends DurableObject<Env> {
         artifacts: this.messageService.listArtifacts().artifacts,
         timeline: this.eventStream.getReplay(),
         promptQueue: this.repository.listPromptQueue(),
+        capabilities: { correlated_prompt_enqueue: 1 },
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });

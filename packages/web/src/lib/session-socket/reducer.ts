@@ -9,6 +9,7 @@ import type {
 } from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
 import { collapseReplayTokenEvents, toUiSandboxEvent } from "./event-log";
+import { CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION } from "@open-inspect/shared/types/server-messages";
 
 export interface HistoryCursor {
   timestamp: number;
@@ -33,6 +34,7 @@ export interface SessionSocketState {
   loadingHistory: boolean;
   cursor: HistoryCursor | null;
   promptQueue: PromptQueueItem[];
+  supportsCorrelatedPromptEnqueue: boolean;
 }
 
 export const initialSessionSocketState: SessionSocketState = {
@@ -47,6 +49,7 @@ export const initialSessionSocketState: SessionSocketState = {
   loadingHistory: false,
   cursor: null,
   promptQueue: [],
+  supportsCorrelatedPromptEnqueue: false,
 };
 
 export type SessionSocketAction =
@@ -189,6 +192,9 @@ function reduceServerMessage(
         // stuck true and block loadOlderEvents after the reconnect.
         loadingHistory: false,
         promptQueue: message.promptQueue,
+        supportsCorrelatedPromptEnqueue:
+          (message.capabilities?.correlated_prompt_enqueue ?? 0) >=
+          CORRELATED_PROMPT_ENQUEUE_CAPABILITY_VERSION,
       };
     }
 
@@ -337,6 +343,7 @@ export function sessionSocketReducer(
         ready: false,
         presenceSynced: false,
         participants: [],
+        supportsCorrelatedPromptEnqueue: false,
       };
   }
 }

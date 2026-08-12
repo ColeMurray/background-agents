@@ -126,7 +126,9 @@ a message ID and queue position. The originating socket receives:
 
 ```ts
 {
-  type: ("prompt_queued", messageId, position);
+  type: "prompt_queued",
+  messageId,
+  position,
 }
 ```
 
@@ -219,8 +221,8 @@ old queued messages and clients, but the updated web client requires it for its 
 
 Add nullable `client_request_id` and `request_fingerprint` columns to the Durable Object `messages`
 table, with a unique partial index on `client_request_id`. Since a Durable Object stores one
-session, the key is already session-scoped. The fingerprint covers participant identity and the
-canonical prompt payload: content, model, reasoning effort, and ordered attachment IDs.
+session, the key is already session-scoped. The fingerprint is a SHA-256 digest of the participant
+identity and canonical prompt payload: content, model, reasoning effort, and ordered attachment IDs.
 
 Enqueue behavior becomes:
 
@@ -276,8 +278,12 @@ authoritative on reconnect.
 Queue updates use capability negotiation because clients validate a strict server-message union.
 Updated clients include `prompt_queue_updates` in the subscribe message, and the control plane emits
 the new message only to those clients. The capability is persisted in `ws_client_mapping` so it
-survives Durable Object hibernation. Snapshot `promptQueue` defaults to an empty list when absent so
-the updated web can connect to an older control plane during rollout.
+survives Durable Object hibernation. Separately, the control plane advertises
+`correlated_prompt_enqueue` in the subscribed response when it supports idempotent request IDs and
+correlated acknowledgements. The updated web requires that server capability before enabling prompt
+submission; `prompt_queue_updates` does not imply enqueue support. Snapshot `promptQueue` defaults
+to an empty list when absent so the updated web can connect read-only to an older control plane
+during rollout.
 
 An alternative is to add queue data only to `subscribed` for the first release and derive live
 changes from known prompt and completion events, but that leaves multiplayer and some failure
@@ -386,6 +392,11 @@ rather than relying on an incidental late sandbox event. A separate "Cancel queu
 is deferred until individual/bulk queue cancellation has a defined status, authorization policy, and
 audit representation.
 
+Stop confirmation state uses a nullable `stop_confirmation_deadline` column on the processing
+message. It must not be encoded in `error_message`: stopping may fail the message with a
+human-readable error while independently awaiting sandbox confirmation, so `error_message` remains
+preserved for history and diagnostics.
+
 ## Data Model Changes
 
 Append a new immutable Durable Object schema migration and update the fresh schema in
@@ -394,6 +405,7 @@ Append a new immutable Durable Object schema migration and update the fresh sche
 ```sql
 ALTER TABLE messages ADD COLUMN client_request_id TEXT;
 ALTER TABLE messages ADD COLUMN request_fingerprint TEXT;
+ALTER TABLE messages ADD COLUMN stop_confirmation_deadline INTEGER;
 
 CREATE UNIQUE INDEX idx_messages_client_request_id
 ON messages(client_request_id)
@@ -419,6 +431,8 @@ admission or dispatch.
 ### Server to client
 
 - Add optional `clientRequestId` to `prompt_queued` for rollout.
+- Advertise `correlated_prompt_enqueue` in the subscribed response when request correlation is
+  supported.
 - Add `promptQueue` to the session snapshot/subscribed contract with an empty default for rollout.
 - Add `prompt_queue_updated` with the full bounded unfinished queue.
 - Add stable prompt rejection error codes, including queue full, request conflict, invalid prompt,
@@ -485,6 +499,7 @@ attachment payloads, credentials, callback context, or full client request IDs.
 - blank and oversized prompts are rejected consistently;
 - new snapshot, acknowledgement, queue item, and queue-update messages parse;
 - compatibility cases without optional request IDs still parse during rollout.
+- subscribed responses parse the server-advertised `correlated_prompt_enqueue` capability.
 
 ### Control plane unit
 
@@ -497,6 +512,7 @@ attachment payloads, credentials, callback context, or full client request IDs.
 - queue updates broadcast after enqueue, dispatch, completion, and cancellation;
 - a definitive sandbox send failure requeues rather than strands the message;
 - a confirmed stop dispatches the next pending prompt exactly once;
+- stop confirmation deadlines are stored separately without overwriting `error_message`;
 - archived and cancelled sessions reject before participant/message mutation.
 
 ### Control plane integration
@@ -542,8 +558,9 @@ or response contracts change, and sandbox-runtime tests only if prompt command b
 ### Phase 2: compatible web client
 
 - Deploy a web client that understands queue snapshots/updates, advertises the queue capability, and
-  sends client request IDs.
-- Render queue status but retain the processing gate until control-plane availability is confirmed.
+  sends client request IDs only when the server advertises `correlated_prompt_enqueue`.
+- Render queue status but keep submission disabled until the server advertises
+  `correlated_prompt_enqueue`.
 
 ### Phase 3: enable queue submission
 

@@ -1,6 +1,10 @@
 import { messageSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
-import { promptContentSchema } from "@open-inspect/shared/types/prompts";
+import {
+  BLANK_PROMPT_MESSAGE,
+  isBlankPrompt,
+  promptContentSchema,
+} from "@open-inspect/shared/types/prompts";
 import { z } from "zod";
 
 export const enqueuePromptRequestSchema = z
@@ -26,8 +30,8 @@ export const enqueuePromptRequestSchema = z
       })
       .optional(),
   })
-  .refine((prompt) => prompt.content.trim().length > 0 || (prompt.attachments?.length ?? 0) > 0, {
-    message: "Prompt content must not be blank without attachments",
+  .refine((prompt) => !isBlankPrompt(prompt), {
+    message: BLANK_PROMPT_MESSAGE,
     path: ["content"],
   });
 

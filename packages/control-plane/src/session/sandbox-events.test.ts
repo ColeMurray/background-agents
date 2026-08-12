@@ -405,7 +405,8 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
       "completed",
-      expect.any(Number)
+      expect.any(Number),
+      null
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-1",
@@ -455,7 +456,8 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-failed",
       "failed",
-      expect.any(Number)
+      expect.any(Number),
+      "Agent failed"
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-failed",

@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS messages (
   request_fingerprint TEXT,                         -- Participant-scoped canonical request hash
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
+  stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -529,6 +530,11 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 41,
     description: "Persist WebSocket client capabilities",
     run: `ALTER TABLE ws_client_mapping ADD COLUMN capabilities TEXT`,
+  },
+  {
+    id: 42,
+    description: "Add dedicated stop confirmation deadline",
+    run: `ALTER TABLE messages ADD COLUMN stop_confirmation_deadline INTEGER`,
   },
 ];
 

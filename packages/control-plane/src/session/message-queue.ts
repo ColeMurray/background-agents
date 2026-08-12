@@ -1,4 +1,4 @@
-import { generateId } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
 import type {
@@ -91,14 +91,18 @@ export class PromptRequestConflictError extends Error {
   }
 }
 
-export function fingerprintWebPrompt(participantId: string, data: PromptMessageData): string {
-  return JSON.stringify({
+export async function fingerprintWebPrompt(
+  participantId: string,
+  data: PromptMessageData
+): Promise<string> {
+  const canonicalRequest = JSON.stringify({
     participantId,
     content: data.content,
     model: data.model ?? null,
     reasoningEffort: data.reasoningEffort ?? null,
     attachmentIds: data.attachments?.map((attachment) => attachment.attachmentId) ?? [],
   });
+  return hashToken(canonicalRequest);
 }
 
 export function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
@@ -342,7 +346,7 @@ export class SessionMessageQueue {
       this.repository.updateMessageToPending(message.id);
       this.messenger.broadcast({ type: "processing_status", isProcessing: false });
       this.broadcastPromptQueue();
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox();
+      await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
     }
 
     if (sent) {
@@ -378,8 +382,12 @@ export class SessionMessageQueue {
 
     if (processingMessage) {
       this.failMessage(processingMessage, "Execution was stopped", now);
-      this.repository.markMessageAwaitingStopConfirmation(processingMessage.id);
-      await this.alarmScheduler.scheduleAlarm(now + STOP_CONFIRMATION_TIMEOUT_MS);
+      const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
+      this.repository.markMessageAwaitingStopConfirmation(
+        processingMessage.id,
+        stopConfirmationDeadline
+      );
+      await this.alarmScheduler.scheduleAlarm(stopConfirmationDeadline);
       this.broadcastPromptQueue();
       this.log.info("prompt.stopped", {
         event: "prompt.stopped",
@@ -394,7 +402,7 @@ export class SessionMessageQueue {
 
     const sandboxWs = this.wsManager.getSandboxSocket();
     if (processingMessage && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
-      await this.sandboxLifecycle.terminateUnresponsiveSandbox();
+      await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
     }
   }
 
@@ -405,7 +413,7 @@ export class SessionMessageQueue {
       event: "prompt.stop_confirmation_timeout",
       message_id: awaitingStop.id,
     });
-    await this.sandboxLifecycle.terminateUnresponsiveSandbox();
+    await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
   }
 
   async resumeAfterSandboxTermination(): Promise<void> {
@@ -459,7 +467,7 @@ export class SessionMessageQueue {
     error: string,
     completedAt: number
   ): void {
-    this.repository.updateMessageCompletion(message.id, "failed", completedAt);
+    this.repository.updateMessageCompletion(message.id, "failed", completedAt, error);
     const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
       type: "execution_complete",
       messageId: message.id,
@@ -478,38 +486,6 @@ export class SessionMessageQueue {
     );
     this.messenger.broadcast({ type: "sandbox_event", event });
     this.ctx.waitUntil(this.callbackService.notifyComplete(message.id, false, error));
-  }
-
-  writeUserMessageEvent(
-    participant: ParticipantRow,
-    content: string,
-    messageId: string,
-    now: number,
-    attachments?: ResolvedSessionAttachment[]
-  ): void {
-    // Metadata only — base64 payloads would bloat the events table and every
-    // broadcast, and DO SQLite rows cap at 2 MB.
-    const userMessageEvent: SandboxEvent = {
-      type: "user_message",
-      content,
-      messageId,
-      timestamp: now / 1000,
-      author: {
-        participantId: participant.id,
-        userId: participant.canonical_user_id ?? participant.user_id,
-        name: resolveParticipantName(participant),
-        avatar: getAvatarUrl(participant.scm_login, this.scmProvider),
-      },
-      ...(attachments && attachments.length > 0 ? { attachments } : {}),
-    };
-    this.repository.createEvent({
-      id: generateId(),
-      type: "user_message",
-      data: JSON.stringify(userMessageEvent),
-      messageId,
-      createdAt: now,
-    });
-    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
   }
 
   private createUserMessageEvent(
@@ -592,7 +568,7 @@ export class SessionMessageQueue {
     const queueDepthBefore = this.repository.getPendingOrProcessingCount();
     let requestFingerprint: string | undefined;
     if (data.clientRequestId) {
-      requestFingerprint = fingerprintWebPrompt(data.participant.id, data);
+      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
       const existing = this.repository.getMessageByClientRequestId(data.clientRequestId);
       if (existing) {
         if (
@@ -646,14 +622,14 @@ export class SessionMessageQueue {
       data.reasoningEffort,
       this.log
     );
+    const userMessageEvent = this.createUserMessageEvent(
+      data.participant,
+      data.content,
+      messageId,
+      now,
+      attachments
+    );
     try {
-      const userMessageEvent = this.createUserMessageEvent(
-        data.participant,
-        data.content,
-        messageId,
-        now,
-        attachments
-      );
       this.repository.createMessageWithAttachments(
         {
           id: messageId,
@@ -690,13 +666,7 @@ export class SessionMessageQueue {
     await this.sessionStatus.transition("active");
     this.messenger.broadcast({
       type: "sandbox_event",
-      event: this.createUserMessageEvent(
-        data.participant,
-        data.content,
-        messageId,
-        now,
-        attachments
-      ),
+      event: userMessageEvent,
     });
     this.broadcastPromptQueue();
 

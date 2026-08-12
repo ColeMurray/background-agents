@@ -107,6 +107,7 @@ export interface MessageRow {
   request_fingerprint?: string | null;
   status: MessageStatus;
   error_message: string | null;
+  stop_confirmation_deadline?: number | null;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;

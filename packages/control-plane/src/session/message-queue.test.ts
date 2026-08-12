@@ -99,6 +99,23 @@ function createClientInfo(overrides: Partial<ClientInfo> = {}): ClientInfo {
 
 const EXECUTION_TIMEOUT_MS = 60_000;
 
+it("creates a canonical SHA-256 web prompt fingerprint", async () => {
+  const fingerprint = await fingerprintWebPrompt("part-1", {
+    content: "hello",
+    model: "anthropic/claude-haiku-4-5",
+    attachments: [{ name: "ignored-name.png", attachmentId: "up-1" }],
+  });
+
+  expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+  await expect(
+    fingerprintWebPrompt("part-1", {
+      content: "hello",
+      model: "anthropic/claude-haiku-4-5",
+      attachments: [{ name: "different-name.png", attachmentId: "up-1" }],
+    })
+  ).resolves.toBe(fingerprint);
+});
+
 function buildQueue() {
   const log = {
     debug: vi.fn(),
@@ -281,7 +298,7 @@ describe("SessionMessageQueue", () => {
       createMessage({
         id: "msg-existing",
         client_request_id: "request-1",
-        request_fingerprint: fingerprintWebPrompt("part-1", {
+        request_fingerprint: await fingerprintWebPrompt("part-1", {
           content: "same",
           model: "anthropic/claude-haiku-4-5",
           reasoningEffort: "high",
@@ -326,7 +343,7 @@ describe("SessionMessageQueue", () => {
         id: "msg-complete",
         status: "completed",
         client_request_id: "request-complete",
-        request_fingerprint: fingerprintWebPrompt("part-1", { content: "same" }),
+        request_fingerprint: await fingerprintWebPrompt("part-1", { content: "same" }),
       })
     );
     h.repository.getUnfinishedMessagePosition.mockReturnValue(null);
@@ -557,7 +574,7 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("uses the canonical profile userId instead of a bot transport identity", () => {
+  it("uses the canonical profile userId instead of a bot transport identity", async () => {
     const h = buildQueue();
     const participant = createParticipant({
       scm_name: null,
@@ -566,7 +583,14 @@ describe("SessionMessageQueue", () => {
       canonical_user_id: "user-pat",
     });
 
-    h.queue.writeUserMessageEvent(participant, "hello", "msg-1", 1000);
+    h.participantService.getByUserId.mockReturnValue(participant);
+    h.repository.getParticipantById.mockReturnValue(participant);
+    await h.queue.enqueuePromptFromApi({
+      authorId: "slack:U123",
+      canonicalUserId: "user-pat",
+      content: "hello",
+      source: "slack",
+    });
 
     expect(h.broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -611,7 +635,9 @@ describe("SessionMessageQueue", () => {
 
     expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-unsent");
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
-    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "prompt_dispatch_send_failed"
+    );
   });
 
   it("records enqueue depth before and after without prompt content", async () => {
@@ -818,9 +844,13 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-9",
       "failed",
+      expect.any(Number),
+      "Execution was stopped"
+    );
+    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
+      "msg-9",
       expect.any(Number)
     );
-    expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-9");
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-9",
       expect.objectContaining({ type: "execution_complete", success: false }),
@@ -869,7 +899,9 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.stopExecution();
 
-    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_send_failed"
+    );
     expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
   });
 
@@ -883,7 +915,9 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.stopExecution();
 
-    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_send_failed"
+    );
   });
 
   it("terminates the sandbox after the bounded stop confirmation deadline", async () => {
@@ -895,7 +929,9 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.recoverStopConfirmationTimeout();
 
-    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledOnce();
+    expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
+      "stop_confirmation_timeout"
+    );
     expect(h.repository.clearMessageAwaitingStopConfirmation).not.toHaveBeenCalled();
   });
 
@@ -963,7 +999,8 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-pending",
       "failed",
-      expect.any(Number)
+      expect.any(Number),
+      "Execution was cancelled before it started"
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-pending",

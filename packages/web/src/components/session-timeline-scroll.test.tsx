@@ -58,6 +58,30 @@ function toolEvent(
 }
 
 describe("timeline auto-scrolling", () => {
+  it("follows prompt queue changes when near the bottom", () => {
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[]} promptQueue={[]} />
+    );
+    const timeline = container.firstElementChild as HTMLDivElement;
+    Object.defineProperties(timeline, {
+      clientHeight: { configurable: true, value: 400 },
+      scrollHeight: { configurable: true, value: 600 },
+      scrollTop: { configurable: true, value: 200, writable: true },
+    });
+    fireEvent.scroll(timeline);
+    timeline.scrollTop = 0;
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[]}
+        promptQueue={[{ messageId: "queued", content: "Next prompt", status: "pending" }]}
+      />
+    );
+
+    expect(timeline.scrollTop).toBe(600);
+  });
+
   it("confines sub-task auto-scrolling to the timeline", () => {
     const task = toolEvent("task", "task-call", 1, {
       childSessionId: "child-1",
