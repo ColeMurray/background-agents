@@ -5,6 +5,12 @@ const collaboratorPermissionResponseSchema = z.object({
   permission: z.string(),
 });
 
+const pullRequestSnapshotResponseSchema = z.object({
+  head: z.object({ sha: z.string() }),
+  state: z.string(),
+  draft: z.boolean(),
+});
+
 const installationTokenResponseSchema = z.object({
   token: z.string(),
 });
@@ -226,5 +232,51 @@ export async function postCommitStatus(
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
+  }
+}
+
+export type PullRequestSnapshotResult =
+  | { ok: true; headSha: string; state: string; draft: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Fetch the PR's current head sha, state, and draft flag directly from
+ * GitHub — used as a freshness check immediately before starting (or
+ * re-verifying) a review, since the webhook payload can lag reality.
+ */
+export async function getPullRequestSnapshot(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  userAgent: string = DEFAULT_APP_NAME
+): Promise<PullRequestSnapshotResult> {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": userAgent,
+        },
+      }
+    );
+    if (!response.ok) {
+      return { ok: false, error: `GitHub API returned ${response.status}` };
+    }
+    const parsed = pullRequestSnapshotResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      return { ok: false, error: "invalid response" };
+    }
+    return {
+      ok: true,
+      headSha: parsed.data.head.sha,
+      state: parsed.data.state,
+      draft: parsed.data.draft,
+    };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }

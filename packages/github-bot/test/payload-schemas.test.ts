@@ -11,7 +11,12 @@ import {
 } from "../src/payload-schemas";
 
 const sender = { login: "octocat", id: 123, avatar_url: "https://example.com/avatar.png" };
-const repository = { owner: { login: "open-inspect" }, name: "background-agents", private: false };
+const repository = {
+  id: 555,
+  owner: { login: "open-inspect" },
+  name: "background-agents",
+  private: false,
+};
 const pullRequest = {
   number: 42,
   title: "Add validation",
@@ -36,11 +41,36 @@ describe("GitHub bot payload schemas", () => {
     }
   );
 
+  it.each(["closed", "converted_to_draft"] as const)(
+    "rejects the %s pull request action (lifecycle events are not review triggers)",
+    (action) => {
+      const result = pullRequestReviewTriggerPayloadSchema.safeParse({
+        action,
+        pull_request: { ...pullRequest, draft: false },
+        repository,
+        sender,
+      });
+
+      expect(result.success).toBe(false);
+    }
+  );
+
   it("rejects a pull request action that does not trigger a review", () => {
     const result = pullRequestReviewTriggerPayloadSchema.safeParse({
-      action: "closed",
+      action: "labeled",
       pull_request: { ...pullRequest, draft: false },
       repository,
+      sender,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a repository payload missing the numeric id", () => {
+    const result = pullRequestReviewTriggerPayloadSchema.safeParse({
+      action: "opened",
+      pull_request: { ...pullRequest, draft: false },
+      repository: { owner: { login: "open-inspect" }, name: "background-agents", private: false },
       sender,
     });
 

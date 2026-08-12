@@ -18,6 +18,7 @@ import {
   postCommitStatus,
   postReaction,
   checkSenderPermission,
+  getPullRequestSnapshot,
   REVIEW_PENDING_DESCRIPTION,
   REVIEW_START_FAILED_DESCRIPTION,
   REVIEW_STATUS_CONTEXT,
@@ -26,10 +27,19 @@ import { buildCodeReviewPrompt, buildCommentActionPrompt } from "./prompts";
 import { resolveSessionTarget, type SessionTargetFields } from "./session-target";
 import { getGitHubConfig, type ResolvedGitHubConfig } from "./utils/integration-config";
 import { requestedReviewerPayloadSchema } from "./payload-schemas";
+import { claimReviewGeneration, sweepStaleReviews } from "./review-supersession";
 
 export type HandlerResult =
-  | { outcome: "processed"; session_id: string; message_id: string; handler_action: string }
+  | {
+      outcome: "processed";
+      handler_action: string;
+      session_id?: string;
+      message_id?: string;
+    }
   | { outcome: "skipped"; skip_reason: string };
+
+/** Session creation was rejected because a newer review claimed the PR's generation first. */
+class ReviewSupersededError extends Error {}
 
 export function isReviewRequestedForBot(payload: unknown, botUsername: string): boolean {
   const parsed = requestedReviewerPayloadSchema.safeParse(payload);
@@ -48,6 +58,7 @@ async function createSession(
     scmLogin: string;
     scmUserId: string;
     scmAvatarUrl: string;
+    githubReview?: { repoId: number; prNumber: number; generation: number; headSha: string };
   }
 ): Promise<string> {
   const body: Record<string, unknown> = {
@@ -60,6 +71,9 @@ async function createSession(
   if (params.reasoningEffort) {
     body.reasoningEffort = params.reasoningEffort;
   }
+  if (params.githubReview) {
+    body.githubReview = params.githubReview;
+  }
   const url = "https://internal/sessions";
   const bodyText = JSON.stringify(body);
   const response = await signedControlPlaneFetch(env, {
@@ -70,8 +84,11 @@ async function createSession(
     traceId,
   });
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Session creation failed: ${response.status} ${body}`);
+    const errorBody = await response.text();
+    if (params.githubReview && response.status === 409) {
+      throw new ReviewSupersededError(`Session creation superseded: ${errorBody}`);
+    }
+    throw new Error(`Session creation failed: ${response.status} ${errorBody}`);
   }
   const result = createSessionResponseSchema.safeParse(await response.json());
   if (!result.success) {
@@ -300,6 +317,7 @@ export async function handleReviewRequested(
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   const userAgent = resolveAppName(env);
+
   fireAndForgetReaction(
     log,
     ghToken,
@@ -316,15 +334,53 @@ export async function handleReviewRequested(
     ghToken,
     traceId,
   });
-  const sessionId = await createSession(env, traceId, {
-    target,
-    title: `GitHub: Review PR #${pr.number}`,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
-    scmLogin: sender.login,
-    scmUserId: String(sender.id),
-    scmAvatarUrl: sender.avatar_url,
+
+  // Freshness runs as the last await before claim: any earlier network-bound
+  // step (target resolution) widens the window in which a close/draft
+  // tombstone or newer push could outrank this snapshot.
+  const freshness = await getPullRequestSnapshot(ghToken, owner, repoName, pr.number, userAgent);
+  if (!freshness.ok) {
+    log.warn("handler.freshness_check_failed", { ...meta, error: freshness.error });
+    return { outcome: "skipped", skip_reason: "freshness_check_failed" };
+  }
+  if (freshness.headSha !== pr.head.sha || freshness.state !== "open" || freshness.draft) {
+    log.debug("handler.stale_head_sha", {
+      ...meta,
+      current_head_sha: freshness.headSha,
+      expected_head_sha: pr.head.sha,
+      state: freshness.state,
+      draft: freshness.draft,
+    });
+    return { outcome: "skipped", skip_reason: "stale_head_sha" };
+  }
+
+  const generation = await claimReviewGeneration(env, traceId, {
+    repoId: repo.id,
+    prNumber: pr.number,
   });
+
+  let sessionId: string;
+  try {
+    sessionId = await createSession(env, traceId, {
+      target,
+      title: `GitHub: Review PR #${pr.number}`,
+      model: config.model,
+      reasoningEffort: config.reasoningEffort,
+      scmLogin: sender.login,
+      scmUserId: String(sender.id),
+      scmAvatarUrl: sender.avatar_url,
+      githubReview: { repoId: repo.id, prNumber: pr.number, generation, headSha: pr.head.sha },
+    });
+  } catch (error) {
+    if (error instanceof ReviewSupersededError) {
+      log.info("handler.review_superseded", { ...meta, generation });
+      return { outcome: "skipped", skip_reason: "superseded" };
+    }
+    throw error;
+  }
+
+  await sweepStaleReviews(env, log, traceId, { repoId: repo.id, prNumber: pr.number, generation });
+
   const statusTarget = await postPendingReviewStatus(
     log,
     ghToken,
@@ -419,6 +475,7 @@ export async function handlePullRequestReviewTrigger(
 
   const meta = { trace_id: traceId, repo: repoFullName, pull_number: pr.number };
   const userAgent = resolveAppName(env);
+
   fireAndForgetReaction(
     log,
     ghToken,
@@ -435,15 +492,53 @@ export async function handlePullRequestReviewTrigger(
     ghToken,
     traceId,
   });
-  const sessionId = await createSession(env, traceId, {
-    target,
-    title: `GitHub: Review PR #${pr.number}`,
-    model: config.model,
-    reasoningEffort: config.reasoningEffort,
-    scmLogin: sender.login,
-    scmUserId: String(sender.id),
-    scmAvatarUrl: sender.avatar_url,
+
+  // Freshness runs as the last await before claim: any earlier network-bound
+  // step (target resolution) widens the window in which a close/draft
+  // tombstone or newer push could outrank this snapshot.
+  const freshness = await getPullRequestSnapshot(ghToken, owner, repoName, pr.number, userAgent);
+  if (!freshness.ok) {
+    log.warn("handler.freshness_check_failed", { ...meta, error: freshness.error });
+    return { outcome: "skipped", skip_reason: "freshness_check_failed" };
+  }
+  if (freshness.headSha !== pr.head.sha || freshness.state !== "open" || freshness.draft) {
+    log.debug("handler.stale_head_sha", {
+      ...meta,
+      current_head_sha: freshness.headSha,
+      expected_head_sha: pr.head.sha,
+      state: freshness.state,
+      draft: freshness.draft,
+    });
+    return { outcome: "skipped", skip_reason: "stale_head_sha" };
+  }
+
+  const generation = await claimReviewGeneration(env, traceId, {
+    repoId: repo.id,
+    prNumber: pr.number,
   });
+
+  let sessionId: string;
+  try {
+    sessionId = await createSession(env, traceId, {
+      target,
+      title: `GitHub: Review PR #${pr.number}`,
+      model: config.model,
+      reasoningEffort: config.reasoningEffort,
+      scmLogin: sender.login,
+      scmUserId: String(sender.id),
+      scmAvatarUrl: sender.avatar_url,
+      githubReview: { repoId: repo.id, prNumber: pr.number, generation, headSha: pr.head.sha },
+    });
+  } catch (error) {
+    if (error instanceof ReviewSupersededError) {
+      log.info("handler.review_superseded", { ...meta, generation });
+      return { outcome: "skipped", skip_reason: "superseded" };
+    }
+    throw error;
+  }
+
+  await sweepStaleReviews(env, log, traceId, { repoId: repo.id, prNumber: pr.number, generation });
+
   const statusTarget = await postPendingReviewStatus(
     log,
     ghToken,

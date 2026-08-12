@@ -18,6 +18,8 @@ import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/in
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
 import { createCloudflareBackgroundTasks } from "./cloudflare/background-tasks";
+import { reapSupersededReviewSessions } from "./routes/github-reviews";
+import { createSessionRuntimeClient } from "./session/runtime-client";
 
 const logger = createLogger("worker");
 
@@ -75,13 +77,34 @@ export default {
       logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
       return;
     }
-
-    // Always wake the SchedulerDO — it runs both the recovery sweep
-    // (orphaned/timed-out runs) and processes overdue automations.
+    const requestId = crypto.randomUUID();
+    const cronCtx = {
+      request_id: requestId,
+      trace_id: requestId,
+      metrics: createRequestMetrics(),
+    };
+    // Always wake the SchedulerDO first — it runs both the recovery sweep
+    // (orphaned/timed-out runs) and processes overdue automations, and must
+    // not be delayed or skipped by a slow or failing review reaper.
     const doId = env.SCHEDULER.idFromName("global-scheduler");
     const stub = env.SCHEDULER.get(doId);
 
     await stub.fetch("http://internal/internal/tick", { method: "POST" });
+
+    try {
+      // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: cron env.DB read
+      const db = instrumentD1(env.DB, cronCtx.metrics);
+      await reapSupersededReviewSessions(db, createSessionRuntimeClient(env, cronCtx));
+    } catch (reaperError) {
+      logger.warn("Review reaper tick failed", {
+        event: "review_reaper.tick_failed",
+        error: reaperError instanceof Error ? reaperError.message : String(reaperError),
+      });
+    }
+    logger.info("review_reaper.tick", {
+      event: "review_reaper.tick",
+      ...cronCtx.metrics.summarize(),
+    });
   },
 
   queue: consumeImageBuildFinalizations,
