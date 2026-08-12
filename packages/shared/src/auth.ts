@@ -91,6 +91,15 @@ export async function verifyCallbackSignature<T extends { signature: string }>(
   return timingSafeEqual(signature, expectedHex);
 }
 
+export function isSignedCallbackPayload(payload: unknown): payload is { signature: string } {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "signature" in payload &&
+    typeof payload.signature === "string"
+  );
+}
+
 /**
  * Verify a CP→bot callback against the bot's own per-service secret
  * (the CP signs callbacks with the destination bot's key).

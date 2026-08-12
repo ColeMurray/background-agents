@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { linearStartCallbackSchema } from "@open-inspect/shared/types/session-api";
+import { isSignedCallbackPayload } from "@open-inspect/shared/auth";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { rejectInvalidCallback } from "./reject-invalid-callback";
@@ -37,6 +38,9 @@ export function createStartCallbackRouter(
       return c.json({ error: "invalid payload" }, 400);
     }
 
+    if (!isSignedCallbackPayload(rawPayload)) {
+      return c.json({ error: "invalid payload" }, 400);
+    }
     const parsed = linearStartCallbackSchema.safeParse(rawPayload);
     if (!parsed.success) return c.json({ error: "invalid payload" }, 400);
     const payload = parsed.data;

@@ -15,7 +15,7 @@ const log = createLogger("callback");
  */
 export async function rejectInvalidCallback(
   c: Context<{ Bindings: Env }>,
-  payload: unknown,
+  payload: { signature: string },
   logContext?: { path: string; traceId: string; startTime: number; sessionId?: string }
 ): Promise<Response | null> {
   if (!c.env.SERVICE_AUTH_SECRET) {
@@ -32,12 +32,7 @@ export async function rejectInvalidCallback(
     return c.json({ error: "not configured" }, 500);
   }
 
-  const authentic =
-    typeof payload === "object" &&
-    payload !== null &&
-    "signature" in payload &&
-    typeof payload.signature === "string" &&
-    (await verifyCallbackFromControlPlane(payload as { signature: string }, c.env));
+  const authentic = await verifyCallbackFromControlPlane(payload, c.env);
   if (!authentic) {
     if (logContext) {
       log.warn("http.request", {
