@@ -117,20 +117,24 @@ describe("E2BRestClient", () => {
 
   it("connect + timeout endpoints", async () => {
     const client = new E2BRestClient(defaultConfig);
-    fetchSpy.mockResolvedValue(
-      jsonResponse({ sandboxID: "sb-1", templateID: "tmpl", state: "running", domain: null })
-    );
-    await expect(client.connectSandbox("sb-1", 3300)).resolves.toEqual({
-      sandboxID: "sb-1",
-      templateID: "tmpl",
-      state: "running",
-      domain: null,
-    });
+    // Connect answers with the create-style Sandbox shape (no `state`); the
+    // command discards it rather than validating it as a sandbox detail.
+    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1", templateID: "tmpl" }));
+    await expect(client.connectSandbox("sb-1", 3300)).resolves.toBeUndefined();
     expect(JSON.parse(fetchSpy.mock.calls[0][1].body)).toEqual({ timeout: 3300 });
 
     fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
     await client.setSandboxTimeout("sb-1", 7200);
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ timeout: 7200 });
+  });
+
+  it("commands ignore whatever a success body contains", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(jsonResponse({ unexpected: "payload" }));
+    await expect(client.pauseSandbox("sb-1")).resolves.toBeUndefined();
+
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+    await expect(client.killSandbox("sb-1")).resolves.toBeUndefined();
   });
 
   it("rejects malformed E2B success responses", async () => {
@@ -143,17 +147,28 @@ describe("E2BRestClient", () => {
     });
   });
 
+  it("rejects a non-JSON success where a parsed body is required", async () => {
+    const client = new E2BRestClient(defaultConfig);
+    fetchSpy.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await expect(client.getSandbox("sb-1")).rejects.toMatchObject({
+      name: "E2BApiError",
+      body: "invalid_response",
+    });
+  });
+
   it("parses structured E2B error bodies and falls back for malformed ones", async () => {
     const client = new E2BRestClient(defaultConfig);
-    fetchSpy.mockResolvedValue(jsonResponse({ code: "bad_request", message: "Nope" }, 400));
+    // E2B's Error schema types `code` as an integer, not a slug.
+    fetchSpy.mockResolvedValue(jsonResponse({ code: 400, message: "Nope" }, 400));
 
     await expect(client.getSandbox("x")).rejects.toMatchObject({
-      body: { code: "bad_request", message: "Nope" },
+      body: { code: 400, message: "Nope" },
     });
 
-    fetchSpy.mockResolvedValue(jsonResponse({ code: 123 }, 400));
+    fetchSpy.mockResolvedValue(jsonResponse({ code: "bad_request" }, 400));
     await expect(client.getSandbox("x")).rejects.toMatchObject({
-      body: '{"code":123}',
+      body: '{"code":"bad_request"}',
     });
   });
 
