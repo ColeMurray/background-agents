@@ -295,6 +295,12 @@ variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
   sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = trimspace(var.anthropic_api_key) != ""
+    error_message = "anthropic_api_key must be non-blank."
+  }
 }
 
 # =============================================================================
