@@ -868,6 +868,22 @@ describe("createChildSessionsHandler", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when child session update status is invalid", async () => {
+    const { handler, broadcast } = createHandler();
+
+    const response = await handler.childSessionUpdate(
+      new Request("http://internal/internal/child-session/update", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ childSessionId: "child-1", status: "paused", title: null }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "childSessionId and status are required" });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
   it("broadcasts child session update when payload is valid", async () => {
     const { handler, broadcast } = createHandler();
 
@@ -890,6 +906,30 @@ describe("createChildSessionsHandler", () => {
       childSessionId: "child-1",
       status: "completed",
       title: "Child title",
+    });
+  });
+
+  it("broadcasts child session update when title is null", async () => {
+    const { handler, broadcast } = createHandler();
+
+    const response = await handler.childSessionUpdate(
+      new Request("http://internal/internal/child-session/update", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          childSessionId: "child-1",
+          status: "active",
+          title: null,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(broadcast).toHaveBeenCalledWith({
+      type: "child_session_update",
+      childSessionId: "child-1",
+      status: "active",
+      title: null,
     });
   });
 });

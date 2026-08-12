@@ -1,6 +1,6 @@
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
-import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
 import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";
@@ -46,6 +46,12 @@ export interface ChildSessionsHandler {
 
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
+});
+
+const childSessionUpdateBodySchema = z.object({
+  childSessionId: z.string().min(1),
+  status: sessionStatusSchema,
+  title: z.string().nullable().optional(),
 });
 
 export const MAX_PENDING_CHILD_PROMPTS = 10;
@@ -202,15 +208,13 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {
-      const body = (await request.json()) as {
-        childSessionId: string;
-        status: SessionStatus;
-        title: string | null;
-      };
+      const result = childSessionUpdateBodySchema.safeParse(await request.json());
 
-      if (!body.childSessionId || !body.status) {
+      if (!result.success) {
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
       }
+
+      const body = result.data;
 
       deps.messenger.broadcast({
         type: "child_session_update",

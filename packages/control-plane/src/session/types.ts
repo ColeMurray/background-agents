@@ -14,6 +14,7 @@ import type {
 import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
+import { z } from "zod";
 
 // Database row types (match SQLite schema)
 
@@ -109,15 +110,17 @@ export interface MessageRow {
   completed_at: number | null;
 }
 
-export interface SessionAttachmentRow {
-  id: string;
-  mime_type: string;
-  size_bytes: number;
-  object_key: string;
-  message_id: string | null; // Set once a prompt references this upload
-  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
-  created_at: number;
-}
+export const sessionAttachmentRowSchema = z.object({
+  id: z.string(),
+  mime_type: z.string(),
+  size_bytes: z.number(),
+  object_key: z.string(),
+  message_id: z.string().nullable(), // Set once a prompt references this upload
+  cleanup_claimed_at: z.number().nullable(), // Retained until object deletion is acknowledged
+  created_at: z.number(),
+});
+
+export type SessionAttachmentRow = z.infer<typeof sessionAttachmentRowSchema>;
 
 export interface EventRow {
   id: string;
