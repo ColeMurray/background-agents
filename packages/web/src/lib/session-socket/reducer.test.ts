@@ -85,7 +85,76 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
   return reduce(initialSessionSocketState, serverMessage(createSubscribedMessage(overrides)));
 }
 
+function userMessage(messageId: string, content: string, timestamp: number): SandboxEvent {
+  return {
+    type: "user_message",
+    messageId,
+    content,
+    timestamp,
+    author: { participantId: "participant-1", userId: "user-1", name: "User" },
+  };
+}
+
 describe("sessionSocketReducer", () => {
+  it("moves a relocated live user message to its latest timeline position", () => {
+    const state = {
+      ...subscribedState(),
+      events: [
+        userMessage("message-1", "Queued", 1),
+        { type: "git_sync", status: "completed", sandboxId: "sb-1", timestamp: 2 } as const,
+      ],
+    };
+
+    const next = reduce(state, {
+      type: "events_appended",
+      events: [userMessage("message-1", "Processing", 3)],
+    });
+
+    expect(next.events).toHaveLength(2);
+    expect(next.events.at(-1)).toMatchObject({
+      type: "user_message",
+      messageId: "message-1",
+      content: "Processing",
+      timestamp: 3,
+    });
+  });
+
+  it("keeps only the latest relocated user message in a replay snapshot", () => {
+    const state = createSessionSocketState(
+      createSnapshot({
+        timeline: {
+          events: [
+            { eventId: "old", timelineSequence: 1, event: userMessage("message-1", "Queued", 1) },
+            {
+              eventId: "complete",
+              timelineSequence: 2,
+              event: {
+                type: "execution_complete",
+                messageId: "message-0",
+                success: true,
+                sandboxId: "sb-1",
+                timestamp: 2,
+              },
+            },
+            {
+              eventId: "relocated",
+              timelineSequence: 3,
+              event: userMessage("message-1", "Processing", 3),
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      })
+    );
+
+    expect(state.events).toHaveLength(2);
+    expect(state.events.at(-1)).toMatchObject({
+      type: "user_message",
+      messageId: "message-1",
+      timestamp: 3,
+    });
+  });
   describe("snapshot", () => {
     it("hydrates the authoritative prompt queue", () => {
       const promptQueue = [

@@ -305,7 +305,21 @@ export class SessionMessageQueue {
       return;
     }
 
-    this.repository.updateMessageToProcessing(message.id, now);
+    const author = this.repository.getParticipantById(message.author_id);
+    if (!author) {
+      throw new Error(`Missing prompt author ${message.author_id}`);
+    }
+    const userMessageEvent = this.createUserMessageEvent(
+      author,
+      message.content,
+      message.id,
+      now,
+      parseStoredSessionAttachments(message.attachments, () =>
+        this.log.error("prompt.invalid_stored_attachments")
+      )
+    );
+    this.repository.startMessageProcessing(message.id, now, userMessageEvent);
+    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
     this.messenger.broadcast({ type: "processing_status", isProcessing: true });
     this.broadcastPromptQueue();
     this.sandboxLifecycle.updateLastActivity(now);
@@ -314,7 +328,6 @@ export class SessionMessageQueue {
     const deadline = now + this.executionTimeoutMs;
     await this.alarmScheduler.scheduleAlarm(deadline);
 
-    const author = this.repository.getParticipantById(message.author_id);
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
@@ -494,7 +507,7 @@ export class SessionMessageQueue {
     messageId: string,
     now: number,
     attachments?: ResolvedSessionAttachment[]
-  ): SandboxEvent {
+  ): Extract<SandboxEvent, { type: "user_message" }> {
     return {
       type: "user_message",
       content,

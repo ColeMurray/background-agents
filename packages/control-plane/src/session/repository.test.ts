@@ -796,7 +796,7 @@ describe("SessionRepository", () => {
       createdAt: 1000,
     };
 
-    it("claims uploads and creates the message and event in one transaction", () => {
+    it("claims uploads and creates the message and hidden event in one transaction", () => {
       let transactions = 0;
       repo = new SessionRepository(
         mock.sql,
@@ -833,14 +833,40 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("updateMessageToProcessing", () => {
-    it("changes status and sets startedAt", () => {
-      repo.updateMessageToProcessing("msg-1", 2000);
+  describe("startMessageProcessing", () => {
+    it("updates processing state and materializes the user event in one transaction", () => {
+      repo.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      });
 
-      expect(mock.calls.length).toBe(1);
+      expect(transactionSyncCalls).toBe(1);
       expect(mock.calls[0].query).toContain("status = 'processing'");
-      expect(mock.calls[0].query).toContain("started_at");
       expect(mock.calls[0].params).toEqual([2000, "msg-1"]);
+      expect(mock.calls[1].query).toContain("WHERE type = 'user_message' AND message_id = ?");
+      expect(mock.calls[2].query).toContain("INSERT INTO events");
+      expect(mock.calls[2].params.at(-1)).toBe(2000);
+    });
+
+    it("relocates an existing enqueue-time event instead of inserting a duplicate", () => {
+      const lookup = `SELECT id FROM events WHERE type = 'user_message' AND message_id = ? LIMIT 1`;
+      mock.setData(lookup, [{ id: "legacy-event" }]);
+
+      repo.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      });
+
+      expect(mock.calls).toHaveLength(3);
+      expect(mock.calls[2].query).toContain("UPDATE events SET data = ?");
+      expect(mock.calls[2].query).toContain("timeline_sequence");
+      expect(mock.calls[2].params.slice(-2)).toEqual([2000, "legacy-event"]);
     });
   });
 

@@ -142,6 +142,7 @@ function buildQueue() {
       () => null as { id: string; created_at: number } | null
     ),
     getNextPendingMessage: vi.fn(() => null as MessageRow | null),
+    startMessageProcessing: vi.fn(),
     updateMessageToProcessing: vi.fn(),
     updateMessageToPending: vi.fn(),
     getParticipantById: vi.fn(() => createParticipant()),
@@ -234,6 +235,7 @@ describe("SessionMessageQueue", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_spawning" });
     expect(h.sandboxLifecycle.spawnSandbox).toHaveBeenCalledTimes(1);
     expect(h.repository.updateMessageToProcessing).not.toHaveBeenCalled();
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
   });
 
@@ -417,7 +419,7 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("stores attachments and embeds content-free metadata in the user_message event", async () => {
+  it("stores attachments in the hidden enqueue-time user_message", async () => {
     const h = buildQueue();
     h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
@@ -450,7 +452,6 @@ describe("SessionMessageQueue", () => {
       ["up-1"],
       expect.objectContaining({ type: "user_message", messageId: expect.any(String) })
     );
-
     expect(h.broadcast).toHaveBeenCalledWith({
       type: "sandbox_event",
       event: expect.objectContaining({
@@ -458,12 +459,6 @@ describe("SessionMessageQueue", () => {
         attachments: [{ name: "shot.png", mimeType: "image/png", attachmentId: "up-1" }],
       }),
     });
-    const storedEvent = JSON.parse(
-      h.repository.createMessageWithAttachments.mock.calls[0][2].data as string
-    );
-    expect(storedEvent.attachments).toEqual([
-      { name: "shot.png", mimeType: "image/png", attachmentId: "up-1" },
-    ]);
   });
 
   it("rejects a prompt when its upload loses the atomic claim race", async () => {
@@ -559,20 +554,27 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("omits attachments from the user_message event when none are sent", async () => {
+  it("materializes the user_message at processing start", async () => {
     const h = buildQueue();
+    const sandboxWs = { readyState: 1 } as WebSocket;
+    h.repository.getNextPendingMessage.mockReturnValue(createMessage());
+    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
 
-    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), { content: "hello" });
+    await h.queue.processMessageQueue();
 
-    const broadcastCall = h.broadcast.mock.calls.find(
-      ([message]) =>
-        (message as { type: string; event?: { type?: string } }).type === "sandbox_event" &&
-        (message as { event?: { type?: string } }).event?.type === "user_message"
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
+      "msg-1",
+      expect.any(Number),
+      expect.objectContaining({
+        type: "user_message",
+        messageId: "msg-1",
+        content: "hello",
+      })
     );
-    expect(broadcastCall).toBeDefined();
-    expect((broadcastCall?.[0] as { event: Record<string, unknown> }).event).not.toHaveProperty(
-      "attachments"
-    );
+    const event = h.repository.startMessageProcessing.mock.calls[0][2];
+    expect(event).not.toHaveProperty("attachments");
+    expect(event.timestamp * 1000).toBe(h.repository.startMessageProcessing.mock.calls[0][1]);
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
   it("uses the canonical profile userId instead of a bot transport identity", async () => {
@@ -584,14 +586,13 @@ describe("SessionMessageQueue", () => {
       canonical_user_id: "user-pat",
     });
 
-    h.participantService.getByUserId.mockReturnValue(participant);
     h.repository.getParticipantById.mockReturnValue(participant);
-    await h.queue.enqueuePromptFromApi({
-      authorId: "slack:U123",
-      canonicalUserId: "user-pat",
-      content: "hello",
-      source: "slack",
-    });
+    h.repository.getNextPendingMessage.mockReturnValue(
+      createMessage({ author_id: participant.id, source: "slack" })
+    );
+    h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
+
+    await h.queue.processMessageQueue();
 
     expect(h.broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -611,9 +612,10 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.processMessageQueue();
 
-    expect(h.repository.updateMessageToProcessing).toHaveBeenCalledWith(
+    expect(h.repository.startMessageProcessing).toHaveBeenCalledWith(
       "msg-42",
-      expect.any(Number)
+      expect.any(Number),
+      expect.objectContaining({ type: "user_message", messageId: "msg-42" })
     );
     expect(h.wsManager.send).toHaveBeenCalledWith(
       sandboxWs,

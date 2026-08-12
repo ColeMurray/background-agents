@@ -76,7 +76,25 @@ function upsertArtifact(artifacts: Artifact[], nextArtifact: Artifact): Artifact
 }
 
 function renderTimelineEvents(items: SessionTimelineEvent[]): SandboxEvent[] {
-  return collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)));
+  return relocateUserMessages(
+    collapseReplayTokenEvents(items.map((item) => toUiSandboxEvent(item.event)))
+  );
+}
+
+function relocateUserMessages(events: SandboxEvent[]): SandboxEvent[] {
+  const latestIndexes = new Map<string, number>();
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index];
+    if (event.type === "user_message" && event.messageId) {
+      latestIndexes.set(event.messageId, index);
+    }
+  }
+  return events.filter(
+    (event, index) =>
+      event.type !== "user_message" ||
+      !event.messageId ||
+      latestIndexes.get(event.messageId) === index
+  );
 }
 
 export function createSessionSocketState(snapshot: SessionSnapshot): SessionSocketState {
@@ -193,7 +211,10 @@ function reduceServerMessage(
     case "history_page": {
       return {
         ...state,
-        events: [...message.items.map((item) => toUiSandboxEvent(item.event)), ...state.events],
+        events: relocateUserMessages([
+          ...message.items.map((item) => toUiSandboxEvent(item.event)),
+          ...state.events,
+        ]),
         hasMoreHistory: message.hasMore,
         cursor: message.cursor,
         loadingHistory: false,
@@ -304,7 +325,10 @@ export function sessionSocketReducer(
       return reduceServerMessage(state, action.message);
 
     case "events_appended": {
-      let next: SessionSocketState = { ...state, events: [...state.events, ...action.events] };
+      let next: SessionSocketState = {
+        ...state,
+        events: relocateUserMessages([...state.events, ...action.events]),
+      };
       for (const event of action.events) {
         if (
           event.type === "step_finish" &&
