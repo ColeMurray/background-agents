@@ -163,7 +163,7 @@ export async function linearGraphQL(
 
   const parsed = linearGraphQLResponseSchema.safeParse(await res.json());
   if (!parsed.success) {
-    throw new Error("Linear GraphQL error: Unknown GraphQL error");
+    throw new Error("Linear GraphQL error: unexpected response shape");
   }
   const json = parsed.data;
 
