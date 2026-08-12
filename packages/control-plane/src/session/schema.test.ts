@@ -328,11 +328,6 @@ describe("applyMigrations", () => {
     )[0];
     expect(messagesTable).toContain("client_request_id TEXT");
     expect(messagesTable).toContain("request_fingerprint TEXT");
-    // Migration 40 must create this index after adding its columns. Creating it
-    // in SCHEMA_SQL would fail before migrations run for legacy messages tables.
-    expect(SCHEMA_SQL).not.toContain(
-      "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id"
-    );
 
     const migration = MIGRATIONS.find((entry) => entry.id === 40);
     expect(typeof migration?.run).toBe("function");
@@ -361,6 +356,8 @@ describe("applyMigrations", () => {
   });
 
   it("initializes a legacy messages table before creating indexes for new columns", () => {
+    expect(SCHEMA_SQL).not.toMatch(/\bCREATE (?:UNIQUE )?INDEX\b/);
+
     const db = new DatabaseSync(":memory:");
     const sql = createDatabaseSql(db);
     try {
@@ -392,8 +389,14 @@ describe("applyMigrations", () => {
         db
           .prepare("PRAGMA index_list(messages)")
           .all()
-          .some((row) => row.name === "idx_messages_client_request_id")
-      ).toBe(true);
+          .map((row) => row.name)
+      ).toEqual(
+        expect.arrayContaining([
+          "idx_messages_status",
+          "idx_messages_author",
+          "idx_messages_client_request_id",
+        ])
+      );
     } finally {
       db.close();
     }
