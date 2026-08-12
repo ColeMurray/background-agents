@@ -188,13 +188,13 @@ export async function parseOpenAIResponsesStream(
       }
     }
   } catch (error) {
-    if (error instanceof OpenAICodexUpstreamError) throw error;
-    if (error instanceof InvalidOpenAICodexResponseError) throw error;
     if (error instanceof BoundedJsonSseAbortError || signal.aborted) {
       throw new OpenAICodexUpstreamError("OpenAI Responses stream aborted", undefined, {
         cause: error,
       });
     }
+    if (error instanceof OpenAICodexUpstreamError) throw error;
+    if (error instanceof InvalidOpenAICodexResponseError) throw error;
     throw new InvalidOpenAICodexResponseError("Invalid OpenAI Responses stream", {
       cause: error,
     });

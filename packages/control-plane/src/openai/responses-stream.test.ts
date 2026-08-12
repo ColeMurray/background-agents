@@ -158,4 +158,22 @@ describe("OpenAI Responses stream reducer", () => {
       parseOpenAIResponsesStream(sseResponse(), controller.signal, TOOL_NAME)
     ).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
   });
+
+  it("gives an abort precedence over a malformed event already read from the stream", async () => {
+    const controller = new AbortController();
+    const event = new TextEncoder().encode("data: null\n\n");
+    const response = new Response(
+      new ReadableStream({
+        pull(streamController) {
+          streamController.enqueue(event);
+          streamController.close();
+          queueMicrotask(() => controller.abort());
+        },
+      })
+    );
+
+    await expect(
+      parseOpenAIResponsesStream(response, controller.signal, TOOL_NAME)
+    ).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
+  });
 });
