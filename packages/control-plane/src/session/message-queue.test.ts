@@ -452,13 +452,28 @@ describe("SessionMessageQueue", () => {
       ["up-1"],
       expect.objectContaining({ type: "user_message", messageId: expect.any(String) })
     );
-    expect(h.broadcast).toHaveBeenCalledWith({
-      type: "sandbox_event",
-      event: expect.objectContaining({
-        type: "user_message",
-        attachments: [{ name: "shot.png", mimeType: "image/png", attachmentId: "up-1" }],
-      }),
+    const storedEvent = JSON.parse(
+      h.repository.createMessageWithAttachments.mock.calls[0][2].data as string
+    );
+    expect(storedEvent.attachments).toEqual([
+      { name: "shot.png", mimeType: "image/png", attachmentId: "up-1" },
+    ]);
+  });
+
+  it("does not broadcast a queued follow-up before it starts processing", async () => {
+    const h = buildQueue();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-running" });
+
+    await h.queue.handlePromptMessage({} as WebSocket, createClientInfo(), {
+      content: "queued follow-up",
     });
+
+    expect(
+      h.broadcast.mock.calls.filter(
+        ([message]) => message.type === "sandbox_event" && message.event.type === "user_message"
+      )
+    ).toHaveLength(0);
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
   });
 
   it("rejects a prompt when its upload loses the atomic claim race", async () => {

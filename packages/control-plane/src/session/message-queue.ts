@@ -682,10 +682,6 @@ export class SessionMessageQueue {
     }
 
     await this.sessionStatus.transition("active");
-    this.messenger.broadcast({
-      type: "sandbox_event",
-      event: userMessageEvent,
-    });
     this.broadcastPromptQueue();
 
     const position = this.repository.getPendingOrProcessingCount();
