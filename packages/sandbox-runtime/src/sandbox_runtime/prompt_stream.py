@@ -18,6 +18,7 @@ from .child_activity import (
     PendingChildError,
     PendingChildMessage,
 )
+from .message_attribution import AssistantMessageDisposition, MessageAttribution
 from .opencode_client import (
     SSEConnectionError,
     SSEInactivityTimeoutError,
@@ -82,21 +83,35 @@ class _PromptState:
     start_time: float
     cumulative_text: dict[str, str] = field(default_factory=dict)
     emitted_tool_states: set[str] = field(default_factory=set)
-    allowed_assistant_msg_ids: set[str] = field(default_factory=set)
-    user_message_ids: set[str] = field(default_factory=set)
+    attribution: MessageAttribution = field(init=False)
     pending_parts: dict[str, list[_PendingPart]] = field(default_factory=dict)
     pending_parts_total: int = 0
     pending_drop_logged: bool = False
     child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
-    # Compaction tracking: after compaction, parentID changes so acceptance
-    # falls back to non-summary assistant messages created after this prompt
-    compaction_occurred: bool = False
-    correlated_compaction_summary_ids: set[str] = field(default_factory=set)
     emitted_error_messages: set[str] = field(default_factory=set)
     # Set when a parent context-overflow announcement was swallowed; cleared by
     # session.compacted. If still set at idle with no error emitted, the
     # promised compaction never happened and the prompt must fail.
     pending_overflow_error: str | None = None
+
+    def __post_init__(self) -> None:
+        self.attribution = MessageAttribution(self.opencode_message_id)
+
+    @property
+    def allowed_assistant_msg_ids(self) -> set[str]:
+        return self.attribution.allowed_assistant_message_ids
+
+    @property
+    def user_message_ids(self) -> set[str]:
+        return self.attribution.user_message_ids
+
+    @property
+    def compaction_occurred(self) -> bool:
+        return self.attribution.compaction_occurred
+
+    @compaction_occurred.setter
+    def compaction_occurred(self, value: bool) -> None:
+        self.attribution.compaction_occurred = value
 
 
 class _Disposition(Enum):
@@ -183,7 +198,6 @@ class OpenCodePromptStream:
             opencode_message_id=opencode_message_id,
             start_time=time.time(),
         )
-        state.user_message_ids.add(opencode_message_id)
         loop = asyncio.get_running_loop()
         prompt_deadline = loop.time() + self._prompt_max_duration_seconds
         try:
@@ -345,7 +359,7 @@ class OpenCodePromptStream:
 
         elif event_type == "session.compacted":
             if props.get("sessionID") == state.opencode_session_id:
-                state.compaction_occurred = True
+                state.attribution.mark_compacted()
                 state.pending_overflow_error = None
                 self._log.info("bridge.session_compacted", message_id=state.message_id)
                 events.append({"type": "context_compacted", "messageId": state.message_id})
@@ -378,15 +392,14 @@ class OpenCodePromptStream:
             finish = info.get("finish", "")
 
             if role == "user" and oc_msg_id:
-                if oc_msg_id not in state.user_message_ids:
+                if state.attribution.add_user_message(oc_msg_id):
                     self._log.info(
                         "bridge.user_message_id_discovered",
                         expected_id=state.opencode_message_id,
                         actual_id=oc_msg_id,
                     )
-                state.user_message_ids.add(oc_msg_id)
 
-            parent_matches = parent_id in state.user_message_ids
+            parent_matches = state.attribution.parent_matches(parent_id)
             is_compaction_summary = info.get("summary") is True
 
             self._log.debug(
@@ -400,17 +413,10 @@ class OpenCodePromptStream:
 
             events: list[dict[str, Any]] = []
             if role == "assistant" and oc_msg_id:
-                if is_compaction_summary and parent_matches:
-                    state.correlated_compaction_summary_ids.add(oc_msg_id)
-                belongs_to_prompt = (
-                    parent_matches
-                    or oc_msg_id in state.correlated_compaction_summary_ids
-                    or (
-                        not is_compaction_summary
-                        and self._compaction_fallback_accepts(state, oc_msg_id)
-                    )
+                disposition = state.attribution.assistant_disposition(
+                    oc_msg_id, parent_id, is_summary=is_compaction_summary
                 )
-                if belongs_to_prompt and info.get("error"):
+                if disposition is not AssistantMessageDisposition.REJECT and info.get("error"):
                     error_event = self._parent_error_event_once(state, info["error"])
                     if error_event:
                         self._log.error(
@@ -420,16 +426,7 @@ class OpenCodePromptStream:
                         )
                         events.append(error_event)
 
-                # Accept if: parentID matches our message, OR compaction
-                # happened and the message postdates this prompt — but never
-                # the compaction summary itself, whose text is internal
-                # context, not assistant output. Its parentID is the
-                # compaction user message, so parentID alone cannot exclude
-                # it.
-                if not is_compaction_summary and (
-                    parent_matches or self._compaction_fallback_accepts(state, oc_msg_id)
-                ):
-                    state.allowed_assistant_msg_ids.add(oc_msg_id)
+                if disposition is AssistantMessageDisposition.OUTPUT:
                     events.extend(self._drain_pending_parts(state, oc_msg_id, is_subtask=False))
 
             if finish and finish not in ("tool-calls", ""):
@@ -443,33 +440,18 @@ class OpenCodePromptStream:
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
-                disposition = state.child_activity.authorize_or_queue_message(
+                child_disposition = state.child_activity.authorize_or_queue_message(
                     msg_session_id, oc_msg_id
                 )
-                if disposition is MessageDisposition.DROPPED:
+                if child_disposition is MessageDisposition.DROPPED:
                     self._log_pending_child_drop(state)
                     return []
-                if disposition is MessageDisposition.QUEUED:
+                if child_disposition is MessageDisposition.QUEUED:
                     return []
-                state.allowed_assistant_msg_ids.add(oc_msg_id)
+                state.attribution.allow_assistant(oc_msg_id)
                 return self._drain_pending_parts(state, oc_msg_id, is_subtask=True)
 
         return []
-
-    @staticmethod
-    def _compaction_fallback_accepts(state: _PromptState, oc_msg_id: str) -> bool:
-        """Whether the post-compaction fallback may claim an assistant message.
-
-        Compaction rewrites the message chain, so parentID correlation stops
-        matching and acceptance falls back to unparented assistant messages.
-        OpenCode also reports the session's full history (over SSE and from
-        the message-list API), so the fallback must be scoped to messages
-        created during this prompt or prior turns' output would be replayed
-        as current output. Ascending OpenCode IDs order by creation time,
-        making an ID comparison against this prompt's user message exactly
-        that scope.
-        """
-        return state.compaction_occurred and oc_msg_id > state.opencode_message_id
 
     def _on_part_updated(self, state: _PromptState, props: dict[str, Any]) -> list[dict[str, Any]]:
         """Forward parts of authorized messages; buffer parts that arrive early."""
@@ -499,7 +481,7 @@ class OpenCodePromptStream:
                         source="task_metadata",
                     )
 
-        if oc_msg_id in state.allowed_assistant_msg_ids:
+        if state.attribution.is_assistant_allowed(oc_msg_id):
             is_subtask = state.child_activity.is_tracked(part_session_id)
             events.extend(self._handle_part(state, part, delta, is_subtask=is_subtask))
         elif oc_msg_id:
@@ -726,7 +708,7 @@ class OpenCodePromptStream:
 
         if not isinstance(activity, PendingChildMessage):
             return []
-        state.allowed_assistant_msg_ids.add(activity.message_id)
+        state.attribution.allow_assistant(activity.message_id)
         return self._drain_pending_parts(state, activity.message_id, is_subtask=True)
 
     def _log_pending_child_drop(self, state: _PromptState) -> None:
@@ -974,20 +956,11 @@ class OpenCodePromptStream:
                 if role != "assistant":
                     continue
 
-                parent_matches = parent_id in state.user_message_ids
-                in_tracked_set = msg_id in state.allowed_assistant_msg_ids
                 is_compaction_summary = info.get("summary") is True
-
-                # Accept if: parentID matches, was tracked during SSE, or
-                # compaction occurred and the message postdates this prompt —
-                # never the compaction summary itself; its parentID (the
-                # compaction user message) matches.
-                should_accept = not is_compaction_summary and (
-                    parent_matches
-                    or in_tracked_set
-                    or self._compaction_fallback_accepts(state, msg_id)
+                disposition = state.attribution.assistant_disposition(
+                    msg_id, parent_id, is_summary=is_compaction_summary
                 )
-                if not should_accept:
+                if disposition is not AssistantMessageDisposition.OUTPUT:
                     continue
 
                 parts = msg.get("parts", [])
