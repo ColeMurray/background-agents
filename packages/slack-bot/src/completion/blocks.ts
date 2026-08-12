@@ -2,7 +2,8 @@
  * Build Slack Block Kit messages for completion notifications.
  */
 
-import type { AgentResponse, SlackCallbackContext } from "../types";
+import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
+import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 import type {
   SlackActionsBlock,
   SlackButtonElement,
@@ -10,7 +11,7 @@ import type {
   SlackSectionBlock,
 } from "../slack-blocks";
 import { escapeMrkdwnText, splitIntoSlackSections } from "@open-inspect/shared/slack";
-import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
+import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared/types/artifacts";
 
 type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
 

@@ -117,6 +117,16 @@ describe("isChannelTriggerCandidate", () => {
     expect(isChannelTriggerCandidate({ ...baseEvent, subtype: "channel_join" }, BOT)).toBe(false);
   });
 
+  it("returns true for a file_share message so an attached request still triggers", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, subtype: "file_share" }, BOT)).toBe(true);
+  });
+
+  it("returns false for a file_share message with no text of its own", () => {
+    expect(isChannelTriggerCandidate({ ...baseEvent, subtype: "file_share", text: "" }, BOT)).toBe(
+      false
+    );
+  });
+
   it("returns false when bot_id is set", () => {
     expect(isChannelTriggerCandidate({ ...baseEvent, bot_id: "B1" }, BOT)).toBe(false);
   });

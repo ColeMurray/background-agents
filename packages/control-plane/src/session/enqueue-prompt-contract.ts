@@ -1,4 +1,4 @@
-import { messageSourceSchema } from "@open-inspect/shared";
+import { messageSourceSchema } from "@open-inspect/shared/types/sessions";
 import { sessionAttachmentReferencesSchema } from "@open-inspect/shared/types/session-attachments";
 import { z } from "zod";
 

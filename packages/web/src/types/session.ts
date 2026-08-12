@@ -2,7 +2,7 @@ import type {
   PullRequestDisplayStatus,
   ScreenshotArtifactMetadata,
   VideoArtifactMetadata,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/artifacts";
 import type { SandboxEvent as SharedSandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 
 // Session-related type definitions

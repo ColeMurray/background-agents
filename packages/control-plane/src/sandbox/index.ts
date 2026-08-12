@@ -20,6 +20,7 @@ export {
   type SandboxProviderCapabilities,
   type StopConfig,
   type StopResult,
+  type VncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
   type RestoreConfig,

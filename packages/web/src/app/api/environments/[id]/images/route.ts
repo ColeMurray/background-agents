@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { imageBuildStatusResponseSchema } from "@open-inspect/shared/types/image-builds";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { excludeSupersededBuilds } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
@@ -33,8 +33,15 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     if (!response.ok) {
       return NextResponse.json(data, { status: response.status });
     }
+    const parsed = imageBuildStatusResponseSchema.safeParse(data);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: "Failed to fetch environment image status" },
+        { status: 502 }
+      );
+    }
     return NextResponse.json({
-      images: excludeSupersededBuilds((data.images ?? []) as ImageBuildRecordView[]),
+      images: excludeSupersededBuilds(parsed.data.images),
     });
   } catch (error) {
     console.error("Failed to fetch environment image status:", error);

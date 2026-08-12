@@ -39,6 +39,8 @@ const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
       created_at: z.number(),
       code_server_url: z.string().nullable().optional(),
       code_server_password: z.string().nullable().optional(),
+      vnc_url: z.string().nullable().optional(),
+      vnc_password: z.string().nullable().optional(),
       ttyd_url: z.string().nullable().optional(),
       tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
     }),
@@ -55,6 +57,8 @@ const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
         modal_object_id: z.string().nullable().optional(),
         code_server_url: z.string().nullable().optional(),
         code_server_password: z.string().nullable().optional(),
+        vnc_url: z.string().nullable().optional(),
+        vnc_password: z.string().nullable().optional(),
         ttyd_url: z.string().nullable().optional(),
         tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
       })
@@ -163,6 +167,7 @@ export interface CreateSandboxRequest {
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
@@ -176,6 +181,8 @@ export interface CreateSandboxResponse {
   createdAt: number;
   codeServerUrl?: string;
   codeServerPassword?: string;
+  vncUrl?: string;
+  vncPassword?: string;
   ttydUrl?: string;
   tunnelUrls?: Record<string, string>;
 }
@@ -194,6 +201,7 @@ export interface RestoreSandboxRequest {
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
@@ -207,6 +215,8 @@ export interface RestoreSandboxResponse {
   error?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
+  vncUrl?: string;
+  vncPassword?: string;
   ttydUrl?: string;
   tunnelUrls?: Record<string, string>;
 }
@@ -374,6 +384,7 @@ export class ModalClient {
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
@@ -407,6 +418,8 @@ export class ModalClient {
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
+        vncUrl: result.data.vnc_url ?? undefined,
+        vncPassword: result.data.vnc_password ?? undefined,
         ttydUrl: result.data.ttyd_url ?? undefined,
         tunnelUrls: result.data.tunnel_urls ?? undefined,
       };
@@ -451,6 +464,7 @@ export class ModalClient {
           user_env_vars: request.userEnvVars || null,
           timeout_seconds: request.timeoutSeconds || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
         }),
@@ -479,6 +493,8 @@ export class ModalClient {
         modalObjectId: result.data?.modal_object_id ?? undefined,
         codeServerUrl: result.data?.code_server_url ?? undefined,
         codeServerPassword: result.data?.code_server_password ?? undefined,
+        vncUrl: result.data?.vnc_url ?? undefined,
+        vncPassword: result.data?.vnc_password ?? undefined,
         ttydUrl: result.data?.ttyd_url ?? undefined,
         tunnelUrls: result.data?.tunnel_urls ?? undefined,
       };

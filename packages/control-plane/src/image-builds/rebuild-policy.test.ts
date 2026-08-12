@@ -17,7 +17,7 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
     status: "ready",
     repositories_fingerprint: "fp-current",
     repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: "v56-managed-provider-runtime",
+    runtime_version: "v57-vnc-runtime",
     build_duration_seconds: 1,
     error_message: null,
     created_at: 1,
@@ -39,7 +39,11 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       reason: "missing_image",
     });
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ runtime_version: "v55-runtime" })], "modal")
+      evaluateImageBuildRebuildPolicy(
+        unit,
+        [row({ runtime_version: "v56-managed-provider-runtime" })],
+        "modal"
+      )
     ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     expect(
       evaluateImageBuildRebuildPolicy(unit, [row({ repository_shas: "not-json" })], "modal")

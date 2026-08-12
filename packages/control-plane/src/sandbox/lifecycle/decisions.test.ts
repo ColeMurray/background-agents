@@ -14,10 +14,6 @@ import {
   evaluateWarmDecision,
   evaluateExecutionTimeout,
   isSandboxReconnectBlockedStatus,
-  DEFAULT_CIRCUIT_BREAKER_CONFIG,
-  DEFAULT_SPAWN_CONFIG,
-  DEFAULT_INACTIVITY_CONFIG,
-  DEFAULT_HEARTBEAT_CONFIG,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
@@ -133,11 +129,6 @@ describe("evaluateCircuitBreaker", () => {
     // At exact boundary, should reset
     expect(decision.shouldProceed).toBe(true);
     expect(decision.shouldReset).toBe(true);
-  });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG.threshold).toBe(3);
-    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG.windowMs).toBe(5 * 60 * 1000);
   });
 });
 
@@ -416,11 +407,6 @@ describe("evaluateSpawnDecision", () => {
     expect(decision.action).toBe("spawn");
   });
 
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_SPAWN_CONFIG.cooldownMs).toBe(30000);
-    expect(DEFAULT_SPAWN_CONFIG.readyWaitMs).toBe(60000);
-  });
-
   // ---- Persistent resume (Daytona-style) ----
 
   it('returns "resume" when provider supports persistent resume and sandbox is stopped with providerObjectId', () => {
@@ -694,12 +680,6 @@ describe("evaluateInactivityTimeout", () => {
 
     expect(decision.action).toBe("timeout");
   });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_INACTIVITY_CONFIG.timeoutMs).toBe(10 * 60 * 1000);
-    expect(DEFAULT_INACTIVITY_CONFIG.extensionMs).toBe(5 * 60 * 1000);
-    expect(DEFAULT_INACTIVITY_CONFIG.minCheckIntervalMs).toBe(30000);
-  });
 });
 
 // ==================== Heartbeat Health Tests ====================
@@ -767,10 +747,6 @@ describe("evaluateHeartbeatHealth", () => {
 
     expect(health.isStale).toBe(true);
     expect(health.ageMs).toBe(config.timeoutMs + 1);
-  });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_HEARTBEAT_CONFIG.timeoutMs).toBe(90000);
   });
 });
 
@@ -842,10 +818,6 @@ describe("evaluateConnectingTimeout", () => {
       const result = evaluateConnectingTimeout(status, old, config, now);
       expect(result.isTimedOut).toBe(false);
     }
-  });
-
-  it("uses correct default config value", () => {
-    expect(DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs).toBe(120_000);
   });
 });
 

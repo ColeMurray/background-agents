@@ -167,6 +167,8 @@ function createSandboxRow(modalSandboxId: string): SandboxRow {
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,

@@ -11,6 +11,8 @@ describe("createSessionInternalRoutes", () => {
     const routes = createSessionInternalRoutes({
       init: noopHandler(),
       state: noopHandler(),
+      snapshot: noopHandler(),
+      sandboxAccess: noopHandler(),
       prompt: noopHandler(),
       stop: noopHandler(),
       sandboxEvent: noopHandler(),
@@ -35,6 +37,7 @@ describe("createSessionInternalRoutes", () => {
       tunnelUrls: noopHandler(),
       spawnContext: noopHandler(),
       childSummary: noopHandler(),
+      parentPrompt: noopHandler(),
       cancel: noopHandler(),
       childSessionUpdate: noopHandler(),
       diffState: noopHandler(),
@@ -49,6 +52,8 @@ describe("createSessionInternalRoutes", () => {
     expect(methodPathSet).toEqual(
       new Set([
         `POST ${SessionInternalPaths.init}`,
+        `GET ${SessionInternalPaths.snapshot}`,
+        `GET ${SessionInternalPaths.sandboxAccess}`,
         `GET ${SessionInternalPaths.state}`,
         `POST ${SessionInternalPaths.prompt}`,
         `POST ${SessionInternalPaths.stop}`,
@@ -74,6 +79,7 @@ describe("createSessionInternalRoutes", () => {
         `GET ${SessionInternalPaths.tunnelUrls}`,
         `GET ${SessionInternalPaths.spawnContext}`,
         `GET ${SessionInternalPaths.childSummary}`,
+        `POST ${SessionInternalPaths.parentPrompt}`,
         `POST ${SessionInternalPaths.cancel}`,
         `POST ${SessionInternalPaths.childSessionUpdate}`,
         `GET ${SessionInternalPaths.diffState}`,

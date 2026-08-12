@@ -6,7 +6,7 @@
  * so the sequencing lives in exactly one place.
  */
 
-import type { CallbackContext, SendPromptResponse } from "@open-inspect/shared";
+import type { CallbackContext, SendPromptResponse } from "@open-inspect/shared/types/session-api";
 import {
   notifyDroppedAttachments,
   uploadPreparedAttachments,

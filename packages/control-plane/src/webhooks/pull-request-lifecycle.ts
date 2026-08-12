@@ -19,7 +19,7 @@ import type {
   GitHubAutomationEvent,
   GitHubPullRequestEventFacts,
 } from "@open-inspect/shared/triggers";
-import type { PullRequestStatus } from "@open-inspect/shared";
+import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,

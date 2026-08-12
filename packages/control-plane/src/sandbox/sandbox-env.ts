@@ -224,6 +224,16 @@ export async function deriveCodeServerPassword(sandboxId: string, secret: string
   return digest.slice(0, 32);
 }
 
+/** Derive a deterministic VNC password in a domain distinct from code-server. */
+export async function deriveVncPassword(sandboxId: string, secret: string): Promise<string> {
+  const digest = await computeHmacHex(`vnc:${sandboxId}`, secret);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: 8 }, (_, index) => {
+    const byte = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
+    return alphabet[byte % alphabet.length];
+  }).join("");
+}
+
 /** Provider-specific inputs to {@link buildSandboxEnvVars}. */
 export interface SandboxEnvVarsOptions {
   /** Resolved clone identity — {@link scmCloneIdentity} of the configured SCM provider. */
@@ -233,6 +243,8 @@ export interface SandboxEnvVarsOptions {
    * async). Providers derive it only when `codeServerEnabled`.
    */
   codeServerPassword?: string;
+  /** Precomputed VNC password, present only when VNC is enabled. */
+  vncPassword?: string;
   /**
    * Overrides `config.userEnvVars` as the user layer when a provider composes
    * it differently (OpenComputer layers provider LLM credentials underneath
@@ -256,6 +268,8 @@ export function buildSandboxEnvVars(
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
   const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
+  delete envVars.VNC_PASSWORD;
+  delete envVars.NOVNC_PORT;
 
   const sessionConfig = buildSessionConfig(config);
 
@@ -276,6 +290,11 @@ export function buildSandboxEnvVars(
 
   if (options.codeServerPassword) {
     envVars.CODE_SERVER_PASSWORD = options.codeServerPassword;
+  }
+
+  if (config.vncEnabled && options.vncPassword) {
+    envVars.VNC_PASSWORD = options.vncPassword;
+    envVars.NOVNC_PORT = String(resolveServicePorts(config.sandboxSettings).vncPort);
   }
 
   if (config.agentSlackNotifyEnabled) {

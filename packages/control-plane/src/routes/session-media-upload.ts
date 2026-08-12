@@ -1,4 +1,7 @@
-import type { ScreenshotArtifactMetadata, VideoArtifactMetadata } from "@open-inspect/shared";
+import type {
+  ScreenshotArtifactMetadata,
+  VideoArtifactMetadata,
+} from "@open-inspect/shared/types/artifacts";
 import { generateId } from "../auth/crypto";
 import {
   buildMediaObjectKey,

@@ -37,6 +37,7 @@ export function SessionDetailsOverlay({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -164,6 +165,7 @@ export function SessionDetailsOverlay({
       sessionId={sessionId}
       sessionState={sessionState}
       participants={participants}
+      presenceSynced={presenceSynced}
       events={events}
       artifacts={artifacts}
       terminalOpen={terminalOpen}
