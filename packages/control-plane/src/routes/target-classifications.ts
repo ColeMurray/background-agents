@@ -1,4 +1,7 @@
-import { targetClassificationRequestSchema } from "@open-inspect/shared/types/target-classification";
+import {
+  TARGET_CLASSIFICATIONS_PATH,
+  targetClassificationRequestSchema,
+} from "@open-inspect/shared/types/target-classification";
 import {
   createTargetClassification,
   InvalidTargetClassificationResponseError,
@@ -68,7 +71,7 @@ export async function handleCreateTargetClassification(
 export const targetClassificationRoutes: Route[] = [
   {
     method: "POST",
-    pattern: parsePattern("/internal/target-classifications"),
+    pattern: parsePattern(TARGET_CLASSIFICATIONS_PATH),
     handler: handleCreateTargetClassification,
   },
 ];

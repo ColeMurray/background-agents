@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 export const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
+export const TARGET_CLASSIFICATIONS_PATH = "/internal/target-classifications";
+export const TARGET_CLASSIFICATIONS_URL = `https://internal${TARGET_CLASSIFICATIONS_PATH}`;
 export const CLASSIFIER_PROMPT_MAX_CHARS = 128_000;
 const CLASSIFIER_USER_MESSAGE_PREFIX = "## User's Message\n";
 export const CLASSIFIER_MESSAGE_MAX_CHARS =

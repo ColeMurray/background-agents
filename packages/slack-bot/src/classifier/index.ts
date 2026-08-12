@@ -10,6 +10,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import {
   CLASSIFY_TARGET_TOOL_NAME,
   CLASSIFIER_MESSAGE_MAX_CHARS,
+  TARGET_CLASSIFICATIONS_URL,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
   targetClassificationRequestSchema,
@@ -33,7 +34,6 @@ import { signedControlPlaneFetch } from "../internal-auth";
 const log = createLogger("classifier");
 const DEFAULT_CLASSIFICATION_MODEL: ClassificationModel = ANTHROPIC_CLASSIFICATION_MODEL_ID;
 const ANTHROPIC_API_MODEL = "claude-haiku-4-5";
-const TARGET_CLASSIFICATIONS_URL = "https://internal/internal/target-classifications";
 const CLASSIFY_TARGET_INPUT_SCHEMA: Anthropic.Messages.Tool.InputSchema = {
   ...targetClassificationJsonSchema,
 };

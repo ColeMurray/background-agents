@@ -3,6 +3,7 @@
  */
 
 import { isBrowserAuthProxyRoute } from "@open-inspect/shared/browser-auth-routes";
+import { TARGET_CLASSIFICATIONS_PATH } from "@open-inspect/shared/types/target-classification";
 import type { Env } from "./types";
 import { authenticate, isAuthError } from "./auth/authenticate";
 import type { Principal } from "./auth/principal";
@@ -176,7 +177,7 @@ export function isWebServiceAuthRoute(method: string, path: string): boolean {
 export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
-    (method === "POST" && path === "/internal/target-classifications") ||
+    (method === "POST" && path === TARGET_CLASSIFICATIONS_PATH) ||
     /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     /^\/skills(?:\/.*)?$/.test(path) ||
