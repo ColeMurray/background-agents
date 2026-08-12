@@ -50,7 +50,7 @@ function ToolIcon({ name }: { name: string | null }) {
   }
 }
 
-export function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
+function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
   const formatted = formatToolCall(event);
   const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
   const { args, output } = formatted.getDetails();

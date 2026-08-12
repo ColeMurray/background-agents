@@ -9,11 +9,8 @@ import {
   type ScmGlobalConfig,
 } from "@open-inspect/shared/types/integrations";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
-import {
-  encodeRepositoryPathSegments,
-  parseRepositoryFullName,
-} from "@open-inspect/shared/types/repositories";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
+import { getScmRepoSettingsPath, SCM_REPO_SETTINGS_KEY } from "./scm-settings-path";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,14 +33,9 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
-const REPO_SETTINGS_KEY = "/api/scm-settings/repos";
+const REPO_SETTINGS_KEY = SCM_REPO_SETTINGS_KEY;
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
 const DEFAULT_PULL_REQUEST_LABEL = "";
-
-export function getScmRepoSettingsPath(fullName: string): `/api/${string}` | null {
-  const repository = parseRepositoryFullName(fullName);
-  return repository ? `${REPO_SETTINGS_KEY}/${encodeRepositoryPathSegments(repository)}` : null;
-}
 
 interface GlobalResponse {
   settings: ScmGlobalConfig | null;
