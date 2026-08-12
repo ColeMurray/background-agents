@@ -202,6 +202,18 @@ export const createSessionRequestSchema = createSessionRequestBaseSchema
 
 export type CreateSessionRequest = z.infer<typeof createSessionRequestSchema>;
 
+/**
+ * Review-generation fence for github-bot-originated review sessions (design:
+ * review-supersede). Accepted only from the github-bot service principal —
+ * routes/session-create.ts rejects it from any other caller with 403.
+ */
+export const createSessionGithubReviewSchema = z.object({
+  repoId: z.number().int().positive(),
+  prNumber: z.number().int().positive(),
+  generation: z.number().int().positive(),
+  headSha: z.string().min(1),
+});
+
 export const createSessionInputSchema = createSessionRequestBaseSchema
   .extend({
     // Display-only identity fields. Callers may not assert identity or SCM
@@ -213,6 +225,7 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     actorDisplayName: z.string().optional(),
     actorEmail: z.string().optional(),
     actorAvatarUrl: z.string().optional(),
+    githubReview: createSessionGithubReviewSchema.optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

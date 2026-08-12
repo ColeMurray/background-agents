@@ -40,6 +40,7 @@ import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
 import { sessionRoutes } from "./routes/sessions";
+import { githubReviewRoutes } from "./routes/github-reviews";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
 
@@ -85,6 +86,7 @@ const SANDBOX_AUTH_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+$/, // GET child detail
   /^\/sessions\/[^/]+\/children\/[^/]+\/cancel$/, // POST cancel child
   /^\/sessions\/[^/]+\/slack-notify$/, // Agent-initiated Slack notification
+  /^\/sessions\/[^/]+\/review-ownership$/, // Review-generation ownership check before the agent's final GitHub writes
 ];
 
 /** Routes that require the session-specific sandbox token and reject internal HMAC auth. */
@@ -376,6 +378,9 @@ const routes: Route[] = [
 
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
+
+  // GitHub review-generation supersession (github-bot service auth)
+  ...githubReviewRoutes,
 ];
 
 /**

@@ -111,31 +111,51 @@ ${prDescriptionBlock}
    - Performance implications
    - Code clarity and maintainability
 3. You may read individual files in the repo for additional context beyond the diff
-4. When your review is complete, submit it and mark the triggering commit's review status complete:
+4. When your review is complete, write the ENTIRE review — summary AND any inline comments —
+   to a single file /tmp/review.json:
 
+   {
+     "body": "<your review summary>",
+     "event": "${reviewEvent}",
+     "commit_id": "${headSha}",
+     "comments": [
+       { "path": "<file path>", "line": <line number>, "side": "RIGHT", "body": "<comment>" }
+     ]
+   }
+
+   Omit the "comments" key entirely if you have no inline comments. NEVER post inline
+   comments through any other endpoint — everything ships in this one review call.
+
+   ${reviewEventGuidance}
+
+5. Submit as ONE command that chains the ownership and freshness fence directly into the
+   write calls, so any guard failure mechanically prevents the POST:
+
+   session_id="$(printf '%s' "$SESSION_CONFIG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["session_id"])')" && \\
+   snapshot="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha + " " + .state + " draft:" + (.draft|tostring)')" && \\
+   test "$snapshot" = "${headSha} open draft:false" && \\
+   curl -fsS -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
+     "$CONTROL_PLANE_URL/sessions/$session_id/review-ownership" && \\
    review_url="$(gh api repos/${owner}/${repo}/pulls/${number}/reviews \\
      --method POST \\
-     -f body="<your review summary>" \\
-     -f event="${reviewEvent}" \\
+     --input /tmp/review.json \\
      --jq '.html_url')" && \\
    gh api repos/${owner}/${repo}/statuses/${headSha} \\
      --method POST \\
      -f state="success" \\
      -f context="${REVIEW_STATUS_CONTEXT}" \\
      -f description="${REVIEW_COMPLETED_DESCRIPTION}" \\
-     -f target_url="$review_url"
+     -f target_url="$review_url" && \\
+   curl -fsS -X DELETE -H "Authorization: Bearer $SANDBOX_AUTH_TOKEN" \\
+     "$CONTROL_PLANE_URL/sessions/$session_id/review-ownership"
 
-   ${reviewEventGuidance}
-
-5. For inline comments on specific files:
-
-   gh api repos/${owner}/${repo}/pulls/${number}/comments \\
-     --method POST \\
-     -f body="<comment>" \\
-     -f path="<file path>" \\
-     -f commit_id="$(gh api repos/${owner}/${repo}/pulls/${number} --jq '.head.sha')" \\
-     -f line=<line number> \\
-     -f side="RIGHT"
+   The fence: the \`test\` asserts the live head is still exactly "${headSha}", open, and not
+   a draft; the GET \`curl\` acquires this session's submission lease from the control plane
+   (204 = owned; 409 = a newer review session has taken over, curl exits 22); the final
+   DELETE releases the lease after the writes. If ANY part fails — missing environment
+   variable, freshness mismatch, ownership 409, network error — the chain stops before or at
+   the review POST. In that case exit immediately WITHOUT posting a review, inline comment,
+   or status update by any other means.
 
 ${buildCustomInstructionsSection(codeReviewInstructions)}
 ${buildCommentGuidelines(isPublic)}`;

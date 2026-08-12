@@ -10,7 +10,11 @@ import { EnvironmentStore } from "../db/environments";
 import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
-import { initializeSession, type SessionInitInput } from "../session/initialize";
+import {
+  initializeSession,
+  ReviewGenerationSupersededError,
+  type SessionInitInput,
+} from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { Env } from "../types";
@@ -42,6 +46,17 @@ async function handleCreateSession(
   const parsed = await parseCreateSessionInput(request);
   if (!parsed.ok) return error(parsed.message, 400);
   const body = parsed.input;
+
+  // githubReview fences a review session against a claimed generation
+  // (design: review-supersede) — only the github-bot service may assert it;
+  // any other caller could otherwise forge supersession state for a PR it
+  // doesn't own.
+  if (
+    body.githubReview &&
+    !(ctx.principal?.kind === "service" && ctx.principal.service === "github-bot")
+  ) {
+    return error("githubReview is only accepted from the github-bot service", 403);
+  }
 
   // Identity comes from the verified principal; caller-asserted identity/SCM
   // body fields are rejected. SCM credentials flow only through
@@ -208,11 +223,15 @@ async function handleCreateSession(
     vncEnabled,
     sandboxSettings,
     spawnSource,
+    githubReview: body.githubReview,
   };
 
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    if (e instanceof ReviewGenerationSupersededError) {
+      return error(e.message, 409);
+    }
     logger.error("Failed to initialize session", {
       error: e instanceof Error ? e.message : String(e),
       session_id: sessionId,

@@ -9,6 +9,9 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
+import { reapSupersededReviewSessions } from "./routes/github-reviews";
+import { createSessionRuntimeClient } from "./session/runtime-client";
+import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 
 const logger = createLogger("worker");
 
@@ -53,6 +56,22 @@ export default {
     if (!env.SCHEDULER) {
       logger.debug("SCHEDULER binding not configured, skipping scheduled tick");
       return;
+    }
+    const requestId = crypto.randomUUID();
+    const cronCtx = {
+      request_id: requestId,
+      trace_id: requestId,
+      metrics: createRequestMetrics(),
+    };
+    try {
+      // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: cron env.DB read
+      const db = instrumentD1(env.DB, cronCtx.metrics);
+      await reapSupersededReviewSessions(db, createSessionRuntimeClient(env, cronCtx));
+    } catch (reaperError) {
+      logger.warn("Review reaper tick failed", {
+        event: "review_reaper.tick_failed",
+        error: reaperError instanceof Error ? reaperError.message : String(reaperError),
+      });
     }
 
     // Always wake the SchedulerDO — it runs both the recovery sweep
