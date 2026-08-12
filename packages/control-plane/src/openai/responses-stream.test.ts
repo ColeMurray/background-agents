@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "./codex-errors";
 import { parseOpenAIResponsesStream } from "./responses-stream";
 
 const TOOL_NAME = "classify_target";
@@ -49,14 +50,14 @@ describe("OpenAI Responses stream reducer", () => {
       },
     ],
   ])("rejects %s", async (_name, event) => {
-    await expect(parse(event)).resolves.toEqual({ kind: "invalid_response" });
+    await expect(parse(event)).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
   it.each([
     ["an error event", { type: "error", message: "upstream failure" }],
     ["a failed response", { type: "response.failed", response: {} }],
   ])("maps %s to an upstream error", async (_name, event) => {
-    await expect(parse(event)).resolves.toEqual({ kind: "upstream_error" });
+    await expect(parse(event)).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
   });
 
   it("rejects a stream that ends without a completed response", async () => {
@@ -65,7 +66,7 @@ describe("OpenAI Responses stream reducer", () => {
         type: "response.output_item.added",
         item: { type: "function_call", id: "fc-1", name: TOOL_NAME, arguments: "" },
       })
-    ).resolves.toEqual({ kind: "invalid_response" });
+    ).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
   it.each([
@@ -75,7 +76,7 @@ describe("OpenAI Responses stream reducer", () => {
   ])("rejects a completed response with %s", async (_name, item) => {
     await expect(
       parse({ type: "response.completed", response: { output: [item] } })
-    ).resolves.toEqual({ kind: "invalid_response" });
+    ).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
   it("uses the tool name supplied by an arguments-done event", async () => {
@@ -93,7 +94,7 @@ describe("OpenAI Responses stream reducer", () => {
         },
         { type: "response.completed", response: {} }
       )
-    ).resolves.toEqual({ kind: "completed", output });
+    ).resolves.toEqual(output);
   });
 
   it("assembles function-call argument deltas", async () => {
@@ -117,7 +118,7 @@ describe("OpenAI Responses stream reducer", () => {
         },
         { type: "response.completed", response: {} }
       )
-    ).resolves.toEqual({ kind: "completed", output });
+    ).resolves.toEqual(output);
   });
 
   it("ignores unrelated events", async () => {
@@ -126,7 +127,7 @@ describe("OpenAI Responses stream reducer", () => {
         { type: "response.created", response: {} },
         { type: "response.completed", response: { output: [functionCall()] } }
       )
-    ).resolves.toEqual({ kind: "completed", output });
+    ).resolves.toEqual(output);
   });
 
   it("ignores a non-function output item before the completed response", async () => {
@@ -138,7 +139,7 @@ describe("OpenAI Responses stream reducer", () => {
           response: { output: [functionCall()] },
         }
       )
-    ).resolves.toEqual({ kind: "completed", output });
+    ).resolves.toEqual(output);
   });
 
   it("normalizes malformed SSE as an invalid response", async () => {
@@ -146,15 +147,15 @@ describe("OpenAI Responses stream reducer", () => {
 
     await expect(
       parseOpenAIResponsesStream(response, new AbortController().signal, TOOL_NAME)
-    ).resolves.toEqual({ kind: "invalid_response" });
+    ).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
-  it("maps an aborted stream to an upstream error", async () => {
+  it("throws an upstream error for an aborted stream", async () => {
     const controller = new AbortController();
     controller.abort();
 
     await expect(
       parseOpenAIResponsesStream(sseResponse(), controller.signal, TOOL_NAME)
-    ).resolves.toEqual({ kind: "upstream_error" });
+    ).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
   });
 });

@@ -4,6 +4,7 @@ import {
   requestOpenAICodexFunction,
   type OpenAICodexFunctionRequest,
 } from "./codex-responses";
+import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "./codex-errors";
 
 const TOOL_NAME = "classify_target";
 const output = { targetId: "acme/api", confidence: "high" };
@@ -95,7 +96,7 @@ describe("OpenAI Codex Responses client", () => {
   });
 
   it("sends a correlated forced-function request and parses fragmented SSE", async () => {
-    await expect(request()).resolves.toEqual({ kind: "completed", output });
+    await expect(request()).resolves.toEqual(output);
 
     const [url, init] = vi.mocked(fetch).mock.calls[0];
     expect(url).toBe("https://chatgpt.com/backend-api/codex/responses");
@@ -145,7 +146,7 @@ describe("OpenAI Codex Responses client", () => {
       )
     );
 
-    await expect(request()).resolves.toEqual({ kind: "completed", output });
+    await expect(request()).resolves.toEqual(output);
   });
 
   it("falls back to streamed function-call arguments", async () => {
@@ -170,7 +171,7 @@ describe("OpenAI Codex Responses client", () => {
       )
     );
 
-    await expect(request()).resolves.toEqual({ kind: "completed", output });
+    await expect(request()).resolves.toEqual(output);
   });
 
   it("rejects malformed authoritative output instead of a completed fallback", async () => {
@@ -184,7 +185,7 @@ describe("OpenAI Codex Responses client", () => {
       )
     );
 
-    await expect(request()).resolves.toEqual({ kind: "invalid_response" });
+    await expect(request()).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
   it.each([
@@ -212,24 +213,24 @@ describe("OpenAI Codex Responses client", () => {
         Array.from({ length: 1_001 }, () => sseEvent({ type: "response.created" })).join("")
       ),
     ],
-  ])("returns invalid_response for %s", async (_name, response) => {
+  ])("rejects invalid output for %s", async (_name, response) => {
     vi.mocked(fetch).mockResolvedValueOnce(response);
-    await expect(request()).resolves.toEqual({ kind: "invalid_response" });
+    await expect(request()).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
-  it("returns invalid_response when the stream ends before a terminal event", async () => {
+  it("rejects when the stream ends before a terminal event", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       fragmentedSseResponse({ type: "response.created", response: { id: "resp-classify" } })
     );
 
-    await expect(request()).resolves.toEqual({ kind: "invalid_response" });
+    await expect(request()).rejects.toBeInstanceOf(InvalidOpenAICodexResponseError);
   });
 
   it.each(["response.failed", "error"])("sanitizes %s events", async (type) => {
     vi.mocked(fetch).mockResolvedValueOnce(
       fragmentedSseResponse({ type, error: { message: "upstream secret details" } })
     );
-    await expect(request()).resolves.toEqual({ kind: "upstream_error" });
+    await expect(request()).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
   });
 
   it("times out a stream whose reader and cancellation never finish", async () => {
@@ -238,10 +239,11 @@ describe("OpenAI Codex Responses client", () => {
     vi.mocked(fetch).mockResolvedValueOnce(openStreamResponse(undefined, cancel));
 
     const result = request();
+    const rejection = expect(result).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(CODEX_RESPONSES_TIMEOUT_MS);
 
-    await expect(result).resolves.toEqual({ kind: "upstream_error" });
+    await rejection;
     expect(cancel).toHaveBeenCalledOnce();
   });
 
@@ -250,10 +252,11 @@ describe("OpenAI Codex Responses client", () => {
     vi.mocked(fetch).mockImplementationOnce(() => new Promise<Response>(() => undefined));
 
     const result = request();
+    const rejection = expect(result).rejects.toBeInstanceOf(OpenAICodexUpstreamError);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(CODEX_RESPONSES_TIMEOUT_MS);
 
-    await expect(result).resolves.toEqual({ kind: "upstream_error" });
+    await rejection;
     expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true);
   });
 
@@ -268,16 +271,18 @@ describe("OpenAI Codex Responses client", () => {
     );
     vi.mocked(fetch).mockResolvedValueOnce(response);
 
-    await expect(request()).resolves.toEqual({ kind: "completed", output });
+    await expect(request()).resolves.toEqual(output);
     expect(cancel).toHaveBeenCalledOnce();
     expect(response.body?.locked).toBe(false);
   });
 
-  it("maps non-OK responses without reading their body", async () => {
+  it("throws an upstream error for non-OK responses without reading their body", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(
       new Response("upstream secret details", { status: 429 })
     );
-    await expect(request()).resolves.toEqual({ kind: "upstream_error", status: 429 });
+    const error = await request().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(OpenAICodexUpstreamError);
+    expect(error).toMatchObject({ status: 429 });
   });
 
   it("omits the account header when no account id is available", async () => {

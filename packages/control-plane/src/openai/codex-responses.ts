@@ -1,4 +1,5 @@
 import { waitForAbort } from "./bounded-json-sse";
+import { OpenAICodexUpstreamError } from "./codex-errors";
 import { parseOpenAIResponsesStream } from "./responses-stream";
 
 const CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
@@ -18,11 +19,6 @@ export type OpenAICodexFunctionRequest = {
     parameters: object;
   };
 };
-
-type OpenAICodexResult =
-  | { kind: "completed"; output: unknown }
-  | { kind: "upstream_error"; status?: number }
-  | { kind: "invalid_response" };
 
 function buildHeaders(request: OpenAICodexFunctionRequest): Headers {
   const headers = new Headers({
@@ -59,7 +55,7 @@ function buildBody(request: OpenAICodexFunctionRequest): string {
 /** Executes one standard Responses function call through the Codex subscription endpoint. */
 export async function requestOpenAICodexFunction(
   request: OpenAICodexFunctionRequest
-): Promise<OpenAICodexResult> {
+): Promise<unknown> {
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), CODEX_RESPONSES_TIMEOUT_MS);
   try {
@@ -74,11 +70,18 @@ export async function requestOpenAICodexFunction(
         }),
         abortController.signal
       );
-    } catch {
-      return { kind: "upstream_error" };
+    } catch (error) {
+      throw new OpenAICodexUpstreamError("OpenAI Codex request failed", undefined, {
+        cause: error,
+      });
     }
 
-    if (!response.ok) return { kind: "upstream_error", status: response.status };
+    if (!response.ok) {
+      throw new OpenAICodexUpstreamError(
+        `OpenAI Codex request failed with status ${response.status}`,
+        response.status
+      );
+    }
     return await parseOpenAIResponsesStream(response, abortController.signal, request.tool.name);
   } finally {
     clearTimeout(timeout);
