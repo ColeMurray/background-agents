@@ -207,7 +207,7 @@ const baseTimelineProps = {
 } as const;
 
 describe("prompt queue status", () => {
-  it("decorates canonical user messages by messageId", () => {
+  it("hides pending messages and leaves the running message undecorated", () => {
     const events: SandboxEvent[] = [
       { ...event(), messageId: "running", content: "First" },
       { ...event(), messageId: "next", content: "Second", timestamp: 2 },
@@ -224,12 +224,13 @@ describe("prompt queue status", () => {
         ]}
       />
     );
-    expect(screen.getByText("Running")).toBeInTheDocument();
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
-    expect(screen.getByText("Queued #2")).toBeInTheDocument();
+    expect(screen.getByText("First")).toBeInTheDocument();
+    expect(screen.queryByText("Running")).not.toBeInTheDocument();
+    expect(screen.queryByText("Second")).not.toBeInTheDocument();
+    expect(screen.queryByText("Third")).not.toBeInTheDocument();
   });
 
-  it("renders authoritative queue entries missing from timeline replay without duplicating matches", () => {
+  it("does not render pending queue entries that are outside timeline replay", () => {
     render(
       <SessionTimeline
         {...baseTimelineProps}
@@ -250,8 +251,8 @@ describe("prompt queue status", () => {
     );
 
     expect(screen.getAllByText("Canonical prompt")).toHaveLength(1);
-    expect(screen.getByText("Queued outside replay")).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Prompt queue" })).toBeInTheDocument();
+    expect(screen.queryByText("Queued outside replay")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Prompt queue" })).not.toBeInTheDocument();
   });
 });
 

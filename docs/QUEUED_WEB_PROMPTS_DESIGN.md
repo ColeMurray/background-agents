@@ -356,25 +356,20 @@ attachment references while the page remains mounted, so a retry deduplicates in
 second prompt. A retry after the prompt has already completed returns `position: null` because it is
 no longer in the unfinished queue. Persisting unsent drafts across a full reload remains a non-goal.
 
-### 7. Display queue state in the timeline
+### 7. Display pending prompts above the composer
 
 The persisted `user_message` event remains the canonical chat entry; do not add a second optimistic
-user bubble. Join its `messageId` with `promptQueue` to display a compact status on unfinished user
-messages:
+user bubble. While its authoritative `promptQueue` item has `pending` status, hide that event from
+the timeline and render the projection in a FIFO stack directly above the composer. When its status
+changes to `processing`, remove it from the stack and reveal the ordinary timeline message without a
+running-status label.
 
-- `Running` for the processing entry;
-- `Queued next` for the first pending entry;
-- `Queued #N` for later pending entries.
+The stack contains only pending prompts, is bounded and scrollable, and preserves queue order. It
+also renders pending prompts whose canonical event is outside the bounded initial replay. Queue
+changes do not trigger timeline scrolling because the stack is outside the timeline scroll region.
 
-Positions are derived and advisory. They may change as work completes or the queue changes.
-
-The first release does not require a separate queue management panel. On mobile, status text must
-fit inside existing message cards without hover-only controls. A future responsive Queue sheet can
-be added if individual management actions are introduced.
-
-If an unfinished prompt's canonical `user_message` event is outside the bounded initial replay, the
-timeline renders it in a compact queue section from the authoritative projection. Loading older
-history removes the fallback once the canonical event is present.
+The first release does not include individual queue management actions. A future responsive Queue
+sheet can be added if those actions are introduced.
 
 ### 8. Preserve stop, cancel, archive, and terminal semantics
 

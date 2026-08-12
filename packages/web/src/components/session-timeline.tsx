@@ -57,33 +57,12 @@ export function SessionTimeline({
   onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
   const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
-  const queueStatuses = useMemo(() => {
-    const statuses = new Map<string, string>();
-    let pendingPosition = 0;
-    for (const item of promptQueue) {
-      if (item.status === "processing") statuses.set(item.messageId, "Running");
-      else {
-        pendingPosition += 1;
-        statuses.set(
-          item.messageId,
-          pendingPosition === 1 ? "Queued next" : `Queued #${pendingPosition}`
-        );
-      }
-    }
-    return statuses;
-  }, [promptQueue]);
-  const timelineMessageIds = useMemo(
+  const pendingMessageIds = useMemo(
     () =>
       new Set(
-        events.flatMap((event) =>
-          event.type === "user_message" && event.messageId ? [event.messageId] : []
-        )
+        promptQueue.filter((item) => item.status === "pending").map((item) => item.messageId)
       ),
-    [events]
-  );
-  const queueOnlyItems = useMemo(
-    () => promptQueue.filter((item) => !timelineMessageIds.has(item.messageId)),
-    [promptQueue, timelineMessageIds]
+    [promptQueue]
   );
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
@@ -172,7 +151,7 @@ export function SessionTimeline({
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events, isProcessing, promptQueue]);
+  }, [events, isProcessing]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);
@@ -210,6 +189,13 @@ export function SessionTimeline({
         />
       );
     }
+    if (
+      item.event.type === "user_message" &&
+      item.event.messageId &&
+      pendingMessageIds.has(item.event.messageId)
+    ) {
+      return null;
+    }
     return (
       <EventItem
         key={item.id}
@@ -218,11 +204,6 @@ export function SessionTimeline({
         currentParticipantId={currentParticipantId}
         participantProfiles={participantProfiles}
         onOpenMedia={onOpenMedia}
-        queueStatus={
-          "messageId" in item.event && item.event.messageId
-            ? queueStatuses.get(item.event.messageId)
-            : undefined
-        }
       />
     );
   };
@@ -283,27 +264,6 @@ export function SessionTimeline({
           })
         )}
         {isProcessing && <ThinkingIndicator />}
-        {queueOnlyItems.length > 0 && (
-          <section
-            aria-label="Prompt queue"
-            className="min-w-0 border border-border-muted bg-card p-3"
-          >
-            <h2 className="mb-2 text-xs font-medium text-muted-foreground">Prompt queue</h2>
-            <div className="space-y-2">
-              {queueOnlyItems.map((item) => (
-                <div key={item.messageId} className="flex min-w-0 items-start gap-2 text-sm">
-                  <span className="shrink-0 text-xs font-medium text-warning">
-                    {queueStatuses.get(item.messageId)}
-                  </span>
-                  <span className="min-w-0 whitespace-pre-wrap break-words text-foreground">
-                    {item.content}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
-
         <div />
       </div>
     </div>
@@ -347,7 +307,6 @@ type EventRendererProps = {
   copied: boolean;
   onCopyContent: (content: string) => void;
   onOpenMedia: (artifactId: string) => void;
-  queueStatus?: string;
 };
 
 type MessageFrameProps = {
@@ -482,7 +441,6 @@ function UserMessageEvent({
   participantProfiles,
   copied,
   onCopyContent,
-  queueStatus,
 }: EventRendererProps) {
   if (event.type !== "user_message") return null;
   const attachments = event.attachments ?? [];
@@ -511,9 +469,6 @@ function UserMessageEvent({
             <img src={avatar} alt={authorName} className="w-5 h-5 rounded-full" />
           )}
           <span className="text-xs text-accent">{authorName}</span>
-          {queueStatus && (
-            <span className="shrink-0 text-xs font-medium text-warning">{queueStatus}</span>
-          )}
         </div>
       }
       time={formatEventTime(event)}
@@ -675,14 +630,12 @@ export const EventItem = memo(function EventItem({
   currentParticipantId,
   participantProfiles,
   onOpenMedia,
-  queueStatus,
 }: {
   event: SandboxEvent;
   sessionId: string;
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
   onOpenMedia: (artifactId: string) => void;
-  queueStatus?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -720,6 +673,5 @@ export const EventItem = memo(function EventItem({
     copied,
     onCopyContent: handleCopyContent,
     onOpenMedia,
-    queueStatus,
   });
 });

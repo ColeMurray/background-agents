@@ -58,9 +58,10 @@ function toolEvent(
 }
 
 describe("timeline auto-scrolling", () => {
-  it("follows prompt queue changes when near the bottom", () => {
+  it("does not scroll the timeline when the pending prompt stack changes", () => {
+    const events: SandboxEvent[] = [];
     const { container, rerender } = render(
-      <SessionTimeline {...baseTimelineProps} events={[]} promptQueue={[]} />
+      <SessionTimeline {...baseTimelineProps} events={events} promptQueue={[]} />
     );
     const timeline = container.firstElementChild as HTMLDivElement;
     Object.defineProperties(timeline, {
@@ -74,12 +75,12 @@ describe("timeline auto-scrolling", () => {
     rerender(
       <SessionTimeline
         {...baseTimelineProps}
-        events={[]}
+        events={events}
         promptQueue={[{ messageId: "queued", content: "Next prompt", status: "pending" }]}
       />
     );
 
-    expect(timeline.scrollTop).toBe(600);
+    expect(timeline.scrollTop).toBe(0);
   });
 
   it("confines sub-task auto-scrolling to the timeline", () => {

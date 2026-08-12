@@ -10,6 +10,7 @@ import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
+import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import {
   Group as PanelGroup,
@@ -458,6 +459,7 @@ export default function SessionPage() {
         }}
       />
 
+      <QueuedPromptStack promptQueue={promptQueue} />
       <SessionPromptComposer
         session={{
           id: sessionId,
