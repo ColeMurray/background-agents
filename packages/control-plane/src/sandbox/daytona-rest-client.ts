@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from "../logger";
+import { z } from "zod";
 
 const log = createLogger("daytona-rest-client");
 
@@ -43,15 +44,19 @@ const TIMEOUT_PREVIEW_URL_MS = 15_000;
 // Response types
 // ---------------------------------------------------------------------------
 
-export interface DaytonaSandboxResponse {
-  id: string;
-  state: string;
-  recoverable?: boolean;
-}
+export const daytonaSandboxResponseSchema = z.object({
+  id: z.string(),
+  state: z.string(),
+  recoverable: z.boolean().optional(),
+});
 
-export interface DaytonaSignedPreviewUrlResponse {
-  url: string;
-}
+export type DaytonaSandboxResponse = z.infer<typeof daytonaSandboxResponseSchema>;
+
+export const daytonaSignedPreviewUrlResponseSchema = z.object({
+  url: z.string(),
+});
+
+export type DaytonaSignedPreviewUrlResponse = z.infer<typeof daytonaSignedPreviewUrlResponseSchema>;
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -123,7 +128,8 @@ export class DaytonaRestClient {
         "POST",
         "/sandbox",
         TIMEOUT_CREATE_MS,
-        params
+        params,
+        daytonaSandboxResponseSchema
       );
     } finally {
       log.info("daytona.create_sandbox", {
@@ -134,7 +140,13 @@ export class DaytonaRestClient {
   }
 
   async getSandbox(id: string): Promise<DaytonaSandboxResponse> {
-    return this.request<DaytonaSandboxResponse>("GET", `/sandbox/${id}`, TIMEOUT_GET_MS);
+    return this.request<DaytonaSandboxResponse>(
+      "GET",
+      `/sandbox/${id}`,
+      TIMEOUT_GET_MS,
+      undefined,
+      daytonaSandboxResponseSchema
+    );
   }
 
   async startSandbox(id: string): Promise<void> {
@@ -157,7 +169,9 @@ export class DaytonaRestClient {
     return this.request<DaytonaSignedPreviewUrlResponse>(
       "GET",
       `/sandbox/${id}/ports/${port}/signed-preview-url?expires_in_seconds=${expirySeconds}`,
-      TIMEOUT_PREVIEW_URL_MS
+      TIMEOUT_PREVIEW_URL_MS,
+      undefined,
+      daytonaSignedPreviewUrlResponseSchema
     );
   }
 
@@ -176,7 +190,8 @@ export class DaytonaRestClient {
     method: "GET" | "POST",
     path: string,
     timeoutMs: number,
-    body?: unknown
+    body?: unknown,
+    responseSchema?: z.ZodType<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -207,9 +222,18 @@ export class DaytonaRestClient {
       // Some endpoints (start, stop, recover) may return empty 200/204
       const contentType = response.headers.get("content-type") ?? "";
       if (contentType.includes("application/json")) {
-        return (await response.json()) as T;
+        const data = await response.json();
+        if (responseSchema) {
+          const parsed = responseSchema.safeParse(data);
+          if (!parsed.success) {
+            throw new DaytonaApiError("Invalid Daytona API response", response.status);
+          }
+          return parsed.data;
+        }
       }
 
+      // SAFETY: Call sites without a response schema are typed as void endpoints;
+      // any JSON body is intentionally ignored to preserve the existing contract.
       return undefined as T;
     } finally {
       clearTimeout(timeoutId);

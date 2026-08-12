@@ -10,6 +10,8 @@ import {
   DaytonaRestClient,
   DaytonaNotFoundError,
   DaytonaApiError,
+  daytonaSandboxResponseSchema,
+  daytonaSignedPreviewUrlResponseSchema,
   type DaytonaRestConfig,
 } from "./daytona-rest-client";
 
@@ -133,6 +135,16 @@ describe("DaytonaRestClient", () => {
       );
       expect(result).toEqual({ id: "sb-1", state: "stopped", recoverable: true });
     });
+
+    it("rejects malformed sandbox response bodies", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(jsonResponse({ id: "sb-1" }));
+
+      await expect(client.getSandbox("sb-1")).rejects.toMatchObject({
+        name: "DaytonaApiError",
+        message: "Invalid Daytona API response",
+      });
+    });
   });
 
   describe("startSandbox", () => {
@@ -189,6 +201,38 @@ describe("DaytonaRestClient", () => {
         expect.objectContaining({ method: "GET" })
       );
       expect(result.url).toBe("https://preview.test/abc");
+    });
+
+    it("rejects malformed signed preview URL response bodies", async () => {
+      const client = new DaytonaRestClient(defaultConfig);
+      fetchSpy.mockResolvedValue(jsonResponse({ url: null }));
+
+      await expect(client.getSignedPreviewUrl("sb-1", 8080, 3900)).rejects.toMatchObject({
+        name: "DaytonaApiError",
+        message: "Invalid Daytona API response",
+      });
+    });
+  });
+
+  describe("response schemas", () => {
+    it("parses a valid sandbox response with an optional recoverable flag", () => {
+      expect(
+        daytonaSandboxResponseSchema.safeParse({
+          id: "sb-1",
+          state: "started",
+          recoverable: false,
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects a partial sandbox response", () => {
+      expect(daytonaSandboxResponseSchema.safeParse({ id: "sb-1" }).success).toBe(false);
+    });
+
+    it("parses a valid signed preview URL response", () => {
+      expect(
+        daytonaSignedPreviewUrlResponseSchema.safeParse({ url: "https://preview.test/abc" }).success
+      ).toBe(true);
     });
   });
 

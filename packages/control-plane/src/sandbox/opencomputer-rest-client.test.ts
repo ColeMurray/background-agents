@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OpenComputerRestClient } from "./opencomputer-rest-client";
+import {
+  OpenComputerRestClient,
+  openComputerCheckpointResponseSchema,
+  openComputerExecResultSchema,
+  openComputerSandboxApiResponseSchema,
+  openComputerSecretStoreResponseSchema,
+} from "./opencomputer-rest-client";
 
 const config = {
   apiUrl: "https://api.opencomputer.dev",
@@ -134,5 +140,77 @@ describe("OpenComputerRestClient request timeouts", () => {
       status: 500,
     });
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("OpenComputerRestClient response validation", () => {
+  it("accepts sandboxID as the upstream sandbox identifier", async () => {
+    const client = new OpenComputerRestClient(config);
+    fetchSpy.mockResolvedValue(jsonResponse({ sandboxID: "sb-1", status: "running" }));
+
+    const sandbox = await client.getSandbox("sb-1");
+
+    expect(sandbox).toEqual({ sandboxID: "sb-1", status: "running", id: "sb-1" });
+  });
+
+  it("rejects malformed sandbox response bodies", async () => {
+    const client = new OpenComputerRestClient(config);
+    fetchSpy.mockResolvedValue(jsonResponse({ status: "running" }));
+
+    await expect(client.getSandbox("sb-1")).rejects.toMatchObject({
+      name: "OpenComputerApiError",
+      message: "Invalid OpenComputer API response",
+    });
+  });
+
+  it("accepts hostname-only tunnel responses and derives the URL", async () => {
+    const client = new OpenComputerRestClient(config);
+    fetchSpy.mockResolvedValue(jsonResponse({ hostname: "preview.example.test" }));
+
+    const tunnel = await client.getTunnelUrl("sb-1", 3000);
+
+    expect(tunnel).toEqual({
+      hostname: "preview.example.test",
+      url: "https://preview.example.test",
+    });
+  });
+});
+
+describe("OpenComputer response schemas", () => {
+  it("parses valid consumed response shapes", () => {
+    expect(openComputerSandboxApiResponseSchema.safeParse({ id: "sb-1" }).success).toBe(true);
+    expect(
+      openComputerSecretStoreResponseSchema.safeParse({
+        id: "store-1",
+        name: "session-secrets",
+        egressAllowlist: ["api.github.com"],
+      }).success
+    ).toBe(true);
+    expect(
+      openComputerExecResultSchema.safeParse({ exitCode: 0, stdout: "ok", stderr: "" }).success
+    ).toBe(true);
+    expect(
+      openComputerCheckpointResponseSchema.safeParse({ id: "cp-1", sandboxId: "sb-1" }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed or partial response shapes", () => {
+    expect(openComputerSandboxApiResponseSchema.safeParse({ status: "running" }).success).toBe(
+      false
+    );
+    expect(openComputerSecretStoreResponseSchema.safeParse({ id: "store-1" }).success).toBe(false);
+    expect(openComputerExecResultSchema.safeParse({ exitCode: 0, stdout: "ok" }).success).toBe(
+      false
+    );
+    expect(openComputerCheckpointResponseSchema.safeParse({ id: "cp-1" }).success).toBe(false);
+  });
+
+  it("accepts optional boundary fields when absent", () => {
+    expect(openComputerSandboxApiResponseSchema.safeParse({ sandboxID: "sb-1" }).success).toBe(
+      true
+    );
+    expect(
+      openComputerSecretStoreResponseSchema.safeParse({ id: "store-1", name: "s" }).success
+    ).toBe(true);
   });
 });

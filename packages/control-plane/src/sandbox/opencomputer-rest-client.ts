@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from "../logger";
+import { z } from "zod";
 
 const log = createLogger("opencomputer-rest-client");
 
@@ -48,15 +49,23 @@ export interface OpenComputerApiPaths {
   secret: string;
 }
 
-export interface OpenComputerSandboxResponse {
-  id: string;
-  sandboxID?: string;
-  state?: string;
-  status?: string;
-  sandboxDomain?: string;
-  routes?: Array<{ port: number; url: string }>;
-  tunnelUrls?: Record<string, string>;
-}
+export const openComputerSandboxApiResponseSchema = z
+  .object({
+    id: z.string().optional(),
+    sandboxID: z.string().optional(),
+    state: z.string().optional(),
+    status: z.string().optional(),
+    sandboxDomain: z.string().optional(),
+    routes: z.array(z.object({ port: z.number(), url: z.string() })).optional(),
+    tunnelUrls: z.record(z.string(), z.string()).optional(),
+  })
+  .refine((response) => response.id !== undefined || response.sandboxID !== undefined, {
+    message: "Expected id or sandboxID",
+  });
+
+type OpenComputerSandboxApiResponse = z.infer<typeof openComputerSandboxApiResponseSchema>;
+
+export type OpenComputerSandboxResponse = OpenComputerSandboxApiResponse & { id: string };
 
 export interface OpenComputerCreateSandboxParams {
   name: string;
@@ -76,15 +85,17 @@ export interface OpenComputerForkCheckpointParams {
   secretStore?: string;
 }
 
-export interface OpenComputerCheckpointResponse {
-  id: string;
-  sandboxId: string;
-  orgId?: string;
-  name?: string;
-  kind?: "full" | "disk_only";
-  status?: string;
-  createdAt?: string;
-}
+export const openComputerCheckpointResponseSchema = z.object({
+  id: z.string(),
+  sandboxId: z.string(),
+  orgId: z.string().optional(),
+  name: z.string().optional(),
+  kind: z.enum(["full", "disk_only"]).optional(),
+  status: z.string().optional(),
+  createdAt: z.string().optional(),
+});
+
+export type OpenComputerCheckpointResponse = z.infer<typeof openComputerCheckpointResponseSchema>;
 
 export type OpenComputerCheckpointRetentionPolicy = typeof OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY;
 
@@ -97,17 +108,21 @@ export interface OpenComputerDeleteSandboxOptions {
   deleteSecretStore?: boolean;
 }
 
-export interface OpenComputerExecResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
+export const openComputerExecResultSchema = z.object({
+  exitCode: z.number(),
+  stdout: z.string(),
+  stderr: z.string(),
+});
 
-export interface OpenComputerSecretStoreResponse {
-  id: string;
-  name: string;
-  egressAllowlist?: string[];
-}
+export type OpenComputerExecResult = z.infer<typeof openComputerExecResultSchema>;
+
+export const openComputerSecretStoreResponseSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  egressAllowlist: z.array(z.string()).optional(),
+});
+
+export type OpenComputerSecretStoreResponse = z.infer<typeof openComputerSecretStoreResponseSchema>;
 
 export interface OpenComputerCreateSecretStoreParams {
   name: string;
@@ -121,9 +136,15 @@ export interface OpenComputerSetSecretParams {
   allowedHosts?: string[];
 }
 
-export interface OpenComputerTunnelResponse {
+const openComputerTunnelApiResponseSchema = z.object({
+  url: z.string().optional(),
+  hostname: z.string().optional(),
+});
+
+type OpenComputerTunnelApiResponse = z.infer<typeof openComputerTunnelApiResponseSchema>;
+
+export interface OpenComputerTunnelResponse extends OpenComputerTunnelApiResponse {
   url: string;
-  hostname?: string;
 }
 
 export class OpenComputerNotFoundError extends Error {
@@ -244,11 +265,13 @@ export class OpenComputerRestClient {
     }
 
     try {
-      const response = await this.request<OpenComputerSandboxResponse>(
+      const response = await this.request<OpenComputerSandboxApiResponse>(
         "POST",
         this.paths.sandboxes,
         TIMEOUT_CREATE_MS,
-        body
+        body,
+        undefined,
+        openComputerSandboxApiResponseSchema
       );
       return this.normalizeSandbox(response);
     } finally {
@@ -273,11 +296,13 @@ export class OpenComputerRestClient {
       body.secretStore = params.secretStore;
     }
 
-    const response = await this.request<OpenComputerSandboxResponse>(
+    const response = await this.request<OpenComputerSandboxApiResponse>(
       "POST",
       this.expandPath(this.paths.sandboxFromCheckpoint, { checkpointId: params.checkpointId }),
       TIMEOUT_CREATE_MS,
-      body
+      body,
+      undefined,
+      openComputerSandboxApiResponseSchema
     );
     return this.normalizeSandbox(response);
   }
@@ -292,7 +317,9 @@ export class OpenComputerRestClient {
       {
         name: params.name,
         egressAllowlist: params.egressAllowlist,
-      }
+      },
+      undefined,
+      openComputerSecretStoreResponseSchema
     );
   }
 
@@ -320,19 +347,25 @@ export class OpenComputerRestClient {
   }
 
   async getSandbox(id: string): Promise<OpenComputerSandboxResponse> {
-    const response = await this.request<OpenComputerSandboxResponse>(
+    const response = await this.request<OpenComputerSandboxApiResponse>(
       "GET",
       this.expandPath(this.paths.sandbox, { id }),
-      TIMEOUT_GET_MS
+      TIMEOUT_GET_MS,
+      undefined,
+      undefined,
+      openComputerSandboxApiResponseSchema
     );
     return this.normalizeSandbox(response);
   }
 
   async wakeSandbox(id: string): Promise<OpenComputerSandboxResponse | void> {
-    const response = await this.request<OpenComputerSandboxResponse | void>(
+    const response = await this.request<OpenComputerSandboxApiResponse | void>(
       "POST",
       this.expandPath(this.paths.wake, { id }),
-      TIMEOUT_WAKE_MS
+      TIMEOUT_WAKE_MS,
+      undefined,
+      undefined,
+      openComputerSandboxApiResponseSchema
     );
     return response ? this.normalizeSandbox(response) : response;
   }
@@ -397,7 +430,9 @@ export class OpenComputerRestClient {
           `${RUNTIME_HOSTS_BOOTSTRAP}; ${RUNTIME_CA_BOOTSTRAP}; ${RUNTIME_LOG_BOOTSTRAP}; ${RUNTIME_ENV_EXPORTS}; ${exports} python3 -m sandbox_runtime.entrypoint >>${RUNTIME_LOG_PATH} 2>&1`,
         ],
         timeout: timeoutSeconds,
-      }
+      },
+      undefined,
+      openComputerExecResultSchema
     );
   }
 
@@ -416,7 +451,8 @@ export class OpenComputerRestClient {
         kind: options.kind ?? OPENCOMPUTER_CHECKPOINT_KIND,
         retentionPolicy: options.retentionPolicy ?? OPENCOMPUTER_CHECKPOINT_RETENTION_POLICY,
       },
-      signal
+      signal,
+      openComputerCheckpointResponseSchema
     );
   }
 
@@ -431,11 +467,13 @@ export class OpenComputerRestClient {
   }
 
   async getTunnelUrl(id: string, port: number): Promise<OpenComputerTunnelResponse> {
-    const response = await this.request<OpenComputerTunnelResponse>(
+    const response = await this.request<OpenComputerTunnelApiResponse>(
       "POST",
       this.expandPath(this.paths.tunnel, { id, port: String(port) }),
       TIMEOUT_TUNNEL_MS,
-      { port }
+      { port },
+      undefined,
+      openComputerTunnelApiResponseSchema
     );
     return {
       ...response,
@@ -456,7 +494,8 @@ export class OpenComputerRestClient {
     path: string,
     timeoutMs: number,
     body?: unknown,
-    externalSignal?: AbortSignal
+    externalSignal?: AbortSignal,
+    responseSchema?: z.ZodType<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -486,8 +525,17 @@ export class OpenComputerRestClient {
 
       const contentType = response.headers.get("content-type") ?? "";
       if (contentType.includes("application/json")) {
-        return (await response.json()) as T;
+        const data = await response.json();
+        if (responseSchema) {
+          const parsed = responseSchema.safeParse(data);
+          if (!parsed.success) {
+            throw new OpenComputerApiError("Invalid OpenComputer API response", response.status);
+          }
+          return parsed.data;
+        }
       }
+      // SAFETY: Call sites without a response schema are typed as void endpoints;
+      // any JSON body is intentionally ignored to preserve the existing contract.
       return undefined as T;
     } catch (error) {
       // The per-call timeout fires controller.abort(); the resulting AbortError
@@ -524,9 +572,11 @@ export class OpenComputerRestClient {
     return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
-  private normalizeSandbox(response: OpenComputerSandboxResponse): OpenComputerSandboxResponse {
+  private normalizeSandbox(response: OpenComputerSandboxApiResponse): OpenComputerSandboxResponse {
     const id = response.id || response.sandboxID;
-    if (!id) return response;
+    if (!id) {
+      throw new OpenComputerApiError("Invalid OpenComputer API response", 200);
+    }
     return { ...response, id };
   }
 }
