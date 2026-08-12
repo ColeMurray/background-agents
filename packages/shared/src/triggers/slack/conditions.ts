@@ -7,8 +7,8 @@
  * matching the sentry/webhook modules.
  */
 
-import type { ConditionRegistry, TextMatchValue } from "../conditions";
-import type { AutomationEvent } from "../types";
+import type { ConditionRegistry } from "../conditions";
+import type { AutomationEvent, TextMatchValue } from "../types";
 import { SLACK_TEXT_MAX_LENGTH } from "./normalizer";
 
 /** Max length of a user-supplied `text_match` regex pattern (characters). */

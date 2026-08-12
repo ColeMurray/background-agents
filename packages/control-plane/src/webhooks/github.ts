@@ -6,7 +6,7 @@
  * background and is additive: its failure never affects automation matching.
  */
 
-import { automationEventSchema } from "@open-inspect/shared";
+import { automationEventSchema } from "@open-inspect/shared/triggers";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { createLogger, parseLogLevel } from "../logger";

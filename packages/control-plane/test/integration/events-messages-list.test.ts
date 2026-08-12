@@ -123,7 +123,7 @@ describe("GET /internal/events", () => {
 
     expect(page1.events.map((event) => event.id)).toEqual(["evt-tie-4", "evt-tie-3"]);
     expect(page1.hasMore).toBe(true);
-    expect(page1.cursor).toBe(`${createdAt}:evt-tie-3`);
+    expect(page1.cursor).toBe(`${createdAt}:4:evt-tie-3`);
 
     const res2 = await stub.fetch(
       `http://internal/internal/events?type=error&limit=2&cursor=${encodeURIComponent(page1.cursor)}`
@@ -218,6 +218,46 @@ describe("GET /internal/events", () => {
     const body = await res.json<{ events: Array<{ id: string; type: string }> }>();
     expect(body.events.map((event) => event.id)).toEqual(["evt-warning"]);
     expect(body.events[0]?.type).toBe("warning");
+  });
+
+  it("filters context compaction events", async () => {
+    const { stub } = await initSession();
+    const createdAt = Date.now();
+
+    await seedEvents(stub, [
+      {
+        id: "evt-context-compacted",
+        type: "context_compacted",
+        data: JSON.stringify({
+          type: "context_compacted",
+          messageId: "message-1",
+          sandboxId: "sandbox-1",
+          timestamp: createdAt / 1000,
+        }),
+        messageId: "message-1",
+        createdAt,
+      },
+      {
+        id: "evt-error",
+        type: "error",
+        data: JSON.stringify({ type: "error", message: "failed" }),
+        createdAt: createdAt + 1,
+      },
+    ]);
+
+    const res = await stub.fetch("http://internal/internal/events?type=context_compacted");
+    expect(res.status).toBe(200);
+    const body = await res.json<{ events: Array<{ id: string; type: string }> }>();
+    expect(body.events).toEqual([
+      expect.objectContaining({ id: "evt-context-compacted", type: "context_compacted" }),
+    ]);
+  });
+
+  it("accepts canonical event types omitted by the old manual filter catalog", async () => {
+    const { stub } = await initSession();
+    const res = await stub.fetch("http://internal/internal/events?type=ready");
+
+    expect(res.status).toBe(200);
   });
 });
 

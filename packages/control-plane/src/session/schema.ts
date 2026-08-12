@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS session (
   spawn_source TEXT NOT NULL DEFAULT 'user',        -- 'user' or 'agent'
   spawn_depth INTEGER NOT NULL DEFAULT 0,           -- 0 for top-level, parent.depth + 1 for children
   code_server_enabled INTEGER NOT NULL DEFAULT 0,   -- 0 = disabled, 1 = enabled (opt-in)
+  vnc_enabled INTEGER NOT NULL DEFAULT 0,           -- 0 = disabled, 1 = enabled (opt-in)
   total_cost REAL NOT NULL DEFAULT 0,              -- Running session cost from step_finish events
   sandbox_settings TEXT DEFAULT NULL,               -- JSON blob of SandboxSettings (resolved at session creation)
   environment_id TEXT,                              -- Launch environment provenance; NULL for repo-launched/ad-hoc sessions
@@ -79,11 +80,12 @@ CREATE TABLE IF NOT EXISTS session (
 CREATE TABLE IF NOT EXISTS participants (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
+  canonical_user_id TEXT,                           -- D1 users.id for cosmetic profile joins only
   scm_user_id TEXT,                                 -- SCM numeric ID
   scm_login TEXT,                                   -- SCM username
   scm_email TEXT,                                   -- For git commit attribution
   scm_name TEXT,                                    -- Display name for git commits
-  auth_name TEXT,                                   -- Provider-agnostic display name (e.g. Google/OIDC) for presence
+  auth_name TEXT,                                   -- Dormant legacy profile snapshot; retained for schema compatibility
   role TEXT NOT NULL DEFAULT 'member',              -- 'owner', 'member'
   -- Token storage (AES-GCM encrypted)
   scm_access_token_encrypted TEXT,
@@ -119,7 +121,8 @@ CREATE TABLE IF NOT EXISTS events (
   type TEXT NOT NULL,                               -- 'tool_call', 'tool_result', 'token', 'error', 'git_sync'
   data TEXT NOT NULL,                               -- JSON payload
   message_id TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  timeline_sequence INTEGER NOT NULL UNIQUE
 );
 
 -- Artifacts (PRs, screenshots, video recordings, preview URLs)
@@ -156,6 +159,8 @@ CREATE TABLE IF NOT EXISTS sandbox (
   last_spawn_failure INTEGER,                       -- Timestamp of last spawn failure
   code_server_url TEXT,                             -- Code-server tunnel URL (rotates on wake/restore)
   code_server_password TEXT,                        -- Code-server password (rotates on each wake/restore)
+  vnc_url TEXT,                                     -- noVNC tunnel URL (rotates on wake/restore)
+  vnc_password TEXT,                                -- VNC password (rotates on each wake/restore)
   tunnel_urls TEXT,                                 -- JSON mapping of port -> tunnel URL for extra ports
   ttyd_url TEXT,                                    -- ttyd proxy tunnel URL
   ttyd_token TEXT,                                  -- Encrypted JWT token for ttyd auth
@@ -479,6 +484,31 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
     id: 36,
     description: "Add durable latest session diff bundle",
     run: SESSION_DIFF_TABLE_SQL,
+  },
+  {
+    id: 37,
+    description: "Add canonical D1 user reference to participants",
+    run: `ALTER TABLE participants ADD COLUMN canonical_user_id TEXT`,
+  },
+  {
+    id: 38,
+    description: "Add stable event timeline sequence",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE events ADD COLUMN timeline_sequence INTEGER`);
+      sql.exec(`UPDATE events SET timeline_sequence = rowid WHERE timeline_sequence IS NULL`);
+      sql.exec(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence)`
+      );
+    },
+  },
+  {
+    id: 39,
+    description: "Add VNC fields",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN vnc_url TEXT`);
+      runMigration(sql, `ALTER TABLE sandbox ADD COLUMN vnc_password TEXT`);
+      runMigration(sql, `ALTER TABLE session ADD COLUMN vnc_enabled INTEGER NOT NULL DEFAULT 0`);
+    },
   },
 ];
 

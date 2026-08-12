@@ -1,8 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { TriggerCondition, AutomationEventSource, JsonPathFilter } from "@open-inspect/shared";
-import { conditionRegistry } from "@open-inspect/shared";
+import type {
+  TriggerCondition,
+  AutomationEventSource,
+  JsonPathFilter,
+} from "@open-inspect/shared/triggers";
+import { conditionRegistry } from "@open-inspect/shared/triggers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";

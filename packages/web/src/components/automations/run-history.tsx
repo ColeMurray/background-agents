@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import type { AutomationInvocation, AutomationRun } from "@open-inspect/shared";
+import type { AutomationInvocation, AutomationRun } from "@open-inspect/shared/types/automations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, ChevronRightIcon } from "@/components/ui/icons";

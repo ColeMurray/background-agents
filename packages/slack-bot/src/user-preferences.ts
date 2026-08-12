@@ -1,13 +1,14 @@
 import {
   DEFAULT_MODEL,
-  createKvCacheStore,
   getDefaultReasoningEffort,
   isValidModel,
   isValidReasoningEffort,
   normalizeModelId,
   resolveEnabledModel,
-} from "@open-inspect/shared";
-import type { Env, UserPreferences } from "./types";
+} from "@open-inspect/shared/models";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
+import type { UserPreferences } from "@open-inspect/shared/types/session-api";
+import type { Env } from "./types";
 import {
   getValidatedBranch,
   isValidBranchName,

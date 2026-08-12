@@ -1,6 +1,6 @@
 "use client";
 
-import type { ImageBuildStatus as ImageBuildStatusValue } from "@open-inspect/shared";
+import type { ImageBuildStatus as ImageBuildStatusValue } from "@open-inspect/shared/types/image-builds";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/time";
 
@@ -86,14 +86,4 @@ export function ImageBuildStatus({
   }
 
   return null;
-}
-
-/** Formats the ready-details line shared by both image families. */
-export function formatReadyDetails(
-  buildSha: string | null | undefined,
-  buildDurationSeconds: number | null | undefined
-): string {
-  const sha = buildSha ? buildSha.slice(0, 7) : "";
-  const duration = buildDurationSeconds ? `${Math.round(buildDurationSeconds)}s` : "";
-  return [sha, duration].filter(Boolean).join(" · ");
 }

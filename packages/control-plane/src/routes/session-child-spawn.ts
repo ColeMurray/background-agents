@@ -1,25 +1,31 @@
+import { spawnChildSessionRequestSchema } from "@open-inspect/shared/types/session-api";
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
+  type SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
+import {
+  getReasoningConfig,
   getValidModelOrDefault,
   isValidModel,
   isValidReasoningEffort,
   resolveEnabledModel,
-  spawnChildSessionRequestSchema,
-  spawnContextSchema,
   type ValidModel,
   VALID_MODELS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 import { generateId } from "../auth/crypto";
 import { getEffectiveEnabledModels } from "../db/model-preferences";
 import { SessionIndexStore } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import {
   resolveCodeServerEnabled,
   resolveSandboxSettings,
+  resolveVncEnabled,
 } from "../session/integration-settings-resolution";
+import { spawnContextSchema } from "../session/spawn-context";
 import type { Env } from "../types";
 import { error, json, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
@@ -53,7 +59,7 @@ async function handleSpawnChild(
   const parentEnvironmentId = parentSession?.environmentId ?? null;
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
-  const childSandboxSettings = parentSession
+  const resolvedChildSandboxSettings = parentSession
     ? await resolveSandboxSettings(
         ctx.db,
         parentSession.repoOwner,
@@ -62,18 +68,14 @@ async function handleSpawnChild(
       )
     : {};
   const maxConcurrentChildren =
-    childSandboxSettings.maxConcurrentChildSessions ?? DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
+    resolvedChildSandboxSettings.maxConcurrentChildSessions ??
+    DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS;
   const maxTotalChildren =
-    childSandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
+    resolvedChildSandboxSettings.maxTotalChildSessions ?? DEFAULT_MAX_TOTAL_CHILD_SESSIONS;
 
   const parentDepth = await sessionStore.getSpawnDepth(parentId);
   if (parentDepth >= MAX_SPAWN_DEPTH) {
     return error(`Maximum spawn depth (${MAX_SPAWN_DEPTH}) exceeded`, 403);
-  }
-
-  const activeCount = await sessionStore.countActiveChildren(parentId);
-  if (activeCount >= maxConcurrentChildren) {
-    return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
   }
 
   const totalCount = await sessionStore.countTotalChildren(parentId);
@@ -104,6 +106,12 @@ async function handleSpawnChild(
     return error("Failed to get parent session context", 500);
   }
   const spawnContext = parsedSpawnContext.data;
+  const { sandboxTimeoutMs: _currentTimeoutMs, ...resolvedChildSettingsWithoutTimeout } =
+    resolvedChildSandboxSettings;
+  const childSandboxSettings: SandboxSettings = resolvedChildSettingsWithoutTimeout;
+  if (spawnContext.sandboxTimeoutMs !== undefined) {
+    childSandboxSettings.sandboxTimeoutMs = spawnContext.sandboxTimeoutMs;
+  }
 
   const requestedRepoOwner = body.repoOwner?.trim().toLowerCase() || null;
   const requestedRepoName = body.repoName?.trim().toLowerCase() || null;
@@ -145,6 +153,16 @@ async function handleSpawnChild(
     return error(`Model "${body.model}" is not enabled`, 400);
   }
   const model = resolveEnabledModel({ model: requestedModel, enabledModels });
+  if (body.reasoningEffort !== undefined && !isValidReasoningEffort(model, body.reasoningEffort)) {
+    const validEfforts = getReasoningConfig(model)?.efforts;
+    const suffix = validEfforts?.length
+      ? ` Valid efforts: ${validEfforts.join(", ")}`
+      : " This model does not support reasoning effort overrides.";
+    return error(
+      `Invalid reasoning effort "${body.reasoningEffort}" for model "${model}".${suffix}`,
+      400
+    );
+  }
   const requestedReasoningEffort = body.reasoningEffort ?? spawnContext.reasoningEffort;
   const reasoningEffort =
     requestedReasoningEffort && isValidReasoningEffort(model, requestedReasoningEffort)
@@ -163,6 +181,12 @@ async function handleSpawnChild(
   });
 
   const childCodeServerEnabled = await resolveCodeServerEnabled(
+    ctx.db,
+    spawnContext.repoOwner,
+    spawnContext.repoName,
+    parentEnvironmentId
+  );
+  const childVncEnabled = await resolveVncEnabled(
     ctx.db,
     spawnContext.repoOwner,
     spawnContext.repoName,
@@ -190,15 +214,28 @@ async function handleSpawnChild(
     scmRefreshTokenEncrypted: spawnContext.owner.scmRefreshTokenEncrypted,
     scmTokenExpiresAt: spawnContext.owner.scmTokenExpiresAt,
     codeServerEnabled: childCodeServerEnabled,
+    vncEnabled: childVncEnabled,
     sandboxSettings: childSandboxSettings,
     parentSessionId: parentId,
     spawnSource: "agent",
     spawnDepth: childDepth,
+    automationId: parentSession?.automationId ?? null,
+    automationRunId: parentSession?.automationRunId ?? null,
   };
+
+  const admissionLease = await sessionStore.acquireChildAdmissionLease(
+    parentId,
+    childId,
+    maxConcurrentChildren
+  );
+  if (!admissionLease) {
+    return error(`Maximum concurrent children (${maxConcurrentChildren}) reached`, 429);
+  }
 
   try {
     await initializeSession(env, input, ctx);
   } catch (e) {
+    await sessionStore.releaseChildAdmissionLease(admissionLease);
     logger.error("Failed to initialize child session", {
       error: e instanceof Error ? e.message : String(e),
       parent_id: parentId,
@@ -207,17 +244,21 @@ async function handleSpawnChild(
     });
     return error("Failed to create child session", 500);
   }
+  await sessionStore.releaseChildAdmissionLease(admissionLease);
 
   let promptResponse: Response;
   try {
+    const promptRequest = {
+      content: body.prompt,
+      authorId: spawnContext.owner.userId,
+      canonicalUserId: spawnContext.owner.canonicalUserId ?? parentUserId ?? undefined,
+      source: "agent",
+    } satisfies EnqueuePromptRequest;
+
     promptResponse = await ctx.sessionRuntime.fetch(childId, SessionInternalPaths.prompt, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        content: body.prompt,
-        authorId: spawnContext.owner.userId,
-        source: "agent",
-      }),
+      body: JSON.stringify(promptRequest),
     });
   } catch (enqueueError) {
     logger.error("Failed to enqueue initial prompt for child session", {

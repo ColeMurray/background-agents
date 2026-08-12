@@ -1,8 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { INTERNAL_TTYD_PORT } from "@open-inspect/shared";
-import { normalizeSandboxSettings, SandboxSettingsValidationError } from "./settings";
+import {
+  DEFAULT_CODE_SERVER_PORT,
+  DEFAULT_TERMINAL_PORT,
+  DEFAULT_VNC_PORT,
+  INTERNAL_TTYD_PORT,
+} from "@open-inspect/shared/types/integrations";
+import {
+  normalizeSandboxSettings,
+  parsePersistedSandboxSettings,
+  SandboxSettingsValidationError,
+} from "./settings";
 
 class CustomSettingsValidationError extends Error {}
+
+describe("parsePersistedSandboxSettings", () => {
+  it("returns empty settings when no snapshot is stored", () => {
+    expect(parsePersistedSandboxSettings(null)).toEqual({});
+  });
+
+  it("parses and normalizes persisted settings", () => {
+    expect(
+      parsePersistedSandboxSettings('{"sandboxTimeoutMs":14400000,"tunnelPorts":[3000,"bad"]}')
+    ).toEqual({ sandboxTimeoutMs: 14_400_000, tunnelPorts: [3000] });
+  });
+
+  it.each(["", "not-json"])("throws when persisted blob %j is not valid JSON", (settingsJson) => {
+    expect(() => parsePersistedSandboxSettings(settingsJson)).toThrow(SyntaxError);
+  });
+});
 
 describe("normalizeSandboxSettings", () => {
   it("throws for invalid settings by default", () => {
@@ -75,9 +100,38 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({ terminalEnabled: true });
   });
 
-  it("accepts valid codeServerPort and terminalPort", () => {
-    expect(normalizeSandboxSettings({ codeServerPort: 8081, terminalPort: 7000 })).toEqual({
+  it("accepts a positive integer sandboxTimeoutMs", () => {
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 14_400_000 })).toEqual({
+      sandboxTimeoutMs: 14_400_000,
+    });
+  });
+
+  it("requires sandboxTimeoutMs to be a positive whole number of seconds", () => {
+    expect(() => normalizeSandboxSettings({ sandboxTimeoutMs: 0 })).toThrow(
+      SandboxSettingsValidationError
+    );
+    for (const sandboxTimeoutMs of [1, 999, 1500, 1000.5]) {
+      expect(() => normalizeSandboxSettings({ sandboxTimeoutMs })).toThrow(
+        SandboxSettingsValidationError
+      );
+    }
+    expect(normalizeSandboxSettings({ sandboxTimeoutMs: 1000 })).toEqual({
+      sandboxTimeoutMs: 1000,
+    });
+  });
+
+  it("omits an invalid sandboxTimeoutMs while preserving valid fields", () => {
+    expect(
+      normalizeSandboxSettings({ sandboxTimeoutMs: -1, terminalEnabled: true }, { invalid: "omit" })
+    ).toEqual({ terminalEnabled: true });
+  });
+
+  it("accepts valid service ports", () => {
+    expect(
+      normalizeSandboxSettings({ codeServerPort: 8081, vncPort: 6081, terminalPort: 7000 })
+    ).toEqual({
       codeServerPort: 8081,
+      vncPort: 6081,
       terminalPort: 7000,
     });
   });
@@ -89,6 +143,7 @@ describe("normalizeSandboxSettings", () => {
     expect(() => normalizeSandboxSettings({ terminalPort: 70000 })).toThrow(
       SandboxSettingsValidationError
     );
+    expect(() => normalizeSandboxSettings({ vncPort: 0 })).toThrow(SandboxSettingsValidationError);
   });
 
   it("rejects the reserved internal terminal port", () => {
@@ -107,12 +162,28 @@ describe("normalizeSandboxSettings", () => {
     expect(() => normalizeSandboxSettings({ codeServerPort: 9000, terminalPort: 9000 })).toThrow(
       SandboxSettingsValidationError
     );
+    expect(() => normalizeSandboxSettings({ vncPort: 3000, tunnelPorts: [3000] })).toThrow(
+      SandboxSettingsValidationError
+    );
+  });
+
+  it("allows tunnels on default ports when the corresponding service is disabled", () => {
+    const defaultPorts = [DEFAULT_CODE_SERVER_PORT, DEFAULT_VNC_PORT, DEFAULT_TERMINAL_PORT];
+    expect(normalizeSandboxSettings({ tunnelPorts: defaultPorts })).toEqual({
+      tunnelPorts: defaultPorts,
+    });
   });
 
   it("frees the default port for a tunnel when code-server is moved", () => {
-    expect(normalizeSandboxSettings({ codeServerPort: 8081, tunnelPorts: [8080] })).toEqual({
-      codeServerPort: 8081,
-      tunnelPorts: [8080],
+    const movedCodeServerPort = DEFAULT_CODE_SERVER_PORT + 1;
+    expect(
+      normalizeSandboxSettings({
+        codeServerPort: movedCodeServerPort,
+        tunnelPorts: [DEFAULT_CODE_SERVER_PORT],
+      })
+    ).toEqual({
+      codeServerPort: movedCodeServerPort,
+      tunnelPorts: [DEFAULT_CODE_SERVER_PORT],
     });
   });
 
@@ -128,6 +199,9 @@ describe("normalizeSandboxSettings", () => {
     ).toEqual({
       codeServerPort: 9000,
       tunnelPorts: [3000],
+    });
+    expect(normalizeSandboxSettings({ codeServerPort: 6080 }, { invalid: "omit" })).toEqual({
+      codeServerPort: 6080,
     });
   });
 

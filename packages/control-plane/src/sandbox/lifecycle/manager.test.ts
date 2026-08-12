@@ -36,7 +36,7 @@ import {
   type StopResult,
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
-import type { SandboxStatus } from "../../types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
 // ==================== Mock Factories ====================
 
@@ -60,6 +60,7 @@ function createMockSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -88,6 +89,8 @@ function createMockSandbox(
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
@@ -198,6 +201,24 @@ function createMockStorage(
         sandbox.code_server_url = null;
       }
     }),
+    updateSandboxVnc: vi.fn(async (url: string, password: string) => {
+      calls.push(`updateSandboxVnc:${url}`);
+      if (sandbox) {
+        sandbox.vnc_url = url;
+        sandbox.vnc_password = password;
+      }
+    }),
+    clearSandboxVnc: vi.fn(() => {
+      calls.push("clearSandboxVnc");
+      if (sandbox) {
+        sandbox.vnc_url = null;
+        sandbox.vnc_password = null;
+      }
+    }),
+    clearSandboxVncUrl: vi.fn(() => {
+      calls.push("clearSandboxVncUrl");
+      if (sandbox) sandbox.vnc_url = null;
+    }),
     updateSandboxTunnelUrls: vi.fn(async (urls: Record<string, string>) => {
       calls.push(`updateSandboxTunnelUrls`);
       if (sandbox) {
@@ -290,6 +311,7 @@ function createMockProvider(
   const provider: SandboxProvider = {
     name: "mock",
     capabilities: {
+      supportsSandboxTimeout: true,
       supportsSnapshots: true,
       supportsRestore: true,
       ...overrides.capabilities,
@@ -332,6 +354,113 @@ function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+type ProviderStartupKind = "spawn" | "restore" | "resume";
+
+async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void> {
+  const sandbox = createMockSandbox({
+    status: kind === "spawn" ? "pending" : "stopped",
+    created_at: Date.now() - 60000,
+    snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+  });
+  const storage = createMockStorage(
+    createMockSession({ code_server_enabled: 1, vnc_enabled: 1 }),
+    sandbox
+  );
+  const broadcaster = createMockBroadcaster();
+  const wsManager = createMockWebSocketManager(false);
+  const alarmScheduler = createMockAlarmScheduler();
+  const accessAtBroadcast: Array<
+    Pick<
+      SandboxRow,
+      "code_server_url" | "code_server_password" | "vnc_url" | "vnc_password" | "tunnel_urls"
+    >
+  > = [];
+  vi.mocked(broadcaster.broadcast).mockImplementation((message: object) => {
+    broadcaster.messages.push(message);
+    if ((message as { type?: string }).type === "sandbox_access_changed") {
+      accessAtBroadcast.push({
+        code_server_url: sandbox.code_server_url,
+        code_server_password: sandbox.code_server_password,
+        vnc_url: sandbox.vnc_url,
+        vnc_password: sandbox.vnc_password,
+        tunnel_urls: sandbox.tunnel_urls,
+      });
+    }
+  });
+  const connectBridge = () => {
+    sandbox.status = "ready";
+    vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
+    broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
+  };
+  const access = {
+    codeServerUrl: `https://${kind}-code.test`,
+    codeServerPassword: `${kind}-code-secret`,
+    vncAccess: { url: `https://${kind}-vnc.test`, password: `${kind}-vnc-secret` },
+    tunnelUrls: { "3000": `https://${kind}-preview.test` },
+  };
+  const provider = createMockProvider({
+    capabilities: { supportsPersistentResume: kind === "resume" },
+    createSandbox: vi.fn(async (config) => {
+      connectBridge();
+      return {
+        sandboxId: config.sandboxId,
+        status: "connecting",
+        createdAt: Date.now(),
+        ...access,
+      };
+    }),
+    restoreFromSnapshot: vi.fn(async (config) => {
+      connectBridge();
+      return { success: true, sandboxId: config.sandboxId, ...access };
+    }),
+    resumeSandbox: vi.fn(async () => {
+      connectBridge();
+      return { success: true, ...access };
+    }),
+  });
+  const manager = new SandboxLifecycleManager(
+    provider,
+    storage,
+    broadcaster,
+    wsManager,
+    alarmScheduler,
+    createMockIdGenerator(),
+    createTestConfig()
+  );
+
+  await manager.spawnSandbox();
+
+  expect(sandbox.status).toBe("ready");
+  expect(storage.calls.filter((call) => call === "updateSandboxStatus:connecting")).toHaveLength(
+    kind === "resume" ? 1 : 0
+  );
+  expect(alarmScheduler.alarms).toEqual([]);
+  expect(manager.isProviderStartupPending()).toBe(false);
+  const readyIndex = broadcaster.messages.findIndex(
+    (message) =>
+      (message as { type?: string; status?: string }).type === "sandbox_status" &&
+      (message as { status?: string }).status === "ready"
+  );
+  expect(broadcaster.messages.slice(readyIndex + 1)).not.toContainEqual({
+    type: "sandbox_status",
+    status: "connecting",
+  });
+  expect(
+    broadcaster.messages.filter(
+      (message) => (message as { type: string }).type === "sandbox_access_changed"
+    )
+  ).toHaveLength(1);
+  expect(accessAtBroadcast).toEqual([
+    {
+      code_server_url: access.codeServerUrl,
+      code_server_password: access.codeServerPassword,
+      vnc_url: access.vncAccess.url,
+      vnc_password: access.vncAccess.password,
+      tunnel_urls: JSON.stringify(access.tunnelUrls),
+    },
+  ]);
+}
+
 // ==================== Tests ====================
 
 describe("SandboxLifecycleManager", () => {
@@ -364,6 +493,43 @@ describe("SandboxLifecycleManager", () => {
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_status")
       ).toBe(true);
     });
+
+    it("stores VNC access without publishing it before the sandbox is ready", async () => {
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const storage = createMockStorage(createMockSession({ vnc_enabled: 1 }), sandbox);
+      const broadcaster = createMockBroadcaster();
+      const provider = createMockProvider({
+        createSandbox: vi.fn(async (config) => ({
+          sandboxId: config.sandboxId,
+          status: "connecting",
+          createdAt: Date.now(),
+          vncAccess: { url: "https://vnc.test", password: "secret" },
+        })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ vncEnabled: true })
+      );
+      expect(storage.updateSandboxVnc).toHaveBeenCalledWith("https://vnc.test", "secret");
+      expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
+      expect(JSON.stringify(broadcaster.messages)).not.toContain("secret");
+    });
+
+    it.each(["spawn", "restore", "resume"] as const)(
+      "preserves an early bridge connection until %s access is persisted",
+      expectEarlyBridgeStartup
+    );
 
     it("logs one terminal sandbox.spawn event for success", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -1249,6 +1415,10 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
       ).toBe(true);
+      expect(broadcaster.messages.slice(-2)).toEqual([
+        { type: "sandbox_status", status: "ready" },
+        { type: "sandbox_access_changed" },
+      ]);
     });
 
     it("skips when provider does not support snapshots", async () => {
@@ -1257,7 +1427,11 @@ describe("SandboxLifecycleManager", () => {
       const broadcaster = createMockBroadcaster();
       const provider: SandboxProvider = {
         name: "no-snapshot",
-        capabilities: { supportsSnapshots: false, supportsRestore: false },
+        capabilities: {
+          supportsSandboxTimeout: true,
+          supportsSnapshots: false,
+          supportsRestore: false,
+        },
         createSandbox: vi.fn(),
         // No takeSnapshot method
       };
@@ -1522,6 +1696,7 @@ describe("SandboxLifecycleManager", () => {
       );
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
       expect(storage.calls).toContain("clearSandboxCodeServer");
+      expect(storage.calls).toContain("clearSandboxVnc");
     });
 
     it("does not explicitly stop providers when the capability is disabled", async () => {
@@ -1569,6 +1744,8 @@ describe("SandboxLifecycleManager", () => {
         last_activity: now - 11 * 60 * 1000,
         code_server_url: "https://code.test",
         code_server_password: "encrypted-password",
+        vnc_url: "https://vnc.test",
+        vnc_password: "encrypted-vnc-password",
       });
       const storage = createMockStorage(createMockSession(), sandbox);
       const stopSandbox = vi.fn(async () => ({ success: true }));
@@ -1598,6 +1775,42 @@ describe("SandboxLifecycleManager", () => {
       );
       expect(storage.calls).toContain("clearSandboxCodeServerUrl");
       expect(storage.calls).not.toContain("clearSandboxCodeServer");
+      expect(storage.calls).toContain("clearSandboxVncUrl");
+      expect(storage.calls).not.toContain("clearSandboxVnc");
+      expect(sandbox.vnc_password).toBe("encrypted-vnc-password");
+    });
+
+    it("clears complete VNC access when URL-only clearing is unavailable", async () => {
+      const now = Date.now();
+      const sandbox = createMockSandbox({
+        status: "ready",
+        last_heartbeat: now - 10000,
+        last_activity: now - 11 * 60 * 1000,
+        vnc_url: "https://vnc.test",
+        vnc_password: "encrypted-vnc-password",
+      });
+      const storage = createMockStorage(createMockSession(), sandbox);
+      delete storage.clearSandboxVncUrl;
+      const provider = createMockProvider({
+        capabilities: { supportsExplicitStop: true, supportsPersistentResume: true },
+        stopSandbox: vi.fn(async () => ({ success: true })),
+      });
+
+      const manager = new SandboxLifecycleManager(
+        provider,
+        storage,
+        createMockBroadcaster(),
+        createMockWebSocketManager(false, 0),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.handleAlarm();
+
+      expect(storage.calls).toContain("clearSandboxVnc");
+      expect(sandbox.vnc_url).toBeNull();
+      expect(sandbox.vnc_password).toBeNull();
     });
 
     it("calls onSandboxTerminating callback on heartbeat stale", async () => {
@@ -1927,7 +2140,7 @@ describe("SandboxLifecycleManager", () => {
         repository_shas: JSON.stringify([
           { repoOwner: "testowner", repoName: "testrepo", baseSha: "sha-def456" },
         ]),
-        runtime_version: "v53-list-native-runtime",
+        runtime_version: "v56-managed-provider-runtime",
         ...overrides,
       };
     }
@@ -1977,6 +2190,27 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({
           prebuiltImageId: "img-abc123",
           prebuiltImageSha: "sha-def456",
+        })
+      );
+    });
+
+    it("boots a VNC-enabled session from a spawn-compatible v56 repo image", async () => {
+      const imageBuildLookup: ImageBuildLookup = {
+        getLatestReady: vi.fn(async () => repoImageRow()),
+        markRestoreFailed: vi.fn(async () => true),
+      };
+      const { manager, provider } = createRepoSessionManager({
+        imageBuildLookup,
+        session: createMockSession({ vnc_enabled: 1 }),
+      });
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prebuiltImageId: "img-abc123",
+          prebuiltImageSha: "sha-def456",
+          vncEnabled: true,
         })
       );
     });
@@ -2121,7 +2355,7 @@ describe("SandboxLifecycleManager", () => {
           { repoOwner: "testowner", repoName: "testrepo", baseSha: "sha-primary" },
           { repoOwner: "testowner", repoName: "backend", baseSha: "sha-backend" },
         ]),
-        runtime_version: "v53-list-native-runtime",
+        runtime_version: "v56-managed-provider-runtime",
         ...overrides,
       };
     }
@@ -2477,6 +2711,182 @@ describe("SandboxLifecycleManager", () => {
   });
 
   describe("sandbox settings", () => {
+    it("uses the configured sandbox timeout for fresh spawns", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"sandboxTimeoutMs":14400000}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: 14_400 })
+      );
+    });
+
+    it("uses the configured sandbox timeout for snapshot restores", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"sandboxTimeoutMs":14400000}',
+      });
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        snapshot_image_id: "img-abc123",
+      });
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.restoreFromSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: 14_400 })
+      );
+    });
+
+    it("uses the configured sandbox timeout when resuming in place", async () => {
+      const session = createMockSession({
+        sandbox_settings: '{"sandboxTimeoutMs":14400000}',
+      });
+      const sandbox = createMockSandbox({
+        status: "stopped",
+        modal_object_id: "provider-obj",
+        snapshot_image_id: null,
+      });
+      const provider = createMockProvider({
+        capabilities: { supportsPersistentResume: true },
+        resumeSandbox: vi.fn(async () => ({ success: true })),
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.resumeSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: 14_400 })
+      );
+    });
+
+    it("uses the configured sandbox timeout for child sessions", async () => {
+      const session = createMockSession({
+        spawn_source: "agent",
+        sandbox_settings: '{"sandboxTimeoutMs":14400000}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: 14_400 })
+      );
+    });
+
+    it("uses the provider default for child sessions when no timeout is configured", async () => {
+      const session = createMockSession({ spawn_source: "agent", sandbox_settings: null });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: undefined })
+      );
+    });
+
+    it("rejects configured timeouts when the provider cannot enforce them", async () => {
+      const session = createMockSession({
+        spawn_source: "agent",
+        sandbox_settings: '{"sandboxTimeoutMs":14400000}',
+      });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider({
+        capabilities: { supportsSandboxTimeout: false },
+      });
+      const broadcaster = createMockBroadcaster();
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        broadcaster,
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).not.toHaveBeenCalled();
+      expect(broadcaster.messages).toContainEqual({
+        type: "sandbox_error",
+        error: "mock does not support configurable sandbox timeouts",
+      });
+    });
+
+    it("uses the provider default for child sessions on unsupported providers", async () => {
+      const session = createMockSession({ spawn_source: "agent", sandbox_settings: null });
+      const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
+      const provider = createMockProvider({
+        capabilities: { supportsSandboxTimeout: false },
+      });
+      const manager = new SandboxLifecycleManager(
+        provider,
+        createMockStorage(session, sandbox),
+        createMockBroadcaster(),
+        createMockWebSocketManager(false),
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig()
+      );
+
+      await manager.spawnSandbox();
+
+      expect(provider.createSandbox).toHaveBeenCalledWith(
+        expect.objectContaining({ timeoutSeconds: undefined })
+      );
+    });
+
     it("doSpawn() passes sandboxSettings from session to provider config", async () => {
       const session = createMockSession({
         sandbox_settings: '{"tunnelPorts":[3000]}',

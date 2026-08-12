@@ -7,14 +7,12 @@
  * path stays cheap.
  */
 
+import { addReaction, getChannelInfo, getPermalink } from "@open-inspect/shared/slack";
 import {
-  addReaction,
-  getChannelInfo,
-  getPermalink,
   normalizeSlackEvent,
   type SlackAutomationEvent,
   type SlackChannelMeta,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
 import type { Env } from "./types";
 import { isChannelTriggerCandidate } from "./dm-utils";
 import { getWatchedChannels } from "./classifier/repos";

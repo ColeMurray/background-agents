@@ -1,7 +1,8 @@
 /**
  * Session target resolution for Linear issues.
  *
- * Owns the four-stage ladder — project mapping → team mapping → Linear's
+ * Owns the five-stage ladder — project mapping → team mapping → explicit
+ * `owner/repo` in the trigger or clarification-reply comment → Linear's
  * repo-suggestions API → LLM classification — and the target-kind policy.
  * Team and project mappings may name a repository or a saved environment
  * (design §7.5); the suggestion and classification stages remain
@@ -9,13 +10,9 @@
  * never stop working; environments join them.
  */
 
-import type {
-  Env,
-  Environment,
-  AgentSessionWebhookIssue,
-  IssueSession,
-  StaticTargetConfig,
-} from "./types";
+import type { Env, AgentSessionWebhookIssue, IssueSession, StaticTargetConfig } from "./types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { LinearApiClient } from "./utils/linear-client";
 import { emitAgentActivity, getRepoSuggestions } from "./utils/linear-client";
 import { splitRepoFullName } from "./utils/repo";
@@ -28,6 +25,44 @@ import { getProjectRepoMapping, getTeamRepoMapping } from "./kv-store";
 import { createLogger } from "./logger";
 
 const log = createLogger("target-resolution");
+const REPO_PATH_CHAR = /[\w/-]/;
+
+function extendsRepositoryPath(text: string, index: number, direction: -1 | 1): boolean {
+  const neighbor = text[index] ?? "";
+  if (REPO_PATH_CHAR.test(neighbor)) return true;
+  if (neighbor !== ".") return false;
+
+  let cursor = index + direction;
+  while (text[cursor] === ".") cursor += direction;
+  return REPO_PATH_CHAR.test(text[cursor] ?? "");
+}
+
+/**
+ * Find the single available repository a comment names explicitly.
+ *
+ * Case-insensitive, boundary-guarded so `acme/api` does not match inside
+ * `acme/api-legacy`, `notacme/api`, `not.acme/api`, or `acme/api.docs`, and
+ * null when the comment names zero or several repositories — several is
+ * still an ambiguity the classifier should see.
+ */
+export function matchExplicitRepo(text: string, repos: RepoConfig[]): RepoConfig | null {
+  const haystack = text.toLowerCase();
+  const named = repos.filter((repo) => {
+    const needle = repo.fullName.toLowerCase();
+    for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+      const end = at + needle.length;
+      // A neighbor extends the repository path when it is a path character,
+      // or a run of periods connecting to one (`not..acme/api`,
+      // `acme/api..docs`). Periods followed by nothing path-like are ordinary
+      // terminal punctuation (`use acme/api...`).
+      const beforeExtends = extendsRepositoryPath(haystack, at - 1, -1);
+      const afterExtends = extendsRepositoryPath(haystack, end, 1);
+      if (!beforeExtends && !afterExtends) return true;
+    }
+    return false;
+  });
+  return named.length === 1 ? named[0] : null;
+}
 
 /** A resolved session target: a repository or a saved environment. */
 export type SessionTarget =
@@ -208,8 +243,21 @@ export async function resolveSessionTarget(
     }
   }
 
-  // 3. Try Linear's built-in issueRepositorySuggestions API
+  // 3. An explicit `owner/repo` in the trigger comment — or in the reply to a
+  //    clarification this resolver previously elicited — beats every heuristic
+  //    below: it is the answer the elicitation asked for.
   const repos = await getAvailableRepos(env, traceId);
+  if (comment?.body) {
+    const named = matchExplicitRepo(comment.body, repos);
+    if (named) {
+      return {
+        target: repositoryTarget(named.owner, named.name, named.fullName),
+        reasoning: `Repository named explicitly in the comment: ${named.fullName}`,
+      };
+    }
+  }
+
+  // 4. Try Linear's built-in issueRepositorySuggestions API
   if (repos.length > 0) {
     const candidates = repos.map((r) => ({
       hostname: "github.com",
@@ -229,7 +277,7 @@ export async function resolveSessionTarget(
     }
   }
 
-  // 4. Fall back to our LLM classification
+  // 5. Fall back to our LLM classification
   await emitAgentActivity(
     client,
     agentSessionId,

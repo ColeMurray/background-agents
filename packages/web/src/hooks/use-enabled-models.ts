@@ -5,7 +5,7 @@ import {
   DEFAULT_ENABLED_MODELS,
   normalizeValidModels,
   type ModelCategory,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/models";
 
 export const MODEL_PREFERENCES_KEY = "/api/model-preferences";
 

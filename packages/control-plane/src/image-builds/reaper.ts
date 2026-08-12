@@ -2,14 +2,14 @@ import type { ImageBuildStore, ReapableImageBuildRow } from "../db/image-builds"
 import { createLogger } from "../logger";
 import type { ImageBuildProvider, SupersededImageBuild } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
-import type { AnyImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
+import type { ImageBuildAdapter, ImageBuildWorkflowContext } from "./types";
+import { runMaintenanceTasks } from "./concurrency";
 
 const logger = createLogger("image-builds:reaper");
 
-/** Rows reclaimed per cleanup pass, per sweep; leftovers wait for the next tick. */
-const REAP_BATCH_LIMIT = 25;
+export const IMAGE_BUILD_CLEANUP_ATTEMPT_MS = 10_000;
 
-type AdapterCache = Map<ImageBuildProvider, AnyImageBuildAdapter | null>;
+type AdapterCache = Map<ImageBuildProvider, ImageBuildAdapter | null>;
 
 /**
  * Best-effort provider-artifact reclamation: inline deletion of images a
@@ -46,20 +46,19 @@ export class ImageBuildReaper {
   ): Promise<{ deletedFailed: number; reapedFailed: number; reapedSuperseded: number }> {
     const adapters: AdapterCache = new Map();
 
-    const reapedFailed = await this.reapArtifactBearingRows(
-      await this.store.getFailedImagesWithArtifacts(REAP_BATCH_LIMIT),
-      ctx,
-      adapters,
-      (row) => this.store.clearFailedImageArtifact(row.id, row.provider_image_id)
+    const failedRows = await this.store.getFailedImagesWithArtifacts();
+    const reapedFailed = await this.reapArtifactBearingRows(failedRows, ctx, adapters, (row) =>
+      this.store.clearFailedImageArtifact(row.id, row.provider_image_id)
     );
 
     const deletedFailed = await this.store.deleteOldFailedBuilds(failedMaxAgeMs);
 
+    const supersededRows = await this.store.getSupersededImages();
     const reapedSuperseded = await this.reapArtifactBearingRows(
-      await this.store.getSupersededImages(REAP_BATCH_LIMIT),
+      supersededRows,
       ctx,
       adapters,
-      (row) => this.store.deleteSupersededImage(row.id)
+      (row) => this.store.deleteSupersededImage(row.id, row.provider_image_id)
     );
 
     return { deletedFailed, reapedFailed, reapedSuperseded };
@@ -79,25 +78,23 @@ export class ImageBuildReaper {
     commit: (row: ReapableImageBuildRow) => Promise<boolean>
   ): Promise<number> {
     let reaped = 0;
-    await Promise.all(
-      rows.map(async (row) => {
-        if (row.provider_image_id) {
-          const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
-          if (!adapter) return;
-          const deleted = await this.deleteImageBestEffort(
-            row.provider,
-            {
-              providerImageId: row.provider_image_id,
-              providerSessionId: row.provider_session_id,
-            },
-            ctx,
-            adapter
-          );
-          if (!deleted) return;
-        }
-        if (await commit(row)) reaped += 1;
-      })
-    );
+    await runMaintenanceTasks(rows, async (row) => {
+      if (row.provider_image_id) {
+        const adapter = this.resolveCleanupAdapter(row.provider, row.id, ctx, adapters);
+        if (!adapter) return;
+        const deleted = await this.deleteImageBestEffort(
+          row.provider,
+          {
+            providerImageId: row.provider_image_id,
+            providerSessionId: row.provider_session_id,
+          },
+          ctx,
+          adapter
+        );
+        if (!deleted) return;
+      }
+      if (await commit(row)) reaped += 1;
+    });
     return reaped;
   }
 
@@ -106,7 +103,7 @@ export class ImageBuildReaper {
     buildId: string,
     ctx: ImageBuildWorkflowContext,
     adapters: AdapterCache
-  ): AnyImageBuildAdapter | null {
+  ): ImageBuildAdapter | null {
     if (!adapters.has(provider)) {
       adapters.set(provider, this.createAdapterForBestEffortCleanup(provider, buildId, ctx));
     }
@@ -141,7 +138,10 @@ export class ImageBuildReaper {
         );
         if (deleted) {
           try {
-            await this.store.deleteSupersededImage(replacedImage.imageBuildId);
+            await this.store.deleteSupersededImage(
+              replacedImage.imageBuildId,
+              replacedImage.image.providerImageId
+            );
           } catch (e) {
             logger.warn("image_build.delete_superseded_row_failed", {
               image_build_id: replacedImage.imageBuildId,
@@ -160,12 +160,15 @@ export class ImageBuildReaper {
     provider: ImageBuildProvider,
     image: { providerImageId: string; providerSessionId?: string | null },
     ctx: ImageBuildWorkflowContext,
-    adapter: AnyImageBuildAdapter
+    adapter: ImageBuildAdapter
   ): Promise<boolean> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), IMAGE_BUILD_CLEANUP_ATTEMPT_MS);
     try {
       await adapter.deleteImage({
         image,
         correlation: ctx,
+        signal: controller.signal,
       });
       return true;
     } catch (e) {
@@ -177,6 +180,8 @@ export class ImageBuildReaper {
         trace_id: ctx.trace_id,
       });
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -185,9 +190,9 @@ export class ImageBuildReaper {
     provider: ImageBuildProvider,
     buildId: string,
     ctx: ImageBuildWorkflowContext
-  ): AnyImageBuildAdapter | null {
+  ): ImageBuildAdapter | null {
     try {
-      return this.adapterFactory.create(provider);
+      return this.adapterFactory.create(provider, "existing_session");
     } catch (e) {
       logger.error("image_build.adapter_config_error", {
         operation: "cleanup",

@@ -5,13 +5,14 @@
  * enabling unit testing and future provider abstraction.
  */
 
-import type { ImageBuildScopeKind } from "@open-inspect/shared";
 import { ModalApiError } from "../client";
 import type { ModalClient } from "../client";
 import type { CorrelationContext } from "../../logger";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  createVncAccess,
+  type ImageBuildProviderTriggerConfig,
   type SandboxProvider,
   type SandboxProviderCapabilities,
   type CreateSandboxConfig,
@@ -22,37 +23,43 @@ import {
   type SnapshotResult,
 } from "../provider";
 
-const MS_PER_SECOND = 1000;
-
-export interface TriggerModalImageBuildConfig {
+interface StartModalImageBuildConfig {
   buildId: string;
-  /** Scope kind ("repo" | "environment") — Modal accepts it for logging only. */
-  scopeKind: ImageBuildScopeKind;
-  /** Scope id (lowercase owner/name or environment id) — logging only. */
-  scopeId: string;
-  /** Repositories in position order ([0] = primary), cloned at their base branches. */
-  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
-  callbackUrl: string;
-  failureCallbackUrl: string;
-  /** Single-use token the builder presents as the callback bearer. */
+  providerSessionId: string;
   callbackToken: string;
-  userEnvVars?: Record<string, string>;
-  /**
-   * Build sandbox lifetime, in milliseconds. Already capped by the trigger.
-   * Omitted -> Modal applies DEFAULT_BUILD_TIMEOUT_SECONDS.
-   */
-  buildTimeoutMs?: number;
   correlation?: CorrelationContext;
 }
 
-export interface TriggerModalImageBuildResult {
+/** Modal extends the shared trigger contract with explicit SCM clone identity. */
+export interface ModalImageBuildTriggerConfig extends ImageBuildProviderTriggerConfig {
+  cloneHost?: string;
+  cloneUsername?: string;
+}
+
+export interface TerminateModalImageBuildConfig {
   buildId: string;
-  status: string;
+  providerSessionId: string;
+  reason: string;
+  correlation?: CorrelationContext;
+  signal?: AbortSignal;
+}
+
+export interface SnapshotModalImageBuildConfig {
+  buildId: string;
+  providerSessionId: string;
+  correlation?: CorrelationContext;
+  signal?: AbortSignal;
 }
 
 export interface ModalImageBuildProvider {
-  triggerImageBuild(config: TriggerModalImageBuildConfig): Promise<TriggerModalImageBuildResult>;
-  deleteProviderImage(providerImageId: string, correlation?: CorrelationContext): Promise<void>;
+  triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void>;
+  terminateImageBuildSandbox(config: TerminateModalImageBuildConfig): Promise<void>;
+  snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult>;
+  deleteProviderImage(
+    providerImageId: string,
+    correlation?: CorrelationContext,
+    signal?: AbortSignal
+  ): Promise<void>;
 }
 
 /**
@@ -79,6 +86,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
   readonly name = "modal";
 
   readonly capabilities: SandboxProviderCapabilities = {
+    supportsSandboxTimeout: true,
     supportsSnapshots: true,
     supportsRestore: true,
     supportsPersistentResume: false,
@@ -109,6 +117,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           timeoutSeconds: config.timeoutSeconds,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          vncEnabled: config.vncEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
@@ -124,6 +133,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
         createdAt: result.createdAt,
         codeServerUrl: result.codeServerUrl,
         codeServerPassword: result.codeServerPassword,
+        vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
         ttydUrl: result.ttydUrl,
         tunnelUrls: result.tunnelUrls,
       };
@@ -152,6 +162,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           timeoutSeconds: config.timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS,
           branch: config.branch,
           codeServerEnabled: config.codeServerEnabled,
+          vncEnabled: config.vncEnabled,
           agentSlackNotifyEnabled: config.agentSlackNotifyEnabled,
           mcpServers: config.mcpServers,
           sandboxSettings: config.sandboxSettings,
@@ -167,6 +178,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           providerObjectId: result.modalObjectId,
           codeServerUrl: result.codeServerUrl,
           codeServerPassword: result.codeServerPassword,
+          vncAccess: createVncAccess(result.vncUrl, result.vncPassword),
           ttydUrl: result.ttydUrl,
           tunnelUrls: result.tunnelUrls,
         };
@@ -200,6 +212,7 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
           providerObjectId: config.providerObjectId,
           sessionId: config.sessionId,
           reason: config.reason,
+          signal: config.signal,
         },
         config.correlation
       );
@@ -229,47 +242,86 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
     }
   }
 
-  /**
-   * Trigger a Modal scope-image build (design §4).
-   */
-  async triggerImageBuild(
-    config: TriggerModalImageBuildConfig
-  ): Promise<TriggerModalImageBuildResult> {
+  async snapshotImageBuildSandbox(config: SnapshotModalImageBuildConfig): Promise<SnapshotResult> {
     try {
-      const result = await this.client.buildImage(
+      const result = await this.client.snapshotBuildSandbox(
         {
-          scopeKind: config.scopeKind,
-          scopeId: config.scopeId,
           buildId: config.buildId,
-          callbackUrl: config.callbackUrl,
-          failureCallbackUrl: config.failureCallbackUrl,
-          callbackToken: config.callbackToken,
-          repositories: config.repositories,
-          userEnvVars: config.userEnvVars,
-          buildTimeoutSeconds:
-            config.buildTimeoutMs === undefined
-              ? undefined
-              : Math.ceil(config.buildTimeoutMs / MS_PER_SECOND),
+          providerSessionId: config.providerSessionId,
+          ...(config.signal ? { signal: config.signal } : {}),
         },
         config.correlation
       );
-
+      if (result.success && result.imageId) {
+        return { success: true, imageId: result.imageId };
+      }
       return {
-        buildId: result.buildId,
-        status: result.status,
+        success: false,
+        error: result.error || "Unknown image build snapshot error",
       };
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
-          `Image build failed with HTTP ${error.status}: ${error.message}`,
+          `Image build snapshot failed with HTTP ${error.status}`,
           error.status,
           error
         );
       }
-      if (error instanceof SandboxProviderError) {
-        throw error;
-      }
-      throw this.classifyError("Failed to trigger Modal image build", error);
+      if (error instanceof SandboxProviderError) throw error;
+      throw this.classifyError("Failed to snapshot image build sandbox", error);
+    }
+  }
+
+  private async createImageBuildSandbox(
+    config: ModalImageBuildTriggerConfig
+  ): Promise<{ providerSessionId: string }> {
+    try {
+      return await this.client.createImageBuildSandbox(
+        {
+          scopeKind: config.scopeKind,
+          scopeId: config.scopeId,
+          buildId: config.buildId,
+          repositories: config.repositories,
+          cloneToken: config.cloneToken,
+          ...(config.cloneHost ? { cloneHost: config.cloneHost } : {}),
+          ...(config.cloneUsername ? { cloneUsername: config.cloneUsername } : {}),
+          callbackUrl: config.callbackUrl,
+          failureCallbackUrl: config.failureCallbackUrl,
+          userEnvVars: config.userEnvVars,
+          buildExecutionTimeoutSeconds: config.buildExecutionTimeoutSeconds,
+          providerSessionTimeoutSeconds: config.providerSessionTimeoutSeconds,
+        },
+        config.correlation
+      );
+    } catch (error) {
+      throw this.classifyImageBuildError("Failed to create Modal image build sandbox", error);
+    }
+  }
+
+  private async startImageBuildSandbox(config: StartModalImageBuildConfig): Promise<void> {
+    try {
+      await this.client.startImageBuildSandbox(config, config.correlation);
+    } catch (error) {
+      throw this.classifyImageBuildError("Failed to start Modal image build sandbox", error);
+    }
+  }
+
+  async triggerImageBuild(config: ModalImageBuildTriggerConfig): Promise<void> {
+    const created = await this.createImageBuildSandbox(config);
+    await config.onProviderSessionCreated(created.providerSessionId);
+    await this.startImageBuildSandbox({
+      buildId: config.buildId,
+      providerSessionId: created.providerSessionId,
+      callbackToken: config.callbackToken,
+      correlation: config.correlation,
+    });
+  }
+
+  async terminateImageBuildSandbox(config: TerminateModalImageBuildConfig): Promise<void> {
+    try {
+      await this.client.terminateImageBuildSandbox(config, config.correlation);
+    } catch (error) {
+      throw this.classifyImageBuildError("Failed to terminate Modal image build sandbox", error);
     }
   }
 
@@ -278,10 +330,11 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
    */
   async deleteProviderImage(
     providerImageId: string,
-    correlation?: CorrelationContext
+    correlation?: CorrelationContext,
+    signal?: AbortSignal
   ): Promise<void> {
     try {
-      await this.client.deleteProviderImage({ providerImageId }, correlation);
+      await this.client.deleteProviderImage({ providerImageId, signal }, correlation);
     } catch (error) {
       if (error instanceof ModalApiError) {
         throw this.classifyErrorWithStatus(
@@ -295,6 +348,18 @@ export class ModalSandboxProvider implements SandboxProvider, ModalImageBuildPro
       }
       throw this.classifyError("Failed to delete Modal provider image", error);
     }
+  }
+
+  private classifyImageBuildError(message: string, error: unknown): SandboxProviderError {
+    if (error instanceof SandboxProviderError) return error;
+    if (error instanceof ModalApiError) {
+      return this.classifyErrorWithStatus(
+        `${message} with HTTP ${error.status}: ${error.message}`,
+        error.status,
+        error
+      );
+    }
+    return this.classifyError(message, error);
   }
 
   /**

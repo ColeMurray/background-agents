@@ -229,7 +229,7 @@ export class VercelSandboxClient {
 
   async snapshotSession(
     sessionId: string,
-    opts: { expirationMs?: number } = {},
+    opts: { expirationMs?: number; signal?: AbortSignal } = {},
     correlation?: CorrelationContext
   ): Promise<VercelSnapshotResponse> {
     const body =
@@ -238,7 +238,7 @@ export class VercelSandboxClient {
         : JSON.stringify({ expiration: opts.expirationMs });
     return this.request<VercelSnapshotResponse>(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/snapshot`,
-      { method: "POST", body },
+      { method: "POST", body, signal: opts.signal },
       correlation,
       "snapshotSession"
     );
@@ -262,19 +262,27 @@ export class VercelSandboxClient {
     return response.snapshots;
   }
 
-  async stopSession(sessionId: string, correlation?: CorrelationContext): Promise<void> {
+  async stopSession(
+    sessionId: string,
+    correlation?: CorrelationContext,
+    signal?: AbortSignal
+  ): Promise<void> {
     await this.request<unknown>(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/stop`,
-      { method: "POST" },
+      { method: "POST", signal },
       correlation,
       "stopSession"
     );
   }
 
-  async deleteSnapshot(snapshotId: string, correlation?: CorrelationContext): Promise<void> {
+  async deleteSnapshot(
+    snapshotId: string,
+    correlation?: CorrelationContext,
+    signal?: AbortSignal
+  ): Promise<void> {
     await this.request<unknown>(
       `/v2/sandboxes/snapshots/${encodeURIComponent(snapshotId)}`,
-      { method: "DELETE" },
+      { method: "DELETE", signal },
       correlation,
       "deleteSnapshot"
     );

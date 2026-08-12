@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { SessionDiffManifest } from "@open-inspect/shared";
+import type { SessionDiffManifest } from "@open-inspect/shared/types/session-diffs";
 import { useDiffFileNavigation } from "./use-diff-file-navigation";
 
 const manifest: SessionDiffManifest = {

@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { SessionDiffFile, SessionDiffRepository } from "@open-inspect/shared";
+import { useMemo, useState } from "react";
+import type {
+  SessionDiffFile,
+  SessionDiffRepository,
+} from "@open-inspect/shared/types/session-diffs";
 import { buildUniquePathLabels, type DiffSelection } from "@/lib/session-diffs";
 import { cn } from "@/lib/utils";
 
@@ -48,11 +51,13 @@ function RepositoryGroup({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
-  useEffect(() => {
-    if (forceOpen) setOpen(true);
-  }, [forceOpen]);
   return (
-    <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details
+      open={forceOpen || open}
+      onToggle={(event) => {
+        if (!forceOpen) setOpen(event.currentTarget.open);
+      }}
+    >
       <summary className="mb-1.5 cursor-pointer truncate text-[11px] font-medium text-muted-foreground">
         {label}
       </summary>

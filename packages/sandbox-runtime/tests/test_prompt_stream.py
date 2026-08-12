@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
 from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _Disposition,
@@ -28,6 +29,7 @@ def make_stream() -> OpenCodePromptStream:
         log=MagicMock(),
         sse_inactivity_timeout_seconds=120.0,
         prompt_max_duration_seconds=5400.0,
+        prompt_cleanup_timeout_seconds=MAX_SNAPSHOT_RESERVE_SECONDS,
     )
 
 
@@ -63,7 +65,7 @@ class TestApplySseEventDispositions:
 
     def test_child_session_idle_does_not_finish_stream(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
 
         step = make_stream()._apply_sse_event(
             state, sse("session.idle", {"sessionID": CHILD_SESSION_ID})
@@ -278,7 +280,7 @@ class TestApplySseEventDispositions:
 
     def test_child_context_overflow_continues_without_error(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.track(CHILD_SESSION_ID)
 
         step = make_stream()._apply_sse_event(
             state,
@@ -346,7 +348,7 @@ class TestApplySseEventDispositions:
 
     def test_child_session_error_emits_subtask_error_and_continues(self):
         state = make_state()
-        state.tracked_child_session_ids.add(CHILD_SESSION_ID)
+        state.child_activity.associate(CHILD_SESSION_ID, "task-call-1")
 
         step = make_stream()._apply_sse_event(
             state,
@@ -360,8 +362,239 @@ class TestApplySseEventDispositions:
                 "error": "Sub-task error",
                 "messageId": "cp-msg-1",
                 "isSubtask": True,
+                "childSessionId": CHILD_SESSION_ID,
+                "taskCallId": "task-call-1",
             }
         ]
+
+    def test_child_session_error_after_completion_keeps_completed_task_ownership(self):
+        state = make_state()
+        state.child_activity.associate(CHILD_SESSION_ID, "task-call-1")
+        state.child_activity.close("task-call-1")
+
+        step = make_stream()._apply_sse_event(
+            state,
+            sse("session.error", {"sessionID": CHILD_SESSION_ID, "error": {}}),
+        )
+
+        assert step.events[0]["taskCallId"] == "task-call-1"
+
+    def test_uncorrelated_child_error_is_flushed_at_parent_idle(self):
+        state = make_state()
+        state.child_activity.track(CHILD_SESSION_ID)
+        stream = make_stream()
+
+        error_step = stream._apply_sse_event(
+            state,
+            sse("session.error", {"sessionID": CHILD_SESSION_ID, "error": {}}),
+        )
+        idle_step = stream._apply_sse_event(
+            state,
+            sse("session.idle", {"sessionID": PARENT_SESSION_ID}),
+        )
+
+        assert error_step.events == []
+        assert idle_step.events == []
+        assert stream._flush_unassociated_child_activity(state) == [
+            {
+                "type": "error",
+                "error": "Sub-task error",
+                "messageId": "cp-msg-1",
+                "isSubtask": True,
+                "childSessionId": CHILD_SESSION_ID,
+            }
+        ]
+
+    def test_late_child_part_keeps_message_ownership_after_task_completion(self):
+        state = make_state()
+        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.child_activity.associate(CHILD_SESSION_ID, "task-call")
+        stream = make_stream()
+
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg",
+                        "role": "assistant",
+                        "sessionID": CHILD_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "parent-msg",
+                        "tool": "task",
+                        "callID": "task-call",
+                        "state": {"status": "completed", "input": {"prompt": "review"}},
+                    }
+                },
+            ),
+        )
+        late_part = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": CHILD_SESSION_ID,
+                        "messageID": "child-msg",
+                        "tool": "Read",
+                        "callID": "late-call",
+                        "state": {"status": "completed", "input": {"filePath": "README.md"}},
+                    }
+                },
+            ),
+        )
+
+        assert late_part.events[0]["taskCallId"] == "task-call"
+
+    def test_child_message_after_completion_keeps_completed_task_ownership(self):
+        state = make_state()
+        state.allowed_assistant_msg_ids.add("parent-msg")
+        stream = make_stream()
+
+        completed_task = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "parent-msg",
+                        "tool": "task",
+                        "callID": "closed-task",
+                        "state": {
+                            "status": "completed",
+                            "input": {"prompt": "review"},
+                            "metadata": {"sessionId": CHILD_SESSION_ID},
+                        },
+                    }
+                },
+            ),
+        )
+        late_message = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "late-child-msg",
+                        "role": "assistant",
+                        "sessionID": CHILD_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        late_part = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": CHILD_SESSION_ID,
+                        "messageID": "late-child-msg",
+                        "tool": "Read",
+                        "callID": "late-call",
+                        "state": {"status": "completed", "input": {"filePath": "README.md"}},
+                    }
+                },
+            ),
+        )
+        resumed_task = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "parent-msg",
+                        "tool": "task",
+                        "callID": "task-call-2",
+                        "state": {
+                            "status": "running",
+                            "input": {"prompt": "resume"},
+                            "metadata": {"sessionId": CHILD_SESSION_ID},
+                        },
+                    }
+                },
+            ),
+        )
+        repeated_message = stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "late-child-msg",
+                        "role": "assistant",
+                        "sessionID": CHILD_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        final_part = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": CHILD_SESSION_ID,
+                        "messageID": "late-child-msg",
+                        "tool": "Bash",
+                        "callID": "final-call",
+                        "state": {"status": "completed", "input": {"command": "git status"}},
+                    }
+                },
+            ),
+        )
+        orphaned = stream._flush_unassociated_child_activity(state)
+
+        assert completed_task.events[0]["childSessionId"] == CHILD_SESSION_ID
+        assert late_message.events == []
+        assert late_part.events == [
+            {
+                "type": "tool_call",
+                "tool": "Read",
+                "args": {"filePath": "README.md"},
+                "callId": "late-call",
+                "status": "completed",
+                "output": "",
+                "messageId": "cp-msg-1",
+                "isSubtask": True,
+                "childSessionId": CHILD_SESSION_ID,
+                "taskCallId": "closed-task",
+            }
+        ]
+        assert resumed_task.events == [
+            {
+                "type": "tool_call",
+                "tool": "task",
+                "args": {"prompt": "resume"},
+                "callId": "task-call-2",
+                "status": "running",
+                "output": "",
+                "messageId": "cp-msg-1",
+                "childSessionId": CHILD_SESSION_ID,
+            }
+        ]
+        assert repeated_message.events == []
+        assert final_part.events[0]["taskCallId"] == "closed-task"
+        assert orphaned == []
 
     def test_other_session_events_are_filtered_out(self):
         step = make_stream()._apply_sse_event(
@@ -380,7 +613,36 @@ class TestApplySseEventDispositions:
         )
 
         assert state.compaction_occurred is True
+        assert step.events == [{"type": "context_compacted", "messageId": "cp-msg-1"}]
         assert step.disposition is _Disposition.CONTINUE
+
+    def test_each_parent_compaction_emits_a_marker(self):
+        state = make_state()
+        stream = make_stream()
+
+        first = stream._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
+        )
+        second = stream._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
+        )
+
+        expected = [{"type": "context_compacted", "messageId": "cp-msg-1"}]
+        assert first.events == expected
+        assert second.events == expected
+
+    def test_child_compaction_does_not_emit_parent_marker(self):
+        state = make_state()
+        state.child_activity.track(CHILD_SESSION_ID)
+        state.pending_overflow_error = "parent overflow"
+
+        step = make_stream()._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": CHILD_SESSION_ID})
+        )
+
+        assert state.compaction_occurred is False
+        assert state.pending_overflow_error == "parent overflow"
+        assert step.events == []
 
     def test_session_created_tracks_direct_children_only(self):
         state = make_state()
@@ -401,7 +663,99 @@ class TestApplySseEventDispositions:
             ),
         )
 
-        assert state.tracked_child_session_ids == {CHILD_SESSION_ID}
+        assert state.child_activity.tracked_session_ids == {CHILD_SESSION_ID}
+
+    def test_task_metadata_reemits_same_status_and_releases_buffered_child_activity(self):
+        state = make_state()
+        state.allowed_assistant_msg_ids.add("parent-msg")
+        state.child_activity.track(CHILD_SESSION_ID)
+        stream = make_stream()
+
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.updated",
+                {
+                    "info": {
+                        "id": "child-msg",
+                        "role": "assistant",
+                        "sessionID": CHILD_SESSION_ID,
+                    }
+                },
+            ),
+        )
+        stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": CHILD_SESSION_ID,
+                        "messageID": "child-msg",
+                        "tool": "Bash",
+                        "callID": "child-call",
+                        "state": {"status": "running", "input": {"command": "ls"}},
+                    }
+                },
+            ),
+        )
+        first_task = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "parent-msg",
+                        "tool": "task",
+                        "callID": "task-call",
+                        "state": {"status": "running", "input": {"prompt": "review"}},
+                    }
+                },
+            ),
+        )
+        correlated_task = stream._apply_sse_event(
+            state,
+            sse(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "sessionID": PARENT_SESSION_ID,
+                        "messageID": "parent-msg",
+                        "tool": "task",
+                        "callID": "task-call",
+                        "state": {
+                            "status": "running",
+                            "input": {"prompt": "review"},
+                            "metadata": {"sessionId": CHILD_SESSION_ID},
+                        },
+                    }
+                },
+            ),
+        )
+
+        assert first_task.events[0].get("childSessionId") is None
+        assert correlated_task.events == [
+            {
+                **first_task.events[0],
+                "childSessionId": CHILD_SESSION_ID,
+            },
+            {
+                "type": "tool_call",
+                "tool": "Bash",
+                "args": {"command": "ls"},
+                "callId": "child-call",
+                "status": "running",
+                "output": "",
+                "messageId": "cp-msg-1",
+                "isSubtask": True,
+                "childSessionId": CHILD_SESSION_ID,
+                "taskCallId": "task-call",
+            },
+        ]
 
 
 class TestSessionTitleDedupe:

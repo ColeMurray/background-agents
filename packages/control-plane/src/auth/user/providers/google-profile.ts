@@ -1,13 +1,12 @@
 import { verifyGoogleIdToken } from "better-auth/social-providers";
+import { SIGN_IN_PROVIDER_ISSUERS } from "@open-inspect/shared/sign-in-provider";
 import { z } from "zod";
-import type { AdmissionPolicy } from "../admission-policy";
+import type { AdmissionPolicy, GoogleAdmissionEvidence } from "../admission-policy";
 import type { ProviderProfile, ProviderTokens } from "../provider-profile";
-import { OAuthProviderError, type ProviderSignInResult } from "./types";
-
-const GOOGLE_ISSUER = "https://accounts.google.com";
+import { OAuthProviderError } from "./types";
 
 const googleClaimsSchema = z.object({
-  iss: z.union([z.literal(GOOGLE_ISSUER), z.literal("accounts.google.com")]),
+  iss: z.union([z.literal(SIGN_IN_PROVIDER_ISSUERS.google), z.literal("accounts.google.com")]),
   sub: z.string().min(1),
   email: z.email(),
   email_verified: z.literal(true),
@@ -51,17 +50,16 @@ export class GoogleSignInProfileResolver {
     }
 
     const email = parsedClaims.data.email.toLowerCase();
-    const signIn: ProviderSignInResult<"google"> = {
+    const signIn: GoogleAdmissionEvidence = {
       identity: {
         provider: "google",
-        issuer: GOOGLE_ISSUER,
+        issuer: SIGN_IN_PROVIDER_ISSUERS.google,
         subject: parsedClaims.data.sub,
         ...(parsedClaims.data.name ? { displayName: parsedClaims.data.name } : {}),
         ...(parsedClaims.data.picture ? { avatarUrl: parsedClaims.data.picture } : {}),
         verifiedEmails: [email],
         primaryEmail: email,
       },
-      credential: null,
     };
     await this.config.admissionPolicy.requireAdmission(signIn);
 

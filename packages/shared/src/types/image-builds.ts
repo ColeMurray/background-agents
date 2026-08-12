@@ -3,16 +3,21 @@
  *
  * An image build bakes a provider image for a *scope* — either a single
  * repository or an environment (an ordered repository set). These types
- * mirror the D1 `image_builds` table and the Modal worker callback payloads;
- * they are consumed by the control plane, the web BFF, and (by comment
- * convention) the Python data plane.
+ * mirror the D1 `image_builds` table and the repository provenance reported by
+ * the sandbox runtime. They are consumed by the control plane and web BFF.
  */
 
+import { z } from "zod";
+
 /** Mirrors the `image_builds.status` column. */
-export type ImageBuildStatus = "building" | "ready" | "failed" | "superseded";
+export const imageBuildStatusSchema = z.enum(["building", "ready", "failed", "superseded"]);
+
+export type ImageBuildStatus = z.infer<typeof imageBuildStatusSchema>;
 
 /** Mirrors the `image_builds.scope_kind` column. */
-export type ImageBuildScopeKind = "repo" | "environment";
+export const imageBuildScopeKindSchema = z.enum(["repo", "environment"]);
+
+export type ImageBuildScopeKind = z.infer<typeof imageBuildScopeKindSchema>;
 
 /**
  * One repository's clone provenance at build time.
@@ -38,45 +43,28 @@ export interface RepositoryShaEntry {
  * scopes. `repositories_fingerprint` identifies the scope's repository set
  * as of the build — rows whose fingerprint differs from the scope's current
  * one are stale. `repository_shas` is the JSON-encoded `RepositoryShaEntry[]`
- * column value — `JSON.parse` before use; `ImageBuildCompleteCallback`
- * carries the same data already parsed. `provider` values come from the
+ * column value — `JSON.parse` before use. `provider` values come from the
  * control plane's provider union (deploy configuration, not part of this
  * contract).
  */
-export interface ImageBuildRecordView {
-  id: string;
-  scope_kind: ImageBuildScopeKind;
-  scope_id: string;
-  provider: string;
-  status: ImageBuildStatus;
-  repositories_fingerprint: string;
-  repository_shas: string;
-  runtime_version: string;
-  build_duration_seconds: number | null;
-  error_message: string | null;
-  created_at: number;
-}
+export const imageBuildRecordViewSchema = z.object({
+  id: z.string(),
+  scope_kind: imageBuildScopeKindSchema,
+  scope_id: z.string(),
+  provider: z.string(),
+  status: imageBuildStatusSchema,
+  repositories_fingerprint: z.string(),
+  repository_shas: z.string(),
+  runtime_version: z.string(),
+  build_duration_seconds: z.number().nullable(),
+  error_message: z.string().nullable(),
+  created_at: z.number(),
+});
 
-/**
- * Success callback POSTed by the Modal build worker
- * (`image_builder.py`) to `/image-builds/build-complete`.
- *
- * `repository_shas` arrives as a parsed array here and is stored
- * JSON-encoded (see `ImageBuildRecordView.repository_shas`).
- */
-export interface ImageBuildCompleteCallback {
-  build_id: string;
-  provider_image_id: string;
-  repository_shas: RepositoryShaEntry[];
-  runtime_version: string;
-  build_duration_seconds: number;
-}
+export type ImageBuildRecordView = z.infer<typeof imageBuildRecordViewSchema>;
 
-/**
- * Failure callback POSTed by the Modal build worker
- * (`image_builder.py`) to `/image-builds/build-failed`.
- */
-export interface ImageBuildFailedCallback {
-  build_id: string;
-  error: string;
-}
+export const imageBuildStatusResponseSchema = z.object({
+  images: z.array(imageBuildRecordViewSchema),
+});
+
+export type ImageBuildStatusResponse = z.infer<typeof imageBuildStatusResponseSchema>;

@@ -22,6 +22,51 @@ describe("GitLabSourceControlProvider", () => {
     vi.resetAllMocks();
   });
 
+  describe("getBranchHead", () => {
+    it("preserves nested namespaces and resolves slash-containing branches", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: { id: "def456" } }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      await expect(
+        provider.getBranchHead({
+          owner: "acme/platform",
+          name: "web",
+          branch: "feature/test",
+        })
+      ).resolves.toBe("def456");
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "/projects/acme%2Fplatform%2Fweb/repository/branches/feature%2Ftest"
+        ),
+        expect.any(Object)
+      );
+    });
+
+    it("returns null for a confirmed missing branch", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({}, 404));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      await expect(
+        provider.getBranchHead({ owner: "acme", name: "web", branch: "missing" })
+      ).resolves.toBeNull();
+    });
+
+    it("rejects malformed branch responses", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse({ commit: {} }));
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+
+      const err = await provider
+        .getBranchHead({ owner: "acme", name: "web", branch: "main" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).message).toBe(
+        "Failed to resolve branch head: unexpected response shape (commit.id)"
+      );
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+    });
+  });
+
   it("throws a permanent provider error when the access token is blank", () => {
     const createProvider = () => new GitLabSourceControlProvider({ accessToken: "   " });
 
@@ -282,6 +327,46 @@ describe("GitLabSourceControlProvider", () => {
       );
 
       expect(capturedBody?.title).toBe("Draft: WIP change");
+    });
+
+    it("passes labels through GitLab merge request creation", async () => {
+      let capturedBody: Record<string, unknown> | undefined;
+      mockFetch.mockImplementationOnce((_url: string, init: RequestInit) => {
+        capturedBody = JSON.parse(init.body as string) as Record<string, unknown>;
+        return Promise.resolve(
+          makeResponse({
+            iid: 6,
+            web_url: "https://gitlab.com/acme/web/-/merge_requests/6",
+            _links: { self: "https://gitlab.com/api/v4/projects/acme%2Fweb/merge_requests/6" },
+            state: "opened",
+            draft: false,
+            source_branch: "feature/labels",
+            target_branch: "main",
+          })
+        );
+      });
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      await provider.createPullRequest(
+        { authType: "pat", token: "user-token" },
+        {
+          repository: {
+            owner: "acme",
+            name: "web",
+            fullName: "acme/web",
+            defaultBranch: "main",
+            isPrivate: true,
+            providerRepoId: 42,
+          },
+          title: "Labelled change",
+          body: "",
+          sourceBranch: "feature/labels",
+          targetBranch: "main",
+          labels: ["generated", "agent"],
+        }
+      );
+
+      expect(capturedBody?.labels).toBe("generated,agent");
     });
 
     it("does not double-prefix when title already starts with 'Draft: '", async () => {

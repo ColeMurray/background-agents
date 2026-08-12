@@ -2,7 +2,7 @@
  * Provider constants.
  */
 
-import { DEFAULT_APP_NAME } from "@open-inspect/shared";
+import { DEFAULT_APP_NAME } from "@open-inspect/shared/app-name";
 
 /** Default User-Agent header used when a per-deployment app name is not configured. */
 export const USER_AGENT = DEFAULT_APP_NAME;

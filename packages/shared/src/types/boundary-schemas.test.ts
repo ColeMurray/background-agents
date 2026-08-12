@@ -3,20 +3,29 @@ import {
   automationRepositoriesInputSchema,
   automationRepositoryInputSchema,
   clientMessageSchema,
-  createSessionResponseSchema,
-  createSessionRequestSchema,
-  callbackContextSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
-  sandboxEventSchema,
-  sendPromptRequestSchema,
   serverMessageSchema,
+} from ".";
+import { sessionParticipantProfilesResponseSchema } from "./sessions";
+import { listArtifactsResponseSchema } from "./artifacts";
+import {
+  callbackContextSchema,
+  cancelChildSessionRequestSchema,
+  childFollowUpPromptRequestSchema,
+  createSessionRequestSchema,
+  createSessionResponseSchema,
+  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
+  sendPromptRequestSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-  spawnContextSchema,
-} from ".";
+} from "./session-api";
+import {
+  listEventsResponseSchema,
+  sandboxEventSchema,
+  toolCallIdentityKey,
+} from "./sandbox-events";
 
 describe("boundary schemas", () => {
   describe("createSessionRequestSchema", () => {
@@ -129,6 +138,122 @@ describe("boundary schemas", () => {
     });
   });
 
+  describe("completion response schemas", () => {
+    it("parses valid event and artifact list responses", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [
+            {
+              id: "event-1",
+              type: "token",
+              data: { content: "hello" },
+              messageId: "msg-1",
+              createdAt: 123,
+            },
+          ],
+          cursor: "next-page",
+          hasMore: true,
+        }).success
+      ).toBe(true);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [
+            {
+              id: "artifact-1",
+              type: "branch",
+              url: "https://example.com/tree/main",
+              metadata: { head: "main" },
+              createdAt: 123,
+            },
+          ],
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects malformed or partial completion responses", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [{ id: "event-1", type: "token", data: {}, messageId: "msg-1" }],
+          hasMore: false,
+        }).success
+      ).toBe(false);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [{ id: "artifact-1", type: "branch", url: null }],
+        }).success
+      ).toBe(false);
+    });
+
+    it("rejects an events page that reports more results without a cursor", () => {
+      const page = {
+        events: [
+          {
+            id: "event-1",
+            type: "token",
+            data: { content: "hello" },
+            messageId: "msg-1",
+            createdAt: 123,
+          },
+        ],
+        hasMore: true,
+      };
+
+      expect(listEventsResponseSchema.safeParse(page).success).toBe(false);
+      expect(listEventsResponseSchema.safeParse({ ...page, cursor: "" }).success).toBe(false);
+      expect(listEventsResponseSchema.safeParse({ ...page, cursor: "next-page" }).success).toBe(
+        true
+      );
+    });
+
+    it("preserves updatedAt on listed artifacts", () => {
+      const parsed = listArtifactsResponseSchema.safeParse({
+        artifacts: [
+          {
+            id: "artifact-1",
+            type: "pr",
+            url: "https://example.com/pull/1",
+            metadata: { number: 1 },
+            createdAt: 123,
+            updatedAt: 456,
+          },
+        ],
+      });
+
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.artifacts[0].updatedAt).toBe(456);
+    });
+
+    it("accepts nullable boundary fields returned by the control plane", () => {
+      expect(
+        listEventsResponseSchema.safeParse({
+          events: [
+            {
+              id: "event-1",
+              type: "execution_complete",
+              data: { success: true },
+              messageId: null,
+              createdAt: 123,
+            },
+          ],
+          hasMore: false,
+        }).success
+      ).toBe(true);
+      expect(
+        listArtifactsResponseSchema.safeParse({
+          artifacts: [
+            {
+              id: "artifact-1",
+              type: "branch",
+              url: null,
+              metadata: null,
+              createdAt: 123,
+            },
+          ],
+        }).success
+      ).toBe(true);
+    });
+  });
+
   describe("sendPromptRequestSchema", () => {
     it("parses a valid prompt request with a Slack callback context", () => {
       const result = sendPromptRequestSchema.safeParse({
@@ -154,6 +279,47 @@ describe("boundary schemas", () => {
       expect(sendPromptRequestSchema.safeParse({ content: 123 }).success).toBe(false);
       expect(sendPromptRequestSchema.safeParse({ source: "web" }).success).toBe(false);
       expect(sendPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+      expect(
+        sendPromptRequestSchema.safeParse({ content: "hello", source: "unknown" }).success
+      ).toBe(false);
+    });
+  });
+
+  describe("childFollowUpPromptRequestSchema", () => {
+    it("accepts non-empty content through the documented limit", () => {
+      expect(
+        childFollowUpPromptRequestSchema.safeParse({ content: "Continue with the failing tests" })
+          .success
+      ).toBe(true);
+      expect(
+        childFollowUpPromptRequestSchema.safeParse({
+          content: "x".repeat(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS),
+        }).success
+      ).toBe(true);
+    });
+
+    it("rejects empty, whitespace-only, and oversized content", () => {
+      expect(childFollowUpPromptRequestSchema.safeParse({ content: "" }).success).toBe(false);
+      expect(childFollowUpPromptRequestSchema.safeParse({ content: " \n\t " }).success).toBe(false);
+      expect(
+        childFollowUpPromptRequestSchema.safeParse({
+          content: "x".repeat(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS + 1),
+        }).success
+      ).toBe(false);
+    });
+
+    it("rejects fields that expand the parent sandbox authority", () => {
+      for (const extra of [
+        { source: "web" },
+        { authorId: "forged" },
+        { model: "openai/gpt-5.4" },
+        { attachments: [] },
+        { callbackContext: {} },
+      ]) {
+        expect(
+          childFollowUpPromptRequestSchema.safeParse({ content: "Continue", ...extra }).success
+        ).toBe(false);
+      }
     });
   });
 
@@ -220,6 +386,70 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("preserves task activity correlation fields", () => {
+      const taskResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "task",
+        args: { description: "Review code" },
+        callId: "task-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+        childSessionId: "child-session-1",
+      });
+      const childResult = sandboxEventSchema.safeParse({
+        type: "tool_call",
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "child-call-1",
+        status: "completed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 124,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      const errorResult = sandboxEventSchema.safeParse({
+        type: "error",
+        error: "Child failed",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 125,
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+
+      expect(taskResult.success && taskResult.data.childSessionId).toBe("child-session-1");
+      expect(childResult.success && childResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+      expect(errorResult.success && errorResult.data).toMatchObject({
+        isSubtask: true,
+        childSessionId: "child-session-1",
+        taskCallId: "task-call-1",
+      });
+    });
+
+    it("uses task ownership when a child session ID is unavailable", () => {
+      const base = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "shared-call",
+        messageId: "message-1",
+        isSubtask: true,
+      };
+
+      expect(toolCallIdentityKey({ ...base, taskCallId: "task-1" })).not.toBe(
+        toolCallIdentityKey({ ...base, taskCallId: "task-2" })
+      );
     });
 
     it("rejects a malformed partial sandbox event", () => {
@@ -299,6 +529,22 @@ describe("boundary schemas", () => {
       });
 
       expect(result.success).toBe(true);
+    });
+
+    it("parses context compaction events with required message association", () => {
+      const event = {
+        type: "context_compacted",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      };
+
+      expect(sandboxEventSchema.safeParse(event)).toEqual(
+        expect.objectContaining({ success: true, data: event })
+      );
+      expect(sandboxEventSchema.safeParse({ ...event, messageId: undefined }).success).toBe(false);
+      expect(sandboxEventSchema.safeParse({ ...event, sandboxId: undefined }).success).toBe(false);
+      expect(sandboxEventSchema.safeParse({ ...event, timestamp: undefined }).success).toBe(false);
     });
   });
 
@@ -393,8 +639,7 @@ describe("boundary schemas", () => {
     it("parses a valid subscribed message with nullable fields", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -418,7 +663,7 @@ describe("boundary schemas", () => {
           },
         ],
         participantId: "participant-1",
-        replay: {
+        timeline: {
           events: [],
           hasMore: false,
           cursor: null,
@@ -429,11 +674,10 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("keeps recognized replay events and drops unknown ones without failing", () => {
+    it("keeps recognized timeline events and drops unknown ones without failing", () => {
       const result = serverMessageSchema.safeParse({
         type: "subscribed",
-        sessionId: "session-1",
-        state: {
+        session: {
           id: "session-1",
           title: null,
           repoOwner: null,
@@ -449,11 +693,25 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
-        replay: {
+        timeline: {
           events: [
-            { type: "ready", sandboxId: "sandbox-1", opencodeSessionId: null, timestamp: 1 },
-            { type: "some_future_event", foo: "bar", timestamp: 2 },
-            { type: "token", content: "hi", messageId: "m1", sandboxId: "sandbox-1", timestamp: 3 },
+            {
+              eventId: "event-1",
+              timelineSequence: 1,
+              event: { type: "ready", sandboxId: "sandbox-1", timestamp: 1 },
+            },
+            { eventId: "event-2", timelineSequence: 2, event: { type: "future" } },
+            {
+              eventId: "event-3",
+              timelineSequence: 3,
+              event: {
+                type: "token",
+                content: "hi",
+                messageId: "m1",
+                sandboxId: "sandbox-1",
+                timestamp: 3,
+              },
+            },
           ],
           hasMore: false,
           cursor: null,
@@ -463,7 +721,10 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.replay?.events.map((event) => event.type)).toEqual(["ready", "token"]);
+        expect(result.data.timeline.events.map((item) => item.event.type)).toEqual([
+          "ready",
+          "token",
+        ]);
       }
     });
 
@@ -471,8 +732,17 @@ describe("boundary schemas", () => {
       const result = serverMessageSchema.safeParse({
         type: "history_page",
         items: [
-          { type: "some_legacy_event", foo: "bar", timestamp: 1 },
-          { type: "git_sync", status: "completed", sandboxId: "sandbox-1", timestamp: 2 },
+          { eventId: "event-1", timelineSequence: 1, event: { type: "future" } },
+          {
+            eventId: "event-2",
+            timelineSequence: 2,
+            event: {
+              type: "git_sync",
+              status: "completed",
+              sandboxId: "sandbox-1",
+              timestamp: 2,
+            },
+          },
         ],
         hasMore: false,
         cursor: null,
@@ -480,7 +750,7 @@ describe("boundary schemas", () => {
 
       expect(result.success).toBe(true);
       if (result.success && result.data.type === "history_page") {
-        expect(result.data.items.map((item) => item.type)).toEqual(["git_sync"]);
+        expect(result.data.items.map((item) => item.event.type)).toEqual(["git_sync"]);
       }
     });
 
@@ -498,10 +768,106 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(false);
     });
 
+    it("accepts context compaction events in live messages and timeline hydration", () => {
+      const event = {
+        type: "context_compacted",
+        messageId: "message-1",
+        sandboxId: "sandbox-1",
+        timestamp: 123,
+      };
+
+      expect(serverMessageSchema.safeParse({ type: "sandbox_event", event }).success).toBe(true);
+
+      const history = serverMessageSchema.safeParse({
+        type: "history_page",
+        items: [{ eventId: "event-1", timelineSequence: 1, event }],
+        hasMore: false,
+        cursor: null,
+      });
+      expect(history.success).toBe(true);
+      if (history.success && history.data.type === "history_page") {
+        expect(history.data.items).toEqual([{ eventId: "event-1", timelineSequence: 1, event }]);
+      }
+
+      const subscribed = serverMessageSchema.safeParse({
+        type: "subscribed",
+        session: {
+          id: "session-1",
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "completed",
+          sandboxStatus: "stopped",
+          messageCount: 1,
+          createdAt: 123,
+        },
+        artifacts: [],
+        participantId: "participant-1",
+        timeline: {
+          events: [{ eventId: "event-1", timelineSequence: 1, event }],
+          hasMore: false,
+          cursor: null,
+        },
+      });
+      expect(subscribed.success).toBe(true);
+      if (subscribed.success && subscribed.data.type === "subscribed") {
+        expect(subscribed.data.timeline.events).toEqual([
+          { eventId: "event-1", timelineSequence: 1, event },
+        ]);
+      }
+    });
+
     it("rejects an unknown message type", () => {
       const result = serverMessageSchema.safeParse({ type: "unexpected" });
 
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("participant profile boundaries", () => {
+    it("parses only safe profile fields keyed by canonical user ID", () => {
+      const result = sessionParticipantProfilesResponseSchema.parse({
+        profiles: {
+          "user-1": {
+            userId: "user-1",
+            displayName: "Ada Lovelace",
+            avatarUrl: "https://avatars.example/ada",
+            email: "private@example.com",
+          },
+        },
+      });
+
+      expect(result).toEqual({
+        profiles: {
+          "user-1": {
+            userId: "user-1",
+            displayName: "Ada Lovelace",
+            avatarUrl: "https://avatars.example/ada",
+          },
+        },
+      });
+    });
+
+    it("accepts historical user messages without an author userId", () => {
+      const legacy = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "hello",
+        messageId: "message-1",
+        timestamp: 1,
+        author: { participantId: "participant-1", name: "Legacy User" },
+      });
+      const current = sandboxEventSchema.safeParse({
+        type: "user_message",
+        content: "hello",
+        messageId: "message-2",
+        timestamp: 1,
+        author: { participantId: "participant-1", userId: "user-1", name: "Ada" },
+      });
+
+      expect(legacy.success).toBe(true);
+      expect(current.success).toBe(true);
     });
   });
 
@@ -543,63 +909,6 @@ describe("boundary schemas", () => {
 
     it("rejects a non-boolean cancelNested", () => {
       const result = cancelChildSessionRequestSchema.safeParse({ cancelNested: "yes" });
-
-      expect(result.success).toBe(false);
-    });
-  });
-
-  describe("spawnContextSchema", () => {
-    it("parses a valid spawn context with nullable fields", () => {
-      const result = spawnContextSchema.safeParse({
-        repoOwner: "open-inspect",
-        repoName: "background-agents",
-        repoId: null,
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: null,
-        baseBranch: null,
-        owner: {
-          userId: "user-1",
-          scmUserId: null,
-          scmLogin: null,
-          scmName: null,
-          scmEmail: null,
-          scmAccessTokenEncrypted: null,
-          scmRefreshTokenEncrypted: null,
-          scmTokenExpiresAt: null,
-        },
-      });
-
-      expect(result.success).toBe(true);
-    });
-
-    it("parses a repo-less spawn context", () => {
-      const result = spawnContextSchema.safeParse({
-        repoOwner: null,
-        repoName: null,
-        repoId: null,
-        model: "anthropic/claude-sonnet-4-6",
-        reasoningEffort: null,
-        baseBranch: null,
-        owner: {
-          userId: "user-1",
-          scmUserId: null,
-          scmLogin: null,
-          scmName: null,
-          scmEmail: null,
-          scmAccessTokenEncrypted: null,
-          scmRefreshTokenEncrypted: null,
-          scmTokenExpiresAt: null,
-        },
-      });
-
-      expect(result.success).toBe(true);
-    });
-
-    it("rejects a malformed partial spawn context", () => {
-      const result = spawnContextSchema.safeParse({
-        repoOwner: "open-inspect",
-        repoName: "background-agents",
-      });
 
       expect(result.success).toBe(false);
     });

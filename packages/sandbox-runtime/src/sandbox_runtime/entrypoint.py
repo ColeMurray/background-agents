@@ -2,7 +2,7 @@
 """
 Sandbox entrypoint - manages OpenCode server and bridge lifecycle.
 
-Runs as PID 1 inside the sandbox. Responsibilities:
+Runs as the sandbox's configured main command. Responsibilities:
 1. Perform git sync with latest code
 2. Run repo hooks (setup/start) based on boot mode
 3. Start OpenCode server
@@ -11,7 +11,9 @@ Runs as PID 1 inside the sandbox. Responsibilities:
 6. Handle graceful shutdown on SIGTERM/SIGINT
 """
 
+import argparse
 import asyncio
+import contextlib
 import filecmp
 import json
 import os
@@ -19,10 +21,14 @@ import re
 import shutil
 import signal
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import httpx
+from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+from cryptography.hazmat.primitives.ciphers import Cipher, modes
 
 from .constants import (
     BIN_INSTALL_DIR_ENV_VAR,
@@ -31,16 +37,26 @@ from .constants import (
     CODE_SERVER_PORT_ENV_VAR,
     DEFAULT_BIN_INSTALL_DIR,
     EXPECTED_TUNNEL_PORTS_ENV_VAR,
+    IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR,
+    NOVNC_PORT,
+    NOVNC_PORT_ENV_VAR,
+    NOVNC_WEB_ROOT,
     REPO_MANIFEST_FILE_PATH,
     TTYD_PORT,
     TTYD_PROXY_PORT,
     TTYD_PROXY_PORT_ENV_VAR,
     TUNNEL_ENV_FILE_PATH,
     TUNNEL_ENV_SANDBOX_ID_KEY,
+    VNC_DISPLAY,
+    VNC_PASSWORD_ENV_VAR,
+    VNC_PASSWORD_FILE_PATH,
+    VNC_PASSWORD_MAX_BYTES,
+    VNC_PORT,
 )
 from .diff_baseline import resolve_session_diff_baselines
 from .git_excludes import install_runtime_git_excludes
 from .log_config import configure_logging, get_logger
+from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
 from .repo_image_callback import RepoImageBuildCallback
 
@@ -56,6 +72,30 @@ _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 # Substituted for a single log line too large to forward intact, so the gap is
 # visible instead of silently dropped.
 _TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
+_ResultT = TypeVar("_ResultT")
+
+# This fixed-key VNC encoding is obfuscation, not encryption. Confidentiality
+# depends on the password file being created with mode 0o600.
+_VNC_PASSWORD_FILE_KEY = bytes((0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0)) * 3
+
+
+def _encode_vnc_password(password: bytes) -> bytes:
+    encryptor = Cipher(TripleDES(_VNC_PASSWORD_FILE_KEY), modes.ECB()).encryptor()
+    return encryptor.update(password.ljust(VNC_PASSWORD_MAX_BYTES, b"\0")) + encryptor.finalize()
+
+
+@dataclass(frozen=True)
+class RepositoryBootResult:
+    """State produced by repository synchronization and hook execution."""
+
+    git_sync_success: bool
+    repository_shas: list[dict[str, str]]
+    setup_success: bool | None
+    start_success: bool | None
+
+
+class ImageBuildExecutionCancelled(Exception):
+    """A handled process signal interrupted image-build work."""
 
 
 def _port_from_env(env_var: str, default: int) -> int:
@@ -114,13 +154,18 @@ class SandboxSupervisor:
     SIDECAR_TIMEOUT_SECONDS = 5
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
 
-    def __init__(self):
+    def __init__(self, shutdown_event: asyncio.Event | None = None):
         self.opencode_process: asyncio.subprocess.Process | None = None
         self.bridge_process: asyncio.subprocess.Process | None = None
         self.code_server_process: asyncio.subprocess.Process | None = None
         self.ttyd_process: asyncio.subprocess.Process | None = None
         self.ttyd_proxy_process: asyncio.subprocess.Process | None = None
-        self.shutdown_event = asyncio.Event()
+        self.xvfb_process: asyncio.subprocess.Process | None = None
+        self.fluxbox_process: asyncio.subprocess.Process | None = None
+        self.x11vnc_process: asyncio.subprocess.Process | None = None
+        self.novnc_process: asyncio.subprocess.Process | None = None
+        self._vnc_restart_task: asyncio.Task[bool] | None = None
+        self.shutdown_event = shutdown_event or asyncio.Event()
         self.git_sync_complete = asyncio.Event()
         self.opencode_ready = asyncio.Event()
         self.boot_mode = "unknown"
@@ -132,6 +177,13 @@ class SandboxSupervisor:
         self.repo_owner = os.environ.get("REPO_OWNER", "")
         self.repo_name = os.environ.get("REPO_NAME", "")
         self.vcs_host = os.environ.get("VCS_HOST", "github.com")
+        # Consume the credential before launching any child so OpenCode,
+        # code-server, ttyd, and the bridge cannot inherit it.
+        self._vnc_password = os.environ.pop(VNC_PASSWORD_ENV_VAR, None) or None
+        if self._vnc_password:
+            # GUI processes launched by OpenCode, code-server, or ttyd must use
+            # the same display that the VNC sidecar exposes.
+            os.environ["DISPLAY"] = VNC_DISPLAY
         # Note: VCS credentials are no longer captured at sandbox start. Git
         # operations authenticate per-call via the system-wide credential
         # helper (`/usr/local/bin/oi-git-credentials`), which fetches fresh
@@ -213,6 +265,28 @@ class SandboxSupervisor:
     # Git primitives
     # ------------------------------------------------------------------
 
+    async def _terminate_owned_subprocess(self, process: asyncio.subprocess.Process) -> None:
+        """Kill a child process group and wait until the owned process exits."""
+        if process.returncode is None:
+            process_id = getattr(process, "pid", None)
+            if isinstance(process_id, int):
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process_id, signal.SIGKILL)
+            else:
+                process.kill()
+        await asyncio.shield(process.wait())
+
+    async def _communicate_owned_subprocess(
+        self, process: asyncio.subprocess.Process
+    ) -> tuple[bytes, bytes]:
+        """Collect output while guaranteeing teardown when the caller is cancelled."""
+        try:
+            stdout, stderr = await process.communicate()
+            return stdout or b"", stderr or b""
+        except asyncio.CancelledError:
+            await self._terminate_owned_subprocess(process)
+            raise
+
     async def _clone_repo(self, repo: RepoEntry) -> bool:
         """Shallow-clone a repository.
 
@@ -237,8 +311,9 @@ class SandboxSupervisor:
                 str(repo.path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await result.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(result)
         except Exception as e:
             # Keep sync_repositories' partial-failure contract: an OSError
             # here must surface as a failed member, not abort the gather.
@@ -311,8 +386,9 @@ class SandboxSupervisor:
                 value,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            _stdout, stderr = await proc.communicate()
+            _stdout, stderr = await self._communicate_owned_subprocess(proc)
             if proc.returncode != 0:
                 self.log.warn(
                     "credential_helper.config_failed",
@@ -373,8 +449,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await proc.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(proc)
         if proc.returncode != 0:
             self.log.error(
                 "git.set_url_failed",
@@ -398,8 +475,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.error(
                 "git.fetch_error",
@@ -420,8 +498,9 @@ class SandboxSupervisor:
             cwd=repo.path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        _stdout, stderr = await result.communicate()
+        _stdout, stderr = await self._communicate_owned_subprocess(result)
         if result.returncode != 0:
             self.log.warn(
                 "git.checkout_error",
@@ -488,8 +567,9 @@ class SandboxSupervisor:
                 cwd=repo.path,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            stdout, _ = await result.communicate()
+            stdout, _ = await self._communicate_owned_subprocess(result)
             if result.returncode == 0:
                 return stdout.decode().strip()
         except Exception as e:
@@ -899,42 +979,63 @@ class SandboxSupervisor:
             self.log.info("opencode.skills_installed", skills_path=str(skills_dest))
         return installed
 
-    def _setup_openai_oauth(self) -> None:
-        """Write OpenCode auth.json for ChatGPT OAuth if refresh token is configured."""
-        refresh_token = os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN")
-        if not refresh_token:
+    def _setup_managed_oauth(self) -> None:
+        """Write OpenCode OAuth sentinels for control-plane-managed providers."""
+        openai_managed = os.environ.get("OPENAI_OAUTH_MANAGED")
+        xai_managed = os.environ.get("XAI_OAUTH_MANAGED")
+        if not openai_managed and not xai_managed:
             return
 
         try:
             auth_dir = Path.home() / ".local" / "share" / "opencode"
             auth_dir.mkdir(parents=True, exist_ok=True)
 
-            openai_entry = {
+            oauth_entry = {
                 "type": "oauth",
                 "refresh": "managed-by-control-plane",
                 "access": "",
                 "expires": 0,
             }
-
-            account_id = os.environ.get("OPENAI_OAUTH_ACCOUNT_ID")
-            if account_id:
-                openai_entry["accountId"] = account_id
+            entries = {}
+            if openai_managed:
+                entries["openai"] = {**oauth_entry}
+            if xai_managed:
+                entries["xai"] = {**oauth_entry}
 
             auth_file = auth_dir / "auth.json"
             tmp_file = auth_dir / ".auth.json.tmp"
+
+            existing_entries = {}
+            if auth_file.exists():
+                try:
+                    existing = json.loads(auth_file.read_text())
+                    if isinstance(existing, dict):
+                        existing_entries = existing
+                except (OSError, json.JSONDecodeError):
+                    self.log.warn("managed_oauth.existing_auth_invalid")
+            existing_entries = {
+                key: value
+                for key, value in existing_entries.items()
+                if not (
+                    isinstance(value, dict)
+                    and value.get("refresh") == "managed-by-control-plane"
+                    and key not in entries
+                )
+            }
+            entries = {**existing_entries, **entries}
 
             # Write to a temp file created with 0o600 from the start, then
             # atomically rename so the target is never world-readable.
             fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
-                os.write(fd, json.dumps({"openai": openai_entry}).encode())
+                os.write(fd, json.dumps(entries).encode())
             finally:
                 os.close(fd)
             tmp_file.replace(auth_file)
 
-            self.log.info("openai_oauth.setup")
+            self.log.info("managed_oauth.setup", providers=list(entries))
         except Exception as e:
-            self.log.warn("openai_oauth.setup_error", exc=e)
+            self.log.warn("managed_oauth.setup_error", exc=e)
 
     async def start_code_server(self) -> None:
         """Start code-server for browser-based VS Code editing."""
@@ -1184,6 +1285,192 @@ class SandboxSupervisor:
         ):
             self.log.info("ttyd_proxy.stdout", line=line)
 
+    async def start_vnc(self) -> None:
+        """Start the optional desktop and browser-facing noVNC sidecar stack."""
+        password = self._vnc_password
+        if not password:
+            Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
+            self.log.info("vnc.skip", reason="no_password")
+            return
+
+        password_bytes = password.encode()
+        if len(password_bytes) > VNC_PASSWORD_MAX_BYTES:
+            raise ValueError(f"VNC password must not exceed {VNC_PASSWORD_MAX_BYTES} bytes")
+
+        self._clear_vnc_display_artifacts()
+
+        password_path = Path(VNC_PASSWORD_FILE_PATH)
+        password_path.unlink(missing_ok=True)
+        password_open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        password_fd = os.open(
+            password_path,
+            password_open_flags,
+            0o600,
+        )
+        try:
+            os.write(password_fd, _encode_vnc_password(password_bytes))
+        finally:
+            os.close(password_fd)
+
+        child_env = os.environ.copy()
+        display_env = {**child_env, "DISPLAY": VNC_DISPLAY}
+        xvfb_cmd = [
+            "Xvfb",
+            VNC_DISPLAY,
+            "-screen",
+            "0",
+            "1280x720x24",
+            "-nolisten",
+            "tcp",
+        ]
+        self.xvfb_process = await asyncio.create_subprocess_exec(
+            *xvfb_cmd,
+            env=child_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("xvfb", self.xvfb_process))
+
+        display_number = VNC_DISPLAY.removeprefix(":").split(".", maxsplit=1)[0]
+        display_socket = Path(f"/tmp/.X11-unix/X{display_number}")
+        if not await self._wait_for_path(display_socket, self.xvfb_process):
+            raise RuntimeError("Xvfb failed to become ready")
+
+        fluxbox_cmd = ["fluxbox"]
+        self.fluxbox_process = await asyncio.create_subprocess_exec(
+            *fluxbox_cmd,
+            env=display_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("fluxbox", self.fluxbox_process))
+
+        x11vnc_cmd = [
+            "x11vnc",
+            "-display",
+            VNC_DISPLAY,
+            "-rfbport",
+            str(VNC_PORT),
+            "-listen",
+            "127.0.0.1",
+            "-forever",
+            "-shared",
+            "-rfbauth",
+            VNC_PASSWORD_FILE_PATH,
+        ]
+        self.x11vnc_process = await asyncio.create_subprocess_exec(
+            *x11vnc_cmd,
+            env=display_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("x11vnc", self.x11vnc_process))
+        if not await self._wait_for_port(VNC_PORT):
+            raise RuntimeError("x11vnc failed to become ready")
+
+        novnc_port = _port_from_env(NOVNC_PORT_ENV_VAR, NOVNC_PORT)
+        novnc_cmd = [
+            "websockify",
+            "--web",
+            NOVNC_WEB_ROOT,
+            f"0.0.0.0:{novnc_port}",
+            f"127.0.0.1:{VNC_PORT}",
+        ]
+        self.novnc_process = await asyncio.create_subprocess_exec(
+            *novnc_cmd,
+            env=child_env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
+        )
+        asyncio.create_task(self._forward_vnc_logs("novnc", self.novnc_process))
+        self.log.info("vnc.started", display=VNC_DISPLAY, novnc_port=novnc_port)
+
+    def _clear_vnc_display_artifacts(self) -> None:
+        """Remove Xvfb lock/socket files that filesystem snapshots can retain."""
+        display_number = VNC_DISPLAY.removeprefix(":").split(".", maxsplit=1)[0]
+        for path in (
+            Path(f"/tmp/.X{display_number}-lock"),
+            Path(f"/tmp/.X11-unix/X{display_number}"),
+        ):
+            path.unlink(missing_ok=True)
+
+    async def _wait_for_path(
+        self,
+        path: Path,
+        process: asyncio.subprocess.Process,
+        timeout_seconds: float | None = None,
+    ) -> bool:
+        """Wait for a process-owned readiness path while ensuring it stays alive."""
+        timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while loop.time() < deadline:
+            if process.returncode is not None:
+                return False
+            if path.exists():
+                return True
+            await asyncio.sleep(0.1)
+        self.log.warn("path_readiness.timeout", path=str(path), timeout=timeout_seconds)
+        return False
+
+    async def _forward_vnc_logs(
+        self,
+        process_name: str,
+        process: asyncio.subprocess.Process,
+    ) -> None:
+        """Forward one VNC component's stdout without including credentials."""
+        if not process.stdout:
+            return
+        async for line in self._iter_process_lines(
+            process.stdout,
+            error_event=f"{process_name}.log_forward_error",
+        ):
+            self.log.info(f"{process_name}.stdout", line=line)
+
+    async def _stop_vnc(self) -> None:
+        """Stop the VNC stack in reverse dependency order and remove its secret."""
+        for process_name, process in (
+            ("novnc", self.novnc_process),
+            ("x11vnc", self.x11vnc_process),
+            ("fluxbox", self.fluxbox_process),
+            ("xvfb", self.xvfb_process),
+        ):
+            if process and process.returncode is None:
+                self.log.info(f"{process_name}.terminating")
+                with contextlib.suppress(ProcessLookupError):
+                    process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=self.SIDECAR_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    await process.wait()
+            setattr(self, f"{process_name}_process", None)
+        Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
+        self._clear_vnc_display_artifacts()
+
+    async def _start_vnc_with_retries(self) -> bool:
+        """Restart VNC with bounded backoff after a monitored component crash."""
+        attempt = 0
+        while not self.shutdown_event.is_set():
+            try:
+                await self.start_vnc()
+                return True
+            except Exception as error:
+                attempt += 1
+                self.log.warn("vnc.start_failed", attempt=attempt, exc=error)
+                await self._stop_vnc()
+                if attempt > self.MAX_RESTARTS:
+                    self.log.warn("vnc.max_restarts", restart_count=attempt)
+                    return False
+                delay = min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX)
+                await asyncio.sleep(delay)
+        return False
+
     async def _wait_for_port(self, port: int, timeout_seconds: float | None = None) -> bool:
         timeout_seconds = timeout_seconds or self.SIDECAR_TIMEOUT_SECONDS
         """Wait for a service to start listening on a port. Returns True if ready."""
@@ -1202,7 +1489,7 @@ class SandboxSupervisor:
 
     async def start_opencode(self) -> None:
         """Start OpenCode server with configuration."""
-        self._setup_openai_oauth()
+        self._setup_managed_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
@@ -1228,15 +1515,21 @@ class SandboxSupervisor:
 
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir)
 
-        # Deploy codex auth proxy plugin if OpenAI OAuth is configured
+        # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
-        plugin_source = Path("/app/sandbox_runtime/plugins/codex-auth-plugin.js")
-        if plugin_source.exists() and os.environ.get("OPENAI_OAUTH_REFRESH_TOKEN"):
+        managed_plugins = (
+            ("OPENAI_OAUTH_MANAGED", "codex-auth-plugin.js", "openai_oauth.plugin_deployed"),
+            ("XAI_OAUTH_MANAGED", "xai-auth-plugin.js", "xai_oauth.plugin_deployed"),
+        )
+        for marker, filename, log_event in managed_plugins:
+            plugin_source = Path(f"/app/sandbox_runtime/plugins/{filename}")
+            if not plugin_source.exists() or not os.environ.get(marker):
+                continue
             plugin_dir = opencode_dir / "plugins"
             plugin_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(plugin_source, plugin_dir / "codex-auth-plugin.js")
-            installed_runtime_paths.add(".opencode/plugins/codex-auth-plugin.js")
-            self.log.info("openai_oauth.plugin_deployed")
+            shutil.copy(plugin_source, plugin_dir / filename)
+            installed_runtime_paths.add(f".opencode/plugins/{filename}")
+            self.log.info(log_event)
 
         if installed_runtime_paths and (workdir / ".git").exists():
             try:
@@ -1387,6 +1680,7 @@ class SandboxSupervisor:
         code_server_restart_count = 0
         ttyd_restart_count = 0
         ttyd_proxy_restart_count = 0
+        vnc_restart_count = 0
 
         while not self.shutdown_event.is_set():
             # Check OpenCode process
@@ -1530,6 +1824,37 @@ class SandboxSupervisor:
                     self.log.warn("ttyd_proxy.max_restarts", restart_count=ttyd_proxy_restart_count)
                     self.ttyd_proxy_process = None
 
+            # VNC components form one dependency stack; restart all of them if any exits.
+            crashed_vnc_process = next(
+                (
+                    (name, process)
+                    for name, process in (
+                        ("xvfb", self.xvfb_process),
+                        ("fluxbox", self.fluxbox_process),
+                        ("x11vnc", self.x11vnc_process),
+                        ("novnc", self.novnc_process),
+                    )
+                    if process and process.returncode is not None
+                ),
+                None,
+            )
+            if crashed_vnc_process and (
+                self._vnc_restart_task is None or self._vnc_restart_task.done()
+            ):
+                process_name, process = crashed_vnc_process
+                vnc_restart_count += 1
+                self.log.warn(
+                    "vnc.crash",
+                    component=process_name,
+                    exit_code=process.returncode,
+                    restart_count=vnc_restart_count,
+                )
+                await self._stop_vnc()
+                if vnc_restart_count <= self.MAX_RESTARTS:
+                    self._vnc_restart_task = asyncio.create_task(self._start_vnc_with_retries())
+                else:
+                    self.log.warn("vnc.max_restarts", restart_count=vnc_restart_count)
+
             await asyncio.sleep(1.0)
 
     async def _report_fatal_error(self, message: str) -> None:
@@ -1605,24 +1930,29 @@ class SandboxSupervisor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=self._hook_env(),
+                start_new_session=True,
             )
 
             try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+                stdout, _ = await asyncio.wait_for(
+                    self._communicate_owned_subprocess(process),
+                    timeout=timeout_seconds,
+                )
             except TimeoutError:
-                process.kill()
+                if process.returncode is None:
+                    await self._terminate_owned_subprocess(process)
                 stdout = await process.stdout.read() if process.stdout else b""
-                await process.wait()
                 output_tail = "\n".join(stdout.decode(errors="replace").splitlines()[-50:])
                 duration_ms = int((time.time() - start_time) * 1000)
-                self.log.error(
-                    f"{hook_name}.timeout",
-                    timeout_seconds=timeout_seconds,
-                    output_tail=output_tail,
-                    script=str(script_path),
-                    duration_ms=duration_ms,
-                    boot_mode=self.boot_mode,
-                )
+                timeout_fields: dict[str, object] = {
+                    "timeout_seconds": timeout_seconds,
+                    "script": str(script_path),
+                    "duration_ms": duration_ms,
+                    "boot_mode": self.boot_mode,
+                }
+                if self.boot_mode != "build":
+                    timeout_fields["output_tail"] = output_tail
+                self.log.error(f"{hook_name}.timeout", **timeout_fields)
                 return False
 
             output_tail = "\n".join(
@@ -1641,14 +1971,15 @@ class SandboxSupervisor:
                 )
                 return True
 
-            self.log.error(
-                f"{hook_name}.failed",
-                exit_code=process.returncode,
-                output_tail=output_tail,
-                script=str(script_path),
-                duration_ms=duration_ms,
-                boot_mode=self.boot_mode,
-            )
+            failure_fields: dict[str, object] = {
+                "exit_code": process.returncode,
+                "script": str(script_path),
+                "duration_ms": duration_ms,
+                "boot_mode": self.boot_mode,
+            }
+            if self.boot_mode != "build":
+                failure_fields["output_tail"] = output_tail
+            self.log.error(f"{hook_name}.failed", **failure_fields)
             return False
 
         except Exception as e:
@@ -1790,7 +2121,154 @@ class SandboxSupervisor:
         )
         return False
 
-    async def run(self) -> None:
+    def _image_build_execution_timeout_seconds(self) -> int | None:
+        """Return the positive clone/setup budget configured for build mode."""
+        raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
+        if not raw_timeout:
+            return None
+        try:
+            timeout_seconds = int(raw_timeout)
+        except ValueError as error:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            ) from error
+        if timeout_seconds <= 0:
+            raise RuntimeError(
+                f"{IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR} must be a positive integer"
+            )
+        return timeout_seconds
+
+    async def _run_repository_boot(self, expected_tunnel_ports: list[int]) -> RepositoryBootResult:
+        """Synchronize repositories and run the hooks for the current boot mode."""
+        if self.repo_config_error:
+            raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
+
+        self._write_repo_manifest()
+
+        if self.repositories:
+            await self._ensure_credential_helper_configured()
+
+        failed_repos = await self.sync_repositories()
+        git_sync_success = not failed_repos
+        if failed_repos:
+            if self.boot_mode in ("fresh", "build"):
+                failed_names = ", ".join(f"{repo.owner}/{repo.name}" for repo in failed_repos)
+                raise RuntimeError(f"git sync failed for {failed_names}")
+            for repo in failed_repos:
+                self._record_boot_warning(
+                    scope="sync",
+                    repo=repo,
+                    message=(
+                        f"Could not update {repo.owner}/{repo.name} from origin; "
+                        "the checkout may be stale."
+                    ),
+                )
+        self.repositories = await resolve_session_diff_baselines(
+            self.repositories,
+            discover_missing=self.boot_mode != "snapshot_restore",
+            get_head_sha=self._get_head_sha,
+        )
+        self._write_repo_manifest()
+
+        head_sha = ""
+        repository_shas: list[dict[str, str]] = []
+        if self.boot_mode == "build" and git_sync_success and self.repositories:
+            repository_shas = [
+                {
+                    "repoOwner": repo.owner,
+                    "repoName": repo.name,
+                    "baseSha": repo.base_sha or "",
+                }
+                for repo in self.repositories
+            ]
+            head_sha = repository_shas[0]["baseSha"]
+            if head_sha:
+                self.log.info(
+                    "git.sync_complete",
+                    head_sha=head_sha,
+                    repository_shas=repository_shas,
+                )
+        self.git_sync_complete.set()
+
+        setup_success: bool | None = None
+        if self.repositories and self.boot_mode in ("fresh", "build"):
+            setup_success = True
+            for repo in self.repositories:
+                if await self.run_setup_script(repo):
+                    continue
+                setup_success = False
+                if self.boot_mode == "build":
+                    raise RuntimeError(
+                        f"setup hook failed for {repo.owner}/{repo.name} in build mode"
+                    )
+                self._record_boot_warning(
+                    scope="setup",
+                    repo=repo,
+                    message=(
+                        f"setup.sh failed for {repo.owner}/{repo.name}; "
+                        "the session continues without it."
+                    ),
+                )
+
+        start_success: bool | None = None
+        if self.repositories and self.boot_mode != "build":
+            await self._wait_for_tunnel_env_file(expected_tunnel_ports)
+            start_success = True
+            for index, repo in enumerate(self.repositories):
+                if await self.run_start_script(repo):
+                    continue
+                start_success = False
+                if index == 0:
+                    raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
+                self._record_boot_warning(
+                    scope="start",
+                    repo=repo,
+                    message=(
+                        f"start.sh failed for {repo.owner}/{repo.name}; "
+                        "the session continues without it."
+                    ),
+                )
+
+        self._write_workspace_manifest()
+        return RepositoryBootResult(
+            git_sync_success=git_sync_success,
+            repository_shas=repository_shas,
+            setup_success=setup_success,
+            start_success=start_success,
+        )
+
+    async def _run_image_build_execution(
+        self, expected_tunnel_ports: list[int]
+    ) -> RepositoryBootResult:
+        """Run only clone and setup work inside the configured build budget."""
+        timeout_seconds = self._image_build_execution_timeout_seconds()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await self._run_until_shutdown(
+                    self._run_repository_boot(expected_tunnel_ports)
+                )
+        except TimeoutError as error:
+            raise RuntimeError(
+                f"image build exceeded its {timeout_seconds}-second execution timeout"
+            ) from error
+
+    async def _run_until_shutdown(self, operation: Awaitable[_ResultT]) -> _ResultT:
+        """Cancel one lifecycle operation when a handled shutdown signal wins."""
+        operation_task = asyncio.ensure_future(operation)
+        shutdown_task = asyncio.create_task(self.shutdown_event.wait())
+        tasks = {operation_task, shutdown_task}
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if operation_task in done:
+                return operation_task.result()
+            raise ImageBuildExecutionCancelled
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def run(self, repo_image_callback: RepoImageBuildCallback | None = None) -> bool:
         """Main supervisor loop."""
         startup_start = time.time()
 
@@ -1826,9 +2304,8 @@ class SandboxSupervisor:
         elif from_repo_image:
             repo_image_sha = os.environ.get("REPO_IMAGE_SHA", "unknown")
             self.log.info("supervisor.from_repo_image", build_sha=repo_image_sha)
-        repo_image_callback = (
-            RepoImageBuildCallback.from_env(self.log) if image_build_mode else None
-        )
+        if image_build_mode and repo_image_callback is None:
+            repo_image_callback = RepoImageBuildCallback.from_env(self.log)
 
         # Clear stale tunnel file on every restore: a snapshot taken with
         # tunnels configured retains the previous session's URLs even if this
@@ -1841,141 +2318,13 @@ class SandboxSupervisor:
         # boot's file, so always start clean.
         Path(BOOT_WARNINGS_FILE_PATH).unlink(missing_ok=True)
 
-        # Set up signal handlers
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(self._handle_signal(s)))
-
-        git_sync_success = False
-        head_sha = ""
-        repository_shas: list[dict[str, str]] = []
         opencode_ready = False
         try:
-            # Refuse to boot on an untrusted repository config — unsafe or
-            # duplicate names would let checkout paths escape /workspace or
-            # collide. Raised here (not __init__) so the failure reaches the
-            # control plane through the normal fatal-error path.
-            if self.repo_config_error:
-                raise RuntimeError(f"invalid repository config: {self.repo_config_error}")
-
-            self._write_repo_manifest()
-
-            # Phase 0: Make sure the git credential helper is configured
-            # before any git operation. New images do this in /etc/gitconfig,
-            # but snapshots/repo-images built before this migration won't.
-            if self.repositories:
-                await self._ensure_credential_helper_configured()
-
-            # Phase 1: Git sync — one per-repo rule for every boot mode
-            # (existing checkout → fetch/checkout, missing → clone). Only the
-            # failure policy differs: fresh and build boots cannot do useful
-            # work without every repository, so any failure is fatal
-            # (deliberate change — previously a fresh boot limped on
-            # repo-less); image/snapshot boots keep their leniency (a deleted
-            # upstream branch must not brick a resume).
-            failed_repos = await self.sync_repositories()
-            git_sync_success = not failed_repos
-            if failed_repos:
-                if self.boot_mode in ("fresh", "build"):
-                    failed_names = ", ".join(f"{r.owner}/{r.name}" for r in failed_repos)
-                    raise RuntimeError(f"git sync failed for {failed_names}")
-                for repo in failed_repos:
-                    self._record_boot_warning(
-                        scope="sync",
-                        repo=repo,
-                        message=(
-                            f"Could not update {repo.owner}/{repo.name} from origin; "
-                            "the checkout may be stale."
-                        ),
-                    )
-            self.repositories = await resolve_session_diff_baselines(
-                self.repositories,
-                discover_missing=self.boot_mode != "snapshot_restore",
-                get_head_sha=self._get_head_sha,
-            )
-            self._write_repo_manifest()
-            if image_build_mode and git_sync_success and self.repositories:
-                # repository_shas is the cross-language provenance document
-                # ([{repoOwner, repoName, baseSha}]): parsed from this event by
-                # the Modal build orchestrator, echoed through the
-                # build-complete callback, stored in environment_images, and
-                # compared against `git ls-remote` by the rebuild cron. The
-                # scalar head_sha stays for the single-repo repo-image path.
-                repository_shas = [
-                    {
-                        "repoOwner": repo.owner,
-                        "repoName": repo.name,
-                        "baseSha": repo.base_sha or "",
-                    }
-                    for repo in self.repositories
-                ]
-                head_sha = repository_shas[0]["baseSha"]
-                if head_sha:
-                    self.log.info(
-                        "git.sync_complete", head_sha=head_sha, repository_shas=repository_shas
-                    )
-            self.git_sync_complete.set()
-
-            # Phase 2: Setup hooks, members in position order, only for fresh
-            # or build boots (prebuilt/snapshot boots ran them at build time).
-            # Build boots fail on the first failing member; fresh boots warn
-            # and continue.
-            setup_success: bool | None = None
-            if self.repositories and self.boot_mode in ("fresh", "build"):
-                setup_success = True
-                for repo in self.repositories:
-                    if await self.run_setup_script(repo):
-                        continue
-                    setup_success = False
-                    if image_build_mode:
-                        raise RuntimeError(
-                            f"setup hook failed for {repo.owner}/{repo.name} in build mode"
-                        )
-                    self._record_boot_warning(
-                        scope="setup",
-                        repo=repo,
-                        message=(
-                            f"setup.sh failed for {repo.owner}/{repo.name}; "
-                            "the session continues without it."
-                        ),
-                    )
-
-            # Phase 3: Start hooks for all non-build boots, members in
-            # position order. The primary stays fatal (a broken primary dev
-            # server is a broken session); secondary failures warn and
-            # continue. Wait for tunnel URLs first so dev servers booted by
-            # start.sh see fresh data.
-            start_success: bool | None = None
-            if self.repositories and self.boot_mode != "build":
-                await self._wait_for_tunnel_env_file(expected_tunnel_ports)
-                start_success = True
-                for index, repo in enumerate(self.repositories):
-                    if await self.run_start_script(repo):
-                        continue
-                    start_success = False
-                    if index == 0:
-                        raise RuntimeError(f"start hook failed for {repo.owner}/{repo.name}")
-                    self._record_boot_warning(
-                        scope="start",
-                        repo=repo,
-                        message=(
-                            f"start.sh failed for {repo.owner}/{repo.name}; "
-                            "the session continues without it."
-                        ),
-                    )
-
-            # Multi-repo workspaces get a generated manifest at /workspace/
-            # AGENTS.md (regenerated every boot; no-op for single-repo).
-            self._write_workspace_manifest()
-
-            # Image build mode: signal completion then keep sandbox alive for
-            # snapshot_filesystem(). MCP packages are not pre-installed during
-            # builds — they are installed at first use via npx at session start.
             if image_build_mode:
+                boot_result = await self._run_image_build_execution(expected_tunnel_ports)
+                if self.shutdown_event.is_set():
+                    raise ImageBuildExecutionCancelled
                 duration_ms = int((time.time() - startup_start) * 1000)
-                # runtime_version is reported by the build itself (design
-                # §7.3): the baked image's SANDBOX_VERSION is the ground
-                # truth, so orchestrators never guess it from their own code.
                 runtime_version = os.environ.get("SANDBOX_VERSION", "")
                 self.log.info(
                     "image_build.complete",
@@ -1983,16 +2332,30 @@ class SandboxSupervisor:
                     runtime_version=runtime_version,
                 )
                 if repo_image_callback:
-                    reported = await repo_image_callback.report_success(
-                        base_sha=head_sha,
-                        build_duration_seconds=time.time() - startup_start,
-                        repository_shas=repository_shas,
-                        runtime_version=runtime_version,
+                    reported = await self._run_until_shutdown(
+                        repo_image_callback.report_success(
+                            build_duration_seconds=time.time() - startup_start,
+                            repository_shas=boot_result.repository_shas,
+                            runtime_version=runtime_version,
+                        )
                     )
                     if not reported:
                         raise RuntimeError("repo image build-complete callback failed")
+                # The sandbox remains available for deferred provider
+                # finalization after the bounded build execution completes.
                 await self.shutdown_event.wait()
-                return
+                return True
+
+            # VNC must exist before repository start hooks so GUI applications can
+            # connect to DISPLAY. Like code-server, failure is best-effort and must
+            # not delay the core agent and bridge behind a retry loop.
+            try:
+                await self.start_vnc()
+            except Exception as e:
+                self.log.warn("vnc.start_failed", exc=e)
+                await self._stop_vnc()
+
+            boot_result = await self._run_repository_boot(expected_tunnel_ports)
 
             # Phase 3.5: Start optional sidecars (best-effort, non-fatal)
             for sidecar_name, starter in (
@@ -2003,7 +2366,6 @@ class SandboxSupervisor:
                     await starter()
                 except Exception as e:
                     self.log.warn(f"{sidecar_name}.start_failed", exc=e)
-
             if self.ttyd_process is not None:
                 ttyd_ready = await self._wait_for_port(
                     TTYD_PORT,
@@ -2031,9 +2393,9 @@ class SandboxSupervisor:
                 boot_mode=self.boot_mode,
                 restored_from_snapshot=restored_from_snapshot,
                 from_repo_image=from_repo_image,
-                git_sync_success=git_sync_success,
-                setup_success=setup_success,
-                start_success=start_success,
+                git_sync_success=boot_result.git_sync_success,
+                setup_success=boot_result.setup_success,
+                start_success=boot_result.start_success,
                 opencode_ready=opencode_ready,
                 duration_ms=duration_ms,
                 outcome="success",
@@ -2042,23 +2404,41 @@ class SandboxSupervisor:
             # Phase 6: Monitor processes
             await self.monitor_processes()
 
+        except ImageBuildExecutionCancelled:
+            self.log.info("image_build.cancelled", reason="shutdown_requested")
+            return True
         except Exception as e:
             self.log.error("supervisor.error", exc=e)
+            if image_build_mode and self.shutdown_event.is_set():
+                self.log.info("image_build.cancelled", reason="shutdown_requested")
+                return True
             if image_build_mode and repo_image_callback:
-                await repo_image_callback.report_failure(str(e))
+                try:
+                    await self._run_until_shutdown(repo_image_callback.report_failure(str(e)))
+                except ImageBuildExecutionCancelled:
+                    self.log.info("image_build.cancelled", reason="shutdown_requested")
+                    return True
             await self._report_fatal_error(str(e))
+            return False
 
         finally:
             await self.shutdown()
 
-    async def _handle_signal(self, sig: signal.Signals) -> None:
-        """Handle shutdown signal."""
+        return True
+
+    def request_shutdown(self, sig: signal.Signals) -> None:
+        """Record a process shutdown signal for the current lifecycle phase."""
         self.log.info("supervisor.signal", signal_name=sig.name)
         self.shutdown_event.set()
 
     async def shutdown(self) -> None:
         """Graceful shutdown of all processes."""
         self.log.info("supervisor.shutdown_start")
+
+        if self._vnc_restart_task and not self._vnc_restart_task.done():
+            self._vnc_restart_task.cancel()
+            await asyncio.gather(self._vnc_restart_task, return_exceptions=True)
+        self._vnc_restart_task = None
 
         # Terminate bridge first
         if self.bridge_process and self.bridge_process.returncode is None:
@@ -2098,6 +2478,9 @@ class SandboxSupervisor:
             except TimeoutError:
                 self.ttyd_process.kill()
 
+        # Terminate browser gateway before its desktop dependencies.
+        await self._stop_vnc()
+
         # Terminate OpenCode
         if self.opencode_process and self.opencode_process.returncode is None:
             self.opencode_process.terminate()
@@ -2109,11 +2492,32 @@ class SandboxSupervisor:
         self.log.info("supervisor.shutdown_complete")
 
 
-async def main():
-    """Entry point for the sandbox supervisor."""
-    supervisor = SandboxSupervisor()
-    await supervisor.run()
+def install_signal_handlers(supervisor: SandboxSupervisor) -> None:
+    """Route process signals to the one supervisor-owned shutdown event."""
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, supervisor.request_shutdown, sig)
+
+
+async def main(argv: list[str] | None = None) -> int:
+    """Run an interactive supervisor or a gated provider-session image build."""
+    parser = argparse.ArgumentParser(description="Open-Inspect sandbox supervisor")
+    parser.add_argument(
+        MODAL_IMAGE_BUILD_START_ARGUMENT,
+        dest="await_modal_image_build_token",
+        action="store_true",
+    )
+    args = parser.parse_args(argv)
+
+    shutdown_event = asyncio.Event()
+    supervisor = SandboxSupervisor(shutdown_event=shutdown_event)
+    install_signal_handlers(supervisor)
+
+    if not args.await_modal_image_build_token:
+        await supervisor.run()
+        return 0
+    return await run_modal_image_build(supervisor)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

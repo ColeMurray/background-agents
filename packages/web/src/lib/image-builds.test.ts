@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { ImageBuildRecordView } from "@open-inspect/shared";
+import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import {
   excludeSupersededBuilds,
   foldEnabledRepoScopeIds,
   foldImageBuildStatusByScope,
   imageBuildScopeKey,
+  imageBuildEnabledRepoViewSchema,
+  imageBuildsEnabledReposResponseSchema,
+  imageBuildsEnabledResponseSchema,
+  imageBuildUnitViewSchema,
   parsePrimaryBuildSha,
   repoImageBuildScopeId,
   type ImageBuildUnitView,
@@ -140,6 +144,37 @@ describe("foldEnabledRepoScopeIds", () => {
 
   it("returns an empty set for no flags", () => {
     expect(foldEnabledRepoScopeIds([])).toEqual(new Set());
+  });
+});
+
+describe("image-build feed schemas", () => {
+  it("parses valid unit and enabled-repo payloads", () => {
+    expect(
+      imageBuildUnitViewSchema.safeParse({
+        scopeKind: "environment",
+        scopeId: "env_1",
+        repositoriesFingerprint: "fp-current",
+      }).success
+    ).toBe(true);
+    expect(
+      imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme", repoName: "web" }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed or partial unit and enabled-repo payloads", () => {
+    expect(
+      imageBuildUnitViewSchema.safeParse({
+        scopeKind: "workspace",
+        scopeId: "env_1",
+        repositoriesFingerprint: "fp-current",
+      }).success
+    ).toBe(false);
+    expect(imageBuildEnabledRepoViewSchema.safeParse({ repoOwner: "acme" }).success).toBe(false);
+  });
+
+  it("requires response arrays from the control-plane feed", () => {
+    expect(imageBuildsEnabledResponseSchema.safeParse({}).success).toBe(false);
+    expect(imageBuildsEnabledReposResponseSchema.safeParse({}).success).toBe(false);
   });
 });
 

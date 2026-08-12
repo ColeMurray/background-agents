@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type { ServerMessage } from "@open-inspect/shared";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { useSessionTransport } from "./use-session-transport";
 
 class FakeWebSocket {
@@ -110,18 +110,40 @@ describe("useSessionTransport", () => {
     expect(result.current.isOpen()).toBe(true);
   });
 
-  it("forwards schema-valid messages to onMessage and drops the rest", async () => {
+  it("forwards schema-valid messages to onMessage", async () => {
     const { socket } = await openSocket();
 
     act(() => {
       socket.receive({ type: "pong", timestamp: 5 });
-      socket.receiveRaw(JSON.stringify({ type: "not_a_message" }));
-      socket.receiveRaw("not json");
     });
 
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith({ type: "pong", timestamp: 5 });
   });
+
+  it.each([JSON.stringify({ type: "not_a_message" }), "not json"])(
+    "reconnects after an invalid server message: %s",
+    async (payload) => {
+      vi.useFakeTimers();
+      const rendered = renderTransport();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const socket = FakeWebSocket.instances[0];
+      act(() => {
+        socket.open();
+        socket.receiveRaw(payload);
+      });
+
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      rendered.unmount();
+    }
+  );
 
   it("surfaces an auth error when the token endpoint returns 401 and opens no socket", async () => {
     fetchMock.mockResolvedValue(new Response("unauthorized", { status: 401 }));
@@ -208,8 +230,7 @@ describe("useSessionTransport", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // Never open the sockets: a successful open resets the attempt counter,
-    // so exhaustion only happens on repeated failed connection attempts.
+    // Never mark the sockets healthy, so repeated failures exhaust the budget.
     for (let attempt = 0; attempt < 6; attempt++) {
       const socket = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
       act(() => {
@@ -225,6 +246,44 @@ describe("useSessionTransport", () => {
       "Connection lost. Please check your network and try reconnecting."
     );
 
+    rendered.unmount();
+  });
+
+  it("resets retry backoff only after synchronization is healthy", async () => {
+    vi.useFakeTimers();
+    const rendered = renderTransport();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      FakeWebSocket.instances[0].open();
+      FakeWebSocket.instances[0].serverClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    act(() => {
+      FakeWebSocket.instances[1].open();
+      FakeWebSocket.instances[1].serverClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(3);
+
+    act(() => {
+      FakeWebSocket.instances[2].open();
+      rendered.result.current.markHealthy();
+      FakeWebSocket.instances[2].serverClose(1006);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(4);
     rendered.unmount();
   });
 

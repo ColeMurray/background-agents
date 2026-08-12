@@ -2,6 +2,73 @@
 
 New features, integrations, and notable improvements to Open-Inspect — newest first.
 
+## August 9, 2026
+
+**Browser-based sandbox desktops.** Opt in to a full VNC desktop for sessions, available from the
+session sidebar through authenticated noVNC access. Desktop settings can be configured globally or
+overridden per environment and repository, and work across supported sandbox providers.
+
+**Follow up with child sessions.** Parent agents can queue additional instructions for direct child
+sessions with `send-child-prompt`, including resuming completed or failed children while preserving
+lineage, ownership, concurrency, and cancellation safeguards.
+
+## August 8, 2026
+
+**Context-aware Slack channel automations.** Runs triggered from Slack threads can now include the
+root and recent earlier replies, with bounded, safely attributed context. Text-bearing file-share
+messages can trigger runs too, while history failures fall back without blocking the automation.
+
+**Clearer, more resilient session timelines.** Session pages now server-render from a canonical
+snapshot, keep existing content visible through WebSocket reconnects, and show when OpenCode
+compacts context to continue a long-running session.
+
+## August 7, 2026
+
+**Labels for session-created pull requests.** Configure a label for pull and merge requests, with a
+global default and per-repository overrides. The policy applies to the actual target repository in
+multi-repo sessions, supports GitHub and GitLab, and creates missing GitHub labels when permitted.
+
+## August 5, 2026
+
+**Draft pull request policy.** Configure session-created pull requests to open as drafts by default,
+globally or per repository. The policy applies to the actual target repository in multi-repo
+sessions and works across GitHub and GitLab deployments.
+
+## August 3, 2026
+
+**Unread session outcomes.** Per-user unread indicators now highlight sessions and child sessions
+with new terminal results. Viewing meaningful output in an active tab marks it read automatically,
+with an explicit Mark as read action also available.
+
+## August 1, 2026
+
+**Grok models with your SuperGrok subscription.** Use Grok 4.5 or Grok Build 0.1 through managed xAI
+OAuth, with opt-in model controls and reasoning-effort settings for Grok 4.5. Refresh credentials
+stay encrypted in the control plane while sandboxes receive only short-lived access tokens.
+
+## July 31, 2026
+
+**Automatic prebuild refresh.** Repository and environment images now rebuild automatically when
+tracked branches move or the sandbox runtime changes, with provider-neutral scheduling and durable
+finalization across Modal, Vercel, and OpenComputer.
+
+**Configurable session lifetimes.** Set sandbox timeouts globally or per repository and environment;
+the setting applies to fresh, restored, and resumed sandboxes, and child sessions inherit it.
+
+**More control over child sessions.** Child-session tools now use consistent `spawn-child`,
+`get-child-status`, and `cancel-child` names. Spawned children inherit the parent's model and
+reasoning effort by default, with optional per-child overrides.
+
+**Better Slack session guidance.** Workspace-wide instructions can now apply to every Slack-started
+session. Watched-channel automations can also return `NO_REPLY` when no response is useful, while
+failures and runs with artifacts still post normally.
+
+## July 30, 2026
+
+**Choose GitHub, Google, or both for sign-in.** Deployments can now enable either provider
+independently, and the sign-in page shows only the methods actually configured. Terraform validates
+the setup. The GitHub App remains required for repository access in Google-only deployments.
+
 ## July 26, 2026
 
 **Better Auth browser authentication.** Browser sign-in now uses control-plane-owned Better Auth
@@ -9,6 +76,9 @@ sessions with GitHub and optional Google providers. The web app forwards an exac
 authentication routes through a signed proxy, and browser resource requests require both that signed
 web-service channel and the browser session. Legacy browser tokens are retired during migration, so
 existing users must sign in again after upgrading.
+
+Note: GitHub sign-in requires the GitHub App `Email addresses: Read-only` account permission —
+without it the callback fails with a misleading `state_mismatch` error.
 
 ## July 24, 2026
 
@@ -436,8 +506,8 @@ from a dedicated settings page, and have them injected into the sandbox environm
 **Structured JSON logging.** Wide events and correlation IDs across the control plane, Modal
 infrastructure, and Slack bot.
 
-**D1 migration system.** A proper migration system replaces the single `schema.sql`, with a
-standalone script to migrate the session index and repository metadata from KV to D1.
+**D1 migration system.** A proper migration system replaces the single `schema.sql`, with session
+index and repository metadata storage moved from KV to D1.
 
 _Also:_ `.openinspect/setup.sh` repository setup support, an archived-chats section in settings, and
 bridge-timeout hardening with an inactivity-based SSE timeout.

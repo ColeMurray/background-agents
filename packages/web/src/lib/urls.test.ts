@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAuthenticatedUrl, getSafeExternalUrl } from "./urls";
+import { buildAuthenticatedUrl, buildVncUrl, getSafeExternalUrl } from "./urls";
 
 describe("buildAuthenticatedUrl", () => {
   it("adds the token while preserving existing query parameters", () => {
@@ -50,5 +50,27 @@ describe("getSafeExternalUrl", () => {
     expect(getSafeExternalUrl(null)).toBeNull();
     expect(getSafeExternalUrl("")).toBeNull();
     expect(getSafeExternalUrl("not-a-url")).toBeNull();
+  });
+});
+
+describe("buildVncUrl", () => {
+  it("keeps the password out of the HTTP request by encoding it in the fragment", () => {
+    expect(buildVncUrl("https://desktop.example/prefix?quality=6", "p&a ss#word")).toBe(
+      "https://desktop.example/prefix/vnc.html?quality=6&autoconnect=true&resize=scale#password=p%26a+ss%23word"
+    );
+  });
+
+  it("omits an absent password and rejects unsafe base URLs", () => {
+    expect(buildVncUrl("https://desktop.example", null)).toBe(
+      "https://desktop.example/vnc.html?autoconnect=true&resize=scale"
+    );
+    expect(buildVncUrl("javascript:alert(1)", "secret")).toBeNull();
+    expect(buildVncUrl("http://desktop.example", "secret")).toBeNull();
+  });
+
+  it("strips a password query parameter from the base URL", () => {
+    expect(buildVncUrl("https://desktop.example/?password=leaked", "secret")).toBe(
+      "https://desktop.example/vnc.html?autoconnect=true&resize=scale#password=secret"
+    );
   });
 });

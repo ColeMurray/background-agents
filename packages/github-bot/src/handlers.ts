@@ -1,9 +1,9 @@
+import { escapeRegExp } from "@open-inspect/shared/regex";
 import {
   createSessionResponseSchema,
-  escapeRegExp,
-  resolveAppName,
   sendPromptResponseSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,

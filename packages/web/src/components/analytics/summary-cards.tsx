@@ -1,4 +1,4 @@
-import type { AnalyticsDays, AnalyticsSummaryResponse } from "@open-inspect/shared";
+import type { AnalyticsDays, AnalyticsSummaryResponse } from "@open-inspect/shared/types/analytics";
 import { formatSessionCost } from "@/lib/session-cost";
 import { formatAnalyticsCount } from "@/lib/analytics";
 

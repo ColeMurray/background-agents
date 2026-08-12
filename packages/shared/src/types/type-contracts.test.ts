@@ -1,26 +1,33 @@
 import type { z } from "zod";
 import { expectTypeOf, it } from "vitest";
 import type {
+  AutomationTriggerType,
+  ConditionConfigMap,
+  ConditionType,
+  JsonPathFilter,
+  TextMatchValue,
+  TriggerCondition,
+  TriggerConfig,
+} from "..";
+import type {
   Automation,
-  AutomationRepository,
   AutomationRepositoryInput,
-  CreateAutomationRequest,
   CreateEnvironmentInput,
-  CreateSessionInput,
-  CreateSessionRequest,
-  ListAutomationsResponse,
   RepositoryInput,
-  SandboxEvent,
   ServerMessage,
   UpdateEnvironmentInput,
   createEnvironmentInputSchema,
-  createSessionInputSchema,
-  createSessionRequestSchema,
   repositoryInputSchema,
-  sandboxEventSchema,
   serverMessageSchema,
   updateEnvironmentInputSchema,
 } from ".";
+import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
+import type {
+  CreateSessionInput,
+  CreateSessionRequest,
+  createSessionInputSchema,
+  createSessionRequestSchema,
+} from "./session-api";
 
 it("preserves public Zod input and output relationships", () => {
   expectTypeOf<RepositoryInput>().toEqualTypeOf<z.input<typeof repositoryInputSchema>>();
@@ -60,42 +67,23 @@ it("preserves the repository transform boundary", () => {
   void invalidOutput;
 });
 
-it("preserves representative session and protocol contracts", () => {
-  const wireInput: z.input<typeof createSessionRequestSchema> = {
-    repositories: [{ repoOwner: "acme", repoName: "web" }],
-  };
-  const request: CreateSessionRequest = {
-    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: null }],
-  };
-  const internalInput: CreateSessionInput = {
-    repositories: [{ repoOwner: "acme", repoName: "web", baseBranch: null }],
-    scmLogin: "ada",
-  };
-  const event = {
-    type: "ready",
-    sandboxId: "sandbox-1",
-    opencodeSessionId: null,
-    timestamp: 1,
-  } satisfies SandboxEvent;
-  const message = {
-    type: "error",
-    code: "BAD_REQUEST",
-    message: "invalid",
-  } satisfies ServerMessage;
+it("preserves public trigger type shapes", () => {
+  const condition = {
+    type: "branch",
+    operator: "glob_match",
+    value: ["main"],
+  } satisfies TriggerCondition;
+  const config = { conditions: [condition] } satisfies TriggerConfig;
 
-  void [wireInput, request, internalInput, event, message];
-});
+  expectTypeOf<ConditionType>().toEqualTypeOf<keyof ConditionConfigMap>();
+  expectTypeOf<Extract<TriggerCondition, { type: "jsonpath" }>["value"]>().toEqualTypeOf<
+    JsonPathFilter[]
+  >();
+  expectTypeOf<
+    Extract<TriggerCondition, { type: "text_match" }>["value"]
+  >().toEqualTypeOf<TextMatchValue>();
+  expectTypeOf<Automation["triggerType"]>().toEqualTypeOf<AutomationTriggerType>();
+  expectTypeOf<Automation["triggerConfig"]>().toEqualTypeOf<TriggerConfig | null>();
 
-it("preserves representative automation contracts", () => {
-  const request = {
-    name: "nightly",
-    instructions: "inspect failures",
-    repositories: [{ repoOwner: "acme", repoName: "web" }],
-    environmentIds: ["env_1"],
-  } satisfies CreateAutomationRequest;
-
-  expectTypeOf<Automation["repositories"]>().toEqualTypeOf<AutomationRepository[]>();
-  expectTypeOf<ListAutomationsResponse["automations"]>().toEqualTypeOf<Automation[]>();
-
-  void request;
+  void config;
 });

@@ -2,12 +2,6 @@
 # Infrastructure Outputs
 # =============================================================================
 
-# Cloudflare KV Namespaces
-output "session_index_kv_id" {
-  description = "Session index KV namespace ID"
-  value       = module.session_index_kv.namespace_id
-}
-
 output "slack_kv_id" {
   description = "Slack KV namespace ID"
   value       = var.enable_slack_bot ? module.slack_kv[0].namespace_id : null
@@ -68,7 +62,7 @@ output "github_bot_worker_name" {
 # Web App
 output "web_app_url" {
   description = "Web app URL"
-  value       = var.web_platform == "vercel" ? module.web_app[0].production_url : local.web_app_url
+  value       = local.effective_web_app_url
 }
 
 output "web_app_platform" {
@@ -122,7 +116,7 @@ output "verification_commands" {
     ${local.use_modal_backend ? "curl ${module.modal_app[0].api_health_url}" : local.use_vercel_backend ? "# Vercel sandboxes use the Vercel Sandbox API directly. Base snapshot: ${var.vercel_base_snapshot_id != "" ? var.vercel_base_snapshot_id : module.vercel_sandbox_infra[0].snapshot_name}" : "# Daytona sandboxes use the REST API directly — no health endpoint to check"}
 
     # 3. Verify web app deployment
-    curl ${local.web_app_url}
+    curl ${local.effective_web_app_url}
 
     # 4. Test authenticated endpoint (should return 401)
     curl ${module.control_plane_worker.worker_url}/sessions

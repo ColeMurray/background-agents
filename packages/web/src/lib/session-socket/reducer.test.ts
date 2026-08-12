@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
-import type { ServerMessage, SessionState } from "@open-inspect/shared";
+import type {
+  ServerMessage,
+  SessionSnapshot,
+  SessionState,
+} from "@open-inspect/shared/types/server-messages";
 import {
+  createSessionSocketState,
   initialSessionSocketState,
   sessionSocketReducer,
   type SessionSocketAction,
@@ -29,12 +34,36 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 function createSubscribedMessage(overrides: Partial<SubscribedMessage> = {}): SubscribedMessage {
   return {
     type: "subscribed",
-    sessionId: "session-1",
-    state: createSessionState(),
+    session: createSessionState(),
     artifacts: [],
     participantId: "participant-1",
     participant: { participantId: "participant-1", name: "Test User" },
-    replay: { events: [], hasMore: false, cursor: null },
+    timeline: { events: [], hasMore: false, cursor: null },
+    spawnError: null,
+    ...overrides,
+  };
+}
+
+function createSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapshot {
+  return {
+    session: createSessionState(),
+    artifacts: [],
+    timeline: {
+      events: [
+        {
+          eventId: "event-1",
+          timelineSequence: 1,
+          event: {
+            type: "git_sync",
+            status: "completed",
+            sandboxId: "sb-1",
+            timestamp: 1,
+          },
+        },
+      ],
+      hasMore: true,
+      cursor: { timestamp: 1, id: "event-1", sequence: 1 },
+    },
     spawnError: null,
     ...overrides,
   };
@@ -55,16 +84,83 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 }
 
 describe("sessionSocketReducer", () => {
+  describe("snapshot", () => {
+    it("initializes the rendered state before the socket connects", () => {
+      const state = createSessionSocketState(createSnapshot());
+
+      expect(state.ready).toBe(false);
+      expect(state.presenceSynced).toBe(false);
+      expect(state.events).toHaveLength(1);
+      expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
+    });
+
+    it("collapses snapshot token snapshots to the final text", () => {
+      const state = createSessionSocketState(
+        createSnapshot({
+          timeline: {
+            events: [
+              {
+                eventId: "token-1",
+                timelineSequence: 1,
+                event: {
+                  type: "token",
+                  content: "Partial",
+                  messageId: "msg-1",
+                  sandboxId: "sb-1",
+                  timestamp: 1,
+                },
+              },
+              {
+                eventId: "token-2",
+                timelineSequence: 2,
+                event: {
+                  type: "token",
+                  content: "Final",
+                  messageId: "msg-1",
+                  sandboxId: "sb-1",
+                  timestamp: 2,
+                },
+              },
+              {
+                eventId: "complete-1",
+                timelineSequence: 3,
+                event: {
+                  type: "execution_complete",
+                  messageId: "msg-1",
+                  success: true,
+                  sandboxId: "sb-1",
+                  timestamp: 3,
+                },
+              },
+            ],
+            hasMore: false,
+            cursor: null,
+          },
+        })
+      );
+
+      expect(state.events.map((event) => event.type)).toEqual(["token", "execution_complete"]);
+      expect(state.events[0]).toEqual(expect.objectContaining({ content: "Final" }));
+    });
+  });
+
   describe("subscribed", () => {
-    it("hydrates the projection and ends replay", () => {
+    it("hydrates the authoritative projection", () => {
       const state = subscribedState({
-        replay: {
+        session: createSessionState({
+          vncUrl: "https://desktop.example",
+        }),
+        timeline: {
           events: [
             {
-              type: "git_sync",
-              status: "in_progress",
-              sandboxId: "sb-1",
-              timestamp: 1,
+              eventId: "evt-1",
+              timelineSequence: 1,
+              event: {
+                type: "context_compacted",
+                messageId: "msg-1",
+                sandboxId: "sb-1",
+                timestamp: 1,
+              },
             },
           ],
           hasMore: true,
@@ -72,9 +168,13 @@ describe("sessionSocketReducer", () => {
         },
       });
 
-      expect(state.replaying).toBe(false);
       expect(state.sessionState).toEqual(
-        expect.objectContaining({ id: "session-1", isProcessing: false, totalCost: 0 })
+        expect.objectContaining({
+          id: "session-1",
+          isProcessing: false,
+          totalCost: 0,
+          vncUrl: "https://desktop.example",
+        })
       );
       expect(state.currentParticipantId).toBe("participant-1");
       expect(state.events).toHaveLength(1);
@@ -82,23 +182,31 @@ describe("sessionSocketReducer", () => {
       expect(state.cursor).toEqual({ timestamp: 1, id: "evt-1" });
     });
 
-    it("collapses replayed token events to one final token before its completion", () => {
+    it("collapses timeline token events to one final token before its completion", () => {
       const state = subscribedState({
-        replay: {
+        timeline: {
           events: [
             {
-              type: "execution_complete",
-              messageId: "msg-1",
-              success: true,
-              sandboxId: "sb-1",
-              timestamp: 2,
+              eventId: "event-1",
+              timelineSequence: 1,
+              event: {
+                type: "token",
+                content: "Final",
+                messageId: "msg-1",
+                sandboxId: "sb-1",
+                timestamp: 1,
+              },
             },
             {
-              type: "token",
-              content: "Final",
-              messageId: "msg-1",
-              sandboxId: "sb-1",
-              timestamp: 1,
+              eventId: "event-2",
+              timelineSequence: 2,
+              event: {
+                type: "execution_complete",
+                messageId: "msg-1",
+                success: true,
+                sandboxId: "sb-1",
+                timestamp: 2,
+              },
             },
           ],
           hasMore: false,
@@ -130,7 +238,7 @@ describe("sessionSocketReducer", () => {
 
     it("preserves existing isProcessing and totalCost from the snapshot", () => {
       const state = subscribedState({
-        state: createSessionState({ isProcessing: true, totalCost: 1.25 }),
+        session: createSessionState({ isProcessing: true, totalCost: 1.25 }),
       });
       expect(state.sessionState?.isProcessing).toBe(true);
       expect(state.sessionState?.totalCost).toBe(1.25);
@@ -140,6 +248,12 @@ describe("sessionSocketReducer", () => {
   describe("events_appended", () => {
     it("appends events in order", () => {
       const events: SandboxEvent[] = [
+        {
+          type: "context_compacted",
+          messageId: "msg-1",
+          sandboxId: "sb-1",
+          timestamp: 0,
+        },
         { type: "token", content: "final", messageId: "msg-1", sandboxId: "sb-1", timestamp: 1 },
         {
           type: "execution_complete",
@@ -154,7 +268,7 @@ describe("sessionSocketReducer", () => {
     });
 
     it("accumulates step_finish cost onto the session total", () => {
-      const base = subscribedState({ state: createSessionState({ totalCost: 1 }) });
+      const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
         events: [
@@ -165,7 +279,7 @@ describe("sessionSocketReducer", () => {
     });
 
     it("ignores missing, non-finite, and non-positive costs", () => {
-      const base = subscribedState({ state: createSessionState({ totalCost: 1 }) });
+      const base = subscribedState({ session: createSessionState({ totalCost: 1 }) });
       const state = reduce(base, {
         type: "events_appended",
         events: [
@@ -183,21 +297,51 @@ describe("sessionSocketReducer", () => {
     it("marks loading on request and prepends the fetched page", () => {
       const base = reduce(
         subscribedState({
-          replay: {
-            events: [{ type: "git_sync", status: "completed", sandboxId: "sb-1", timestamp: 10 }],
+          timeline: {
+            events: [
+              {
+                eventId: "evt-10",
+                timelineSequence: 10,
+                event: {
+                  type: "git_sync",
+                  status: "completed",
+                  sandboxId: "sb-1",
+                  timestamp: 10,
+                },
+              },
+            ],
             hasMore: true,
-            cursor: { timestamp: 10, id: "evt-10" },
+            cursor: { timestamp: 10, id: "evt-10", sequence: 10 },
           },
         }),
         { type: "history_requested" }
       );
       expect(base.loadingHistory).toBe(true);
+      expect(base.cursor).toEqual({ timestamp: 10, id: "evt-10", sequence: 10 });
+
+      const withLiveEvent = reduce(base, {
+        type: "events_appended",
+        events: [
+          { type: "token", content: "live", messageId: "msg-1", sandboxId: "sb-1", timestamp: 11 },
+        ],
+      });
 
       const state = reduce(
-        base,
+        withLiveEvent,
         serverMessage({
           type: "history_page",
-          items: [{ type: "git_sync", status: "in_progress", sandboxId: "sb-1", timestamp: 5 }],
+          items: [
+            {
+              eventId: "evt-5",
+              timelineSequence: 5,
+              event: {
+                type: "context_compacted",
+                messageId: "msg-1",
+                sandboxId: "sb-1",
+                timestamp: 5,
+              },
+            },
+          ],
           hasMore: false,
           cursor: null,
         })
@@ -205,7 +349,7 @@ describe("sessionSocketReducer", () => {
       expect(state.loadingHistory).toBe(false);
       expect(state.hasMoreHistory).toBe(false);
       expect(state.cursor).toBeNull();
-      expect(state.events.map((event) => event.timestamp)).toEqual([5, 10]);
+      expect(state.events.map((event) => event.timestamp)).toEqual([5, 10, 11]);
     });
 
     it("clears a stuck loadingHistory when a new subscribed snapshot arrives", () => {
@@ -250,31 +394,75 @@ describe("sessionSocketReducer", () => {
         subscribedState(),
         serverMessage({ type: "presence_sync", participants })
       );
+      expect(synced.presenceSynced).toBe(true);
       expect(synced.participants).toEqual(participants);
 
       const left = reduce(synced, serverMessage({ type: "presence_leave", userId: "user-1" }));
       expect(left.participants.map((p) => p.userId)).toEqual(["user-2"]);
+    });
+
+    it("marks an empty presence sync as synchronized", () => {
+      const state = reduce(
+        subscribedState(),
+        serverMessage({ type: "presence_sync", participants: [] })
+      );
+
+      expect(state.presenceSynced).toBe(true);
+      expect(state.participants).toEqual([]);
+    });
+
+    it("waits for a new presence sync while reconnecting", () => {
+      const synced = reduce(
+        subscribedState(),
+        serverMessage({
+          type: "presence_sync",
+          participants: [
+            {
+              participantId: "participant-1",
+              userId: "user-1",
+              name: "A",
+              status: "active",
+              lastSeen: 1,
+            },
+          ],
+        })
+      );
+      const disconnected = reduce(synced, { type: "socket_closed" });
+      const resubscribed = reduce(disconnected, serverMessage(createSubscribedMessage()));
+      const resynced = reduce(
+        resubscribed,
+        serverMessage({ type: "presence_sync", participants: [] })
+      );
+
+      expect(disconnected.presenceSynced).toBe(false);
+      expect(disconnected.participants).toEqual([]);
+      expect(resubscribed.presenceSynced).toBe(false);
+      expect(resynced.presenceSynced).toBe(true);
+      expect(resynced.participants).toEqual([]);
     });
   });
 
   describe("sandbox lifecycle", () => {
     const withAccessState = () =>
       reduce(
-        subscribedState(),
-        serverMessage({ type: "code_server_info", url: "https://code.example", password: "pw" }),
-        serverMessage({ type: "ttyd_info", url: "https://ttyd.example", token: "tok" }),
+        subscribedState({
+          session: createSessionState({
+            codeServerUrl: "https://code.example",
+            vncUrl: "https://desktop.example",
+            ttydUrl: "https://ttyd.example",
+          }),
+        }),
         serverMessage({ type: "tunnel_urls", urls: { "3000": "https://tunnel.example" } }),
         serverMessage({ type: "sandbox_dashboard_url", url: "https://provider.example" })
       );
 
-    it("stores access info messages on the session state", () => {
+    it("stores non-secret runtime info on the session state", () => {
       const state = withAccessState();
       expect(state.sessionState).toEqual(
         expect.objectContaining({
           codeServerUrl: "https://code.example",
-          codeServerPassword: "pw",
+          vncUrl: "https://desktop.example",
           ttydUrl: "https://ttyd.example",
-          ttydToken: "tok",
           tunnelUrls: { "3000": "https://tunnel.example" },
           sandboxDashboardUrl: "https://provider.example",
         })
@@ -288,6 +476,7 @@ describe("sessionSocketReducer", () => {
       );
       expect(state.sessionState?.sandboxStatus).toBe("spawning");
       expect(state.sessionState?.codeServerUrl).toBeUndefined();
+      expect(state.sessionState?.vncUrl).toBeUndefined();
       expect(state.sessionState?.ttydUrl).toBeUndefined();
       expect(state.sessionState?.tunnelUrls).toBeUndefined();
       expect(state.sessionState?.sandboxDashboardUrl).toBeUndefined();
@@ -298,6 +487,7 @@ describe("sessionSocketReducer", () => {
         const state = reduce(withAccessState(), serverMessage({ type: "sandbox_status", status }));
         expect(state.sessionState?.sandboxStatus).toBe(status);
         expect(state.sessionState?.codeServerUrl).toBeUndefined();
+        expect(state.sessionState?.vncUrl).toBeUndefined();
         expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
       }
     });
@@ -308,6 +498,7 @@ describe("sessionSocketReducer", () => {
         serverMessage({ type: "sandbox_status", status: "ready" })
       );
       expect(state.sessionState?.codeServerUrl).toBe("https://code.example");
+      expect(state.sessionState?.vncUrl).toBe("https://desktop.example");
       expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
     });
 
@@ -318,6 +509,7 @@ describe("sessionSocketReducer", () => {
       );
       expect(state.sessionState?.sandboxStatus).toBe("failed");
       expect(state.sessionState?.codeServerUrl).toBeUndefined();
+      expect(state.sessionState?.vncUrl).toBeUndefined();
       expect(state.sessionState?.sandboxDashboardUrl).toBe("https://provider.example");
     });
 
@@ -412,7 +604,7 @@ describe("sessionSocketReducer", () => {
         },
       ];
       const base = subscribedState({
-        state: createSessionState({ branchName: "open-inspect/session-1", repositories }),
+        session: createSessionState({ branchName: "open-inspect/session-1", repositories }),
       });
 
       const secondary = reduce(
@@ -456,9 +648,9 @@ describe("sessionSocketReducer", () => {
       expect(state.sessionState?.isProcessing).toBe(true);
     });
 
-    it("ends replay when the socket closes", () => {
+    it("keeps the socket unready when it closes", () => {
       const state = reduce(initialSessionSocketState, { type: "socket_closed" });
-      expect(state.replaying).toBe(false);
+      expect(state.ready).toBe(false);
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {

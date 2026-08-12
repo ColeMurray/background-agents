@@ -149,7 +149,7 @@ class TestStartScriptTimeout:
     async def test_timeout_kills_process(self, tmp_path):
         sup = _make_supervisor(tmp_path)
         _create_start_script(sup.repo_path)
-        fake_proc = _fake_process()
+        fake_proc = _fake_process(returncode=None)
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
         fake_proc.stdout = MagicMock()
         fake_proc.stdout.read = AsyncMock(return_value=b"partial output\n")

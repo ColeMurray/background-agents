@@ -13,10 +13,7 @@ import {
   evaluateConnectingTimeout,
   evaluateWarmDecision,
   evaluateExecutionTimeout,
-  DEFAULT_CIRCUIT_BREAKER_CONFIG,
-  DEFAULT_SPAWN_CONFIG,
-  DEFAULT_INACTIVITY_CONFIG,
-  DEFAULT_HEARTBEAT_CONFIG,
+  isSandboxReconnectBlockedStatus,
   DEFAULT_CONNECTING_TIMEOUT_CONFIG,
   DEFAULT_EXECUTION_TIMEOUT_MS,
   type CircuitBreakerState,
@@ -30,6 +27,19 @@ import {
   type WarmState,
   type ExecutionTimeoutConfig,
 } from "./decisions";
+
+describe("isSandboxReconnectBlockedStatus", () => {
+  it.each(["stopped", "stale"] as const)("blocks reconnects for %s sandboxes", (status) => {
+    expect(isSandboxReconnectBlockedStatus(status)).toBe(true);
+  });
+
+  it.each(["pending", "spawning", "connecting", "ready", "running", "failed"] as const)(
+    "allows reconnects for %s sandboxes",
+    (status) => {
+      expect(isSandboxReconnectBlockedStatus(status)).toBe(false);
+    }
+  );
+});
 
 // ==================== Circuit Breaker Tests ====================
 
@@ -119,11 +129,6 @@ describe("evaluateCircuitBreaker", () => {
     // At exact boundary, should reset
     expect(decision.shouldProceed).toBe(true);
     expect(decision.shouldReset).toBe(true);
-  });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG.threshold).toBe(3);
-    expect(DEFAULT_CIRCUIT_BREAKER_CONFIG.windowMs).toBe(5 * 60 * 1000);
   });
 });
 
@@ -322,6 +327,44 @@ describe("evaluateSpawnDecision", () => {
     }
   });
 
+  it("skips restore when a spawn is already in progress in-memory", () => {
+    // A restore sets the in-memory flag synchronously but persists the
+    // "spawning" status only after its first await; a concurrent evaluation in
+    // that window still sees "stopped" and must not start a second restore.
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: "img-abc123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, true);
+
+    expect(decision.action).toBe("skip");
+    if (decision.action === "skip") {
+      expect(decision.reason).toContain("in-memory flag");
+    }
+  });
+
+  it("skips resume when a spawn is already in progress in-memory", () => {
+    const now = Date.now();
+    const state: SandboxState = {
+      status: "stopped",
+      createdAt: now - 120000,
+      snapshotImageId: null,
+      providerObjectId: "sb-123",
+      hasActiveWebSocket: false,
+    };
+
+    const decision = evaluateSpawnDecision(state, config, now, true, true);
+
+    expect(decision.action).toBe("skip");
+    if (decision.action === "skip") {
+      expect(decision.reason).toContain("in-memory flag");
+    }
+  });
+
   it('returns "spawn" when all conditions pass', () => {
     const now = Date.now();
     const state: SandboxState = {
@@ -362,11 +405,6 @@ describe("evaluateSpawnDecision", () => {
     const decision = evaluateSpawnDecision(state, config, now, false);
 
     expect(decision.action).toBe("spawn");
-  });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_SPAWN_CONFIG.cooldownMs).toBe(30000);
-    expect(DEFAULT_SPAWN_CONFIG.readyWaitMs).toBe(60000);
   });
 
   // ---- Persistent resume (Daytona-style) ----
@@ -642,12 +680,6 @@ describe("evaluateInactivityTimeout", () => {
 
     expect(decision.action).toBe("timeout");
   });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_INACTIVITY_CONFIG.timeoutMs).toBe(10 * 60 * 1000);
-    expect(DEFAULT_INACTIVITY_CONFIG.extensionMs).toBe(5 * 60 * 1000);
-    expect(DEFAULT_INACTIVITY_CONFIG.minCheckIntervalMs).toBe(30000);
-  });
 });
 
 // ==================== Heartbeat Health Tests ====================
@@ -715,10 +747,6 @@ describe("evaluateHeartbeatHealth", () => {
 
     expect(health.isStale).toBe(true);
     expect(health.ageMs).toBe(config.timeoutMs + 1);
-  });
-
-  it("uses default config values correctly", () => {
-    expect(DEFAULT_HEARTBEAT_CONFIG.timeoutMs).toBe(90000);
   });
 });
 
@@ -790,10 +818,6 @@ describe("evaluateConnectingTimeout", () => {
       const result = evaluateConnectingTimeout(status, old, config, now);
       expect(result.isTimedOut).toBe(false);
     }
-  });
-
-  it("uses correct default config value", () => {
-    expect(DEFAULT_CONNECTING_TIMEOUT_CONFIG.timeoutMs).toBe(120_000);
   });
 });
 

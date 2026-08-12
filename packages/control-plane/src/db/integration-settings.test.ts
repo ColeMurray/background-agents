@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { MAX_SLACK_ROUTING_KEYWORD_LENGTH, MAX_SLACK_ROUTING_RULES } from "@open-inspect/shared";
+import {
+  MAX_SESSION_INSTRUCTIONS_LENGTH,
+  MAX_SLACK_ROUTING_KEYWORD_LENGTH,
+  MAX_SLACK_ROUTING_RULES,
+} from "@open-inspect/shared/types/integrations";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -703,6 +707,14 @@ describe("IntegrationSettingsStore", () => {
       expect(config.settings.enabled).toBe(true);
     });
 
+    it("applies VNC environment overrides", async () => {
+      await store.setGlobal("vnc", { defaults: { enabled: false } });
+      await store.setEnvironmentSettings("vnc", "env_1", { enabled: true });
+
+      const config = await store.getResolvedConfig("vnc", "acme/widgets", "env_1");
+      expect(config.settings.enabled).toBe(true);
+    });
+
     it("skips the environment layer for integrations that don't support it", async () => {
       await store.setGlobal("github", { defaults: { autoReviewOnOpen: true } });
 
@@ -715,9 +727,16 @@ describe("IntegrationSettingsStore", () => {
     it("declares environment support for exactly the session-scoped integrations", () => {
       expect(supportsEnvironmentSettings("sandbox")).toBe(true);
       expect(supportsEnvironmentSettings("code-server")).toBe(true);
+      expect(supportsEnvironmentSettings("vnc")).toBe(true);
       expect(supportsEnvironmentSettings("github")).toBe(false);
       expect(supportsEnvironmentSettings("linear")).toBe(false);
       expect(supportsEnvironmentSettings("slack")).toBe(false);
+    });
+
+    it("rejects a non-boolean VNC enabled setting", async () => {
+      await expect(
+        store.setRepoSettings("vnc", "acme/widgets", { enabled: "yes" } as never)
+      ).rejects.toThrow("enabled must be a boolean");
     });
   });
 
@@ -749,6 +768,27 @@ describe("IntegrationSettingsStore", () => {
       const config = await store.getResolvedConfig("github", "acme/widgets");
       expect(config.settings.model).toBe("anthropic/claude-opus-4-6");
       expect(config.settings.reasoningEffort).toBe("low");
+    });
+  });
+
+  describe("SCM field-level overrides", () => {
+    it("keeps omitted repository fields inherited when global defaults change", async () => {
+      await store.setGlobal("scm", {
+        defaults: { alwaysUseDraftMode: false, pullRequestLabel: "global" },
+      });
+      await store.setRepoSettings("scm", "acme/widgets", {
+        pullRequestLabel: "repository",
+      });
+
+      await store.setGlobal("scm", {
+        defaults: { alwaysUseDraftMode: true, pullRequestLabel: "new-global" },
+      });
+      const config = await store.getResolvedConfig("scm", "acme/widgets");
+
+      expect(config.settings).toEqual({
+        alwaysUseDraftMode: true,
+        pullRequestLabel: "repository",
+      });
     });
   });
 
@@ -1059,6 +1099,33 @@ describe("IntegrationSettingsStore", () => {
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });
 
+    it("round-trips global session instructions", async () => {
+      await store.setGlobal("slack", {
+        defaults: { sessionInstructions: "Always run tests before pushing changes." },
+      });
+
+      const result = await store.getGlobal("slack");
+      expect(result?.defaults?.sessionInstructions).toBe(
+        "Always run tests before pushing changes."
+      );
+    });
+
+    it("rejects non-string sessionInstructions", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { sessionInstructions: 42 as unknown as string },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects sessionInstructions over the maximum length", async () => {
+      await expect(
+        store.setGlobal("slack", {
+          defaults: { sessionInstructions: "x".repeat(MAX_SESSION_INSTRUCTIONS_LENGTH + 1) },
+        })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
     it("round-trips per-repo slack settings", async () => {
       await store.setRepoSettings("slack", "acme/widgets", {
         agentNotificationsEnabled: false,
@@ -1080,6 +1147,14 @@ describe("IntegrationSettingsStore", () => {
       await expect(
         store.setRepoSettings("slack", "acme/widgets", {
           model: "anthropic/claude-sonnet-4-6",
+        } as unknown as { agentNotificationsEnabled?: boolean })
+      ).rejects.toThrow(IntegrationSettingsValidationError);
+    });
+
+    it("rejects sessionInstructions at per-repo level (global-only field)", async () => {
+      await expect(
+        store.setRepoSettings("slack", "acme/widgets", {
+          sessionInstructions: "Prefer minimal diffs.",
         } as unknown as { agentNotificationsEnabled?: boolean })
       ).rejects.toThrow(IntegrationSettingsValidationError);
     });

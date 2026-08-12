@@ -1,13 +1,20 @@
 import type { Logger } from "../../../logger";
 import {
   createMediaArtifactRequestSchema,
-  sandboxEventSchema,
   type CreateMediaArtifactRequest,
-  type SessionArtifact,
-} from "@open-inspect/shared";
-import type { ParticipantRole, SandboxEvent } from "../../../types";
+} from "@open-inspect/shared/types/session-api";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
+import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
 import { isDeadSandboxStatus } from "../../../sandbox/lifecycle/decisions";
-import type { OpenAITokenRefreshResult } from "../../openai-token-refresh-service";
+import {
+  OpenAITokenNotConfiguredError,
+  OpenAITokenStorageError,
+  OpenAITokenUnauthorizedError,
+  OpenAITokenUpstreamError,
+  type OpenAIToken,
+} from "../../openai-token-refresh-service";
+import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
@@ -35,8 +42,9 @@ export interface SandboxHandlerDeps {
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
   getSession: () => SessionRow | null;
-  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAITokenRefreshResult>;
-  isOpenAISecretsConfigured: () => boolean;
+  refreshOpenAIToken: (session: SessionRow, log: Logger) => Promise<OpenAIToken>;
+  refreshXaiToken: (session: SessionRow, log: Logger) => Promise<XaiTokenRefreshResult>;
+  isManagedSecretsConfigured: () => boolean;
   getScmCredentials: (log: Logger) => Promise<ScmCredentialsResult>;
   messenger: SessionMessenger;
   generateId: () => string;
@@ -49,6 +57,7 @@ export interface SandboxHandler {
   addParticipant: (request: Request) => Promise<Response>;
   verifySandboxToken: (request: Request, log: Logger) => Promise<Response>;
   openaiTokenRefresh: (log: Logger) => Promise<Response>;
+  xaiTokenRefresh: (log: Logger) => Promise<Response>;
   scmCredentials: (log: Logger) => Promise<Response>;
   /** Return the sandbox's resolved tunnel URLs as a `{ [port]: url }` map. */
   tunnelUrls: (log: Logger) => Promise<Response>;
@@ -225,22 +234,54 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "No session" }, { status: 404 });
       }
 
-      if (!deps.isOpenAISecretsConfigured()) {
+      if (!deps.isManagedSecretsConfigured()) {
         return Response.json({ error: "Secrets not configured" }, { status: 500 });
       }
 
-      const result = await deps.refreshOpenAIToken(session, log);
-      if (!result.ok) {
-        return Response.json({ error: result.error }, { status: result.status });
+      let token: OpenAIToken;
+      try {
+        token = await deps.refreshOpenAIToken(session, log);
+      } catch (error) {
+        if (error instanceof OpenAITokenNotConfiguredError) {
+          return Response.json({ error: error.message }, { status: 404 });
+        }
+        if (error instanceof OpenAITokenUnauthorizedError) {
+          return Response.json({ error: error.message }, { status: 401 });
+        }
+        if (error instanceof OpenAITokenStorageError) {
+          return Response.json({ error: error.message }, { status: 500 });
+        }
+        if (error instanceof OpenAITokenUpstreamError) {
+          return Response.json({ error: error.message }, { status: 502 });
+        }
+        throw error;
       }
 
       return Response.json(
         {
-          access_token: result.accessToken,
-          expires_in: result.expiresIn,
-          account_id: result.accountId,
+          access_token: token.accessToken,
+          expires_in: token.expiresIn,
+          account_id: token.accountId,
         },
-        { status: 200 }
+        { status: 200, headers: { "Cache-Control": "no-store" } }
+      );
+    },
+
+    async xaiTokenRefresh(log: Logger): Promise<Response> {
+      const session = deps.getSession();
+      if (!session) {
+        return Response.json({ error: "No session" }, { status: 404 });
+      }
+      if (!deps.isManagedSecretsConfigured()) {
+        return Response.json({ error: "Secrets not configured" }, { status: 500 });
+      }
+      const result = await deps.refreshXaiToken(session, log);
+      if (!result.ok) {
+        return Response.json({ error: result.error }, { status: result.status });
+      }
+      return Response.json(
+        { access_token: result.accessToken, expires_in: result.expiresIn },
+        { status: 200, headers: { "Cache-Control": "no-store" } }
       );
     },
 

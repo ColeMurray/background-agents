@@ -69,6 +69,54 @@ describe("POST /internal/sandbox-event", () => {
     expect(matching.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("updates a tool snapshot without moving its timeline position", async () => {
+    const { stub } = await initSession();
+    const promptResponse = await stub.fetch("http://internal/internal/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "Review code", authorId: "user-1", source: "web" }),
+    });
+    const { messageId } = await promptResponse.json<{ messageId: string }>();
+
+    const sendToolSnapshot = async (status: string, timestamp: number) => {
+      const response = await stub.fetch("http://internal/internal/sandbox-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "tool_call",
+          tool: "task",
+          args: { description: "Review code" },
+          callId: "task-call-1",
+          status,
+          messageId,
+          sandboxId: "sb-1",
+          timestamp,
+        }),
+      });
+      expect(response.status).toBe(200);
+    };
+
+    await sendToolSnapshot("running", 1000);
+    const runningEvents = await queryDO<{ created_at: number }>(
+      stub,
+      `SELECT created_at FROM events
+       WHERE type = 'tool_call' AND message_id = ?`,
+      messageId
+    );
+    await sendToolSnapshot("completed", 2000);
+
+    const events = await queryDO<{ data: string; created_at: number }>(
+      stub,
+      `SELECT data, created_at FROM events
+       WHERE type = 'tool_call' AND message_id = ?`,
+      messageId
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0].created_at).toBe(runningEvents[0].created_at);
+    expect(JSON.parse(events[0].data)).toMatchObject({ status: "completed", timestamp: 2000 });
+  });
+
   it("stores artifact events in both artifacts and events tables", async () => {
     const { stub } = await initSession();
 

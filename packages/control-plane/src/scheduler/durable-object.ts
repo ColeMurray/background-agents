@@ -11,16 +11,20 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   automationEventSchema,
-  nextCronOccurrence,
   matchesConditions,
   conditionRegistry,
-  computeHmacHex,
-  type AutomationCallbackContext,
-  type AutomationInvocationSource,
+  buildSlackContextBlock,
+  slackChannelLabel,
   type SlackAutomationEvent,
-  type SlackCallbackContext,
   type TriggerConfig,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/triggers";
+import { nextCronOccurrence } from "@open-inspect/shared/cron";
+import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
+import type {
+  AutomationCallbackContext,
+  SlackCallbackContext,
+} from "@open-inspect/shared/types/session-api";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";
 import {
@@ -35,6 +39,7 @@ import {
   type AutomationEnvironmentRow,
 } from "../db/automation-store";
 import { SlackChannelStore } from "../db/slack-channel-store";
+import { IntegrationSettingsStore } from "../db/integration-settings";
 import {
   buildSlackCompletionNotification,
   buildSlackSkipNotification,
@@ -51,6 +56,7 @@ import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
 import type { RequestContext } from "../routes/shared";
@@ -101,6 +107,15 @@ const INVOCATION_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000;
 const SLACK_THREAD_CONTINUITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * Bound on the thread-context request. It sits between admission and launch, so
+ * a slow Slack read would hold every child in `starting` until the orphan sweep
+ * repairs them. Matches the callback-delivery attempt timeout; on expiry the run
+ * launches with no thread history, which is the same fallback as any other
+ * failure.
+ */
+const SLACK_THREAD_CONTEXT_TIMEOUT_MS = 10_000;
+
+/**
  * Repository label for user-facing surfaces (Slack), read from the run's
  * firing-time snapshot — the automation row's selection may have been edited
  * since this run started.
@@ -111,8 +126,26 @@ function formatRunRepositoryLabel(
   return run?.repo_owner && run?.repo_name ? `${run.repo_owner}/${run.repo_name}` : "No repository";
 }
 
+async function getSlackSessionInstructions(db: SqlDatabase): Promise<string | undefined> {
+  try {
+    const instructions = (await new IntegrationSettingsStore(db).getGlobal("slack"))?.defaults
+      ?.sessionInstructions;
+    return typeof instructions === "string" && instructions.trim() ? instructions : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function appendSlackSessionInstructions(prompt: string, instructions: string | undefined): string {
+  return instructions ? `${prompt}\n\n## Additional Instructions\n\n${instructions}` : prompt;
+}
+
 const manualTriggerBodySchema = z.object({
   automationId: z.string().min(1),
+});
+
+const slackThreadContextResponseSchema = z.object({
+  threadContext: z.string(),
 });
 
 const runCompleteBodySchema = z.object({
@@ -146,7 +179,16 @@ interface StartInvocationParams {
   repositories?: AutomationRepositoryInsert[];
   /** Pre-fetched environment selection (the tick passes its batched fetch). */
   environments?: AutomationEnvironmentRow[];
+  /** Complete prompt to use directly, or as the fallback for a lazy override. */
   instructionsOverride?: string;
+  /**
+   * Lazy alternative to `instructionsOverride`, resolved only after the
+   * invocation is admitted. Slack runs use it so thread history is fetched for
+   * runs that actually start — never for unmatched events, steers, concurrency
+   * skips or deduplicated firings. If resolution fails, startInvocation uses
+   * `instructionsOverride` so admitted children cannot be stranded.
+   */
+  instructionsOverrideFactory?: () => Promise<string>;
 }
 
 type StartInvocationResult =
@@ -158,6 +200,13 @@ type StartInvocationResult =
   | { outcome: "blocked" }
   /** Idempotency/dedup collision — another firing owns this slot or event. */
   | { outcome: "deduplicated" };
+
+type SchedulerPromptRequest = Pick<
+  EnqueuePromptRequest,
+  "content" | "authorId" | "canonicalUserId" | "source"
+> & {
+  callbackContext: AutomationCallbackContext | SlackCallbackContext;
+};
 
 export class SchedulerDO extends DurableObject<Env> {
   private readonly log: Logger;
@@ -356,15 +405,27 @@ export class SchedulerDO extends DurableObject<Env> {
       return this.recordOverlapSkip(store, params, { advanceSchedule: false });
     }
 
+    // Admitted. Only now is it worth paying for anything the prompt needs.
+    // Contain provider failures here: children already exist in `starting`, so
+    // a rejected lazy override must not escape and strand persisted state.
+    let instructionsOverride = params.instructionsOverride;
+    if (params.instructionsOverrideFactory) {
+      try {
+        instructionsOverride = await params.instructionsOverrideFactory();
+      } catch (error) {
+        this.log.warn("Failed to resolve lazy instructions; using fallback", {
+          event: "scheduler.instructions_override_failed",
+          automation_id: automation.id,
+          invocation_id: invocationId,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
+
     const launchChild = async (child: AutomationRunRow): Promise<void> => {
       try {
         const { sessionId } = await this.createSessionForAutomationRun(automation, child);
-        await this.sendPromptToSession(
-          sessionId,
-          automation,
-          child.id,
-          params.instructionsOverride
-        );
+        await this.sendPromptToSession(sessionId, automation, child.id, instructionsOverride);
         await store.updateRun(child.id, {
           status: "running",
           session_id: sessionId,
@@ -838,6 +899,15 @@ export class SchedulerDO extends DurableObject<Env> {
         break;
     }
 
+    // One thread read per event, shared by every automation admitted for it and
+    // created only on the first admission. Several automations can watch the
+    // same channel; they must not each re-read the thread.
+    let slackContextPromise: Promise<string> | undefined;
+    const slackContextBlock = (): Promise<string> => {
+      slackContextPromise ??= this.buildSlackContextWithThread(event as SlackAutomationEvent);
+      return slackContextPromise;
+    };
+
     let triggered = 0;
     let skipped = 0;
     // Follow-ups routed into an already-active thread's session (slack steering).
@@ -845,6 +915,8 @@ export class SchedulerDO extends DurableObject<Env> {
     // Surface at most one concurrency-skip ephemeral per event, even when
     // several automations watch the same thread and all skip.
     let concurrencySkipped = false;
+    let slackSessionInstructions: string | undefined;
+    let slackSettingsLoaded = false;
 
     for (const automation of candidates) {
       const now = Date.now();
@@ -880,19 +952,37 @@ export class SchedulerDO extends DurableObject<Env> {
         continue;
       }
 
+      if (event.source === "slack" && !slackSettingsLoaded) {
+        slackSessionInstructions = await getSlackSessionInstructions(this.db);
+        slackSettingsLoaded = true;
+      }
+
       // Event firings are invocations of 1 (or 0 children when skipped): same
       // per-key concurrency, same trigger_key dedup — both now enforced on the
       // invocation, atomically. The overlap skip also covers the brief slack
       // window before a run has created its session (no steerable row yet), so
       // a reply racing the initial trigger gets the "already active" notice
       // instead of a second session.
+      const instructionsOverride = appendSlackSessionInstructions(
+        `${event.contextBlock}\n---\n\n${automation.instructions}`,
+        slackSessionInstructions
+      );
       const result = await this.startInvocation(store, {
         automation,
         source: "event",
         triggerKey: event.triggerKey,
         concurrencyKey: event.concurrencyKey,
         triggerMetadata: event.source === "slack" ? serializeSlackTriggerMetadata(event) : null,
-        instructionsOverride: `${event.contextBlock}\n---\n\n${automation.instructions}`,
+        instructionsOverride,
+        ...(event.source === "slack"
+          ? {
+              instructionsOverrideFactory: async () =>
+                appendSlackSessionInstructions(
+                  `${await slackContextBlock()}\n---\n\n${automation.instructions}`,
+                  slackSessionInstructions
+                ),
+            }
+          : {}),
       });
 
       switch (result.outcome) {
@@ -1146,6 +1236,68 @@ export class SchedulerDO extends DurableObject<Env> {
   }
 
   /**
+   * Rebuild a Slack event's context block with the thread the message was posted
+   * in, asking slack-bot to fetch and render it.
+   *
+   * Called only after an invocation has been admitted, so the read is paid for
+   * exactly when a run will consume it. The bot owns the Slack token and
+   * display-name resolution; the scheduler only splices the rendered block into
+   * the same layout the ingress path used.
+   *
+   * Every failure path returns the original context block: thread history is an
+   * enhancement and must never prevent a run from starting.
+   */
+  private async buildSlackContextWithThread(event: SlackAutomationEvent): Promise<string> {
+    if (!event.threadTs) return event.contextBlock;
+
+    const binding = this.env.SLACK_BOT;
+    const secret = callbackSigningSecret(this.env, "slack-bot");
+    if (!binding || !secret) return event.contextBlock;
+
+    try {
+      const body = {
+        channel: event.channelId,
+        threadTs: event.threadTs,
+        ts: event.ts,
+      };
+      const signature = await computeHmacHex(JSON.stringify(body), secret);
+      const response = await binding.fetch("https://internal/internal/thread-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, signature }),
+        signal: AbortSignal.timeout(SLACK_THREAD_CONTEXT_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        this.log.warn("Slack thread context request failed", {
+          event: "scheduler.slack_thread_context_failed",
+          channel: event.channelId,
+          http_status: response.status,
+        });
+        return event.contextBlock;
+      }
+
+      const parsed = slackThreadContextResponseSchema.safeParse(await response.json());
+      const threadContext = parsed.success ? parsed.data.threadContext : "";
+      if (!threadContext) return event.contextBlock;
+
+      return buildSlackContextBlock({
+        channelLabel: slackChannelLabel(event.channelId, event.channelName),
+        actorUserId: event.actorUserId,
+        permalink: event.permalink,
+        text: event.text,
+        threadContext,
+      });
+    } catch (error) {
+      this.log.warn("Slack thread context request threw", {
+        event: "scheduler.slack_thread_context_failed",
+        channel: event.channelId,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return event.contextBlock;
+    }
+  }
+
+  /**
    * Post a best-effort ephemeral "a run is already active for this thread"
    * notice to the message author when a slack event is dropped by the
    * per-thread concurrency guard. No-ops without a binding/secret/actor.
@@ -1250,7 +1402,7 @@ export class SchedulerDO extends DurableObject<Env> {
       (target.repoOwner && target.repoName
         ? [{ repoOwner: target.repoOwner, repoName: target.repoName }]
         : []);
-    const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+    const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
       this.db,
       scopeMembers,
       target.environmentId
@@ -1269,6 +1421,7 @@ export class SchedulerDO extends DurableObject<Env> {
         scmTokenEncrypted: null,
         scmRefreshTokenEncrypted: null,
         codeServerEnabled,
+        vncEnabled,
         sandboxSettings,
         spawnSource: "automation",
         spawnDepth: 0,
@@ -1297,6 +1450,7 @@ export class SchedulerDO extends DurableObject<Env> {
     await this.enqueueSessionPrompt(sessionId, {
       content: instructionsOverride ?? automation.instructions,
       authorId: automation.created_by,
+      canonicalUserId: automation.user_id,
       source: "automation",
       callbackContext,
     });
@@ -1328,12 +1482,17 @@ export class SchedulerDO extends DurableObject<Env> {
       repoFullName: formatRunRepositoryLabel(run),
       model: automation.model,
       reasoningEffort: automation.reasoning_effort ?? undefined,
+      // Marks the turn as automation-owned: a follow-up completes through the
+      // interactive callback, which would otherwise treat it as a user request.
+      automationId: automation.id,
     };
 
     try {
+      const identity = await new UserStore(this.db).getIdentity("slack", event.actorUserId);
       await this.enqueueSessionPrompt(sessionId, {
         content: event.text,
         authorId: `slack:${event.actorUserId}`,
+        canonicalUserId: identity?.userId,
         source: "slack",
         callbackContext,
       });
@@ -1358,12 +1517,7 @@ export class SchedulerDO extends DurableObject<Env> {
   /** Enqueue a prompt onto a session's queue via its DO `/internal/prompt` route. */
   private async enqueueSessionPrompt(
     sessionId: string,
-    body: {
-      content: string;
-      authorId: string;
-      source: string;
-      callbackContext: AutomationCallbackContext | SlackCallbackContext;
-    }
+    body: SchedulerPromptRequest
   ): Promise<void> {
     const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
     const promptResponse = await stub.fetch("http://internal/internal/prompt", {

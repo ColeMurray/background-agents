@@ -1,12 +1,14 @@
+import type { ArtifactInfo } from "@open-inspect/shared/types/artifacts";
+import type {
+  ChildSessionDetail,
+  ChildSessionFinalResponse,
+  ChildSessionTrajectory,
+} from "@open-inspect/shared/types/session-api";
+import type { EventResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   buildAgentResponseFromEvents,
   getArtifactLabelFromArtifact,
-  type ArtifactInfo,
-  type ChildSessionDetail,
-  type ChildSessionFinalResponse,
-  type ChildSessionTrajectory,
-  type EventResponse,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/completion/extractor";
 import {
   encodeEventTimelineCursor,
   parseEventTimelineCursor,
@@ -56,6 +58,7 @@ export interface BuildChildSessionDetailInput {
   publicSessionId: string;
   artifacts: ArtifactRow[];
   recentEventRows: EventRow[];
+  hasUnfinishedPrompt: boolean;
   parseArtifactMetadata: (
     artifact: Pick<ArtifactRow, "id" | "metadata">
   ) => Record<string, unknown> | null;
@@ -168,6 +171,7 @@ export function buildChildSessionDetail(input: BuildChildSessionDetailInput): Ch
       updatedAt: input.session.updated_at,
     },
     sandbox: input.sandbox ? { status: input.sandbox.status } : null,
+    hasUnfinishedPrompt: input.hasUnfinishedPrompt,
     artifacts: artifacts.map(({ row, metadata }) => ({
       type: row.type,
       url: row.url ?? "",

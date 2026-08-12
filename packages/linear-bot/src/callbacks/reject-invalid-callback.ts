@@ -1,5 +1,5 @@
 import type { Context } from "hono";
-import { verifyCallbackFromControlPlane } from "@open-inspect/shared";
+import { verifyCallbackFromControlPlane } from "@open-inspect/shared/auth";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 

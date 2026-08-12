@@ -1,18 +1,10 @@
-import type { TriggerConfig } from "../triggers/conditions";
+import type { AutomationTriggerType, TriggerConfig } from "../triggers/types";
 import {
   MAX_TARGET_REPOSITORIES,
   repositoriesInputSchema,
   repositoryInputSchema,
 } from "./repositories";
 import type { RepositoryInput, RepositoryRef } from "./repositories";
-
-export type AutomationTriggerType =
-  | "schedule"
-  | "github_event"
-  | "linear_event"
-  | "sentry"
-  | "webhook"
-  | "slack_event";
 
 export type AutomationRunStatus = "starting" | "running" | "completed" | "failed" | "skipped";
 

@@ -9,7 +9,7 @@
  * named handler.
  */
 
-import type { AutomationEventSource } from "@open-inspect/shared";
+import type { AutomationEventSource } from "@open-inspect/shared/triggers";
 import { requireEventPoster } from "../auth/identity-enforcement";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";

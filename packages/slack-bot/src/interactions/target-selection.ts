@@ -1,21 +1,24 @@
 import {
   escapeMrkdwnText,
-  getMessageFiles,
+  getMessageDetails,
   postMessage,
   updateMessage,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/slack";
 import { toImageAttachments, type SlackImageAttachment } from "../attachments";
+import { collectForwardedMessages } from "../forwarded-messages";
 import { createLogger } from "../logger";
 import {
   buildWorkingMessageBlocks,
   scheduleStartingStatus,
   type BackgroundTaskScheduler,
 } from "../messages/blocks";
+import { formatAttributedRequest } from "../messages/context";
 import { deletePendingRequest, getPendingRequest } from "../pending-requests/pending-request-store";
 import { startSessionAndSendPrompt } from "../sessions/session-launcher";
 import { resolveTargetValue } from "../target-clarification";
 import { targetLabel } from "../targets";
 import type { Env } from "../types";
+import { resolveSlackActorIdentity } from "../user-identity";
 
 const log = createLogger("target-selection");
 
@@ -48,6 +51,7 @@ export async function handleTargetSelection(
     channelDescription,
     imageOnly,
     sourceMessage,
+    unattributedPrompt,
   } = pendingData;
   const target = await resolveTargetValue(env, selectedValue, traceId);
   if (!target) {
@@ -64,14 +68,17 @@ export async function handleTargetSelection(
   // files from Slack now that the target is known.
   let images: SlackImageAttachment[] = [];
   if (sourceMessage) {
-    const lookup = await getMessageFiles(
+    const lookup = await getMessageDetails(
       env.SLACK_BOT_TOKEN,
       channel,
       sourceMessage.ts,
       sourceMessage.threadTs
     );
     if (lookup.ok) {
-      images = toImageAttachments(lookup.files, traceId);
+      // The pending prompt already preserves any forwarded-message text, but
+      // its images live on the attachment and are re-fetched here like the rest.
+      const forwarded = collectForwardedMessages(lookup.attachments);
+      images = toImageAttachments([...lookup.files, ...forwarded.files], traceId);
     } else {
       log.warn("slack.attachment.file_lookup_failed", {
         trace_id: traceId,
@@ -99,12 +106,17 @@ export async function handleTargetSelection(
     blocks: buildWorkingMessageBlocks(label),
   });
   const ackTs = ackResult.ok ? ackResult.ts : undefined;
+  const actor = await resolveSlackActorIdentity(env.SLACK_BOT_TOKEN, userId);
+  // Records written before deferred attribution already contain deliverable text.
+  const messageText = unattributedPrompt
+    ? formatAttributedRequest(actor.senderLabel, message, unattributedPrompt.forwardedMessages)
+    : message;
   const sessionResult = await startSessionAndSendPrompt(env, {
     target,
     channel,
     threadTs: threadKey,
-    messageText: message,
-    userId,
+    messageText,
+    actor,
     // The original message ts isn't persisted with the pending request, so
     // the "Working on..." ack — or the interaction message when the ack post
     // fails — marks where interim thread context resumes.

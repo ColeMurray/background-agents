@@ -1,9 +1,10 @@
 import {
   findSandboxPortConflict,
+  isValidSandboxTimeoutMs,
   MAX_TUNNEL_PORTS,
   type ConfiguredSandboxPort,
   type SandboxSettings,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
 
 export type InvalidSandboxSettingsBehavior = "throw" | "omit";
 
@@ -17,6 +18,12 @@ export class SandboxSettingsValidationError extends Error {
     super(message);
     this.name = "SandboxSettingsValidationError";
   }
+}
+
+/** Decode and normalize a session's persisted sandbox settings snapshot. */
+export function parsePersistedSandboxSettings(settingsJson: string | null): SandboxSettings {
+  if (settingsJson === null) return {};
+  return normalizeSandboxSettings(JSON.parse(settingsJson), { invalid: "omit" });
 }
 
 /**
@@ -63,6 +70,9 @@ export function normalizeSandboxSettings(
 
   const codeServerPort = normalizePort(settings.codeServerPort, "codeServerPort", reject);
   if (codeServerPort !== undefined) result.codeServerPort = codeServerPort;
+
+  const vncPort = normalizePort(settings.vncPort, "vncPort", reject);
+  if (vncPort !== undefined) result.vncPort = vncPort;
 
   const terminalPort = normalizePort(settings.terminalPort, "terminalPort", reject);
   if (terminalPort !== undefined) result.terminalPort = terminalPort;
@@ -122,6 +132,14 @@ export function normalizeSandboxSettings(
     }
   }
 
+  if (settings.sandboxTimeoutMs !== undefined) {
+    if (!isValidSandboxTimeoutMs(settings.sandboxTimeoutMs)) {
+      reject("sandboxTimeoutMs must be a positive whole number of seconds");
+    } else {
+      result.sandboxTimeoutMs = settings.sandboxTimeoutMs;
+    }
+  }
+
   const buildTimeoutSeconds = normalizePositiveIntegerSetting(
     settings.buildTimeoutSeconds,
     "buildTimeoutSeconds",
@@ -155,10 +173,10 @@ function normalizePort(
 }
 
 /**
- * Reject reserved-port use and any port shared across code-server, terminal, and
- * tunnel ports. Enablement-independent: every configured port must be unique so a
- * port is never silently dropped at sandbox spawn. The conflict rule itself lives
- * in `findSandboxPortConflict` (shared with the web settings UI).
+ * Reject reserved-port use and any port shared across explicitly configured
+ * code-server, VNC, terminal, and tunnel ports. Integration defaults are omitted
+ * here because enablement is resolved separately; providers reserve those ports
+ * only when the corresponding service is enabled.
  *
  * In `invalid: "omit"` mode `reject` returns instead of throwing, so we actively
  * drop the offending port and re-check until the result is collision-free. This
@@ -172,6 +190,9 @@ function checkPortCollisions(result: SandboxSettings, reject: (message: string) 
     if (result.codeServerPort !== undefined) {
       ports.push({ port: result.codeServerPort, label: "codeServerPort" });
     }
+    if (result.vncPort !== undefined) {
+      ports.push({ port: result.vncPort, label: "vncPort" });
+    }
     if (result.terminalPort !== undefined) {
       ports.push({ port: result.terminalPort, label: "terminalPort" });
     }
@@ -184,8 +205,8 @@ function checkPortCollisions(result: SandboxSettings, reject: (message: string) 
 
     reject(
       conflict.kind === "reserved"
-        ? `Port ${conflict.port} is reserved for the internal terminal (used by ${conflict.label})`
-        : `Port ${conflict.port} is used more than once across code-server, terminal, and tunnel ports`
+        ? `Port ${conflict.port} is reserved for an internal service (used by ${conflict.label})`
+        : `Port ${conflict.port} is used more than once across code-server, VNC, terminal, and tunnel ports`
     );
 
     // Reached only in omit mode (throw mode already threw). Drop the offending
@@ -193,6 +214,8 @@ function checkPortCollisions(result: SandboxSettings, reject: (message: string) 
     // terminates. Service ports listed first win; conflicting tunnels are dropped.
     if (conflict.label === "codeServerPort") {
       delete result.codeServerPort;
+    } else if (conflict.label === "vncPort") {
+      delete result.vncPort;
     } else if (conflict.label === "terminalPort") {
       delete result.terminalPort;
     } else {
