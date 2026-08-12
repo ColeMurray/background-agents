@@ -12,13 +12,12 @@
  * images.
  */
 
-import { z } from "zod";
 import { postMessage, type SlackMessageFile } from "@open-inspect/shared/slack";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
-  sessionAttachmentIdSchema,
+  sessionAttachmentUploadResponseSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
 import { readBodyCapped } from "@open-inspect/shared/http-body";
@@ -32,15 +31,6 @@ const log = createLogger("attachments");
 const ATTACHMENT_NAME_MAX_LENGTH = 255;
 
 const SUPPORTED_MIME_TYPES = new Set<string>(SESSION_ATTACHMENT_IMAGE_MIME_TYPES);
-
-/**
- * Upload response from the control plane. The id is parsed with the canonical
- * `sessionAttachmentIdSchema` so an id that would be rejected downstream is
- * treated as an upload rejection here, not carried into a prompt reference.
- */
-const uploadAttachmentResponseSchema = z.object({
-  attachmentId: sessionAttachmentIdSchema,
-});
 
 /** Prompt body used when a message carries images but no user text. */
 export const IMAGE_ONLY_PROMPT_TEXT = "See the attached image(s).";
@@ -298,7 +288,7 @@ async function uploadToSession(
       });
       return { sessionMissing: response.status === 404 };
     }
-    const parsed = uploadAttachmentResponseSchema.safeParse(await response.json());
+    const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
       log.warn("slack.attachment.upload_failed", {
         trace_id: traceId,

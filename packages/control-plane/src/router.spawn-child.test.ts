@@ -32,8 +32,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     model: string;
     reasoningEffort: string | null;
     sandboxTimeoutMs?: number;
-    owner: {
+    promptAuthor: {
       userId: string;
+      canonicalUserId?: string | null;
       scmUserId: string | null;
       scmLogin: string | null;
       scmName: string | null;
@@ -52,8 +53,9 @@ describe("handleSpawnChild prompt enqueue handling", () => {
     reasoningEffort: null,
     sandboxTimeoutMs: 14_400_000,
     baseBranch: "main",
-    owner: {
+    promptAuthor: {
       userId: "user-1",
+      canonicalUserId: "canonical-user-123",
       scmUserId: "12345",
       scmLogin: "acmedev",
       scmName: "Acme Dev",
@@ -297,6 +299,44 @@ describe("handleSpawnChild prompt enqueue handling", () => {
       sandboxSettings: { sandboxTimeoutMs: 14_400_000 },
     });
     expect(store.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it("attributes the child and initial prompt to the active prompt author", async () => {
+    const activeAuthorContext = {
+      ...spawnContext,
+      promptAuthor: {
+        ...spawnContext.promptAuthor,
+        userId: "slack:U2",
+        canonicalUserId: "canonical-user-2",
+        scmLogin: "second-user",
+        scmAccessTokenEncrypted: "second-access",
+      },
+    };
+    const store = makeStore("canonical-user-1", activeAuthorContext as never);
+    vi.mocked(SessionIndexStore).mockImplementation(function () {
+      return store as never;
+    });
+    const { env, childStub } = makeSuccessfulEnv(activeAuthorContext as never);
+
+    const response = await makeRequest(env);
+
+    expect(response.status).toBe(201);
+    expect(store.create.mock.calls[0]?.[0]?.userId).toBe("canonical-user-2");
+    await expect(getInitBody(childStub)).resolves.toMatchObject({
+      userId: "slack:U2",
+      canonicalUserId: "canonical-user-2",
+      scmLogin: "second-user",
+      scmTokenEncrypted: "second-access",
+    });
+    const promptRequest = vi.mocked(childStub.fetch).mock.calls.find((call) => {
+      const request = call[0] as Request;
+      return new URL(request.url).pathname === SessionInternalPaths.prompt;
+    })?.[0] as Request;
+    await expect(promptRequest.json()).resolves.toMatchObject({
+      authorId: "slack:U2",
+      canonicalUserId: "canonical-user-2",
+      source: "agent",
+    });
   });
 
   it("preserves the provider default when the parent has no snapshotted timeout", async () => {

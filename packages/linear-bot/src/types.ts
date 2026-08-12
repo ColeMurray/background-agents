@@ -43,40 +43,68 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export interface StaticRepoConfig {
-  owner: string;
-  name: string;
-  label?: string;
-}
+export const staticRepoConfigSchema = z.object({
+  owner: z.string(),
+  name: z.string(),
+  label: z.string().optional(),
+});
+
+export type StaticRepoConfig = z.infer<typeof staticRepoConfigSchema>;
 
 /**
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export interface StaticEnvironmentConfig {
-  environmentId: string;
-  label?: string;
-}
+export const staticEnvironmentConfigSchema = z.object({
+  environmentId: z.string(),
+  label: z.string().optional(),
+});
+
+export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSchema>;
 
 /**
  * A mapping entry: a repository or a saved environment. Targets unify instead
  * of migrate — repository entries never stop working; environments join them.
+ *
+ * The environment variant is listed first, and the order is load-bearing: a
+ * stored entry carrying both an `environmentId` and repo keys is ambiguous,
+ * and `resolveMappedTarget` launched its environment (`"environmentId" in
+ * config`) long before these entries were validated. Environment-first keeps
+ * that entry pointed at the same target — validating stored config may reject
+ * an entry, but it must never quietly re-point a working one somewhere else.
  */
-export type StaticTargetConfig = StaticRepoConfig | StaticEnvironmentConfig;
+export const staticTargetConfigSchema = z.union([
+  staticEnvironmentConfigSchema,
+  staticRepoConfigSchema,
+]);
+
+export type StaticTargetConfig = z.infer<typeof staticTargetConfigSchema>;
+
+/** The targets stored under one team key, validated as a unit. */
+export const teamTargetsSchema = z.array(staticTargetConfigSchema);
 
 /**
- * Static team→target mapping stored in KV under "config:team-repos".
+ * Static team→target mapping stored in KV under "config:team-repos". Only the
+ * entries are schemas: the record is validated key by key on read, so one
+ * malformed team never invalidates the others.
  */
-export interface TeamRepoMapping {
-  [teamId: string]: StaticTargetConfig[];
-}
+export type TeamRepoMapping = Record<string, StaticTargetConfig[]>;
 
 /**
- * Project→target mapping stored in KV under "config:project-repos".
+ * The target stored under one project key. Environment-first for the same
+ * reason as {@link staticTargetConfigSchema}: an entry holding both shapes
+ * keeps resolving to its environment.
  */
-export interface ProjectRepoMapping {
-  [projectId: string]: { owner: string; name: string } | { environmentId: string };
-}
+export const projectTargetSchema = z.union([
+  z.object({ environmentId: z.string() }),
+  z.object({ owner: z.string(), name: z.string() }),
+]);
+
+/**
+ * Project→target mapping stored in KV under "config:project-repos", validated
+ * key by key like {@link TeamRepoMapping}.
+ */
+export type ProjectRepoMapping = Record<string, z.infer<typeof projectTargetSchema>>;
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 

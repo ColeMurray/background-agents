@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF, env } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
+import type { SessionDO } from "../../src/session/durable-object";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import {
@@ -9,6 +10,7 @@ import {
   seedEvents,
   openClientWs,
   collectMessages,
+  seedMessage,
 } from "./helpers";
 
 describe("Child session operations (list, get, cancel)", () => {
@@ -35,6 +37,20 @@ describe("Child session operations (list, get, cancel)", () => {
     // Seed sandbox auth on parent so sandbox Bearer token works
     const sandboxToken = `sb-tok-ops-${Date.now()}`;
     await seedSandboxAuth(parentStub, { authToken: sandboxToken, sandboxId: "sb-ops-1" });
+    const [parentOwner] = await queryDO<{ id: string }>(
+      parentStub,
+      "SELECT id FROM participants WHERE role = 'owner'"
+    );
+    if (!parentOwner) throw new Error("Expected parent owner participant");
+    await seedMessage(parentStub, {
+      id: `processing-${pName}`,
+      authorId: parentOwner.id,
+      content: "Prompt the child",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
 
     // Create child DO
     const { stub: childStub } = await initNamedSession(childName, {
@@ -478,7 +494,7 @@ describe("Child session operations (list, get, cancel)", () => {
   });
 
   describe("POST /sessions/:parentId/children/:childId/prompt", () => {
-    it("queues a follow-up in the direct child as its owner", async () => {
+    it("queues a follow-up in the direct child as the parent prompt author", async () => {
       const { pName, childName, childStub, sandboxToken } = await setupParentAndChild();
 
       const res = await SELF.fetch(
@@ -515,6 +531,84 @@ describe("Child session operations (list, get, cancel)", () => {
           content: "Now cover the edge cases",
           source: "agent",
           user_id: "user-1",
+        },
+      ]);
+    });
+
+    it("preserves a different parent prompt author in the child", async () => {
+      const { pName, childName, parentStub, childStub, sandboxToken } = await setupParentAndChild();
+      const [processing] = await queryDO<{ id: string }>(
+        parentStub,
+        "SELECT id FROM messages WHERE status = 'processing'"
+      );
+      if (!processing) throw new Error("Expected processing parent prompt");
+      await runInDurableObject(parentStub, (instance: SessionDO) => {
+        instance.ctx.storage.sql.exec(
+          `INSERT INTO participants (
+             id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email,
+             role, joined_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'member', ?)`,
+          "participant-second-user",
+          "slack:U2",
+          "canonical-2",
+          "222",
+          "second-user",
+          "Second User",
+          "second@example.com",
+          Date.now()
+        );
+      });
+      const [secondUser] = await queryDO<{ id: string }>(
+        parentStub,
+        "SELECT id FROM participants WHERE user_id = 'slack:U2'"
+      );
+      if (!secondUser) throw new Error("Expected second participant");
+      await runInDurableObject(parentStub, (instance: SessionDO) => {
+        instance.ctx.storage.sql.exec(
+          "UPDATE messages SET author_id = ? WHERE id = ?",
+          secondUser.id,
+          processing.id
+        );
+      });
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "Continue as the teammate" }),
+        }
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ messageId: string }>();
+      const messages = await queryDO<{
+        user_id: string;
+        canonical_user_id: string | null;
+        scm_user_id: string | null;
+        scm_login: string | null;
+        scm_name: string | null;
+        scm_email: string | null;
+      }>(
+        childStub,
+        `SELECT participants.user_id, participants.canonical_user_id,
+                participants.scm_user_id, participants.scm_login,
+                participants.scm_name, participants.scm_email
+         FROM messages JOIN participants ON participants.id = messages.author_id
+         WHERE messages.id = ?`,
+        body.messageId
+      );
+      expect(messages).toEqual([
+        {
+          user_id: "slack:U2",
+          canonical_user_id: "canonical-2",
+          scm_user_id: "222",
+          scm_login: "second-user",
+          scm_name: "Second User",
+          scm_email: "second@example.com",
         },
       ]);
     });

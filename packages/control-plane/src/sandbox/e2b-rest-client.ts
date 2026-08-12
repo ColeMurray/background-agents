@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from "../logger";
+import { z } from "zod";
 
 const log = createLogger("e2b-rest-client");
 
@@ -23,24 +24,37 @@ const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_SETTTL_MS = 15_000;
 const TIMEOUT_WRITE_FILE_MS = 30_000;
 
-export interface E2BSandboxDetail {
-  sandboxID: string;
-  templateID: string;
-  state: "running" | "paused" | "killed" | string;
-  startedAt?: string;
-  endAt?: string;
-  /** Custom sandbox domain for dedicated clusters; null/absent on the default cloud. */
-  domain?: string | null;
-}
+const e2bSandboxDetailSchema = z.object({
+  sandboxID: z.string(),
+  templateID: z.string(),
+  state: z.string(),
+  startedAt: z.string().optional(),
+  endAt: z.string().optional(),
+  domain: z.string().nullable().optional(),
+});
 
-export interface E2BSandboxCreated {
-  sandboxID: string;
-  templateID: string;
-  /** Custom envd domain for dedicated clusters; null/absent on the default cloud. */
-  domain?: string | null;
-  /** envd access token; returned only when the sandbox is created with secure:true, null otherwise. */
-  envdAccessToken?: string | null;
-}
+export type E2BSandboxDetail = z.infer<typeof e2bSandboxDetailSchema>;
+
+const e2bSandboxCreatedSchema = z.object({
+  sandboxID: z.string(),
+  templateID: z.string(),
+  domain: z.string().nullable().optional(),
+  envdAccessToken: z.string().nullable().optional(),
+});
+
+export type E2BSandboxCreated = z.infer<typeof e2bSandboxCreatedSchema>;
+
+/**
+ * E2B's `Error` schema types `code` as an integer, not a string slug. Typing it
+ * as a string here rejects every real structured error and silently downgrades
+ * the body to raw text.
+ */
+const e2bErrorBodySchema = z.object({
+  code: z.number().int().optional(),
+  message: z.string().optional(),
+});
+
+export type E2BErrorBody = z.infer<typeof e2bErrorBodySchema>;
 
 /** Default port envd listens on inside every sandbox. */
 const ENVD_PORT = 49983;
@@ -86,7 +100,7 @@ export class E2BApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly body?: { code?: string; message?: string } | string
+    public readonly body?: E2BErrorBody | string
   ) {
     super(message);
     this.name = "E2BApiError";
@@ -106,15 +120,23 @@ export class E2BRestClient {
   async createSandbox(params: E2BCreateSandboxParams): Promise<E2BSandboxCreated> {
     const startMs = Date.now();
     try {
-      return await this.request<E2BSandboxCreated>("POST", "/sandboxes", TIMEOUT_CREATE_MS, {
-        templateID: params.templateID,
-        envVars: params.envVars,
-        metadata: params.metadata,
-        timeout: params.timeoutSeconds,
-        secure: params.secure ?? false,
-        autoPause: params.autoPause ?? false,
-        autoResume: { enabled: params.autoResume ?? false },
-      });
+      return await this.requestJson(
+        "POST",
+        "/sandboxes",
+        TIMEOUT_CREATE_MS,
+        e2bSandboxCreatedSchema,
+        {
+          body: {
+            templateID: params.templateID,
+            envVars: params.envVars,
+            metadata: params.metadata,
+            timeout: params.timeoutSeconds,
+            secure: params.secure ?? false,
+            autoPause: params.autoPause ?? false,
+            autoResume: { enabled: params.autoResume ?? false },
+          },
+        }
+      );
     } finally {
       log.info("e2b.create_sandbox", {
         duration_ms: Date.now() - startMs,
@@ -192,26 +214,34 @@ export class E2BRestClient {
   }
 
   async getSandbox(id: string): Promise<E2BSandboxDetail> {
-    return this.request<E2BSandboxDetail>("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS);
+    return this.requestJson("GET", `/sandboxes/${id}`, TIMEOUT_GET_MS, e2bSandboxDetailSchema);
   }
 
   async pauseSandbox(id: string): Promise<void> {
-    await this.request<void>("POST", `/sandboxes/${id}/pause`, TIMEOUT_PAUSE_MS);
+    await this.requestVoid("POST", `/sandboxes/${id}/pause`, TIMEOUT_PAUSE_MS);
   }
 
-  async connectSandbox(id: string, timeoutSeconds: number): Promise<E2BSandboxDetail> {
-    return this.request<E2BSandboxDetail>("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
-      timeout: timeoutSeconds,
+  /**
+   * Resume a paused sandbox (or extend a running one).
+   *
+   * Connect answers with the create-style `Sandbox` shape — `sandboxID`/`templateID`,
+   * no `state`, which only `GET /sandboxes/{id}` returns. Callers re-read state
+   * through getSandbox when they need it, so this is a command: the success body
+   * carries nothing we act on and is discarded.
+   */
+  async connectSandbox(id: string, timeoutSeconds: number): Promise<void> {
+    await this.requestVoid("POST", `/sandboxes/${id}/connect`, TIMEOUT_CONNECT_MS, {
+      body: { timeout: timeoutSeconds },
     });
   }
 
   async killSandbox(id: string): Promise<void> {
-    await this.request<void>("DELETE", `/sandboxes/${id}`, TIMEOUT_KILL_MS);
+    await this.requestVoid("DELETE", `/sandboxes/${id}`, TIMEOUT_KILL_MS);
   }
 
   async setSandboxTimeout(id: string, timeoutSeconds: number): Promise<void> {
-    await this.request<void>("POST", `/sandboxes/${id}/timeout`, TIMEOUT_SETTTL_MS, {
-      timeout: timeoutSeconds,
+    await this.requestVoid("POST", `/sandboxes/${id}/timeout`, TIMEOUT_SETTTL_MS, {
+      body: { timeout: timeoutSeconds },
     });
   }
 
@@ -226,11 +256,55 @@ export class E2BRestClient {
     };
   }
 
-  private async request<T>(
+  /**
+   * Request whose success body is required: it must be JSON and must satisfy
+   * `schema`, otherwise the call fails as an invalid response.
+   */
+  private requestJson<T>(
     method: "GET" | "POST" | "DELETE",
     path: string,
     timeoutMs: number,
-    body?: unknown
+    schema: z.ZodType<T>,
+    options?: { body?: unknown }
+  ): Promise<T> {
+    return this.send(method, path, timeoutMs, options, async (response) => {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("application/json")) {
+        throw new E2BApiError("Invalid E2B API response", response.status, "invalid_response");
+      }
+      const parsed = schema.safeParse(await response.json());
+      if (!parsed.success) {
+        throw new E2BApiError("Invalid E2B API response", response.status, "invalid_response");
+      }
+      return parsed.data;
+    });
+  }
+
+  /**
+   * Command whose success body carries nothing we act on. E2B answers some of
+   * these with 204 and others with JSON; both are discarded, so neither shape
+   * can fail the call.
+   */
+  private requestVoid(
+    method: "GET" | "POST" | "DELETE",
+    path: string,
+    timeoutMs: number,
+    options?: { body?: unknown }
+  ): Promise<void> {
+    return this.send<void>(method, path, timeoutMs, options, () => {});
+  }
+
+  /**
+   * Issue the request under `timeoutMs` and hand a successful response to
+   * `consume`. The timeout stays armed while `consume` reads the body so an
+   * abort raised there is translated like any other (see the catch below).
+   */
+  private async send<T>(
+    method: "GET" | "POST" | "DELETE",
+    path: string,
+    timeoutMs: number,
+    options: { body?: unknown } | undefined,
+    consume: (response: Response) => T | Promise<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
@@ -242,7 +316,7 @@ export class E2BRestClient {
         headers: this.getHeaders(),
         signal: controller.signal,
       };
-      if (body !== undefined) init.body = JSON.stringify(body);
+      if (options?.body !== undefined) init.body = JSON.stringify(options.body);
 
       const response = await fetch(url, init);
 
@@ -254,11 +328,12 @@ export class E2BRestClient {
       }
       if (!response.ok) {
         const text = await response.text();
-        let parsedBody: { code?: string; message?: string } | string | undefined = text;
+        let parsedBody: E2BErrorBody | string = text;
         const contentType = response.headers.get("content-type") ?? "";
         if (contentType.includes("application/json") && text) {
           try {
-            parsedBody = JSON.parse(text) as { code?: string; message?: string };
+            const parsed = e2bErrorBodySchema.safeParse(JSON.parse(text));
+            parsedBody = parsed.success ? parsed.data : text;
           } catch {
             parsedBody = text;
           }
@@ -266,11 +341,7 @@ export class E2BRestClient {
         throw new E2BApiError(text || response.statusText, response.status, parsedBody);
       }
 
-      const contentType = response.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
-        return (await response.json()) as T;
-      }
-      return undefined as T;
+      return await consume(response);
     } catch (error) {
       // A timeout fires controller.abort(); the resulting AbortError — from
       // fetch OR a body read — must surface as a transient timeout so it isn't

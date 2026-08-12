@@ -47,11 +47,12 @@ export function createStartCallbackRouter(
       issue_id: payload.context.issueId,
     };
 
-    const rejection = await rejectInvalidCallback(
-      c,
-      rawPayload as Record<string, unknown> & { signature: string },
-      { path: "/start", traceId, startTime: requestStartedAt, sessionId: payload.sessionId }
-    );
+    const rejection = await rejectInvalidCallback(c, payload, {
+      path: "/start",
+      traceId,
+      startTime: requestStartedAt,
+      sessionId: payload.sessionId,
+    });
     if (rejection) return rejection;
 
     const ageMs = requestStartedAt - payload.timestamp;

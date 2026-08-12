@@ -4,6 +4,7 @@ import {
   fetchIssueDetails,
   fetchUser,
   getRepoSuggestions,
+  linearGraphQL,
   postIssueComment,
 } from "./linear-client";
 import type { LinearApiClient } from "./linear-client";
@@ -23,6 +24,36 @@ function mockFetchResponse(data: unknown): void {
     })
   );
 }
+
+describe("linearGraphQL", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects a GraphQL response that is not an object", async () => {
+    mockFetchResponse([]);
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toThrow(
+      "Linear GraphQL error: unexpected response shape"
+    );
+  });
+
+  it("rejects a null GraphQL response", async () => {
+    mockFetchResponse(null);
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).rejects.toThrow(
+      "Linear GraphQL error: unexpected response shape"
+    );
+  });
+
+  it("returns the envelope for a well-formed GraphQL response", async () => {
+    mockFetchResponse({ data: { viewer: { id: "user-1" } } });
+
+    await expect(linearGraphQL(client, "query { viewer { id } }", {})).resolves.toEqual({
+      data: { viewer: { id: "user-1" } },
+    });
+  });
+});
 
 describe("fetchUser", () => {
   beforeEach(() => {

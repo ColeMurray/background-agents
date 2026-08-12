@@ -127,6 +127,7 @@ import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
+import { parseArtifactMetadataJson } from "./artifact-metadata";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -255,6 +256,7 @@ export class SessionDO extends DurableObject<Env> {
     scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
     tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
+    activePromptAuthor: () => this.childSessionsHandler.getActivePromptAuthor(),
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     parentPrompt: (request) => this.childSessionsHandler.parentPrompt(request),
     cancel: () => this.sessionLifecycleHandler.cancel(),
@@ -2116,7 +2118,14 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     try {
-      return JSON.parse(artifact.metadata) as Record<string, unknown>;
+      const metadata = parseArtifactMetadataJson(artifact.metadata);
+      if (!metadata) {
+        this.log.warn("Invalid artifact metadata shape", {
+          artifact_id: artifact.id,
+        });
+        return null;
+      }
+      return metadata;
     } catch (error) {
       this.log.warn("Invalid artifact metadata JSON", {
         artifact_id: artifact.id,

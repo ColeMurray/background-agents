@@ -31,6 +31,7 @@ export const SessionInternalPaths = {
   scmCredentials: "/internal/scm-credentials",
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",
+  activePromptAuthor: "/internal/active-prompt-author",
   childSummary: "/internal/child-summary",
   parentPrompt: "/internal/parent-prompt",
   updateTitle: "/internal/update-title",

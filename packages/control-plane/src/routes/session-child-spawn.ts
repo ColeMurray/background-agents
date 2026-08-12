@@ -55,7 +55,6 @@ async function handleSpawnChild(
   const sessionStore = new SessionIndexStore(ctx.db);
 
   const parentSession = await sessionStore.get(parentId);
-  const parentUserId = parentSession?.userId ?? null;
   const parentEnvironmentId = parentSession?.environmentId ?? null;
   // Children inherit the parent's settings scope: its primary repo plus, for
   // environment-launched parents, that environment's overrides (design §13.5).
@@ -204,15 +203,15 @@ async function handleSpawnChild(
     title: body.title,
     model,
     reasoningEffort,
-    participantUserId: spawnContext.owner.userId,
-    platformUserId: parentUserId,
-    scmLogin: spawnContext.owner.scmLogin,
-    scmName: spawnContext.owner.scmName,
-    scmEmail: spawnContext.owner.scmEmail,
-    scmUserId: spawnContext.owner.scmUserId,
-    scmTokenEncrypted: spawnContext.owner.scmAccessTokenEncrypted,
-    scmRefreshTokenEncrypted: spawnContext.owner.scmRefreshTokenEncrypted,
-    scmTokenExpiresAt: spawnContext.owner.scmTokenExpiresAt,
+    participantUserId: spawnContext.promptAuthor.userId,
+    platformUserId: spawnContext.promptAuthor.canonicalUserId ?? null,
+    scmLogin: spawnContext.promptAuthor.scmLogin,
+    scmName: spawnContext.promptAuthor.scmName,
+    scmEmail: spawnContext.promptAuthor.scmEmail,
+    scmUserId: spawnContext.promptAuthor.scmUserId,
+    scmTokenEncrypted: spawnContext.promptAuthor.scmAccessTokenEncrypted,
+    scmRefreshTokenEncrypted: spawnContext.promptAuthor.scmRefreshTokenEncrypted,
+    scmTokenExpiresAt: spawnContext.promptAuthor.scmTokenExpiresAt,
     codeServerEnabled: childCodeServerEnabled,
     vncEnabled: childVncEnabled,
     sandboxSettings: childSandboxSettings,
@@ -250,8 +249,8 @@ async function handleSpawnChild(
   try {
     const promptRequest = {
       content: body.prompt,
-      authorId: spawnContext.owner.userId,
-      canonicalUserId: spawnContext.owner.canonicalUserId ?? parentUserId ?? undefined,
+      authorId: spawnContext.promptAuthor.userId,
+      canonicalUserId: spawnContext.promptAuthor.canonicalUserId ?? undefined,
       source: "agent",
     } satisfies EnqueuePromptRequest;
 

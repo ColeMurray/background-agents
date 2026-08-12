@@ -103,37 +103,3 @@ export async function verifyCallbackFromControlPlane<T extends { signature: stri
     env.SERVICE_AUTH_SECRET && (await verifyCallbackSignature(payload, env.SERVICE_AUTH_SECRET))
   );
 }
-
-/**
- * Verify an internal API token from the Authorization header.
- *
- * @param authHeader - The Authorization header value (e.g., "Bearer timestamp.signature")
- * @param secret - The shared secret for HMAC verification
- * @returns true if the token is valid, false otherwise
- */
-export async function verifyInternalToken(
-  authHeader: string | null,
-  secret: string
-): Promise<boolean> {
-  if (!authHeader?.startsWith("Bearer ")) {
-    return false;
-  }
-
-  const token = authHeader.slice(7);
-  const [timestamp, signature] = token.split(".");
-
-  if (!timestamp || !signature) {
-    return false;
-  }
-
-  // Reject tokens outside the validity window
-  const tokenTime = parseInt(timestamp, 10);
-  const now = Date.now();
-  if (isNaN(tokenTime) || Math.abs(now - tokenTime) > TOKEN_VALIDITY_MS) {
-    return false;
-  }
-
-  // Verify HMAC signature
-  const expectedHex = await computeHmacHex(timestamp, secret);
-  return timingSafeEqual(signature, expectedHex);
-}
