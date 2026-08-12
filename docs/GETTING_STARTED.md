@@ -548,9 +548,6 @@ google_client_secret = ""
 enable_slack_bot     = false
 slack_bot_token      = ""
 slack_signing_secret = ""
-# Deployment-wide classifier (Anthropic preserves the default; OpenAI requires
-# the global managed ChatGPT OAuth credential described in OPENAI_MODELS.md).
-slack_classification_model = "anthropic/claude-haiku-4-5"
 
 # GitHub Bot (set enable_github_bot = true to deploy the webhook worker)
 enable_github_bot      = false
@@ -758,20 +755,6 @@ In Slack, for each channel where you want the bot to respond:
 
 The bot only responds to @mentions in channels it has been invited to.
 
-### Optional: OpenAI Slack target classification
-
-Slack target classification runs before a repository or environment is known, so its OpenAI
-credential must be available globally. Roll out the option in this order:
-
-1. Deploy with the default `slack_classification_model = "anthropic/claude-haiku-4-5"` (the existing
-   behavior).
-2. Add `OPENAI_OAUTH_REFRESH_TOKEN` to **Settings → Secrets → All Repositories (Global)**. This uses
-   the managed ChatGPT OAuth transport; repository and environment tokens cannot be used for this
-   pre-target call, and no `OPENAI_API_KEY` is required. See [Using OpenAI Models](OPENAI_MODELS.md)
-   for how to obtain the refresh token.
-3. Set `slack_classification_model = "openai/gpt-5.6-luna"` in `terraform.tfvars` and run
-   `terraform apply`.
-
 ---
 
 ## Step 7c: Complete GitHub Bot Setup (If Using GitHub Bot)
@@ -978,7 +961,6 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `ENABLE_SLACK_BOT`               | `true` to deploy Slack bot, `false` to skip (default: `true`)                               |
 | `SLACK_BOT_TOKEN`                | Slack bot token (required if enabled)                                                       |
 | `SLACK_SIGNING_SECRET`           | Slack signing secret (required if enabled)                                                  |
-| `SLACK_CLASSIFICATION_MODEL`     | Optional classifier: `anthropic/claude-haiku-4-5` (default) or `openai/gpt-5.6-luna`        |
 | `ENABLE_LINEAR_BOT`              | `true` to deploy Linear bot, `false` to skip (default: `false`)                             |
 | `LINEAR_CLIENT_ID`               | Linear OAuth application client ID (required if Linear enabled)                             |
 | `LINEAR_CLIENT_SECRET`           | Linear OAuth application client secret (required if Linear enabled)                         |

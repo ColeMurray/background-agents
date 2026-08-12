@@ -7,144 +7,140 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     },
     "./auth": {
-      "types": "./dist/auth.d.ts",
-      "import": "./dist/auth.js"
+      "import": "./dist/auth.js",
+      "types": "./dist/auth.d.ts"
     },
     "./service-auth": {
-      "types": "./dist/service-auth.d.ts",
-      "import": "./dist/service-auth.js"
+      "import": "./dist/service-auth.js",
+      "types": "./dist/service-auth.d.ts"
     },
     "./models": {
-      "types": "./dist/models.d.ts",
-      "import": "./dist/models.js"
+      "import": "./dist/models.js",
+      "types": "./dist/models.d.ts"
     },
     "./logger": {
-      "types": "./dist/logger.d.ts",
-      "import": "./dist/logger.js"
+      "import": "./dist/logger.js",
+      "types": "./dist/logger.d.ts"
     },
     "./cache-store": {
-      "types": "./dist/cache-store.d.ts",
-      "import": "./dist/cache-store.js"
+      "import": "./dist/cache-store.js",
+      "types": "./dist/cache-store.d.ts"
     },
     "./app-name": {
-      "types": "./dist/app-name.d.ts",
-      "import": "./dist/app-name.js"
+      "import": "./dist/app-name.js",
+      "types": "./dist/app-name.d.ts"
     },
     "./http-body": {
-      "types": "./dist/http-body.d.ts",
-      "import": "./dist/http-body.js"
+      "import": "./dist/http-body.js",
+      "types": "./dist/http-body.d.ts"
     },
     "./regex": {
-      "types": "./dist/regex.d.ts",
-      "import": "./dist/regex.js"
+      "import": "./dist/regex.js",
+      "types": "./dist/regex.d.ts"
     },
     "./user-id": {
-      "types": "./dist/user-id.d.ts",
-      "import": "./dist/user-id.js"
+      "import": "./dist/user-id.js",
+      "types": "./dist/user-id.d.ts"
     },
     "./browser-auth-routes": {
-      "types": "./dist/browser-auth-routes.d.ts",
-      "import": "./dist/browser-auth-routes.js"
+      "import": "./dist/browser-auth-routes.js",
+      "types": "./dist/browser-auth-routes.d.ts"
     },
     "./types/commit-signing": {
-      "types": "./dist/types/commit-signing.d.ts",
-      "import": "./dist/types/commit-signing.js"
+      "import": "./dist/types/commit-signing.js",
+      "types": "./dist/types/commit-signing.d.ts"
     },
     "./types/environments": {
-      "types": "./dist/types/environments.d.ts",
-      "import": "./dist/types/environments.js"
+      "import": "./dist/types/environments.js",
+      "types": "./dist/types/environments.d.ts"
     },
     "./types/github-identity": {
-      "types": "./dist/types/github-identity.d.ts",
-      "import": "./dist/types/github-identity.js"
+      "import": "./dist/types/github-identity.js",
+      "types": "./dist/types/github-identity.d.ts"
     },
     "./types/image-builds": {
-      "types": "./dist/types/image-builds.d.ts",
-      "import": "./dist/types/image-builds.js"
+      "import": "./dist/types/image-builds.js",
+      "types": "./dist/types/image-builds.d.ts"
     },
     "./types/integrations": {
-      "types": "./dist/types/integrations.d.ts",
-      "import": "./dist/types/integrations.js"
-    },
-    "./types/target-classification": {
-      "types": "./dist/types/target-classification.d.ts",
-      "import": "./dist/types/target-classification.js"
+      "import": "./dist/types/integrations.js",
+      "types": "./dist/types/integrations.d.ts"
     },
     "./sign-in-provider": {
-      "types": "./dist/sign-in-provider.d.ts",
-      "import": "./dist/sign-in-provider.js"
+      "import": "./dist/sign-in-provider.js",
+      "types": "./dist/sign-in-provider.d.ts"
     },
     "./git": {
-      "types": "./dist/git.d.ts",
-      "import": "./dist/git.js"
+      "import": "./dist/git.js",
+      "types": "./dist/git.d.ts"
     },
     "./cron": {
-      "types": "./dist/cron.d.ts",
-      "import": "./dist/cron.js"
+      "import": "./dist/cron.js",
+      "types": "./dist/cron.d.ts"
     },
     "./triggers": {
-      "types": "./dist/triggers/index.d.ts",
-      "import": "./dist/triggers/index.js"
+      "import": "./dist/triggers/index.js",
+      "types": "./dist/triggers/index.d.ts"
     },
     "./slack": {
-      "types": "./dist/slack/index.d.ts",
-      "import": "./dist/slack/index.js"
+      "import": "./dist/slack/index.js",
+      "types": "./dist/slack/index.d.ts"
     },
     "./completion/extractor": {
-      "types": "./dist/completion/extractor.d.ts",
-      "import": "./dist/completion/extractor.js"
+      "import": "./dist/completion/extractor.js",
+      "types": "./dist/completion/extractor.d.ts"
     },
     "./types/repositories": {
-      "types": "./dist/types/repositories.d.ts",
-      "import": "./dist/types/repositories.js"
+      "import": "./dist/types/repositories.js",
+      "types": "./dist/types/repositories.d.ts"
     },
     "./types/repository-catalog": {
-      "types": "./dist/types/repository-catalog.d.ts",
-      "import": "./dist/types/repository-catalog.js"
+      "import": "./dist/types/repository-catalog.js",
+      "types": "./dist/types/repository-catalog.d.ts"
     },
     "./types/automations": {
-      "types": "./dist/types/automations.d.ts",
-      "import": "./dist/types/automations.js"
+      "import": "./dist/types/automations.js",
+      "types": "./dist/types/automations.d.ts"
     },
     "./types/websocket": {
-      "types": "./dist/types/websocket.d.ts",
-      "import": "./dist/types/websocket.js"
+      "import": "./dist/types/websocket.js",
+      "types": "./dist/types/websocket.d.ts"
     },
     "./types/server-messages": {
-      "types": "./dist/types/server-messages.d.ts",
-      "import": "./dist/types/server-messages.js"
+      "import": "./dist/types/server-messages.js",
+      "types": "./dist/types/server-messages.d.ts"
     },
     "./types/sandbox-events": {
-      "types": "./dist/types/sandbox-events.d.ts",
-      "import": "./dist/types/sandbox-events.js"
+      "import": "./dist/types/sandbox-events.js",
+      "types": "./dist/types/sandbox-events.d.ts"
     },
     "./types/sessions": {
-      "types": "./dist/types/sessions.d.ts",
-      "import": "./dist/types/sessions.js"
+      "import": "./dist/types/sessions.js",
+      "types": "./dist/types/sessions.d.ts"
     },
     "./types/artifacts": {
-      "types": "./dist/types/artifacts.d.ts",
-      "import": "./dist/types/artifacts.js"
+      "import": "./dist/types/artifacts.js",
+      "types": "./dist/types/artifacts.d.ts"
     },
     "./types/session-api": {
-      "types": "./dist/types/session-api.d.ts",
-      "import": "./dist/types/session-api.js"
+      "import": "./dist/types/session-api.js",
+      "types": "./dist/types/session-api.d.ts"
     },
     "./types/session-attachments": {
-      "types": "./dist/types/session-attachments.d.ts",
-      "import": "./dist/types/session-attachments.js"
+      "import": "./dist/types/session-attachments.js",
+      "types": "./dist/types/session-attachments.d.ts"
     },
     "./types/session-diffs": {
-      "types": "./dist/types/session-diffs.d.ts",
-      "import": "./dist/types/session-diffs.js"
+      "import": "./dist/types/session-diffs.js",
+      "types": "./dist/types/session-diffs.d.ts"
     },
     "./types/analytics": {
-      "types": "./dist/types/analytics.d.ts",
-      "import": "./dist/types/analytics.js"
+      "import": "./dist/types/analytics.js",
+      "types": "./dist/types/analytics.d.ts"
     }
   },
   "scripts": {

@@ -193,9 +193,6 @@ enable_slack_bot = false
 
 slack_bot_token = ""       # e.g., "xoxb-..."
 slack_signing_secret = ""
-# Deployment-wide target-classification model. Anthropic preserves the default;
-# OpenAI uses the managed ChatGPT OAuth credentials documented in docs/OPENAI_MODELS.md.
-slack_classification_model = "anthropic/claude-haiku-4-5"
 
 # Linear Agent (Optional)
 # Create an OAuth Application at: https://linear.app/settings/api/applications/new
