@@ -3,11 +3,13 @@
  * Extracted from index.ts for modularity.
  */
 
-import { createSessionResponseSchema } from "@open-inspect/shared";
+import {
+  createSessionResponseSchema,
+  type LinearCallbackContext,
+} from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 import type {
   Env,
-  LinearCallbackContext,
   LinearIssueDetails,
   AgentSessionWebhook,
   AgentSessionWebhookIssue,

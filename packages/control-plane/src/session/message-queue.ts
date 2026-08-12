@@ -12,7 +12,8 @@ import {
   isValidModel,
 } from "@open-inspect/shared/models";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import type { ClientInfo, MessageSource } from "../types";
+import type { MessageSource } from "@open-inspect/shared/types/sessions";
+import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";

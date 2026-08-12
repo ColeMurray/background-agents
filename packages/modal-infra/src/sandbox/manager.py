@@ -580,7 +580,7 @@ class SandboxManager:
 
         Args:
             snapshot_image_id: Modal Image ID from snapshot_filesystem()
-            session_config: Session configuration (SessionConfig or dict)
+            session_config: Session configuration
             sandbox_id: Optional sandbox ID (generated if not provided)
             control_plane_url: URL for the control plane
             sandbox_auth_token: Auth token for the sandbox
@@ -591,7 +591,6 @@ class SandboxManager:
         """
         start_time = time.time()
 
-        # Handle both SessionConfig and dict
         if isinstance(session_config, dict):
             repo_owner = session_config.get("repo_owner")
             repo_name = session_config.get("repo_name")

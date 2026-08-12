@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from "../types";
+import type { ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 import {
   encodeEventTimelineCursor,
@@ -9,6 +9,7 @@ import type { EventRow } from "./types";
 import type { SessionRepository } from "./repository";
 import {
   sessionTimelineEventSchema,
+  type ServerMessage,
   type SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
 

@@ -171,6 +171,28 @@ describe("context compaction", () => {
       "single",
     ]);
   });
+
+  it("keeps assistant segments on both sides of a marker", () => {
+    const token = (content: string, timestamp: number): SandboxEvent => ({
+      type: "token",
+      content,
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp,
+    });
+
+    const items = buildTimelineItems([
+      token("before compaction", 1),
+      compaction(2),
+      token("after compaction", 3),
+    ]);
+
+    expect(items).toMatchObject([
+      { type: "single", event: { type: "token", content: "before compaction" } },
+      { type: "single", event: { type: "context_compacted" } },
+      { type: "single", event: { type: "token", content: "after compaction" } },
+    ]);
+  });
 });
 
 const baseTimelineProps = {
@@ -510,6 +532,40 @@ function toolEvent(
 }
 
 describe("task activity grouping", () => {
+  it("pulses while a Task is running and stops after its completion update", () => {
+    const runningTask = toolEvent("task", "task-call", 1, {
+      args: { description: "Review code" },
+      status: "running",
+    });
+    const { container, rerender } = render(
+      <SessionTimeline {...baseTimelineProps} events={[runningTask]} />
+    );
+
+    const indicator = screen.getByRole("status");
+    expect(indicator).toHaveClass("sr-only");
+    expect(indicator).toHaveTextContent("Task in progress");
+    expect(indicator.closest("button")).toBeNull();
+    expect(container.querySelector("button [aria-hidden='true'].animate-pulse")).toHaveClass(
+      "bg-accent"
+    );
+
+    rerender(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          runningTask,
+          toolEvent("task", "task-call", 2, {
+            args: { description: "Review code" },
+            status: "completed",
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(container.querySelector("button [aria-hidden='true'].animate-pulse")).toBeNull();
+  });
+
   it("nests child tools beneath their Task and keeps parallel Tasks separate", () => {
     const groups = buildTimelineItems([
       toolEvent("task", "task-a", 1, { childSessionId: "child-a" }),

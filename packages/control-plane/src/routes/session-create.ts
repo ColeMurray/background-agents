@@ -1,5 +1,6 @@
 import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
 import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
+import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
 import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
@@ -12,7 +13,7 @@ import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
-import type { CreateSessionResponse, Env } from "../types";
+import type { Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,

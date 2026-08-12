@@ -2,12 +2,6 @@
 # Infrastructure Outputs
 # =============================================================================
 
-# Cloudflare KV Namespaces
-output "session_index_kv_id" {
-  description = "Session index KV namespace ID"
-  value       = module.session_index_kv.namespace_id
-}
-
 output "slack_kv_id" {
   description = "Slack KV namespace ID"
   value       = var.enable_slack_bot ? module.slack_kv[0].namespace_id : null

@@ -1,8 +1,9 @@
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
 import type {
+  ParticipantPresence,
   ServerMessage,
   SessionSnapshot,
+  SessionState,
   SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
 import { toUiArtifact } from "./artifact-metadata";
@@ -21,6 +22,7 @@ export interface HistoryCursor {
  */
 export interface SessionSocketState {
   ready: boolean;
+  presenceSynced: boolean;
   sessionState: SessionState | null;
   events: SandboxEvent[];
   participants: ParticipantPresence[];
@@ -33,6 +35,7 @@ export interface SessionSocketState {
 
 export const initialSessionSocketState: SessionSocketState = {
   ready: false,
+  presenceSynced: false,
   sessionState: null,
   events: [],
   participants: [],
@@ -195,6 +198,8 @@ function reduceServerMessage(
     }
 
     case "presence_sync":
+      return { ...state, presenceSynced: true, participants: message.participants };
+
     case "presence_update":
       return { ...state, participants: message.participants };
 
@@ -322,6 +327,7 @@ export function sessionSocketReducer(
       return {
         ...state,
         ready: false,
+        presenceSynced: false,
         participants: [],
       };
   }

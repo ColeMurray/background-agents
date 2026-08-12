@@ -8,7 +8,10 @@
  * - Enabled-scope and status queries
  */
 
-import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import type {
+  ImageBuildRecordView,
+  ImageBuildStatusResponse,
+} from "@open-inspect/shared/types/image-builds";
 import { z } from "zod";
 import { ImageBuildStore } from "../db/image-builds";
 import { RepoMetadataStore } from "../db/repo-metadata";
@@ -424,7 +427,8 @@ async function handleGetStatus(
   if (scope instanceof Response) return scope;
 
   try {
-    return json({ images: await readStatusRows(ctx.db, scope) });
+    const body = { images: await readStatusRows(ctx.db, scope) } satisfies ImageBuildStatusResponse;
+    return json(body);
   } catch (e) {
     logger.error("image_build.status_error", {
       error: e instanceof Error ? e.message : String(e),

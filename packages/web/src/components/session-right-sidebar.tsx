@@ -15,7 +15,7 @@ import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { ParticipantPresence, SessionState } from "@open-inspect/shared";
+import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
 import type {
   SessionDiffFile,
   SessionDiffRepository,
@@ -29,6 +29,7 @@ interface SessionRightSidebarProps {
   sessionId: string;
   sessionState: SessionState | null;
   participants: ParticipantPresence[];
+  presenceSynced: boolean;
   events: SandboxEvent[];
   artifacts: Artifact[];
   terminalOpen?: boolean;
@@ -46,6 +47,7 @@ export function SessionRightSidebarContent({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -99,7 +101,7 @@ export function SessionRightSidebarContent({
     <>
       {/* Participants */}
       <div className="px-4 py-4 border-b border-border-muted">
-        <ParticipantsSection participants={participants} />
+        <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
       </div>
 
       {/* Metadata */}
@@ -270,6 +272,7 @@ export function SessionRightSidebar({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -286,6 +289,7 @@ export function SessionRightSidebar({
         sessionId={sessionId}
         sessionState={sessionState}
         participants={participants}
+        presenceSynced={presenceSynced}
         events={events}
         artifacts={artifacts}
         terminalOpen={terminalOpen}

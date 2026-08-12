@@ -3,22 +3,24 @@ import {
   automationRepositoriesInputSchema,
   automationRepositoryInputSchema,
   clientMessageSchema,
-  childFollowUpPromptRequestSchema,
-  createSessionResponseSchema,
-  createSessionRequestSchema,
-  callbackContextSchema,
-  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
-  listArtifactsResponseSchema,
   MAX_AUTOMATION_REPOSITORIES,
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
-  sendPromptRequestSchema,
   serverMessageSchema,
-  sessionParticipantProfilesResponseSchema,
+} from ".";
+import { sessionParticipantProfilesResponseSchema } from "./sessions";
+import { listArtifactsResponseSchema } from "./artifacts";
+import {
+  callbackContextSchema,
+  cancelChildSessionRequestSchema,
+  childFollowUpPromptRequestSchema,
+  createSessionRequestSchema,
+  createSessionResponseSchema,
+  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
+  sendPromptRequestSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-} from ".";
+} from "./session-api";
 import {
   listEventsResponseSchema,
   sandboxEventSchema,

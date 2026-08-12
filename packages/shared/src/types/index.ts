@@ -66,53 +66,6 @@ export type {
   ConfidenceLevel,
 } from "./repository-catalog";
 
-export { listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
-export type {
-  SessionArtifact,
-  ManualPullRequestArtifactMetadata,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-  PullRequest,
-  PullRequestLifecycleState,
-  PullRequestStatus,
-  PullRequestDisplayStatus,
-  PullRequestArtifactMetadata,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  MediaArtifactInfo,
-  AgentResponse,
-  ArtifactType,
-} from "./artifacts";
-export { sessionArtifactSchema } from "./artifacts";
-
-export type {
-  SessionParticipant,
-  Session,
-  SessionMessage,
-  PullRequestSummary,
-  SessionReadState,
-  SessionReadAction,
-  SessionReadResult,
-  SessionParticipantProfile,
-  SessionParticipantProfilesResponse,
-  SessionStatus,
-  SandboxStatus,
-  MessageStatus,
-  MessageSource,
-  ParticipantRole,
-  SpawnSource,
-} from "./sessions";
-export {
-  messageSourceSchema,
-  sessionStatusSchema,
-  sessionReadActionSchema,
-  sessionReadResultSchema,
-  sessionParticipantProfileSchema,
-  sessionParticipantProfilesResponseSchema,
-} from "./sessions";
-
 export {
   serverMessageSchema,
   sessionSnapshotSchema,
@@ -171,45 +124,6 @@ export type {
   SessionDiffState,
   SessionDiffFailure,
 } from "./session-diffs";
-
-export {
-  automationCallbackContextSchema,
-  callbackContextSchema,
-  linearCallbackContextSchema,
-  linearStartCallbackSchema,
-  MAX_CHILD_FOLLOW_UP_PROMPT_CHARS,
-  childFollowUpPromptRequestSchema,
-  sendPromptRequestSchema,
-  slackCallbackContextSchema,
-  createSessionRequestSchema,
-  createSessionInputSchema,
-  createMediaArtifactRequestSchema,
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-  spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-} from "./session-api";
-export type {
-  UserPreferences,
-  SlackCallbackContext,
-  LinearCallbackContext,
-  LinearStartCallback,
-  AutomationCallbackContext,
-  CallbackContext,
-  ChildFollowUpPromptRequest,
-  SendPromptRequest,
-  CreateSessionRequest,
-  CreateSessionInput,
-  CreateMediaArtifactRequest,
-  CreateSessionResponse,
-  SendPromptResponse,
-  ListSessionsResponse,
-  SpawnChildSessionRequest,
-  CancelChildSessionRequest,
-  ChildSessionFinalResponse,
-  ChildSessionTrajectory,
-  ChildSessionDetail,
-} from "./session-api";
 
 export {
   MAX_ENVIRONMENT_NAME_LENGTH,

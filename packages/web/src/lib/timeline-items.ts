@@ -86,6 +86,7 @@ function dedupeEvents(events: SandboxEvent[]): SandboxEvent[] {
       tokenIndexes.set(event.messageId, result.length);
       result.push(event);
     } else {
+      if (event.type === "context_compacted") tokenIndexes.delete(event.messageId);
       result.push(event);
     }
   }

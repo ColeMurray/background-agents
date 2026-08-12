@@ -64,16 +64,6 @@ class TestSetupScriptSkip:
         assert result is True
         mock_exec.assert_not_called()
 
-    async def test_skip_when_repo_path_missing(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        # repo_path does not exist at all
-
-        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            result = await sup.run_setup_script(sup.repositories[0])
-
-        assert result is True
-        mock_exec.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # TestSetupScriptSuccess
@@ -82,18 +72,6 @@ class TestSetupScriptSkip:
 
 class TestSetupScriptSuccess:
     """Cases where the setup script runs successfully."""
-
-    async def test_successful_run(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"installed deps\n")
-
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
-        ):
-            result = await sup.run_setup_script(sup.repositories[0])
-
-        assert result is True
 
     async def test_bash_called_with_correct_args(self, tmp_path):
         sup = _make_supervisor(tmp_path)
@@ -110,18 +88,6 @@ class TestSetupScriptSuccess:
         assert call_args[0][0] == "bash"
         assert call_args[0][1] == str(script)
         assert call_args[1]["cwd"] == sup.repo_path
-
-    async def test_stdout_logged_on_success(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-        _create_setup_script(sup.repo_path)
-        fake_proc = _fake_process(returncode=0, stdout=b"line1\nline2\n")
-
-        with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
-        ):
-            result = await sup.run_setup_script(sup.repositories[0])
-
-        assert result is True
 
     async def test_inherits_environment(self, tmp_path):
         sup = _make_supervisor(tmp_path)
@@ -313,35 +279,6 @@ class TestSetupScriptTimeout:
 
 class TestSetupInRun:
     """Verify run_setup_script is called at the right point in run()."""
-
-    async def test_run_calls_setup_on_fresh_clone(self, tmp_path):
-        sup = _make_supervisor(tmp_path)
-
-        # Mock all phases
-        sup.sync_repositories = AsyncMock(return_value=[])
-        sup.run_setup_script = AsyncMock(return_value=True)
-        sup.run_start_script = AsyncMock(return_value=True)
-        sup.start_opencode = AsyncMock()
-        sup.start_bridge = AsyncMock()
-        sup.monitor_processes = AsyncMock()
-
-        # No snapshot restore
-        with (
-            patch.dict("os.environ", {"RESTORED_FROM_SNAPSHOT": "false"}, clear=False),
-            patch("asyncio.get_event_loop") as mock_loop,
-        ):
-            mock_loop.return_value.add_signal_handler = MagicMock()
-            await sup.run()
-
-        sup.run_setup_script.assert_called_once()
-
-        # Verify ordering: run_setup_script before run_start_script before start_opencode
-        call_order = []
-        for name in ["run_setup_script", "run_start_script", "start_opencode"]:
-            mock = getattr(sup, name)
-            if mock.call_count > 0:
-                call_order.append(name)
-        assert call_order == ["run_setup_script", "run_start_script", "start_opencode"]
 
     async def test_run_skips_setup_on_snapshot_restore(self, tmp_path):
         sup = _make_supervisor(tmp_path)

@@ -12,9 +12,11 @@ import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
 import {
   sessionSnapshotSchema,
+  type ServerMessage,
   type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import { resolveAppName } from "@open-inspect/shared/app-name";
@@ -53,13 +55,8 @@ import {
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import type {
-  Env,
-  ClientInfo,
-  ServerMessage,
-  SessionRepositoryState,
-  SandboxStatus,
-} from "../types";
+import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
+import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -1086,6 +1083,9 @@ export class SessionDO extends DurableObject<Env> {
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
       if (isSandbox) {
+        // The lifecycle manager publishes access after any pending provider
+        // startup has persisted its URLs and credentials.
+        const accessIsPersisted = !this.lifecycleManager.isProviderStartupPending();
         const { replaced } = this.wsManager.acceptAndSetSandboxSocket(
           server,
           sandboxId ?? undefined
@@ -1095,6 +1095,9 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
         this.broadcast({ type: "sandbox_status", status: "ready" });
+        if (accessIsPersisted) {
+          this.broadcast({ type: "sandbox_access_changed" });
+        }
 
         // Set initial activity timestamp and schedule inactivity check
         // IMPORTANT: Must await to ensure alarm is scheduled before returning

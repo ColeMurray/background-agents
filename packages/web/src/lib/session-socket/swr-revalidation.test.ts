@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { swrKeysToRevalidate } from "./swr-revalidation";
 
 const SESSION_ID = "session-1";

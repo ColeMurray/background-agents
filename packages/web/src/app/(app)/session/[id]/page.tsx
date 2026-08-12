@@ -70,6 +70,7 @@ export default function SessionPage() {
     connected,
     connecting,
     ready,
+    presenceSynced,
     authError,
     connectionError,
     sessionState,
@@ -258,9 +259,13 @@ export default function SessionPage() {
   }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
-    <div className="flex h-full flex-1 flex-col overflow-hidden">
-      <PanelGroup orientation="vertical" id="session-terminal">
-        <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-clip">
+      <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
+        <Panel
+          defaultSize={showTerminal ? "70%" : "100%"}
+          minSize="30%"
+          style={{ minHeight: 0, overflow: "clip" }}
+        >
           <SessionTimeline
             events={events}
             sessionId={sessionId}
@@ -293,7 +298,7 @@ export default function SessionPage() {
   );
 
   return (
-    <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-clip">
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
@@ -330,7 +335,7 @@ export default function SessionPage() {
       )}
 
       {/* Main content */}
-      <main className="min-w-0 flex-1 flex overflow-hidden">
+      <main className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!isBelowLg ? (
           <SessionDesktopLayout
             workspace={sessionWorkspace}
@@ -339,6 +344,7 @@ export default function SessionPage() {
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}
+                presenceSynced={presenceSynced}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -371,6 +377,7 @@ export default function SessionPage() {
               sessionId={sessionId}
               sessionState={sessionState}
               participants={profiledParticipants}
+              presenceSynced={presenceSynced}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -394,6 +401,7 @@ export default function SessionPage() {
           sessionId={sessionId}
           sessionState={sessionState}
           participants={profiledParticipants}
+          presenceSynced={presenceSynced}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}

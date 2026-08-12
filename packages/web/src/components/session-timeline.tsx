@@ -22,7 +22,7 @@ import {
   type ToolCallEvent,
 } from "@/lib/timeline-items";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { SessionParticipantProfile } from "@open-inspect/shared";
+import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
 import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
@@ -85,7 +85,6 @@ export function SessionTimeline({
   }, [timelineItems, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isPrependingRef = useRef(false);
   const didPrependRef = useRef(false);
@@ -133,15 +132,16 @@ export function SessionTimeline({
     }
   }, [events]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (didPrependRef.current) {
       didPrependRef.current = false;
       return;
     }
     if (isNearBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+      const container = scrollContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events]);
+  }, [events, isProcessing]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);
@@ -248,7 +248,7 @@ export function SessionTimeline({
         )}
         {isProcessing && <ThinkingIndicator />}
 
-        <div ref={messagesEndRef} />
+        <div />
       </div>
     </div>
   );

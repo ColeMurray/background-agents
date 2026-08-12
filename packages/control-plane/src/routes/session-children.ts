@@ -1,9 +1,9 @@
 import {
   cancelChildSessionRequestSchema,
   childFollowUpPromptRequestSchema,
-  DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   type CancelChildSessionRequest,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
+import { DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore, type ChildAdmissionLease } from "../db/session-index";
 import { createLogger } from "../logger";
 import { SessionInternalPaths } from "../session/contracts";

@@ -10,14 +10,9 @@
  * never stop working; environments join them.
  */
 
-import type {
-  Env,
-  Environment,
-  AgentSessionWebhookIssue,
-  IssueSession,
-  RepoConfig,
-  StaticTargetConfig,
-} from "./types";
+import type { Env, AgentSessionWebhookIssue, IssueSession, StaticTargetConfig } from "./types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { LinearApiClient } from "./utils/linear-client";
 import { emitAgentActivity, getRepoSuggestions } from "./utils/linear-client";
 import { splitRepoFullName } from "./utils/repo";

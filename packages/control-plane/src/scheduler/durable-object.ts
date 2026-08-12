@@ -20,7 +20,10 @@ import {
 } from "@open-inspect/shared/triggers";
 import { nextCronOccurrence } from "@open-inspect/shared/cron";
 import type { AutomationInvocationSource } from "@open-inspect/shared/types/automations";
-import type { AutomationCallbackContext, SlackCallbackContext } from "@open-inspect/shared";
+import type {
+  AutomationCallbackContext,
+  SlackCallbackContext,
+} from "@open-inspect/shared/types/session-api";
 import { computeHmacHex } from "@open-inspect/shared/auth";
 import { z } from "zod";
 import { callbackSigningSecret } from "../auth/service/callback-signing";

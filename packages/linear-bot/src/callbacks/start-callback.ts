@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { linearStartCallbackSchema } from "@open-inspect/shared";
+import { linearStartCallbackSchema } from "@open-inspect/shared/types/session-api";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { rejectInvalidCallback } from "./reject-invalid-callback";
