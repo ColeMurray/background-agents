@@ -419,7 +419,7 @@ describe("SessionMessageQueue", () => {
     );
   });
 
-  it("stores attachments in the hidden enqueue-time user_message", async () => {
+  it("stores attachments on the pending message without creating a timeline event", async () => {
     const h = buildQueue();
     h.attachmentRepository.getUnreferenced.mockReturnValue([
       {
@@ -449,15 +449,8 @@ describe("SessionMessageQueue", () => {
           { name: "shot.png", attachmentId: "up-1", mimeType: "image/png" },
         ]),
       }),
-      ["up-1"],
-      expect.objectContaining({ type: "user_message", messageId: expect.any(String) })
+      ["up-1"]
     );
-    const storedEvent = JSON.parse(
-      h.repository.createMessageWithAttachments.mock.calls[0][2].data as string
-    );
-    expect(storedEvent.attachments).toEqual([
-      { name: "shot.png", mimeType: "image/png", attachmentId: "up-1" },
-    ]);
   });
 
   it("does not broadcast a queued follow-up before it starts processing", async () => {
@@ -643,7 +636,7 @@ describe("SessionMessageQueue", () => {
     });
   });
 
-  it("requeues a prompt when sandbox send definitively fails", async () => {
+  it("leaves the prompt pending and timeline untouched when sandbox send fails", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-unsent" }));
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
@@ -651,7 +644,13 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.processMessageQueue();
 
-    expect(h.repository.updateMessageToPending).toHaveBeenCalledWith("msg-unsent");
+    expect(h.repository.startMessageProcessing).not.toHaveBeenCalled();
+    expect(h.repository.updateMessageToPending).not.toHaveBeenCalled();
+    expect(
+      h.broadcast.mock.calls.filter(
+        ([message]) => message.type === "sandbox_event" && message.event.type === "user_message"
+      )
+    ).toHaveLength(0);
     expect(h.callbackService.notifyStarted).not.toHaveBeenCalled();
     expect(h.sandboxLifecycle.terminateUnresponsiveSandbox).toHaveBeenCalledWith(
       "prompt_dispatch_send_failed"

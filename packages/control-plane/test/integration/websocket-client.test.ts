@@ -496,7 +496,7 @@ describe("Client WebSocket (via SELF.fetch)", () => {
       `SELECT (SELECT COUNT(*) FROM messages) AS messages,
               (SELECT COUNT(*) FROM events WHERE type = 'user_message') AS events`
     );
-    expect(counts[0]).toEqual({ messages: 1, events: 1 });
+    expect(counts[0]).toEqual({ messages: 1, events: 0 });
 
     ws.close();
     const reconnect = await openClientWs(name, { subscribe: true });

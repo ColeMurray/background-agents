@@ -318,16 +318,6 @@ export class SessionMessageQueue {
         this.log.error("prompt.invalid_stored_attachments")
       )
     );
-    this.repository.startMessageProcessing(message.id, now, userMessageEvent);
-    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
-    this.messenger.broadcast({ type: "processing_status", isProcessing: true });
-    this.broadcastPromptQueue();
-    this.sandboxLifecycle.updateLastActivity(now);
-
-    // Execution timeout shares the DO's single alarm slot with lifecycle checks.
-    const deadline = now + this.executionTimeoutMs;
-    await this.alarmScheduler.scheduleAlarm(deadline);
-
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
@@ -356,13 +346,18 @@ export class SessionMessageQueue {
     const sent = this.wsManager.send(sandboxWs, command);
 
     if (!sent) {
-      this.repository.updateMessageToPending(message.id);
-      this.messenger.broadcast({ type: "processing_status", isProcessing: false });
-      this.broadcastPromptQueue();
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
-    }
+    } else {
+      this.repository.startMessageProcessing(message.id, now, userMessageEvent);
+      this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+      this.messenger.broadcast({ type: "processing_status", isProcessing: true });
+      this.broadcastPromptQueue();
+      this.sandboxLifecycle.updateLastActivity(now);
 
-    if (sent) {
+      // Execution timeout shares the DO's single alarm slot with lifecycle checks.
+      const deadline = now + this.executionTimeoutMs;
+      await this.alarmScheduler.scheduleAlarm(deadline);
+
       this.ctx.waitUntil(
         this.callbackService.notifyStarted(message.id).catch((error) => {
           this.log.error("callback.started.background_error", {
@@ -640,13 +635,6 @@ export class SessionMessageQueue {
       data.reasoningEffort,
       this.log
     );
-    const userMessageEvent = this.createUserMessageEvent(
-      data.participant,
-      data.content,
-      messageId,
-      now,
-      attachments
-    );
     try {
       this.repository.createMessageWithAttachments(
         {
@@ -663,14 +651,7 @@ export class SessionMessageQueue {
           status: "pending",
           createdAt: now,
         },
-        resolvedAttachments?.attachmentIds ?? [],
-        {
-          id: generateId(),
-          type: "user_message",
-          data: JSON.stringify(userMessageEvent),
-          messageId,
-          createdAt: now,
-        }
+        resolvedAttachments?.attachmentIds ?? []
       );
     } catch (error) {
       if (error instanceof AttachmentClaimConflictError) {

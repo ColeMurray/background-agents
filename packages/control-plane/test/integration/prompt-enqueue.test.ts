@@ -98,7 +98,7 @@ describe("POST /internal/prompt", () => {
     expect(member!.role).toBe("member");
   });
 
-  it("writes a hidden enqueue-time user_message for deployment compatibility", async () => {
+  it("does not write a timeline event while a prompt is pending", async () => {
     const { stub } = await initSession();
 
     const res = await stub.fetch("http://internal/internal/prompt", {
@@ -119,12 +119,7 @@ describe("POST /internal/prompt", () => {
       messageId
     );
 
-    expect(events).toHaveLength(1);
-    expect(JSON.parse(events[0].data)).toMatchObject({
-      content: "Refactor auth",
-      messageId,
-      author: { userId: "canonical-bot" },
-    });
+    expect(events).toEqual([]);
   });
 
   it("orders a queued user_message after the preceding prompt completes", async () => {
@@ -159,7 +154,7 @@ describe("POST /internal/prompt", () => {
         "SELECT id FROM events WHERE type = 'user_message' AND message_id = ?",
         secondId
       )
-    ).toHaveLength(1);
+    ).toEqual([]);
 
     const secondPrompt = collectMessages(sandboxWs!, {
       until: (message) => message.type === "prompt" && message.messageId === secondId,
