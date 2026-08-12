@@ -46,7 +46,7 @@ export function ChildSessionsSection({ sessionId }: ChildSessionsSectionProps) {
   if (!children?.length) return null;
 
   return (
-    <CollapsibleSection title="Sub-tasks" defaultOpen={false}>
+    <CollapsibleSection key={sessionId} title="Sub-tasks" defaultOpen={false}>
       <div className="space-y-2">
         {children.map((child) => {
           const prDisplay = pullRequestSummaryDisplay(child.pullRequestSummary);

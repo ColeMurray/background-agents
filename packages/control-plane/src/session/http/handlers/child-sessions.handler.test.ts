@@ -972,6 +972,22 @@ describe("createChildSessionsHandler", () => {
     expect(broadcast).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when child session update body is malformed JSON", async () => {
+    const { handler, broadcast } = createHandler();
+
+    const response = await handler.childSessionUpdate(
+      new Request("http://internal/internal/child-session/update", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"childSessionId":',
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "childSessionId and status are required" });
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when child session update status is invalid", async () => {
     const { handler, broadcast } = createHandler();
 

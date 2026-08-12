@@ -47,7 +47,8 @@ export function createStartCallbackRouter(
       issue_id: payload.context.issueId,
     };
 
-    const rejection = await rejectInvalidCallback(c, payload, {
+    // Verify the original object because the signature covers its JSON key order.
+    const rejection = await rejectInvalidCallback(c, rawPayload, {
       path: "/start",
       traceId,
       startTime: requestStartedAt,

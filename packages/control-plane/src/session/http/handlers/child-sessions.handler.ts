@@ -246,7 +246,13 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {
-      const result = childSessionUpdateBodySchema.safeParse(await request.json());
+      let rawBody: unknown;
+      try {
+        rawBody = await request.json();
+      } catch {
+        return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
+      }
+      const result = childSessionUpdateBodySchema.safeParse(rawBody);
 
       if (!result.success) {
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });

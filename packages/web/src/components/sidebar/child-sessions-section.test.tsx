@@ -54,10 +54,13 @@ describe("ChildSessionsSection", () => {
     );
 
     const toggle = await screen.findByRole("button", { name: "Sub-tasks" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls");
     expect(screen.queryByRole("link", { name: /Child session/ })).not.toBeInTheDocument();
 
     await user.click(toggle);
 
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("link", { name: /Child session/ })).toBeInTheDocument();
   });
 
