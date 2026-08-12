@@ -41,7 +41,6 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => ({ userId: "user-1" }),
-        resolveOrCreateUser: async () => ({ id: "user-1" }),
         getIdentitiesForUser: async () => [],
       } as never;
     });
@@ -277,7 +276,6 @@ describe("handleCreateSession D1 ordering", () => {
     vi.mocked(UserStore).mockImplementation(function () {
       return {
         getIdentity: async () => ({ userId: "user-1" }),
-        resolveOrCreateUser: async () => ({ id: "user-1" }),
         getIdentitiesForUser: async () => [
           {
             provider: "github",
@@ -335,13 +333,9 @@ describe("handleCreateSession D1 ordering", () => {
     const response = await createSessionRequestWithBody(createEnv(initFetch), {
       title: "First-contact session",
       model: "anthropic/claude-haiku-4-5",
-      verifiedActorEvidence: {
-        provider: "slack",
-        providerUserId: "U0123",
-        displayName: "Ada Lovelace",
-        verifiedEmail: "ada@example.com",
-        avatarUrl: "https://avatars.example.com/ada.png",
-      },
+      actorDisplayName: "Ada Lovelace",
+      actorEmail: "ada@example.com",
+      actorAvatarUrl: "https://avatars.example.com/ada.png",
     });
 
     expect(response.status).toBe(201);
@@ -356,7 +350,7 @@ describe("handleCreateSession D1 ordering", () => {
     expect(initFetch).toHaveBeenCalledOnce();
   });
 
-  it("creates the session without canonical attribution when actor reconciliation is unavailable", async () => {
+  it("fails closed without creating the session when actor resolution is unavailable", async () => {
     const create = vi.fn().mockResolvedValue(undefined);
     vi.mocked(SessionIndexStore).mockImplementation(function () {
       return { create } as never;
@@ -376,9 +370,12 @@ describe("handleCreateSession D1 ordering", () => {
       model: "anthropic/claude-haiku-4-5",
     });
 
-    expect(response.status).toBe(201);
-    expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: null }));
-    expect(initFetch).toHaveBeenCalledOnce();
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Failed to resolve session identity",
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(initFetch).not.toHaveBeenCalled();
   });
 
   it("preserves non-GitHub SCM display identity without GitHub enrichment", async () => {

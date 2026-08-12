@@ -43,8 +43,8 @@ const SPAWNING_FORBIDDEN_FIELDS = [
  * Raw-body keys a caller may not send: identity comes from the principal,
  * SCM credentials from server-side enrichment. Checked against raw JSON
  * before Zod because every schema is strip-mode. Display-only fields
- * Display-only SCM fields stay body-carried by design. Provider-attested actor
- * evidence is promoted into the principal and stripped during service auth.
+ * (authEmail/Name/AvatarUrl, actorDisplayName, scmLogin…) stay body-carried
+ * by design.
  */
 const FORBIDDEN_IDENTITY_FIELDS: Record<IdentityRoute, readonly string[]> = {
   "session-create": SPAWNING_FORBIDDEN_FIELDS,
@@ -81,7 +81,7 @@ export interface DerivedIdentity {
   canonicalUserId: string | null;
   /**
    * The verified bot-asserted actor backing `participantUserId` — what
-   * `resolveAndReconcileActor` reconciles the canonical user from on each request.
+   * `resolveCanonicalUserId` creates the canonical user from on first sight.
    * Null for user principals (their `canonicalUserId` is always set) and for
    * userless service principals.
    */
@@ -182,23 +182,24 @@ export function applyIdentityEnforcement<R extends IdentityRoute>(
 }
 
 /**
- * Reconcile the canonical `users.id` from verified actor evidence. Storage
- * outages are distinguishable so routes can preserve their existing
- * best-effort behavior without weakening invalid-principal handling.
+ * Resolve the canonical `users.id` for a spawning route, creating the user
+ * from the VERIFIED actor when the CP has not seen them before (display
+ * fields may come from the body — they are cosmetic, never identity). Fails
+ * closed with a 500 rather than writing anonymous attribution. Shared by
+ * session-create and automation-create so the two routes cannot drift.
  *
  * Takes the requires-user enforced shape: every participant is backed by a
  * canonical user (web users) or a verified actor (bot assertions), so the
  * resolved id is never null.
  */
-export async function resolveAndReconcileActor(
+export async function resolveCanonicalUserId(
   userStore: UserStore,
   ctx: RequestContext,
-  enforced: DerivedIdentity & { participantUserId: string }
-): Promise<{ ok: true; userId: string } | { ok: false } | Response> {
+  enforced: DerivedIdentity & { participantUserId: string },
+  display: { displayName?: string; email?: string; avatarUrl?: string }
+): Promise<{ userId: string } | Response> {
+  if (enforced.canonicalUserId) return { userId: enforced.canonicalUserId };
   const actor = enforced.actor;
-  if (!actor && enforced.canonicalUserId) {
-    return { ok: true, userId: enforced.canonicalUserId };
-  }
   if (!actor) {
     // Unreachable while deriveIdentity holds its invariant (a participant
     // without a canonical user is always actor-backed); fail closed rather
@@ -214,22 +215,19 @@ export async function resolveAndReconcileActor(
     const user = await userStore.resolveOrCreateUser({
       provider: actor.provider,
       providerUserId: actor.providerUserId,
-      displayName:
-        ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.displayName : undefined,
-      providerEmail:
-        ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.verifiedEmail : undefined,
-      avatarUrl:
-        ctx.principal?.kind === "service" ? ctx.principal.actorEvidence?.avatarUrl : undefined,
+      displayName: display.displayName,
+      providerEmail: display.email,
+      avatarUrl: display.avatarUrl,
     });
-    return { ok: true, userId: user.id };
+    return { userId: user.id };
   } catch (e) {
-    logger.warn("Failed to reconcile verified actor identity", {
+    logger.error("Failed to resolve verified actor identity", {
       error: e instanceof Error ? e : String(e),
       provider: actor.provider,
       request_id: ctx.request_id,
       trace_id: ctx.trace_id,
     });
-    return { ok: false };
+    return error("Failed to resolve session identity", 500);
   }
 }
 

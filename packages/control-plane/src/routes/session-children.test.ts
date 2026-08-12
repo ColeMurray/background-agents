@@ -21,6 +21,10 @@ function routeMatch(path: string, pattern: string): RegExpMatchArray {
 const defaultPromptAuthor: ActivePromptAuthor = {
   userId: "user-1",
   canonicalUserId: "canonical-1",
+  scmUserId: null,
+  scmLogin: null,
+  scmName: null,
+  scmEmail: null,
 };
 
 function routeContext(
@@ -131,6 +135,10 @@ describe("handlePromptChild", () => {
     const promptAuthor = {
       userId: "slack:U2",
       canonicalUserId: "canonical-2",
+      scmUserId: "222",
+      scmLogin: "second-user",
+      scmName: "Second User",
+      scmEmail: "second@example.com",
     };
     const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async (sessionId, path, init) => {
       expect(sessionId).toBe("child");
@@ -140,9 +148,10 @@ describe("handlePromptChild", () => {
         author: {
           userId: "slack:U2",
           canonicalUserId: "canonical-2",
+          scmLogin: "second-user",
         },
       });
-      expect(forwarded.author).toEqual({ userId: "slack:U2", canonicalUserId: "canonical-2" });
+      expect(forwarded.author).not.toHaveProperty("scmAccessTokenEncrypted");
       return Response.json({ messageId: "message-1", status: "queued" });
     });
 

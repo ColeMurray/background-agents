@@ -74,6 +74,10 @@ function toActivePromptAuthor(participant: ParticipantRow): ActivePromptAuthor {
   return {
     userId: participant.user_id,
     ...(participant.canonical_user_id ? { canonicalUserId: participant.canonical_user_id } : {}),
+    scmUserId: participant.scm_user_id,
+    scmLogin: participant.scm_login,
+    scmName: participant.scm_name,
+    scmEmail: participant.scm_email,
   };
 }
 
@@ -218,6 +222,15 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
             authorId: parsed.data.author.userId,
             canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
             source: "agent",
+            scmEnrichment: {
+              userId: parsed.data.author.scmUserId,
+              login: parsed.data.author.scmLogin,
+              name: parsed.data.author.scmName,
+              email: parsed.data.author.scmEmail,
+              accessTokenEncrypted: null,
+              refreshTokenEncrypted: null,
+              tokenExpiresAt: null,
+            },
           })
         );
       } catch (error) {

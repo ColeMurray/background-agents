@@ -2331,12 +2331,8 @@ describe("POST /interactions", () => {
     expect(sessionCall).toBeTruthy();
     const init = sessionCall?.[1] as RequestInit;
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
-    expect(body.verifiedActorEvidence).toMatchObject({
-      provider: "slack",
-      providerUserId: "U123",
-      displayName: "Jane",
-      verifiedEmail: "jane@example.com",
-    });
+    expect(body.actorDisplayName).toBe("Jane");
+    expect(body.actorEmail).toBe("jane@example.com");
     expect(mockGetUserInfo).toHaveBeenCalledOnce();
     // Identity travels via the signed actor assertion, never the body.
     expect(body.actorUserId).toBeUndefined();

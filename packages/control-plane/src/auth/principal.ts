@@ -8,7 +8,6 @@
  */
 
 import type { ServiceName } from "@open-inspect/shared/service-auth";
-import type { VerifiedActorEvidence } from "@open-inspect/shared/types/session-api";
 
 /** Actor namespaces bots may assert (`slack:U123` etc.). */
 export const ACTOR_NAMESPACES = ["slack", "github", "linear"] as const;
@@ -39,12 +38,7 @@ export interface AuthenticationContext {
 
 export type Principal =
   | { kind: "user"; userId: string }
-  | {
-      kind: "service";
-      service: ServiceName;
-      actor: ResolvedIdentity | null;
-      actorEvidence?: VerifiedActorEvidence | null;
-    }
+  | { kind: "service"; service: ServiceName; actor: ResolvedIdentity | null }
   | { kind: "sandbox"; sessionId: string };
 
 /**

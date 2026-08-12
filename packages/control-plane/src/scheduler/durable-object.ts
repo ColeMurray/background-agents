@@ -55,7 +55,6 @@ import type { Logger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import { initializeSession } from "../session/initialize";
-import { parseAuthorId } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
@@ -1365,18 +1364,15 @@ export class SchedulerDO extends DurableObject<Env> {
     // Resolve the canonical user_id for the session index.
     // Automations created through the web UI populate user_id at creation time
     // (handleCreateAutomation resolves it for both GitHub and Google users), so this
-    // lookup is skipped for them. Provider-qualified bot actors can appear here
-    // after best-effort reconciliation, while legacy rows store a bare GitHub
-    // numeric ID in created_by.
+    // lookup is skipped for them. The fallback below only covers legacy rows with
+    // user_id = NULL: those predate Google login and store the GitHub numeric user ID
+    // in created_by (from the canonical browser principal), so a GitHub-only identity lookup
+    // recovers the canonical user. It becomes dead code once legacy rows are backfilled.
     let userId = automation.user_id;
     if (!userId && automation.created_by && automation.created_by !== "anonymous") {
       try {
         const userStore = new UserStore(this.db);
-        const actor = parseAuthorId(automation.created_by);
-        const identity = await userStore.getIdentity(
-          actor?.provider ?? "github",
-          actor?.providerUserId ?? automation.created_by
-        );
+        const identity = await userStore.getIdentity("github", automation.created_by);
         if (identity) {
           userId = identity.userId;
         }

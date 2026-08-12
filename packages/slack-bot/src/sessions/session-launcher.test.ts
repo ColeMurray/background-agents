@@ -164,12 +164,8 @@ describe("startSessionAndSendPrompt", () => {
       branch: "repo-override-branch",
       traceId: "trace-1",
       slackUserId: "U123",
-      actorEvidence: {
-        provider: "slack",
-        providerUserId: "U123",
-        displayName: "Display Name",
-        verifiedEmail: "user@example.com",
-      },
+      actorDisplayName: "Display Name",
+      actorEmail: "user@example.com",
     });
     expect(deliverPrompt).toHaveBeenCalledWith(env, {
       sessionId: "session-1",
@@ -178,12 +174,6 @@ describe("startSessionAndSendPrompt", () => {
         "Context from the Slack thread:\n---\n[Alice]: Earlier request\n[Bot]: Earlier response\n---\n\n" +
         "Fix the failing deploy",
       authorId: "slack:U123",
-      actorEvidence: {
-        provider: "slack",
-        providerUserId: "U123",
-        displayName: "Display Name",
-        verifiedEmail: "user@example.com",
-      },
       attachments: { files: [], dropped: [] },
       imageOnly: false,
       callbackContext: {

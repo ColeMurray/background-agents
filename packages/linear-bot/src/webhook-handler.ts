@@ -156,14 +156,8 @@ async function createSession(
     title: params.title,
     model: params.model,
     reasoningEffort: params.reasoningEffort,
-    verifiedActorEvidence: params.actorUserId
-      ? {
-          provider: "linear",
-          providerUserId: params.actorUserId,
-          displayName: params.actorDisplayName,
-          verifiedEmail: params.actorEmail,
-        }
-      : undefined,
+    actorDisplayName: params.actorDisplayName,
+    actorEmail: params.actorEmail,
   });
   const response = await signedControlPlaneFetch(env, {
     method: "POST",

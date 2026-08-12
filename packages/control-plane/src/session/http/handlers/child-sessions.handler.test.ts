@@ -198,9 +198,6 @@ describe("createChildSessionsHandler", () => {
                 scmLogin: null,
                 scmName: null,
                 scmEmail: null,
-                scmAccessTokenEncrypted: null,
-                scmRefreshTokenEncrypted: null,
-                scmTokenExpiresAt: null,
               },
             }
           : body;
@@ -232,6 +229,15 @@ describe("createChildSessionsHandler", () => {
         authorId: "owner-1",
         canonicalUserId: "canonical-1",
         source: "agent",
+        scmEnrichment: {
+          userId: null,
+          login: null,
+          name: null,
+          email: null,
+          accessTokenEncrypted: null,
+          refreshTokenEncrypted: null,
+          tokenExpiresAt: null,
+        },
       });
     });
 
@@ -352,11 +358,11 @@ describe("createChildSessionsHandler", () => {
         id: "participant-2",
         user_id: "slack:U2",
         canonical_user_id: "canonical-2",
-        role: "member",
         scm_user_id: "222",
         scm_login: "second-user",
         scm_name: "Second User",
         scm_email: "second@example.com",
+        role: "member",
         scm_access_token_encrypted: "second-access",
         scm_refresh_token_encrypted: "second-refresh",
         scm_token_expires_at: 5678,
@@ -400,6 +406,10 @@ describe("createChildSessionsHandler", () => {
       createParticipant({
         user_id: "slack:U2",
         canonical_user_id: "canonical-2",
+        scm_user_id: "222",
+        scm_login: "second-user",
+        scm_name: "Second User",
+        scm_email: "second@example.com",
         scm_access_token_encrypted: "secret-access",
         scm_refresh_token_encrypted: "secret-refresh",
       })
@@ -409,7 +419,12 @@ describe("createChildSessionsHandler", () => {
 
     expect(response.status).toBe(200);
     const body = await response.json<Record<string, unknown>>();
-    expect(body).toMatchObject({ userId: "slack:U2", canonicalUserId: "canonical-2" });
+    expect(body).toMatchObject({
+      userId: "slack:U2",
+      canonicalUserId: "canonical-2",
+      scmUserId: "222",
+      scmLogin: "second-user",
+    });
     expect(body).not.toHaveProperty("scmAccessTokenEncrypted");
     expect(body).not.toHaveProperty("scmRefreshTokenEncrypted");
   });

@@ -585,14 +585,32 @@ describe("Child session operations (list, get, cancel)", () => {
 
       expect(res.status).toBe(200);
       const body = await res.json<{ messageId: string }>();
-      const messages = await queryDO<{ user_id: string; canonical_user_id: string | null }>(
+      const messages = await queryDO<{
+        user_id: string;
+        canonical_user_id: string | null;
+        scm_user_id: string | null;
+        scm_login: string | null;
+        scm_name: string | null;
+        scm_email: string | null;
+      }>(
         childStub,
-        `SELECT participants.user_id, participants.canonical_user_id
+        `SELECT participants.user_id, participants.canonical_user_id,
+                participants.scm_user_id, participants.scm_login,
+                participants.scm_name, participants.scm_email
          FROM messages JOIN participants ON participants.id = messages.author_id
          WHERE messages.id = ?`,
         body.messageId
       );
-      expect(messages).toEqual([{ user_id: "slack:U2", canonical_user_id: "canonical-2" }]);
+      expect(messages).toEqual([
+        {
+          user_id: "slack:U2",
+          canonical_user_id: "canonical-2",
+          scm_user_id: "222",
+          scm_login: "second-user",
+          scm_name: "Second User",
+          scm_email: "second@example.com",
+        },
+      ]);
     });
 
     it("rejects authority-expanding request fields", async () => {

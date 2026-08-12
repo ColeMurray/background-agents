@@ -25,6 +25,9 @@ describe("parseCreateSessionInput", () => {
       scmLogin: "ada",
       scmName: "Ada Lovelace",
       scmEmail: "ada@example.com",
+      actorDisplayName: "Ada Lovelace",
+      actorEmail: "ada@example.com",
+      actorAvatarUrl: "https://avatars.example.com/ada.png",
     };
     const result = await parseCreateSessionInput(jsonRequest(fields));
 

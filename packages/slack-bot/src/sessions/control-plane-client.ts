@@ -9,7 +9,6 @@ import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";
 import { buildSessionTargetRequestFields, targetId, type SlackSessionTarget } from "../targets";
 import type { CallbackContext } from "@open-inspect/shared/types/session-api";
-import type { VerifiedActorEvidence } from "@open-inspect/shared/types/session-api";
 import type { Env } from "../types";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
@@ -22,7 +21,8 @@ interface CreateSessionOptions {
   branch?: string;
   traceId?: string;
   slackUserId?: string;
-  actorEvidence?: VerifiedActorEvidence;
+  actorDisplayName?: string;
+  actorEmail?: string;
 }
 
 export type SendPromptResult =
@@ -33,7 +33,16 @@ export async function createSession(
   env: Env,
   options: CreateSessionOptions
 ): Promise<CreateSessionResponse | null> {
-  const { target, model, reasoningEffort, branch, traceId, slackUserId, actorEvidence } = options;
+  const {
+    target,
+    model,
+    reasoningEffort,
+    branch,
+    traceId,
+    slackUserId,
+    actorDisplayName,
+    actorEmail,
+  } = options;
   const startTime = Date.now();
   const base = {
     trace_id: traceId,
@@ -49,7 +58,8 @@ export async function createSession(
       ...buildSessionTargetRequestFields(target, branch),
       model,
       reasoningEffort,
-      verifiedActorEvidence: actorEvidence,
+      actorDisplayName,
+      actorEmail,
     });
     const response = await signedControlPlaneFetch(
       env,
@@ -107,12 +117,10 @@ export interface SendPromptOptions {
   callbackContext?: CallbackContext;
   attachments?: SessionAttachmentReference[];
   traceId?: string;
-  actorEvidence?: VerifiedActorEvidence;
 }
 
 export async function sendPrompt(env: Env, options: SendPromptOptions): Promise<SendPromptResult> {
-  const { sessionId, content, authorId, callbackContext, attachments, traceId, actorEvidence } =
-    options;
+  const { sessionId, content, authorId, callbackContext, attachments, traceId } = options;
   const startTime = Date.now();
   const base = { trace_id: traceId, session_id: sessionId, source: "slack" };
   try {
@@ -121,7 +129,6 @@ export async function sendPrompt(env: Env, options: SendPromptOptions): Promise<
       content,
       source: "slack",
       callbackContext,
-      verifiedActorEvidence: actorEvidence,
       ...(attachments?.length ? { attachments } : {}),
     });
     const response = await signedControlPlaneFetch(

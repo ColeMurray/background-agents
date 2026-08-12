@@ -20,7 +20,6 @@ import {
   sendPromptRequestSchema,
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
-  verifiedActorEvidenceSchema,
 } from "./session-api";
 import {
   listEventsResponseSchema,
@@ -29,18 +28,6 @@ import {
 } from "./sandbox-events";
 
 describe("boundary schemas", () => {
-  describe("verifiedActorEvidenceSchema", () => {
-    it("rejects malformed verified email evidence", () => {
-      const result = verifiedActorEvidenceSchema.safeParse({
-        provider: "slack",
-        providerUserId: "U123",
-        verifiedEmail: "not-an-email",
-      });
-
-      expect(result.success).toBe(false);
-    });
-  });
-
   describe("createSessionRequestSchema", () => {
     it("parses a valid session creation request", () => {
       const result = createSessionRequestSchema.safeParse({

@@ -97,17 +97,6 @@ export const callbackContextSchema = z.union([
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
-/** Provider-attested identity evidence bound to a signed service request body. */
-export const verifiedActorEvidenceSchema = z.strictObject({
-  provider: z.enum(["slack", "github", "linear"]),
-  providerUserId: z.string().min(1),
-  displayName: z.string().optional(),
-  verifiedEmail: z.email().optional(),
-  avatarUrl: z.string().optional(),
-});
-
-export type VerifiedActorEvidence = z.infer<typeof verifiedActorEvidenceSchema>;
-
 export const sendPromptRequestSchema = z.object({
   content: z.string().min(1),
   source: messageSourceSchema.optional(),
@@ -221,6 +210,9 @@ export const createSessionInputSchema = createSessionRequestBaseSchema
     scmLogin: z.string().optional(),
     scmName: z.string().optional(),
     scmEmail: z.string().optional(),
+    actorDisplayName: z.string().optional(),
+    actorEmail: z.string().optional(),
+    actorAvatarUrl: z.string().optional(),
   })
   .refine(hasMatchingRepositoryIdentifiers, {
     message: "repoOwner and repoName must be provided together",

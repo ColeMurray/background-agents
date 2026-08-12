@@ -5,7 +5,7 @@ import {
   deriveIdentity,
   mayAttachCallbackContext,
   requireEventPoster,
-  resolveAndReconcileActor,
+  resolveCanonicalUserId,
 } from "./identity-enforcement";
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
@@ -27,12 +27,6 @@ const SLACK_BOT_PRINCIPAL: Principal = {
   kind: "service",
   service: "slack-bot",
   actor: SLACK_ACTOR,
-  actorEvidence: {
-    provider: "slack",
-    providerUserId: "U0123",
-    displayName: "Dana",
-    verifiedEmail: "d@example.com",
-  },
 };
 
 function createCtx(principal?: Principal): RequestContext {
@@ -206,78 +200,84 @@ describe("applyIdentityEnforcement — requires-user rejection", () => {
   });
 });
 
-describe("resolveAndReconcileActor", () => {
+describe("resolveCanonicalUserId", () => {
+  const display = { displayName: "Dana", email: "d@example.com" };
+
   it("returns the canonical id directly when the principal already resolved", async () => {
     const userStore = { resolveOrCreateUser: vi.fn() } as unknown as UserStore;
-    const result = await resolveAndReconcileActor(userStore, createCtx(USER_PRINCIPAL), {
-      participantUserId: "canon-1",
-      canonicalUserId: "canon-1",
-      actor: null,
-      spawnSource: "user",
-    });
-    expect(result).toEqual({ ok: true, userId: "canon-1" });
+    const result = await resolveCanonicalUserId(
+      userStore,
+      createCtx(USER_PRINCIPAL),
+      {
+        participantUserId: "canon-1",
+        canonicalUserId: "canon-1",
+        actor: null,
+        spawnSource: "user",
+      },
+      display
+    );
+    expect(result).toEqual({ userId: "canon-1" });
   });
 
   it("creates the user from the VERIFIED actor when unseen", async () => {
     const resolveOrCreateUser = vi.fn(async () => ({ id: "canon-new" }));
     const userStore = { resolveOrCreateUser } as unknown as UserStore;
-    const result = await resolveAndReconcileActor(userStore, createCtx(SLACK_BOT_PRINCIPAL), {
-      participantUserId: "slack:U0123",
-      canonicalUserId: null,
-      actor: SLACK_ACTOR,
-      spawnSource: "slack-bot",
-    });
-    expect(result).toEqual({ ok: true, userId: "canon-new" });
+    const result = await resolveCanonicalUserId(
+      userStore,
+      createCtx(SLACK_BOT_PRINCIPAL),
+      {
+        participantUserId: "slack:U0123",
+        canonicalUserId: null,
+        actor: SLACK_ACTOR,
+        spawnSource: "slack-bot",
+      },
+      display
+    );
+    expect(result).toEqual({ userId: "canon-new" });
     expect(resolveOrCreateUser).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "slack", providerUserId: "U0123", displayName: "Dana" })
     );
   });
 
-  it("reconciles a previously resolved actor on every request", async () => {
-    const resolveOrCreateUser = vi.fn(async () => ({ id: "canon-reconciled" }));
-    const result = await resolveAndReconcileActor(
-      { resolveOrCreateUser } as unknown as UserStore,
-      createCtx(SLACK_BOT_PRINCIPAL),
-      {
-        participantUserId: "slack:U0123",
-        canonicalUserId: "canon-old",
-        actor: SLACK_ACTOR,
-        spawnSource: "slack-bot",
-      }
-    );
-
-    expect(result).toEqual({ ok: true, userId: "canon-reconciled" });
-    expect(resolveOrCreateUser).toHaveBeenCalledOnce();
-  });
-
   it("fails closed with a 500 if a participant ever lacks both a canonical user and an actor", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const userStore = { resolveOrCreateUser: vi.fn() } as unknown as UserStore;
-    const result = await resolveAndReconcileActor(userStore, createCtx(SLACK_BOT_PRINCIPAL), {
-      participantUserId: "slack:U0123",
-      canonicalUserId: null,
-      actor: null,
-      spawnSource: "slack-bot",
-    });
+    const result = await resolveCanonicalUserId(
+      userStore,
+      createCtx(SLACK_BOT_PRINCIPAL),
+      {
+        participantUserId: "slack:U0123",
+        canonicalUserId: null,
+        actor: null,
+        spawnSource: "slack-bot",
+      },
+      display
+    );
     expect(result).toBeInstanceOf(Response);
     expect((result as Response).status).toBe(500);
     expect(userStore.resolveOrCreateUser).not.toHaveBeenCalled();
   });
 
-  it("returns a best-effort failure when reconciliation throws", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("fails closed with a 500 when resolution throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
     const userStore = {
       resolveOrCreateUser: vi.fn(async () => {
         throw new Error("d1 down");
       }),
     } as unknown as UserStore;
-    const result = await resolveAndReconcileActor(userStore, createCtx(SLACK_BOT_PRINCIPAL), {
-      participantUserId: "slack:U0123",
-      canonicalUserId: null,
-      actor: SLACK_ACTOR,
-      spawnSource: "slack-bot",
-    });
-    expect(result).toEqual({ ok: false });
+    const result = await resolveCanonicalUserId(
+      userStore,
+      createCtx(SLACK_BOT_PRINCIPAL),
+      {
+        participantUserId: "slack:U0123",
+        canonicalUserId: null,
+        actor: SLACK_ACTOR,
+        spawnSource: "slack-bot",
+      },
+      display
+    );
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(500);
   });
 });
 

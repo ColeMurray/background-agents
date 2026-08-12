@@ -30,7 +30,7 @@ import { EnvironmentStore } from "../db/environments";
 import { SlackChannelStore } from "../db/slack-channel-store";
 import { UserStore } from "../db/user-store";
 import { generateId } from "../auth/crypto";
-import { applyIdentityEnforcement, resolveAndReconcileActor } from "../auth/identity-enforcement";
+import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { generateWebhookApiKey, hashApiKey, encryptSentrySecret } from "../auth/webhook-key";
 import { createLogger } from "../logger";
 import {
@@ -302,7 +302,14 @@ async function handleCreateAutomation(
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const body = await parseJsonBody<CreateAutomationRequest>(request);
+  const body = await parseJsonBody<
+    CreateAutomationRequest & {
+      // Bot-asserted actor display fields — cosmetic, never identity.
+      actorDisplayName?: string;
+      actorEmail?: string;
+      actorAvatarUrl?: string;
+    }
+  >(request);
   if (body instanceof Response) return body;
 
   // Automation attribution comes from the verified principal. The stored
@@ -448,11 +455,16 @@ async function handleCreateAutomation(
     triggerAuthData = await encryptSentrySecret(sentrySecret, env.REPO_SECRETS_ENCRYPTION_KEY);
   }
 
-  // Canonical attribution is best-effort. The scheduler retains its fallback
-  // for rows created while identity storage is temporarily unavailable.
-  const resolution = await resolveAndReconcileActor(new UserStore(ctx.db), ctx, enforced);
+  // Resolve the canonical user model ID fail-closed from the verified
+  // principal — the scheduler replays user_id as session identity at fire
+  // time, so an automation must never be created with lost attribution.
+  const resolution = await resolveCanonicalUserId(new UserStore(ctx.db), ctx, enforced, {
+    displayName: body.actorDisplayName,
+    email: body.actorEmail,
+    avatarUrl: body.actorAvatarUrl,
+  });
   if (resolution instanceof Response) return resolution;
-  const resolvedUserId = resolution.ok ? resolution.userId : (enforced.canonicalUserId ?? null);
+  const resolvedUserId = resolution.userId;
 
   const db: SqlDatabase = ctx.db;
   const store = new AutomationStore(db);

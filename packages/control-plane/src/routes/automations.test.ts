@@ -129,13 +129,6 @@ const SLACK_BOT_PRINCIPAL: Principal = {
     canonicalUserId: null,
     participantUserId: "slack:U0123",
   },
-  actorEvidence: {
-    provider: "slack",
-    providerUserId: "U0123",
-    displayName: "Alice",
-    verifiedEmail: "alice@corp.com",
-    avatarUrl: "https://avatars.test/alice.png",
-  },
 };
 
 function createCtx(principal: Principal = USER_PRINCIPAL): RequestContext {
@@ -607,6 +600,9 @@ describe("automation route handlers", () => {
       const res = await callRoute("POST", "/automations", {
         body: {
           ...validBody,
+          actorDisplayName: "Alice",
+          actorEmail: "alice@corp.com",
+          actorAvatarUrl: "https://avatars.test/alice.png",
         },
         principal: SLACK_BOT_PRINCIPAL,
       });
@@ -621,21 +617,6 @@ describe("automation route handlers", () => {
       });
       expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
         expect.objectContaining({ created_by: "slack:U0123", user_id: "resolved-user-1" })
-      );
-    });
-
-    it("creates a bot automation without canonical attribution when reconciliation fails", async () => {
-      mockStore.getById.mockResolvedValue({ ...sampleRow, user_id: null });
-      mockUserStore.resolveOrCreateUser.mockRejectedValueOnce(new Error("D1 unavailable"));
-
-      const res = await callRoute("POST", "/automations", {
-        body: validBody,
-        principal: SLACK_BOT_PRINCIPAL,
-      });
-
-      expect(res.status).toBe(201);
-      expect(mockStore.bindAutomationInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ created_by: "slack:U0123", user_id: null })
       );
     });
 
