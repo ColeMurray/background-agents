@@ -1257,6 +1257,22 @@ describe("SchedulerDO", () => {
       );
     });
 
+    it("uses the provider encoded in a bot automation creator", async () => {
+      mockStore.getOverdueAutomations.mockResolvedValue([
+        { ...sampleAutomation, created_by: "slack:U0123", user_id: null },
+      ]);
+      selectRepositories("auto-1", [repositoryRow("auto-1")]);
+      mockUserStoreGetIdentity.mockResolvedValue({ userId: "slack-canonical-user" });
+
+      const scheduler = createSchedulerDO();
+      await scheduler.fetch(new Request("http://internal/internal/tick", { method: "POST" }));
+
+      expect(mockUserStoreGetIdentity).toHaveBeenCalledWith("slack", "U0123");
+      expect(mockSessionStoreCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: "slack-canonical-user" })
+      );
+    });
+
     it("creates session with null userId when identity lookup finds nothing", async () => {
       mockStore.getOverdueAutomations.mockResolvedValue([sampleAutomation]);
       selectRepositories("auto-1", [repositoryRow("auto-1")]);
