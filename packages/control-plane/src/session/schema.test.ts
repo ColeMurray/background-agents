@@ -376,6 +376,15 @@ describe("applyMigrations", () => {
         started_at INTEGER,
         completed_at INTEGER
       )`);
+      db.exec(
+        "CREATE TABLE _schema_migrations (id INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)"
+      );
+      const recordMigration = db.prepare(
+        "INSERT INTO _schema_migrations (id, applied_at) VALUES (?, 0)"
+      );
+      for (const migration of MIGRATIONS.filter(({ id }) => id < 40)) {
+        recordMigration.run(migration.id);
+      }
 
       expect(() => initSchema(sql)).not.toThrow();
       expect(db.prepare("PRAGMA table_info(messages)").all()).toEqual(
