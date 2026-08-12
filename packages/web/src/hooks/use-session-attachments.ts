@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  sessionAttachmentUploadResponseSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
 import { WEB_SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "@/lib/session-attachment-limits";
@@ -29,14 +30,6 @@ function parseUploadErrorMessage(value: unknown): string | null {
   }
   const error = value.error;
   return typeof error === "string" && error.length > 0 ? error : null;
-}
-
-function parseAttachmentUploadResponse(value: unknown): { attachmentId: string } | null {
-  if (typeof value !== "object" || value === null || !("attachmentId" in value)) {
-    return null;
-  }
-  const attachmentId = value.attachmentId;
-  return typeof attachmentId === "string" && attachmentId.length > 0 ? { attachmentId } : null;
 }
 
 function isSupportedImage(file: File): boolean {
@@ -213,15 +206,15 @@ export function useSessionAttachments() {
             const message = parseUploadErrorMessage(await response.json().catch(() => null));
             throw new Error(message || `Failed to upload ${fileName}`);
           }
-          const uploadResult = parseAttachmentUploadResponse(
+          const uploadResult = sessionAttachmentUploadResponseSchema.safeParse(
             await response.json().catch(() => null)
           );
-          if (!uploadResult) {
+          if (!uploadResult.success) {
             throw new Error(`Failed to upload ${fileName}`);
           }
           const attachment: SessionAttachmentReference = {
             name: fileName || "image-attachment",
-            attachmentId: uploadResult.attachmentId,
+            attachmentId: uploadResult.data.attachmentId,
           };
           uploadedByIdRef.current.set(pendingAttachment.id, { sessionId, attachment });
           uploaded.push(attachment);

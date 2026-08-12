@@ -104,6 +104,40 @@ describe("useSessionAttachments", () => {
     expect(result.current.attachmentError).toBe("Failed to upload shot.png");
   });
 
+  it("rejects a syntactically invalid attachment id and does not cache it", async () => {
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ attachmentId: "not a valid id", mimeType: "image/png" }, { status: 201 })
+      )
+      .mockResolvedValueOnce(
+        Response.json({ attachmentId: "up-1", mimeType: "image/png" }, { status: 201 })
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useSessionAttachments());
+    act(() => {
+      result.current.addFiles([new File(["image"], "shot.png", { type: "image/png" })]);
+    });
+
+    await act(async () => {
+      await expect(result.current.uploadAll("session-1")).rejects.toThrow(
+        "Failed to upload shot.png"
+      );
+    });
+
+    // The rejected id must not survive in the retry cache, so retrying
+    // re-uploads and returns only the id the prompt schema accepts.
+    let uploaded = [] as Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      uploaded = await result.current.uploadAll("session-1");
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(uploaded).toEqual([{ attachmentId: "up-1", name: "shot.png" }]);
+  });
+
   it("falls back when an upload error body is malformed", async () => {
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:image");
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});

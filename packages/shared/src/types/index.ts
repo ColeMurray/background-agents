@@ -15,11 +15,13 @@ export {
   sessionAttachmentReferencesSchema,
   resolvedSessionAttachmentSchema,
   resolvedSessionAttachmentsSchema,
+  sessionAttachmentUploadResponseSchema,
 } from "./session-attachments";
 export type {
   SessionAttachmentMimeType,
   SessionAttachmentReference,
   ResolvedSessionAttachment,
+  SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
 export { clientMessageSchema } from "./websocket";

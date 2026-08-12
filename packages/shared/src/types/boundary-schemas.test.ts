@@ -7,6 +7,7 @@ import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
   serverMessageSchema,
+  sessionAttachmentUploadResponseSchema,
 } from ".";
 import { sessionParticipantProfilesResponseSchema } from "./sessions";
 import { listArtifactsResponseSchema } from "./artifacts";
@@ -135,6 +136,51 @@ describe("boundary schemas", () => {
         createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
       ).toBe(false);
       expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("sessionAttachmentUploadResponseSchema", () => {
+    it("parses an upload response and ignores unknown fields", () => {
+      const result = sessionAttachmentUploadResponseSchema.safeParse({
+        attachmentId: "att-1",
+        mimeType: "image/png",
+        sizeBytes: 1024,
+      });
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ attachmentId: "att-1", mimeType: "image/png" });
+    });
+
+    it("rejects ids the prompt schema would reject", () => {
+      // Non-empty but not a canonical id: accepting these lets a bad id reach
+      // client state and fail later, at prompt validation.
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({
+          attachmentId: "bad id",
+          mimeType: "image/png",
+        }).success
+      ).toBe(false);
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({
+          attachmentId: "a".repeat(129),
+          mimeType: "image/png",
+        }).success
+      ).toBe(false);
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({ attachmentId: "", mimeType: "image/png" })
+          .success
+      ).toBe(false);
+    });
+
+    it("rejects unsupported or missing mime types", () => {
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({
+          attachmentId: "att-1",
+          mimeType: "application/pdf",
+        }).success
+      ).toBe(false);
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({ attachmentId: "att-1" }).success
+      ).toBe(false);
     });
   });
 
