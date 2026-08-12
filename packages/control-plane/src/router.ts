@@ -43,6 +43,7 @@ import { analyticsRoutes } from "./routes/analytics";
 import { skillRoutes } from "./routes/skills";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
+import { targetClassificationRoutes } from "./routes/target-classifications";
 import { webhookRoutes } from "./webhooks";
 
 const logger = createLogger("router");
@@ -175,6 +176,7 @@ export function isWebServiceAuthRoute(method: string, path: string): boolean {
 export function isScmAgnosticRoute(method: string, path: string): boolean {
   return (
     isWebServiceAuthRoute(method, path) ||
+    (method === "POST" && path === "/internal/target-classifications") ||
     /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
     /^\/skills(?:\/.*)?$/.test(path) ||
@@ -335,6 +337,7 @@ const routes: Route[] = [
 
   ...browserAuthRoutes,
   ...signInProviderRoutes,
+  ...targetClassificationRoutes,
 
   // Session management
   ...sessionRoutes,

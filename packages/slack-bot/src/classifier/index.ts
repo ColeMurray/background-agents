@@ -7,178 +7,135 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  CLASSIFY_TARGET_TOOL_NAME,
+  CLASSIFIER_MESSAGE_MAX_CHARS,
+  TARGET_CLASSIFIER_SYSTEM_PROMPT,
+  ANTHROPIC_CLASSIFICATION_MODEL_ID,
+  targetClassificationRequestSchema,
+  targetClassificationResponseSchema,
+  classificationModelSchema,
+  targetClassificationDecisionSchema,
+  targetClassificationJsonSchema,
+  buildTargetClassificationPrompt,
+  type ClassificationModel,
+  type TargetClassificationDecision,
+  type TargetClassificationRequest,
+} from "@open-inspect/shared/types/target-classification";
 import type { Env, ThreadContext, ClassificationResult } from "../types";
-import { buildRepoDescriptions } from "./repos";
-import { buildEnvironmentDescriptions } from "./environments";
 import { loadTargetCatalog, type TargetCatalog } from "./catalog";
 import { matchTargetId, resolveChannelTargets, resolveRoutingRuleTargets } from "./routing";
 import { escapeMrkdwnText } from "@open-inspect/shared/slack";
-import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
 import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
+import { signedControlPlaneFetch } from "../internal-auth";
 
 const log = createLogger("classifier");
-const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
-const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
+const DEFAULT_CLASSIFICATION_MODEL: ClassificationModel = ANTHROPIC_CLASSIFICATION_MODEL_ID;
+const ANTHROPIC_API_MODEL = "claude-haiku-4-5";
+const TARGET_CLASSIFICATIONS_URL = "https://internal/internal/target-classifications";
+const CLASSIFY_TARGET_INPUT_SCHEMA: Anthropic.Messages.Tool.InputSchema = {
+  ...targetClassificationJsonSchema,
+};
 
 const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
   name: CLASSIFY_TARGET_TOOL_NAME,
   description:
     "Classify which repository or environment a Slack message refers to. " +
     "Use targetId as null when uncertain.",
-  input_schema: {
-    type: "object",
-    properties: {
-      targetId: {
-        type: ["string", "null"],
-        description:
-          'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
-      },
-      confidence: {
-        type: "string",
-        enum: CONFIDENCE_LEVELS,
-      },
-      reasoning: {
-        type: "string",
-        description: "Brief explanation of classification decision.",
-      },
-      alternatives: {
-        type: "array",
-        items: { type: "string" },
-        description:
-          "Alternative repository fullNames / environment ids when confidence is not high.",
-      },
-    },
-    required: ["targetId", "confidence", "reasoning", "alternatives"],
-    additionalProperties: false,
-  },
+  input_schema: CLASSIFY_TARGET_INPUT_SCHEMA,
 };
 
-/**
- * Build the classification prompt for the LLM over the target catalog.
- */
-function buildClassificationPrompt(
+class ClassificationMessageTooLongError extends Error {}
+
+function createTargetClassificationRequest(
   message: string,
   catalog: TargetCatalog,
   context?: ThreadContext
-): string {
-  const repoDescriptions = buildRepoDescriptions(catalog.repos);
-
-  const environmentSection =
-    catalog.environments.length > 0
-      ? `
-## Available Environments
-
-Environments are saved multi-repository workspaces. Prefer an environment over a
-single repository when the message names it, or when the work spans several of
-its repositories.
-${buildEnvironmentDescriptions(catalog.environments)}
-`
-      : "";
-
-  let contextSection = "";
-
-  if (context) {
-    contextSection = `
-## Context
-
-**Channel**: ${context.channelName ? `#${context.channelName}` : context.channelId}
-${context.channelDescription ? `**Channel Description**: ${context.channelDescription}` : ""}
-${context.threadTs ? `**In Thread**: Yes` : "**In Thread**: No"}
-${
-  context.previousMessages?.length
-    ? `**Previous Messages in Thread**:
-${context.previousMessages.map((m) => `- ${m}`).join("\n")}`
-    : ""
-}`;
+): TargetClassificationRequest {
+  const parsed = targetClassificationRequestSchema.safeParse({
+    message,
+    targets: [
+      ...catalog.repos.map((repository) => ({
+        kind: "repository" as const,
+        id: repository.id,
+        fullName: repository.fullName,
+        description: repository.description,
+        aliases: repository.aliases,
+        keywords: repository.keywords,
+        defaultBranch: repository.defaultBranch,
+        private: repository.private,
+      })),
+      ...catalog.environments.map((environment) => ({
+        kind: "environment" as const,
+        id: environment.id,
+        name: environment.name,
+        description: environment.description,
+        repositories: environment.repositories.map(
+          (repository) => `${repository.repoOwner}/${repository.repoName}`
+        ),
+      })),
+    ],
+    context: context
+      ? {
+          channelId: context.channelId,
+          channelName: context.channelName,
+          channelDescription: context.channelDescription,
+          inThread: Boolean(context.threadTs),
+          previousMessages: context.previousMessages,
+        }
+      : undefined,
+  });
+  if (!parsed.success) {
+    if (message.length > CLASSIFIER_MESSAGE_MAX_CHARS) {
+      throw new ClassificationMessageTooLongError();
+    }
+    throw new Error("Invalid target classification input");
   }
-
-  return `You are a target classifier for a coding agent. Your job is to determine which code repository or environment a Slack message is referring to.
-
-## Available Repositories
-${repoDescriptions}
-${environmentSection}
-${contextSection}
-
-## User's Message
-${message}
-
-## Your Task
-
-Analyze the message and context to determine which repository or environment the user is referring to.
-
-Consider:
-1. Explicit mentions of repository or environment names or aliases
-2. Technical keywords that match repository technologies
-3. File paths or code patterns mentioned
-4. Channel associations (some channels are associated with specific repos)
-5. Context from previous messages in the thread
-
-## Response Format
-
-Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
-- targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
-- confidence: "high" | "medium" | "low"
-- reasoning: brief explanation
-- alternatives: other possible targets when confidence is not high`;
+  return parsed.data;
 }
 
 /**
  * Parse the LLM response into a structured result.
  */
-interface LLMResponse {
-  targetId: string | null;
-  confidence: ConfidenceLevel;
-  reasoning: string;
-  alternatives: string[];
+function resolveClassificationModel(value: unknown): ClassificationModel | null {
+  const raw = (typeof value === "string" ? value.trim() : "") || DEFAULT_CLASSIFICATION_MODEL;
+  const parsed = classificationModelSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
-function normalizeModelResponse(raw: unknown): LLMResponse {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeAnthropicToolInput(raw: unknown): TargetClassificationDecision {
+  if (!isRecord(raw)) {
     throw new Error("LLM response was not an object");
   }
 
-  const input = raw as Record<string, unknown>;
-  const rawTargetId = input.targetId;
+  const rawTargetId = raw.targetId;
   const targetId =
-    rawTargetId === null
-      ? null
-      : typeof rawTargetId === "string" && rawTargetId.trim().length > 0
-        ? rawTargetId.trim()
-        : null;
-
-  const rawConfidence = typeof input.confidence === "string" ? input.confidence.trim() : "";
-  const confidence = rawConfidence.toLowerCase();
-  if (!CONFIDENCE_LEVELS.includes(confidence as ClassificationResult["confidence"])) {
-    throw new Error(`Invalid confidence value: ${rawConfidence || String(input.confidence)}`);
-  }
-
-  if (typeof input.reasoning !== "string" || input.reasoning.trim().length === 0) {
-    throw new Error("Missing reasoning in LLM response");
-  }
-
-  if (!Array.isArray(input.alternatives)) {
-    throw new Error("Alternatives must be an array");
-  }
-
-  const alternatives = input.alternatives
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
-
-  if (alternatives.length !== input.alternatives.length) {
-    throw new Error("Invalid alternatives in LLM response");
+    typeof rawTargetId === "string" && rawTargetId.trim().length > 0 ? rawTargetId.trim() : null;
+  const normalized = targetClassificationDecisionSchema.safeParse({
+    targetId,
+    confidence:
+      typeof raw.confidence === "string" ? raw.confidence.trim().toLowerCase() : raw.confidence,
+    reasoning: raw.reasoning,
+    alternatives: raw.alternatives,
+  });
+  if (!normalized.success) {
+    throw new Error("Invalid structured tool input in LLM response");
   }
 
   return {
-    targetId,
-    confidence: confidence as ClassificationResult["confidence"],
-    reasoning: input.reasoning.trim(),
-    alternatives: [...new Set(alternatives)],
+    ...normalized.data,
+    alternatives: [...new Set(normalized.data.alternatives)],
   };
 }
 
-function extractStructuredResponse(response: Anthropic.Messages.Message): LLMResponse {
+function extractStructuredResponse(
+  response: Anthropic.Messages.Message
+): TargetClassificationDecision {
   const toolUseBlock = response.content.find(
     (block): block is Anthropic.Messages.ToolUseBlock =>
       block.type === "tool_use" && block.name === CLASSIFY_TARGET_TOOL_NAME
@@ -188,21 +145,93 @@ function extractStructuredResponse(response: Anthropic.Messages.Message): LLMRes
     throw new Error("No structured tool_use classification in LLM response");
   }
 
-  return normalizeModelResponse(toolUseBlock.input);
+  return normalizeAnthropicToolInput(toolUseBlock.input);
 }
 
 /**
  * Repository classifier class.
  */
 export class RepoClassifier {
-  private client: Anthropic;
+  private client: Anthropic | undefined;
   private env: Env;
 
   constructor(env: Env) {
     this.env = env;
-    this.client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
+  }
+
+  private getAnthropicClient(): Anthropic {
+    if (!this.client) {
+      if (!this.env.ANTHROPIC_API_KEY) {
+        throw new Error("Anthropic classifier API key is not configured");
+      }
+      this.client = new Anthropic({
+        apiKey: this.env.ANTHROPIC_API_KEY,
+      });
+    }
+    return this.client;
+  }
+
+  private async classifyWithAnthropic(
+    request: TargetClassificationRequest
+  ): Promise<TargetClassificationDecision> {
+    const response = await this.getAnthropicClient().messages.create({
+      model: ANTHROPIC_API_MODEL,
+      max_tokens: 500,
+      temperature: 0,
+      system: TARGET_CLASSIFIER_SYSTEM_PROMPT,
+      tools: [CLASSIFY_TARGET_TOOL],
+      tool_choice: {
+        type: "tool",
+        name: CLASSIFY_TARGET_TOOL_NAME,
+        disable_parallel_tool_use: true,
+      },
+      messages: [
+        {
+          role: "user",
+          content: buildTargetClassificationPrompt(request),
+        },
+      ],
     });
+
+    return extractStructuredResponse(response);
+  }
+
+  private async classifyWithControlPlane(
+    request: TargetClassificationRequest,
+    traceId?: string
+  ): Promise<TargetClassificationDecision> {
+    const body = JSON.stringify(request);
+    const response = await signedControlPlaneFetch(
+      this.env,
+      {
+        method: "POST",
+        url: TARGET_CLASSIFICATIONS_URL,
+        body,
+        traceId,
+      },
+      { headers: { Accept: "application/json" } }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Target classification request failed with ${response.status}`);
+    }
+
+    const parsed = targetClassificationResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      throw new Error("Invalid target classification response");
+    }
+    return parsed.data;
+  }
+
+  private async classifyWithModel(
+    model: ClassificationModel,
+    request: TargetClassificationRequest,
+    traceId?: string
+  ): Promise<TargetClassificationDecision> {
+    if (model === ANTHROPIC_CLASSIFICATION_MODEL_ID) {
+      return this.classifyWithAnthropic(request);
+    }
+    return this.classifyWithControlPlane(request, traceId);
   }
 
   /**
@@ -351,27 +380,12 @@ export class RepoClassifier {
 
     // Use LLM for classification
     try {
-      const prompt = buildClassificationPrompt(message, catalog, context);
-
-      const response = await this.client.messages.create({
-        model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
-        max_tokens: 500,
-        temperature: 0,
-        tools: [CLASSIFY_TARGET_TOOL],
-        tool_choice: {
-          type: "tool",
-          name: CLASSIFY_TARGET_TOOL_NAME,
-          disable_parallel_tool_use: true,
-        },
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
-
-      const llmResult = extractStructuredResponse(response);
+      const request = createTargetClassificationRequest(message, catalog, context);
+      const model = resolveClassificationModel(this.env.CLASSIFICATION_MODEL);
+      if (!model) {
+        throw new Error(`Unsupported classifier model: ${this.env.CLASSIFICATION_MODEL}`);
+      }
+      const llmResult = await this.classifyWithModel(model, request, traceId);
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 
@@ -413,7 +427,9 @@ export class RepoClassifier {
         target: null,
         confidence: "low",
         reasoning:
-          "Could not classify a target from structured model output. Please pick one below.",
+          e instanceof ClassificationMessageTooLongError
+            ? "This Slack message is too long to classify. Please shorten it and try again."
+            : "Could not classify a target from structured model output. Please pick one below.",
         // No basis to suggest specific targets on a classification failure;
         // the picker lets the user search the full list.
         alternatives: undefined,
