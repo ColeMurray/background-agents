@@ -3,7 +3,7 @@ import {
   getExternalUploadUrl,
   uploadToExternalUrl,
 } from "@open-inspect/shared/slack";
-import type { MediaArtifactInfo } from "@open-inspect/shared";
+import type { MediaArtifactInfo } from "@open-inspect/shared/types/artifacts";
 import type { Env } from "../types";
 import { signedControlPlaneFetch } from "../internal-auth";
 import { createLogger } from "../logger";

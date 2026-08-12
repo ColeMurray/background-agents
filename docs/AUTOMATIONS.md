@@ -231,9 +231,17 @@ ingested once the flag is on.
 A Slack automation must define at least a **Slack Channel** condition; the rest are optional
 filters.
 
-Slack Message automations ingest text only. Slack file uploads have a `file_share` subtype and are
-ignored, so image-only messages do not trigger a run and attachments are not added to prompts. Use
-an interactive bot DM or `@mention` for image input.
+Slack Message automations ingest text only. A message posted with an attachment (a `file_share`
+message) is matched on its text like any other, but the attachment is not added to the prompt, so an
+image-only message with no text triggers nothing. Use an interactive bot DM or `@mention` for image
+input.
+
+When the triggering message is a reply, the thread it belongs to is passed to the agent alongside it
+— up to 20 earlier messages total, preserving the thread's opening message alongside the most recent
+replies — so a reply is read in context instead of on its own. The thread is fetched only after a
+run is admitted, so unmatched messages, follow-ups that steer an existing session, and skipped or
+duplicate firings cost nothing. Conditions still match against the triggering message's text only,
+never the thread.
 
 - **Slack Channel** (required) — the channels to watch. Pick channels by name in the web form;
   channel IDs (for example `C0123ABCD`) also work as a fallback when channel listing is unavailable.

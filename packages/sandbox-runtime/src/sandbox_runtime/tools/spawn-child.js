@@ -29,7 +29,7 @@ export default tool({
       .string()
       .optional()
       .describe(
-        "Overrides the reasoning effort for the child. Defaults to the parent's reasoning effort."
+        "Overrides the reasoning effort for the child. Valid values depend on the model and may include 'none', 'low', 'medium', 'high', 'xhigh', and 'max'. Use 'xhigh', not 'x-high'. Defaults to the parent's reasoning effort when the selected model supports it."
       ),
   },
   async execute(args) {

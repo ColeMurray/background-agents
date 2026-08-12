@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import { formatRelativeTime } from "@/lib/time";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { formatRepoLabel } from "@/lib/repo-label";

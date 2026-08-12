@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createUserAuthFromEnv,
-  createUserAuthRuntimeFromEnv,
-  getUserAuthRuntime,
-  parsePublicWebOrigin,
-} from "./runtime";
+import { createUserAuthRuntimeFromEnv, getUserAuthRuntime, parsePublicWebOrigin } from "./runtime";
 import { createUserAuth } from "./better-auth";
 import type { Env } from "../../types";
 
@@ -53,7 +48,7 @@ describe("parsePublicWebOrigin", () => {
   });
 });
 
-describe("createUserAuthFromEnv sign-in provider configuration", () => {
+describe("createUserAuthRuntimeFromEnv sign-in provider configuration", () => {
   beforeEach(() => {
     vi.mocked(createUserAuth).mockClear();
   });
@@ -77,7 +72,7 @@ describe("createUserAuthFromEnv sign-in provider configuration", () => {
   });
 
   it("wires both providers when both are configured", () => {
-    createUserAuthFromEnv(
+    createUserAuthRuntimeFromEnv(
       envWith({
         GITHUB_CLIENT_ID: "github-id",
         GITHUB_CLIENT_SECRET: "github-secret",
@@ -161,7 +156,7 @@ describe("createUserAuthFromEnv sign-in provider configuration", () => {
   });
 
   it("rejects a deployment with no sign-in provider configured", () => {
-    expect(() => createUserAuthFromEnv(envWith({}), STUB_DATABASE)).toThrow(
+    expect(() => createUserAuthRuntimeFromEnv(envWith({}), STUB_DATABASE)).toThrow(
       /At least one sign-in provider must be configured/
     );
   });
@@ -170,7 +165,7 @@ describe("createUserAuthFromEnv sign-in provider configuration", () => {
     ["GITHUB_CLIENT_ID", { GITHUB_CLIENT_ID: "github-id" }],
     ["GITHUB_CLIENT_SECRET", { GITHUB_CLIENT_SECRET: "github-secret" }],
   ])("rejects a half-configured GitHub provider: %s alone", (_name, overrides) => {
-    expect(() => createUserAuthFromEnv(envWith(overrides), STUB_DATABASE)).toThrow(
+    expect(() => createUserAuthRuntimeFromEnv(envWith(overrides), STUB_DATABASE)).toThrow(
       /GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be configured together/
     );
   });
@@ -179,14 +174,14 @@ describe("createUserAuthFromEnv sign-in provider configuration", () => {
     ["GOOGLE_CLIENT_ID", { GOOGLE_CLIENT_ID: "google-id" }],
     ["GOOGLE_CLIENT_SECRET", { GOOGLE_CLIENT_SECRET: "google-secret" }],
   ])("rejects a half-configured Google provider: %s alone", (_name, overrides) => {
-    expect(() => createUserAuthFromEnv(envWith(overrides), STUB_DATABASE)).toThrow(
+    expect(() => createUserAuthRuntimeFromEnv(envWith(overrides), STUB_DATABASE)).toThrow(
       /GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together/
     );
   });
 
   it("treats whitespace-only credentials as unset", () => {
     expect(() =>
-      createUserAuthFromEnv(
+      createUserAuthRuntimeFromEnv(
         envWith({ GITHUB_CLIENT_ID: "   ", GITHUB_CLIENT_SECRET: "   " }),
         STUB_DATABASE
       )

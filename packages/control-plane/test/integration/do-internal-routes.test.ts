@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { cleanD1Tables } from "./cleanup";
 import { initSession, queryDO, seedEvents } from "./helpers";
-import type { SpawnContext, ChildSessionDetail } from "@open-inspect/shared";
+import type { ChildSessionDetail } from "@open-inspect/shared/types/session-api";
+import type { SpawnContext } from "../../src/session/spawn-context";
 
 const originalFetch = globalThis.fetch;
 

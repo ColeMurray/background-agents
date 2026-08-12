@@ -22,6 +22,8 @@ export interface SessionInternalRoute {
 export interface SessionInternalRouteHandlers {
   init: SessionInternalRouteHandler;
   state: SessionInternalRouteHandler;
+  snapshot: SessionInternalRouteHandler;
+  sandboxAccess: SessionInternalRouteHandler;
   prompt: SessionInternalRouteHandler;
   stop: SessionInternalRouteHandler;
   sandboxEvent: SessionInternalRouteHandler;
@@ -46,6 +48,7 @@ export interface SessionInternalRouteHandlers {
   tunnelUrls: SessionInternalRouteHandler;
   spawnContext: SessionInternalRouteHandler;
   childSummary: SessionInternalRouteHandler;
+  parentPrompt: SessionInternalRouteHandler;
   cancel: SessionInternalRouteHandler;
   childSessionUpdate: SessionInternalRouteHandler;
   diffState: SessionInternalRouteHandler;
@@ -65,6 +68,12 @@ export function createSessionInternalRoutes(
   return [
     { method: "POST", path: SessionInternalPaths.init, handler: handlers.init },
     { method: "GET", path: SessionInternalPaths.state, handler: handlers.state },
+    { method: "GET", path: SessionInternalPaths.snapshot, handler: handlers.snapshot },
+    {
+      method: "GET",
+      path: SessionInternalPaths.sandboxAccess,
+      handler: handlers.sandboxAccess,
+    },
     { method: "POST", path: SessionInternalPaths.prompt, handler: handlers.prompt },
     { method: "POST", path: SessionInternalPaths.stop, handler: handlers.stop },
     { method: "POST", path: SessionInternalPaths.sandboxEvent, handler: handlers.sandboxEvent },
@@ -125,6 +134,7 @@ export function createSessionInternalRoutes(
     { method: "GET", path: SessionInternalPaths.tunnelUrls, handler: handlers.tunnelUrls },
     { method: "GET", path: SessionInternalPaths.spawnContext, handler: handlers.spawnContext },
     { method: "GET", path: SessionInternalPaths.childSummary, handler: handlers.childSummary },
+    { method: "POST", path: SessionInternalPaths.parentPrompt, handler: handlers.parentPrompt },
     { method: "POST", path: SessionInternalPaths.cancel, handler: handlers.cancel },
     {
       method: "POST",

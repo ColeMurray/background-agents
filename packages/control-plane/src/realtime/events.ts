@@ -2,7 +2,8 @@
  * Real-time event utilities.
  */
 
-import type { SandboxEvent, ServerMessage } from "../types";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 
 /**
  * Event categories for filtering.

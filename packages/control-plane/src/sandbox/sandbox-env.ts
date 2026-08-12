@@ -224,6 +224,16 @@ export async function deriveCodeServerPassword(sandboxId: string, secret: string
   return digest.slice(0, 32);
 }
 
+/** Derive a deterministic VNC password in a domain distinct from code-server. */
+export async function deriveVncPassword(sandboxId: string, secret: string): Promise<string> {
+  const digest = await computeHmacHex(`vnc:${sandboxId}`, secret);
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: 8 }, (_, index) => {
+    const byte = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16);
+    return alphabet[byte % alphabet.length];
+  }).join("");
+}
+
 /** Provider-specific inputs to {@link buildSandboxEnvVars}. */
 export interface SandboxEnvVarsOptions {
   /** Resolved clone identity — {@link scmCloneIdentity} of the configured SCM provider. */
@@ -233,6 +243,8 @@ export interface SandboxEnvVarsOptions {
    * async). Providers derive it only when `codeServerEnabled`.
    */
   codeServerPassword?: string;
+  /** Precomputed VNC password, present only when VNC is enabled. */
+  vncPassword?: string;
   /**
    * Overrides `config.userEnvVars` as the user layer when a provider composes
    * it differently (OpenComputer layers provider LLM credentials underneath
@@ -256,6 +268,8 @@ export function buildSandboxEnvVars(
   options: SandboxEnvVarsOptions
 ): Record<string, string> {
   const envVars: Record<string, string> = { ...(options.baseEnvVars ?? config.userEnvVars ?? {}) };
+  delete envVars.VNC_PASSWORD;
+  delete envVars.NOVNC_PORT;
 
   const sessionConfig = buildSessionConfig(config);
 
@@ -276,6 +290,11 @@ export function buildSandboxEnvVars(
 
   if (options.codeServerPassword) {
     envVars.CODE_SERVER_PASSWORD = options.codeServerPassword;
+  }
+
+  if (config.vncEnabled && options.vncPassword) {
+    envVars.VNC_PASSWORD = options.vncPassword;
+    envVars.NOVNC_PORT = String(resolveServicePorts(config.sandboxSettings).vncPort);
   }
 
   if (config.agentSlackNotifyEnabled) {
@@ -304,22 +323,15 @@ export function buildSandboxEnvVars(
  * `sandboxName` is the per-attempt provider-object name — pass the trigger
  * timestamp (`Date.now()`) as `now` so the impure input is visible at the
  * call site and one config yields one name per trigger attempt;
- * `labels` identify the build sandbox on the provider (tags on Vercel,
- * labels on OpenComputer). Providers with extra label conventions spread and
- * extend `labels`.
+ * `labels` are the canonical build identity shared by providers (tags on
+ * Vercel, labels on OpenComputer). Providers with extra or legacy label
+ * conventions spread and extend `labels`.
  *
  * The `build-env-` prefix is deliberately scope-agnostic legacy: it predates
  * scoped builds and is kept verbatim so repo-scoped builds keep the same
  * `SANDBOX_ID`/name shape operators already query for.
  */
-export function imageBuildSandboxIdentity(
-  config: ImageBuildProviderTriggerConfig,
-  now: number
-): {
-  sandboxId: string;
-  sandboxName: string;
-  labels: Record<string, string>;
-} {
+export function imageBuildSandboxIdentity(config: ImageBuildProviderTriggerConfig, now: number) {
   return {
     sandboxId: `build-env-${config.scopeId}`,
     sandboxName: `build-env-${config.scopeId}-${now}`,
@@ -331,9 +343,6 @@ export function imageBuildSandboxIdentity(
       // packages/modal-infra/src/sandbox/build_session.py.
       openinspect_scope_kind: config.scopeKind,
       openinspect_scope_id: config.scopeId,
-      // Legacy label kept alongside the scope pair so existing operator
-      // label queries keep matching; builds are no longer environment-only.
-      openinspect_environment: config.scopeId,
     },
   };
 }

@@ -10,7 +10,7 @@
  * and per-artifact failures — and the caller broadcasts and logs them.
  */
 
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import type { SessionPullRequestStore } from "../db/session-pull-request-store";
 import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
 import {

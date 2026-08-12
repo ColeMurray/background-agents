@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { linearGraphQL, type LinearApiClient } from "./linear-client";
 
-type LinearGraphQLExecutor = typeof linearGraphQL;
-
 const workflowStateSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -46,11 +44,10 @@ export type IssueStartTransitionResult =
 /** Move an issue forward to the team's first started workflow state. */
 export async function transitionIssueToStarted(
   client: LinearApiClient,
-  issueId: string,
-  execute: LinearGraphQLExecutor = linearGraphQL
+  issueId: string
 ): Promise<IssueStartTransitionResult> {
   const contextResponse = transitionContextSchema.parse(
-    await execute(
+    await linearGraphQL(
       client,
       `
       query IssueStartTransitionContext($issueId: String!) {
@@ -88,7 +85,7 @@ export async function transitionIssueToStarted(
   if (!target) return { outcome: "no_started_state", previousStateType };
 
   transitionMutationSchema.parse(
-    await execute(
+    await linearGraphQL(
       client,
       `
       mutation IssueMoveToStarted($issueId: String!, $stateId: String!) {

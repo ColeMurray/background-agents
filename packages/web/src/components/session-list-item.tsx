@@ -17,25 +17,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { SessionItem } from "@/hooks/use-sidebar-sessions";
+import { buildSessionHref } from "@/lib/session-list";
 
 export const MOBILE_LONG_PRESS_MS = 450;
 const MOBILE_LONG_PRESS_MOVE_THRESHOLD_PX = 10;
-
-export function buildSessionHref(session: SessionItem) {
-  const query: Record<string, string> = {};
-  if (session.repoOwner && session.repoName) {
-    query.repoOwner = session.repoOwner;
-    query.repoName = session.repoName;
-  }
-  if (session.title) {
-    query.title = session.title;
-  }
-
-  return {
-    pathname: `/session/${session.id}`,
-    query,
-  };
-}
 
 export function SessionListItem({
   session,

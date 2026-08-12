@@ -66,72 +66,20 @@ export type {
   ConfidenceLevel,
 } from "./repository-catalog";
 
-export { listArtifactsResponseSchema, toDisplayStatus } from "./artifacts";
-export type {
-  SessionArtifact,
-  ManualPullRequestArtifactMetadata,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-  PullRequest,
-  PullRequestLifecycleState,
-  PullRequestStatus,
-  PullRequestDisplayStatus,
-  PullRequestArtifactMetadata,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  MediaArtifactInfo,
-  AgentResponse,
-  ArtifactType,
-} from "./artifacts";
-export { sessionArtifactSchema } from "./artifacts";
-
 export {
-  eventResponseSchema,
-  eventTypeSchema,
-  listEventsResponseSchema,
-  sandboxEventSchema,
-  toolCallIdentityKey,
-  toolCallIdentityTuple,
-} from "./sandbox-events";
+  serverMessageSchema,
+  sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
+  sessionTimelineEventSchema,
+} from "./server-messages";
 export type {
-  AgentEvent,
-  SandboxEvent,
-  EventResponse,
-  ListEventsResponse,
-  GitSyncStatus,
-  EventType,
-} from "./sandbox-events";
-
-export type {
-  SessionParticipant,
-  Session,
-  SessionMessage,
-  PullRequestSummary,
-  SessionReadState,
-  SessionReadAction,
-  SessionReadResult,
-  SessionParticipantProfile,
-  SessionParticipantProfilesResponse,
-  SessionStatus,
-  SandboxStatus,
-  MessageStatus,
-  MessageSource,
-  ParticipantRole,
-  SpawnSource,
-} from "./sessions";
-export {
-  messageSourceSchema,
-  sessionStatusSchema,
-  sessionReadActionSchema,
-  sessionReadResultSchema,
-  sessionParticipantProfileSchema,
-  sessionParticipantProfilesResponseSchema,
-} from "./sessions";
-
-export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage, SessionState, ParticipantPresence } from "./server-messages";
+  ParticipantPresence,
+  ServerMessage,
+  SessionSnapshot,
+  SessionSnapshotState,
+  SessionState,
+  SessionTimelineEvent,
+} from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
@@ -176,44 +124,6 @@ export type {
   SessionDiffState,
   SessionDiffFailure,
 } from "./session-diffs";
-
-export {
-  automationCallbackContextSchema,
-  callbackContextSchema,
-  linearCallbackContextSchema,
-  linearStartCallbackSchema,
-  sendPromptRequestSchema,
-  slackCallbackContextSchema,
-  createSessionRequestSchema,
-  createSessionInputSchema,
-  createMediaArtifactRequestSchema,
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-  spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-  spawnContextSchema,
-} from "./session-api";
-export type {
-  UserPreferences,
-  SlackCallbackContext,
-  LinearCallbackContext,
-  LinearStartCallback,
-  AutomationCallbackContext,
-  CallbackContext,
-  SendPromptRequest,
-  CreateSessionRequest,
-  CreateSessionInput,
-  CreateMediaArtifactRequest,
-  CreateSessionResponse,
-  SendPromptResponse,
-  ListSessionsResponse,
-  SpawnChildSessionRequest,
-  CancelChildSessionRequest,
-  SpawnContext,
-  ChildSessionFinalResponse,
-  ChildSessionTrajectory,
-  ChildSessionDetail,
-} from "./session-api";
 
 export {
   MAX_ENVIRONMENT_NAME_LENGTH,

@@ -42,6 +42,9 @@ describe("Child session operations (list, get, cancel)", () => {
       repoName: "web-app",
       userId: "user-1",
       scmLogin: "acmedev",
+      parentSessionId: pName,
+      spawnSource: "agent",
+      spawnDepth: 1,
     });
 
     // Seed D1 rows for both parent and child
@@ -471,6 +474,197 @@ describe("Child session operations (list, get, cancel)", () => {
       );
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("POST /sessions/:parentId/children/:childId/prompt", () => {
+    it("queues a follow-up in the direct child as its owner", async () => {
+      const { pName, childName, childStub, sandboxToken } = await setupParentAndChild();
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "Now cover the edge cases" }),
+        }
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json<{ messageId: string; status: string }>();
+      expect(body.status).toBe("queued");
+
+      const messages = await queryDO<{
+        id: string;
+        content: string;
+        source: string;
+        user_id: string;
+      }>(
+        childStub,
+        `SELECT messages.id, messages.content, messages.source, participants.user_id
+         FROM messages JOIN participants ON participants.id = messages.author_id
+         WHERE messages.id = ?`,
+        body.messageId
+      );
+      expect(messages).toEqual([
+        {
+          id: body.messageId,
+          content: "Now cover the edge cases",
+          source: "agent",
+          user_id: "user-1",
+        },
+      ]);
+    });
+
+    it("rejects authority-expanding request fields", async () => {
+      const { pName, childName, sandboxToken } = await setupParentAndChild();
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "Continue", source: "web" }),
+        }
+      );
+
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects whitespace-only content", async () => {
+      const { pName, childName, sandboxToken } = await setupParentAndChild();
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "  \n\t " }),
+        }
+      );
+
+      expect(res.status).toBe(400);
+    });
+
+    it.each(["cancelled", "archived"])(
+      "rejects a %s child without storing a prompt",
+      async (status) => {
+        const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild();
+        await queryDO(childStub, "UPDATE session SET status = ?", status);
+        await store.updateStatus(childName, status as "cancelled" | "archived");
+
+        const res = await SELF.fetch(
+          `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${sandboxToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ content: "Continue" }),
+          }
+        );
+
+        expect(res.status).toBe(409);
+        const messages = await queryDO<{ count: number }>(
+          childStub,
+          "SELECT COUNT(*) AS count FROM messages"
+        );
+        expect(messages[0]?.count).toBe(0);
+      }
+    );
+
+    it.each(["completed", "failed"])("resumes a %s child", async (status) => {
+      const { pName, childName, childStub, sandboxToken, store } = await setupParentAndChild();
+      await queryDO(childStub, "UPDATE session SET status = ?", status);
+      await store.updateStatus(childName, status as "completed" | "failed");
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${sandboxToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "Try again" }),
+        }
+      );
+
+      expect(res.status).toBe(200);
+      const state = await queryDO<{ status: string }>(childStub, "SELECT status FROM session");
+      expect(state[0]?.status).toBe("active");
+    });
+
+    it("rejects a child sandbox token on the parent-scoped route", async () => {
+      const { pName, childName, childStub } = await setupParentAndChild();
+      const childToken = `sb-tok-child-${Date.now()}`;
+      await seedSandboxAuth(childStub, { authToken: childToken, sandboxId: "sb-child" });
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${pName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${childToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+
+      expect(res.status).toBe(401);
+    });
+
+    it("returns 404 without touching a child owned by another parent", async () => {
+      const { childName, childStub } = await setupParentAndChild();
+      const fakeName = `fake-prompt-${Date.now()}`;
+      const { stub: fakeStub } = await initNamedSession(fakeName);
+      const fakeToken = `sb-tok-fake-prompt-${Date.now()}`;
+      await seedSandboxAuth(fakeStub, { authToken: fakeToken, sandboxId: "sb-fake-prompt" });
+      const store = new SessionIndexStore(env.DB);
+      const now = Date.now();
+      await store.create({
+        id: fakeName,
+        title: "Fake Parent",
+        repoOwner: "acme",
+        repoName: "web-app",
+        model: "anthropic/claude-sonnet-4-6",
+        reasoningEffort: null,
+        baseBranch: null,
+        status: "active",
+        spawnDepth: 0,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const res = await SELF.fetch(
+        `https://test.local/sessions/${fakeName}/children/${childName}/prompt`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${fakeToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: "Continue" }),
+        }
+      );
+
+      expect(res.status).toBe(404);
+      const messages = await queryDO<{ count: number }>(
+        childStub,
+        "SELECT COUNT(*) AS count FROM messages"
+      );
+      expect(messages[0]?.count).toBe(0);
     });
   });
 

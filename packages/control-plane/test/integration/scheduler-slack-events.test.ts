@@ -82,7 +82,8 @@ async function seedSlackAutomation(
 ): Promise<string> {
   const id = `auto-slack-${Math.random().toString(36).slice(2, 8)}`;
   await store.create(makeAutomation({ id, ...overrides }));
-  await new SlackChannelStore(env.DB).setSlackChannels(id, ["C1"]);
+  const channels = new SlackChannelStore(env.DB);
+  await env.DB.batch(channels.bindChannelStatements(id, ["C1"]));
   return id;
 }
 

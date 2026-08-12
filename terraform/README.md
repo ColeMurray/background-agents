@@ -274,7 +274,6 @@ ENABLE_DURABLE_OBJECT_BINDINGS # Optional; defaults to true
 
 # Branding
 APP_NAME # Optional; defaults to Open-Inspect
-APP_SHORT_NAME
 APP_ICON_URL
 ```
 

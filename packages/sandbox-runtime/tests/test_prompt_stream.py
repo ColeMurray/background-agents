@@ -613,7 +613,36 @@ class TestApplySseEventDispositions:
         )
 
         assert state.compaction_occurred is True
+        assert step.events == [{"type": "context_compacted", "messageId": "cp-msg-1"}]
         assert step.disposition is _Disposition.CONTINUE
+
+    def test_each_parent_compaction_emits_a_marker(self):
+        state = make_state()
+        stream = make_stream()
+
+        first = stream._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
+        )
+        second = stream._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID})
+        )
+
+        expected = [{"type": "context_compacted", "messageId": "cp-msg-1"}]
+        assert first.events == expected
+        assert second.events == expected
+
+    def test_child_compaction_does_not_emit_parent_marker(self):
+        state = make_state()
+        state.child_activity.track(CHILD_SESSION_ID)
+        state.pending_overflow_error = "parent overflow"
+
+        step = make_stream()._apply_sse_event(
+            state, sse("session.compacted", {"sessionID": CHILD_SESSION_ID})
+        )
+
+        assert state.compaction_occurred is False
+        assert state.pending_overflow_error == "parent overflow"
+        assert step.events == []
 
     def test_session_created_tracks_direct_children_only(self):
         state = make_state()

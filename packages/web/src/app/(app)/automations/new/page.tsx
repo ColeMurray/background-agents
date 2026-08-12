@@ -8,7 +8,7 @@ import {
   type AutomationFormValues,
 } from "@/components/automations/automation-form";
 import { WebhookConfig } from "@/components/automations/webhook-config";
-import { getTemplateById } from "@/lib/automation-templates";
+import { automationTemplates } from "@/lib/automation-templates";
 import { Button } from "@/components/ui/button";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { BackIcon } from "@/components/ui/icons";
@@ -32,7 +32,8 @@ function NewAutomationContent() {
   // A template id (from the gallery) pre-fills the form. Repository is never
   // pre-filled, so the repo-required-at-creation invariant is untouched. The
   // form coerces a template's suggested model against the user's enabled set.
-  const template = getTemplateById(searchParams.get("template") ?? "");
+  const templateId = searchParams.get("template");
+  const template = automationTemplates.find((candidate) => candidate.id === templateId);
   const initialValues: Partial<AutomationFormValues> | undefined = template?.prefill;
 
   const handleSubmit = async (values: AutomationFormValues) => {

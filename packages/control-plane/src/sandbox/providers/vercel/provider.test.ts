@@ -92,7 +92,7 @@ function createMockClient(
 
 const providerConfig: VercelProviderConfig = {
   scmProvider: "github",
-  codeServerPasswordSecret: "code-secret",
+  sandboxAccessPasswordSecret: "code-secret",
   token: "vercel-token",
   teamId: "team-123",
   apiBaseUrl: "https://vercel.test/api",
@@ -230,6 +230,39 @@ describe("VercelSandboxProvider", () => {
         ttydUrl: "https://term.test",
       })
     );
+  });
+
+  it("exposes and returns VNC access without adding its port to generic tunnels", async () => {
+    const client = createMockClient({
+      createSandbox: vi.fn(async () =>
+        createSessionResponse("vercel-session-1", [
+          { port: 6099, subdomain: "vnc", url: "https://vnc.test" },
+          { port: 3000, subdomain: "app", url: "https://app.test" },
+        ])
+      ),
+    });
+    const provider = new VercelSandboxProvider(client, providerConfig);
+
+    const result = await provider.createSandbox({
+      ...baseCreateConfig,
+      vncEnabled: true,
+      sandboxSettings: { vncPort: 6099, tunnelPorts: [6099, 3000] },
+    });
+    const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
+
+    expect(createCall.ports).toEqual([6099, 3000]);
+    expect(createCall.env).toEqual(
+      expect.objectContaining({
+        NOVNC_PORT: "6099",
+        VNC_PASSWORD: expect.any(String),
+        EXPECTED_TUNNEL_PORTS: "3000",
+      })
+    );
+    expect(result).toMatchObject({
+      vncAccess: { url: "https://vnc.test", password: expect.any(String) },
+      tunnelUrls: { "3000": "https://app.test" },
+    });
+    expect(result.tunnelUrls).not.toHaveProperty("6099");
   });
 
   it("maps bitbucket to its own clone identity", async () => {
@@ -491,12 +524,19 @@ describe("VercelSandboxProvider", () => {
   });
 
   it("restores from a session snapshot and sets restore mode env vars", async () => {
-    const client = createMockClient();
+    const client = createMockClient({
+      createSandbox: vi.fn(async () =>
+        createSessionResponse("vercel-session-1", [
+          { port: 6080, subdomain: "vnc", url: "https://vnc.test" },
+        ])
+      ),
+    });
     const provider = new VercelSandboxProvider(client, providerConfig);
 
     const result = await provider.restoreFromSnapshot({
       ...baseRestoreConfig,
       codeServerEnabled: true,
+      vncEnabled: true,
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
@@ -507,7 +547,7 @@ describe("VercelSandboxProvider", () => {
         success: true,
         sandboxId: "sandbox-456",
         providerObjectId: "vercel-session-1",
-        codeServerUrl: "https://code.test",
+        vncAccess: { url: "https://vnc.test", password: expect.any(String) },
       })
     );
   });
@@ -697,12 +737,13 @@ describe("VercelSandboxProvider", () => {
         { repo_owner: "acme", repo_name: "api", branch: "develop" },
       ],
     });
-    expect(createCall.tags).toEqual(
-      expect.objectContaining({
-        openinspect_kind: "environment-image-build",
-        openinspect_environment: "env_flagship",
-      })
-    );
+    expect(createCall.tags).toEqual({
+      openinspect_framework: "open-inspect",
+      openinspect_kind: "environment-image-build",
+      openinspect_build_id: "envimg-1",
+      openinspect_scope_kind: "environment",
+      openinspect_scope_id: "env_flagship",
+    });
     expect(onProviderSessionCreated).toHaveBeenCalledWith("vercel-session-1");
     expect(vi.mocked(client.startCommand)).toHaveBeenCalledWith(
       expect.objectContaining({
