@@ -176,6 +176,8 @@ describe("ModalClient", () => {
             created_at: 1,
             code_server_url: "https://code.test",
             code_server_password: "pw",
+            vnc_url: "https://vnc.test",
+            vnc_password: "vnc-pw",
             ttyd_url: "https://ttyd.test",
             tunnel_urls: { "3000": "https://3000.test" },
           },
@@ -200,6 +202,8 @@ describe("ModalClient", () => {
       createdAt: 1,
       codeServerUrl: "https://code.test",
       codeServerPassword: "pw",
+      vncUrl: "https://vnc.test",
+      vncPassword: "vnc-pw",
       ttydUrl: "https://ttyd.test",
       tunnelUrls: { "3000": "https://3000.test" },
     });
@@ -217,6 +221,8 @@ describe("ModalClient", () => {
             created_at: 1,
             code_server_url: null,
             code_server_password: null,
+            vnc_url: null,
+            vnc_password: null,
             ttyd_url: null,
             tunnel_urls: null,
           },
@@ -241,6 +247,8 @@ describe("ModalClient", () => {
       createdAt: 1,
       codeServerUrl: undefined,
       codeServerPassword: undefined,
+      vncUrl: undefined,
+      vncPassword: undefined,
       ttydUrl: undefined,
       tunnelUrls: undefined,
     });
@@ -336,6 +344,8 @@ describe("ModalClient", () => {
             status: "warming",
             code_server_url: null,
             code_server_password: null,
+            vnc_url: null,
+            vnc_password: null,
             ttyd_url: null,
             tunnel_urls: null,
           },
@@ -363,9 +373,49 @@ describe("ModalClient", () => {
       modalObjectId: undefined,
       codeServerUrl: undefined,
       codeServerPassword: undefined,
+      vncUrl: undefined,
+      vncPassword: undefined,
       ttydUrl: undefined,
       tunnelUrls: undefined,
     });
+  });
+
+  it("sends VNC enablement on create and restore", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    const client = createModalClient("secret", "acme", "prod-web");
+
+    await client.createSandbox({
+      sessionId: "session-123",
+      repoOwner: null,
+      repoName: null,
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      vncEnabled: true,
+    });
+    await client.restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: null,
+      repoName: null,
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+      vncEnabled: true,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).vnc_enabled).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).vnc_enabled).toBe(true);
   });
 
   it("parses valid snapshot responses", async () => {

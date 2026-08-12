@@ -44,18 +44,6 @@ const makeSlackAutomation = (overrides?: Partial<AutomationRow>) =>
 describe("SlackChannelStore (D1 integration)", () => {
   beforeEach(cleanD1Tables);
 
-  it("setSlackChannels writes and replaces the channel set", async () => {
-    const store = new AutomationStore(env.DB);
-    const channels = new SlackChannelStore(env.DB);
-    await store.create(makeSlackAutomation({ id: "auto-s1" }));
-
-    await channels.setSlackChannels("auto-s1", ["C1", "C2"]);
-    expect((await channels.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2"]);
-
-    await channels.setSlackChannels("auto-s1", ["C2", "C3"]);
-    expect((await channels.getWatchedSlackChannels()).sort()).toEqual(["C2", "C3"]);
-  });
-
   it("getSlackAutomationsForChannel returns only enabled, non-deleted slack automations", async () => {
     const store = new AutomationStore(env.DB);
     const channels = new SlackChannelStore(env.DB);
@@ -69,9 +57,9 @@ describe("SlackChannelStore (D1 integration)", () => {
       })
     );
 
-    await channels.setSlackChannels("auto-s2", ["C1"]);
-    await channels.setSlackChannels("auto-s3", ["C1"]); // disabled → excluded
-    await channels.setSlackChannels("auto-s4", ["C1"]); // wrong trigger_type → excluded
+    await env.DB.batch(channels.bindChannelStatements("auto-s2", ["C1"]));
+    await env.DB.batch(channels.bindChannelStatements("auto-s3", ["C1"]));
+    await env.DB.batch(channels.bindChannelStatements("auto-s4", ["C1"]));
 
     const matches = await channels.getSlackAutomationsForChannel("C1");
     expect(matches.map((m) => m.id)).toEqual(["auto-s2"]);
@@ -84,9 +72,9 @@ describe("SlackChannelStore (D1 integration)", () => {
     await store.create(makeSlackAutomation({ id: "auto-s6" }));
     await store.create(makeSlackAutomation({ id: "auto-s7", enabled: 0 }));
 
-    await channels.setSlackChannels("auto-s5", ["C1", "C2"]);
-    await channels.setSlackChannels("auto-s6", ["C2", "C3"]); // C2 duplicated across automations
-    await channels.setSlackChannels("auto-s7", ["C9"]); // disabled → excluded
+    await env.DB.batch(channels.bindChannelStatements("auto-s5", ["C1", "C2"]));
+    await env.DB.batch(channels.bindChannelStatements("auto-s6", ["C2", "C3"]));
+    await env.DB.batch(channels.bindChannelStatements("auto-s7", ["C9"]));
 
     expect((await channels.getWatchedSlackChannels()).sort()).toEqual(["C1", "C2", "C3"]);
   });

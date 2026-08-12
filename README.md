@@ -250,6 +250,7 @@ Agents can decompose work into parallel child sessions:
 
 - `spawn-child` creates a child session in its own sandbox and returns immediately
 - Parent continues working while children run in parallel on separate branches
+- `send-child-prompt` queues follow-up instructions in an existing direct child session
 - `get-child-status` and `cancel-child` coordinate child sessions
 - Depth limits and per-repo guardrails enforced
 

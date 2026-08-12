@@ -168,7 +168,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
     const channels = new SlackChannelStore(env.DB);
     const auto = makeSlackAutomation();
     await store.create(auto);
-    await channels.setSlackChannels(auto.id, ["C1"]);
+    await env.DB.batch(channels.bindChannelStatements(auto.id, ["C1"]));
 
     const res = await putAutomation(auto.id, {
       triggerConfig: {
@@ -223,7 +223,7 @@ describe("PUT /automations/:id — slack_event validation (integration)", () => 
       }),
     });
     await store.create(auto);
-    await channels.setSlackChannels(auto.id, ["C1"]);
+    await env.DB.batch(channels.bindChannelStatements(auto.id, ["C1"]));
 
     const res = await putAutomation(auto.id, { triggerConfig: null });
     expect(res.status).toBe(400);
@@ -257,8 +257,8 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     const b = makeSlackAutomation();
     await store.create(a);
     await store.create(b);
-    await channels.setSlackChannels(a.id, ["C1", "C2"]);
-    await channels.setSlackChannels(b.id, ["C2", "C3"]);
+    await env.DB.batch(channels.bindChannelStatements(a.id, ["C1", "C2"]));
+    await env.DB.batch(channels.bindChannelStatements(b.id, ["C2", "C3"]));
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);
@@ -271,7 +271,7 @@ describe("GET /integration-settings/slack/watched-channels (integration)", () =>
     const channels = new SlackChannelStore(env.DB);
     const disabled = makeSlackAutomation({ enabled: 0 });
     await store.create(disabled);
-    await channels.setSlackChannels(disabled.id, ["C9"]);
+    await env.DB.batch(channels.bindChannelStatements(disabled.id, ["C9"]));
 
     const res = await getWatchedChannels();
     expect(res.status).toBe(200);

@@ -161,7 +161,7 @@ function validCompletion(overrides: Record<string, unknown> = {}) {
     buildId: "imgb-env_1-1-abcd",
     providerSessionId: "vercel-session-1",
     repositoryShas: [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }],
-    runtimeVersion: "v56-managed-provider-runtime",
+    runtimeVersion: "v57-vnc-runtime",
     buildDurationSeconds: 12.5,
     ...overrides,
   };

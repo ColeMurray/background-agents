@@ -3,11 +3,13 @@
  * Extracted from index.ts for modularity.
  */
 
-import { createSessionResponseSchema } from "@open-inspect/shared";
+import {
+  createSessionResponseSchema,
+  type LinearCallbackContext,
+} from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 import type {
   Env,
-  LinearCallbackContext,
   LinearIssueDetails,
   AgentSessionWebhook,
   AgentSessionWebhookIssue,
@@ -639,8 +641,8 @@ async function handleNewSession(
   // ─── Build and send prompt ────────────────────────────────────────────
 
   // Prefer Linear's promptContext (includes issue, comments, guidance)
-  let prompt = webhook.agentSession.promptContext
-    ? buildPromptContextPrompt(webhook.agentSession.promptContext)
+  let prompt = webhook.promptContext
+    ? buildPromptContextPrompt(webhook.promptContext)
     : buildPrompt(issue, issueDetails, comment);
 
   if (integrationConfig.issueSessionInstructions) {

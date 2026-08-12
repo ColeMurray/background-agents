@@ -8,7 +8,10 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { env, runInDurableObject } from "cloudflare:test";
-import type { SessionState } from "@open-inspect/shared";
+import {
+  sessionSnapshotSchema,
+  type SessionState,
+} from "@open-inspect/shared/types/server-messages";
 import type { SessionDO } from "../../src/session/durable-object";
 import { EnvironmentStore } from "../../src/db/environments";
 import { EnvironmentSecretsStore } from "../../src/db/environment-secrets";
@@ -60,11 +63,10 @@ function getUserEnvVars(stub: DurableObjectStub): Promise<Record<string, string>
   );
 }
 
-/** Invoke the DO's real (private) getSessionState. */
-function getSessionState(stub: DurableObjectStub): Promise<SessionState> {
-  return runInDurableObject(stub, (instance: SessionDO) =>
-    (instance as unknown as { getSessionState(): Promise<SessionState> }).getSessionState()
-  );
+async function getSessionState(stub: DurableObjectStub): Promise<SessionState> {
+  const response = await stub.fetch("http://internal/internal/snapshot");
+  expect(response.ok).toBe(true);
+  return sessionSnapshotSchema.parse(await response.json()).session;
 }
 
 const WEB: RepoSpec = { repoOwner: "acme", repoName: "web", repoId: 1, baseBranch: "main" };

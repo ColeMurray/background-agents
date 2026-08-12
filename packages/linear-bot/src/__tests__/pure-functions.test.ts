@@ -7,7 +7,7 @@ import {
 import { isValidPayload } from "../callbacks";
 import { buildOAuthSuccessHtml } from "../index";
 import { matchExplicitRepo } from "../target-resolution";
-import type { RepoConfig } from "../types";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { CompletionCallback } from "../types";
 
 describe("buildOAuthSuccessHtml", () => {
@@ -67,11 +67,14 @@ describe("matchExplicitRepo", () => {
 
   it("does not match inside a period-delimited repository path", () => {
     expect(matchExplicitRepo("see acme/backend.docs for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see acme/backend..docs for context", repos)).toBeNull();
     expect(matchExplicitRepo("see not.acme/backend for context", repos)).toBeNull();
+    expect(matchExplicitRepo("see not..acme/backend for context", repos)).toBeNull();
   });
 
   it("accepts ordinary terminal punctuation", () => {
     expect(matchExplicitRepo("use acme/backend.", repos)?.fullName).toBe("acme/backend");
+    expect(matchExplicitRepo("use acme/backend...", repos)?.fullName).toBe("acme/backend");
     expect(matchExplicitRepo("acme/backend, please", repos)?.fullName).toBe("acme/backend");
   });
 });

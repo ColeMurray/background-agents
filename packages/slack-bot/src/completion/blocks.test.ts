@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCompletionBlocks } from "./blocks";
-import type { AgentResponse, SlackCallbackContext } from "../types";
+import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
+import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 
 const BASE_CONTEXT: SlackCallbackContext = {
   source: "slack",

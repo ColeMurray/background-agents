@@ -3,7 +3,7 @@ import { processSlackCompletion, shouldDeclineReply } from "./delivery";
 import { extractAgentResponse } from "./extractor";
 import { deliverMediaArtifacts } from "./media-upload";
 import type { SlackCompletionJob } from "./job";
-import type { AgentResponse } from "@open-inspect/shared";
+import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
 import type { Env } from "../types";
 import type * as ExtractorModule from "./extractor";
 import type * as MediaUploadModule from "./media-upload";
