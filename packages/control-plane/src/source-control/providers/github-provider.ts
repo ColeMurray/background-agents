@@ -6,8 +6,8 @@
  */
 
 import { z } from "zod";
-import type { InstallationRepository } from "@open-inspect/shared";
-import type { PullRequestStatus } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
+import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SourceControlProvider,
   SourceControlAuthContext,
@@ -102,6 +102,21 @@ const githubRepositoryLocationSchema = z.object({
   owner: z.object({ login: z.string() }),
 });
 
+/** Wire shape of GET /repos/{owner}/{repo}, limited to fields used for repo metadata. */
+const githubRepositoryInfoSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  full_name: z.string(),
+  default_branch: z.string(),
+  private: z.boolean(),
+  owner: z.object({ login: z.string() }),
+});
+
+/** Wire shape of a GitHub git-ref response, limited to the branch head SHA. */
+const githubBranchRefSchema = z.object({
+  object: z.object({ sha: z.string().min(1) }),
+});
+
 /** Parse a GitHub ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
@@ -152,14 +167,11 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       );
     }
 
-    const data = (await response.json()) as {
-      id: number;
-      name: string;
-      full_name: string;
-      default_branch: string;
-      private: boolean;
-      owner: { login: string };
-    };
+    const data = await parseProviderResponse(
+      response,
+      githubRepositoryInfoSchema,
+      "Failed to get repository"
+    );
 
     return {
       owner: data.owner.login,
@@ -237,6 +249,12 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
 
     // Add labels if requested
     if (config.labels && config.labels.length > 0) {
+      await this.ensureLabels(
+        auth.token,
+        config.repository.owner,
+        config.repository.name,
+        config.labels
+      );
       await this.addLabels(
         auth.token,
         config.repository.owner,
@@ -478,6 +496,55 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
     }
   }
 
+  async getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null> {
+    if (!this.appConfig) {
+      throw new SourceControlProviderError(
+        "GitHub App not configured - cannot resolve branch head",
+        "permanent"
+      );
+    }
+    try {
+      const token = await getCachedInstallationToken(this.appConfig, {
+        cacheStore: this.cacheStore,
+        userAgent: this.userAgent,
+      });
+      const response = await fetchWithTimeout(
+        `${GITHUB_API_BASE}/repos/${encodeURIComponent(config.owner)}/${encodeURIComponent(
+          config.name
+        )}/git/ref/heads/${encodeURIComponent(config.branch)}`,
+        {
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "User-Agent": this.userAgent,
+          },
+        }
+      );
+      if (response.status === 404) return null;
+      if (!response.ok) {
+        const error = await response.text();
+        throw SourceControlProviderError.fromFetchError(
+          `Failed to resolve branch head: ${response.status} ${error}`,
+          new Error(error),
+          response.status
+        );
+      }
+      const data = await parseProviderResponse(
+        response,
+        githubBranchRefSchema,
+        "Failed to resolve branch head"
+      );
+      return data.object.sha;
+    } catch (error) {
+      if (error instanceof SourceControlProviderError) throw error;
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to resolve branch head: ${error instanceof Error ? error.message : String(error)}`,
+        error,
+        extractHttpStatus(error)
+      );
+    }
+  }
+
   /**
    * Generate authentication for git push operations using GitHub App.
    */
@@ -558,6 +625,55 @@ export class GitHubSourceControlProvider implements SourceControlProvider {
       repoName: config.name,
       force,
     };
+  }
+
+  /** Ensure requested labels exist without generating repeated mutating 422 responses. */
+  private async ensureLabels(
+    accessToken: string,
+    owner: string,
+    repo: string,
+    labels: string[]
+  ): Promise<void> {
+    const encodedOwner = encodeURIComponent(owner);
+    const encodedRepo = encodeURIComponent(repo);
+    const headers = {
+      Accept: "application/vnd.github.v3+json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": this.userAgent,
+    };
+
+    for (const label of labels) {
+      const labelUrl = `${GITHUB_API_BASE}/repos/${encodedOwner}/${encodedRepo}/labels/${encodeURIComponent(label)}`;
+      try {
+        const existing = await fetchWithTimeout(labelUrl, { headers });
+        if (existing.ok) continue;
+        if (existing.status !== 404) {
+          console.warn(`Failed to check label "${label}" in ${owner}/${repo}: ${existing.status}`);
+          continue;
+        }
+
+        const created = await fetchWithTimeout(
+          `${GITHUB_API_BASE}/repos/${encodedOwner}/${encodedRepo}/labels`,
+          {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: label, color: "ededed" }),
+          }
+        );
+        if (created.ok) continue;
+
+        // A concurrent creator can win between the GET and POST. Confirm the
+        // label now exists rather than treating every validation failure as a duplicate.
+        if (created.status === 422) {
+          const raced = await fetchWithTimeout(labelUrl, { headers });
+          if (raced.ok) continue;
+        }
+
+        console.warn(`Failed to create label "${label}" in ${owner}/${repo}: ${created.status}`);
+      } catch (error) {
+        console.warn(`Failed to ensure label "${label}" in ${owner}/${repo}:`, error);
+      }
+    }
   }
 
   /**

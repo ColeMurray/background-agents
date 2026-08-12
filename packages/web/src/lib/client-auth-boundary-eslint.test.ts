@@ -50,10 +50,10 @@ describe("client authentication boundaries", () => {
     ).resolves.toHaveLength(0);
   });
 
-  it("allows the auth seam to own the NextAuth client integration", async () => {
+  it("keeps the app-owned auth seam framework-independent", async () => {
     await expect(
       boundaryMessages('import { useSession } from "next-auth/react";', authSessionPath)
-    ).resolves.toHaveLength(0);
+    ).resolves.toHaveLength(1);
   });
 
   it("allows the browser request seam to own fetch", async () => {

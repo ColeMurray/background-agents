@@ -42,16 +42,6 @@ export interface Env {
 }
 
 /**
- * Repository configuration for the classifier.
- */
-export type {
-  RepoConfig,
-  RepoMetadata,
-  ControlPlaneRepo,
-  ControlPlaneReposResponse,
-} from "@open-inspect/shared";
-
-/**
  * Thread context for classification.
  */
 export interface ThreadContext {
@@ -62,7 +52,7 @@ export interface ThreadContext {
   previousMessages?: string[];
 }
 
-import type { ConfidenceLevel } from "@open-inspect/shared";
+import type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
 // targets.ts is a pure leaf (types + policy functions, no I/O), so the types
 // barrel can depend on it without a cycle.
 import type { SlackSessionTarget } from "../targets";
@@ -81,7 +71,6 @@ export interface ClassificationResult {
   needsClarification: boolean;
 }
 
-export type { ConfidenceLevel, Environment } from "@open-inspect/shared";
 export type { SlackSessionTarget } from "../targets";
 
 /**
@@ -130,14 +119,7 @@ export interface SlackAppMentionEvent {
 
 export type { SlackInteractionPayload } from "../interaction-payload";
 
-/**
- * Callback context passed with prompts for follow-up notifications.
- */
-export type { SlackCallbackContext, CallbackContext } from "@open-inspect/shared";
-import type { SlackCallbackContext } from "@open-inspect/shared";
-
-// Keep backward-compatible alias
-export type SlackBotCallbackContext = SlackCallbackContext;
+import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
 
 /**
  * Thread-to-session mapping stored in KV for conversation continuity.
@@ -185,17 +167,3 @@ export interface ToolCallCallback {
   signature: string;
   context: SlackCallbackContext;
 }
-
-/**
- * Event response from control-plane events API.
- */
-export type {
-  EventResponse,
-  ListEventsResponse,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  AgentResponse,
-  UserPreferences,
-} from "@open-inspect/shared";

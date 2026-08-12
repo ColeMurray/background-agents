@@ -63,12 +63,12 @@ class TestCodexAuthPluginSetup:
         with (
             patch.dict(
                 "os.environ",
-                {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret"},
+                {"OPENAI_OAUTH_MANAGED": "1"},
                 clear=False,
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
         ):
-            sup._setup_openai_oauth()
+            sup._setup_managed_oauth()
 
         data = json.loads(_auth_file(tmp_path).read_text())
         assert data["openai"]["refresh"] == "managed-by-control-plane"
@@ -76,26 +76,26 @@ class TestCodexAuthPluginSetup:
         assert data["openai"]["access"] == ""
         assert data["openai"]["expires"] == 0
 
-    def test_auth_json_still_includes_account_id(self, tmp_path):
-        """Account ID should still be written if present."""
+    def test_auth_json_does_not_include_account_id(self, tmp_path):
+        """The broker returns account IDs with access tokens when needed."""
         sup = _make_supervisor()
 
         with (
             patch.dict(
                 "os.environ",
                 {
-                    "OPENAI_OAUTH_REFRESH_TOKEN": "rt_abc",
+                    "OPENAI_OAUTH_MANAGED": "1",
                     "OPENAI_OAUTH_ACCOUNT_ID": "acct_xyz",
                 },
                 clear=False,
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
         ):
-            sup._setup_openai_oauth()
+            sup._setup_managed_oauth()
 
         data = json.loads(_auth_file(tmp_path).read_text())
         assert data["openai"]["refresh"] == "managed-by-control-plane"
-        assert data["openai"]["accountId"] == "acct_xyz"
+        assert "accountId" not in data["openai"]
 
     async def test_start_opencode_copies_js_plugin(self, tmp_path):
         """start_opencode() should deploy the precompiled JS plugin into .opencode/plugins."""
@@ -115,7 +115,7 @@ class TestCodexAuthPluginSetup:
         original_path = Path
 
         with (
-            patch.dict("os.environ", {"OPENAI_OAUTH_REFRESH_TOKEN": "rt_real_secret"}, clear=False),
+            patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
             patch("sandbox_runtime.entrypoint.Path") as mock_path,
             patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
             patch("sandbox_runtime.entrypoint.install_runtime_git_excludes") as mock_excludes,
@@ -133,7 +133,7 @@ class TestCodexAuthPluginSetup:
                 if p == "/app/sandbox_runtime/plugins/codex-auth-plugin.js"
                 else original_path(p)
             )
-            sup._setup_openai_oauth = MagicMock()
+            sup._setup_managed_oauth = MagicMock()
             sup._install_tools = MagicMock()
             sup._install_skills = MagicMock()
             sup._install_bin_scripts = MagicMock()

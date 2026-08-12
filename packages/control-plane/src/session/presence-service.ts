@@ -9,7 +9,11 @@
  */
 
 import type { Logger } from "../logger";
-import type { ClientInfo, ServerMessage, ParticipantPresence } from "../types";
+import type {
+  ParticipantPresence,
+  ServerMessage,
+} from "@open-inspect/shared/types/server-messages";
+import type { ClientInfo } from "../types";
 import type { SessionMessenger } from "./messenger";
 
 /**
@@ -18,7 +22,6 @@ import type { SessionMessenger } from "./messenger";
  */
 export interface PresenceServiceDeps {
   getAuthenticatedClients: () => IterableIterator<ClientInfo>;
-  getClientInfo: (ws: WebSocket) => ClientInfo | null;
   messenger: SessionMessenger;
   send: (ws: WebSocket, message: ServerMessage) => boolean;
   getSandboxSocket: () => WebSocket | null;
@@ -82,15 +85,12 @@ export class PresenceService {
    * Update client presence status and broadcast.
    */
   updatePresence(
-    ws: WebSocket,
+    client: ClientInfo,
     data: { status: "active" | "idle"; cursor?: { line: number; file: string } }
   ): void {
-    const client = this.deps.getClientInfo(ws);
-    if (client) {
-      client.status = data.status;
-      client.lastSeen = Date.now();
-      this.broadcastPresence();
-    }
+    client.status = data.status;
+    client.lastSeen = Date.now();
+    this.broadcastPresence();
   }
 
   /**

@@ -3,19 +3,15 @@
  *
  * The `config:*` and `user_prefs:*` keys are operator-managed: edit them
  * directly with `wrangler kv key put --namespace-id <LINEAR_KV> <key> <json>`
- * (the HTTP /config endpoints were retired with the shared bearer):
+ * using these key formats:
  * - `config:team-repos`   — { [teamKey]: "owner/repo" }
  * - `config:project-repos` — { [projectId]: "owner/repo" }
  * - `user_prefs:<userId>`  — { userId, model, reasoningEffort?, updatedAt }
  */
 
-import type {
-  Env,
-  TeamRepoMapping,
-  ProjectRepoMapping,
-  UserPreferences,
-  IssueSession,
-} from "./types";
+import { issueSessionSchema } from "./types";
+import type { UserPreferences } from "@open-inspect/shared/types/session-api";
+import type { Env, TeamRepoMapping, ProjectRepoMapping, IssueSession } from "./types";
 import { createLogger } from "./logger";
 
 const log = createLogger("kv-store");
@@ -67,7 +63,8 @@ function getIssueSessionKey(issueId: string): string {
 export async function lookupIssueSession(env: Env, issueId: string): Promise<IssueSession | null> {
   try {
     const data = await env.LINEAR_KV.get(getIssueSessionKey(issueId), "json");
-    if (data && typeof data === "object") return data as IssueSession;
+    const result = issueSessionSchema.safeParse(data);
+    if (result.success) return result.data;
   } catch (e) {
     log.debug("kv.lookup_issue_session_failed", {
       issueId,

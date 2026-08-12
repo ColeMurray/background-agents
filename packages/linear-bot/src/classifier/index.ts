@@ -3,8 +3,12 @@
  * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
  */
 
-import type { Env, RepoConfig, ClassificationResult } from "../types";
-import type { ConfidenceLevel } from "@open-inspect/shared";
+import type {
+  ClassificationResult,
+  RepoConfig,
+} from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
+import { z } from "zod";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
 
@@ -12,24 +16,24 @@ const log = createLogger("classifier");
 
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
 
-interface ClassifyToolInput {
-  repoId: string | null;
-  confidence: ConfidenceLevel;
-  reasoning: string;
-  alternatives: string[];
-}
+export const classifyToolInputSchema = z.object({
+  repoId: z.string().nullable(),
+  confidence: z.enum(["high", "medium", "low"]),
+  reasoning: z.string(),
+  alternatives: z.array(z.string()),
+});
 
-interface AnthropicContentBlock {
-  type: string;
-  id?: string;
-  name?: string;
-  input?: unknown;
-  text?: string;
-}
+export type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
 
-interface AnthropicResponse {
-  content: AnthropicContentBlock[];
-}
+export const anthropicMessagesResponseSchema = z.object({
+  content: z.array(
+    z.object({
+      type: z.string(),
+      name: z.string().optional(),
+      input: z.unknown().optional(),
+    })
+  ),
+});
 
 /**
  * Build classification prompt from Linear issue context.
@@ -138,22 +142,19 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
     throw new Error(`Anthropic API error ${response.status}: ${errText}`);
   }
 
-  const data = (await response.json()) as AnthropicResponse;
-  const toolBlock = data.content.find(
+  const data = anthropicMessagesResponseSchema.safeParse(await response.json());
+  if (!data.success) throw new Error("Malformed Anthropic response");
+
+  const toolBlock = data.data.content.find(
     (b) => b.type === "tool_use" && b.name === CLASSIFY_REPO_TOOL_NAME
   );
 
   if (!toolBlock) throw new Error("No tool_use block in Anthropic response");
 
-  const input = toolBlock.input as Record<string, unknown>;
-  return {
-    repoId: input.repoId === null ? null : typeof input.repoId === "string" ? input.repoId : null,
-    confidence: (input.confidence as ConfidenceLevel) || "low",
-    reasoning: String(input.reasoning || ""),
-    alternatives: Array.isArray(input.alternatives)
-      ? input.alternatives.filter((a): a is string => typeof a === "string")
-      : [],
-  };
+  const input = classifyToolInputSchema.safeParse(toolBlock.input);
+  if (!input.success) throw new Error("Malformed Anthropic tool input");
+
+  return input.data;
 }
 
 /**

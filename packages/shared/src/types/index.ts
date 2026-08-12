@@ -25,20 +25,6 @@ export type {
 export { clientMessageSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
-export { sessionStatusSchema } from "./statuses";
-export type {
-  SessionStatus,
-  SandboxStatus,
-  GitSyncStatus,
-  MessageStatus,
-  MessageSource,
-  ArtifactType,
-  EventType,
-  ParticipantRole,
-  SpawnSource,
-  ConfidenceLevel,
-} from "./statuses";
-
 export {
   MAX_TARGET_REPOSITORIES,
   MAX_SESSION_REPOSITORIES,
@@ -62,6 +48,13 @@ export type {
   RepositoryPair,
 } from "./repositories";
 
+export {
+  installationRepositorySchema,
+  repoMetadataSchema,
+  enrichedRepositorySchema,
+  repoConfigSchema,
+  controlPlaneReposResponseSchema,
+} from "./repository-catalog";
 export type {
   InstallationRepository,
   RepoMetadata,
@@ -70,41 +63,23 @@ export type {
   ControlPlaneRepo,
   ControlPlaneReposResponse,
   ClassificationResult,
+  ConfidenceLevel,
 } from "./repository-catalog";
 
-export { toDisplayStatus } from "./artifacts";
+export {
+  serverMessageSchema,
+  sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
+  sessionTimelineEventSchema,
+} from "./server-messages";
 export type {
-  SessionArtifact,
-  ManualPullRequestArtifactMetadata,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-  PullRequest,
-  PullRequestLifecycleState,
-  PullRequestStatus,
-  PullRequestDisplayStatus,
-  PullRequestArtifactMetadata,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  MediaArtifactInfo,
-  AgentResponse,
-} from "./artifacts";
-
-export { sandboxEventSchema } from "./sandbox-events";
-export type { AgentEvent, SandboxEvent, EventResponse, ListEventsResponse } from "./sandbox-events";
-
-export type {
-  SessionParticipant,
-  Session,
-  SessionMessage,
-  SessionState,
   ParticipantPresence,
-  PullRequestSummary,
-} from "./sessions";
-
-export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage } from "./server-messages";
+  ServerMessage,
+  SessionSnapshot,
+  SessionSnapshotState,
+  SessionState,
+  SessionTimelineEvent,
+} from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
@@ -151,44 +126,14 @@ export type {
 } from "./session-diffs";
 
 export {
-  linearCallbackContextSchema,
-  linearStartCallbackSchema,
-  createSessionRequestSchema,
-  createSessionInputSchema,
-  createMediaArtifactRequestSchema,
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-  spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-  spawnContextSchema,
-} from "./session-api";
-export type {
-  UserPreferences,
-  SlackCallbackContext,
-  LinearCallbackContext,
-  LinearStartCallback,
-  AutomationCallbackContext,
-  CallbackContext,
-  CreateSessionRequest,
-  CreateSessionInput,
-  CreateMediaArtifactRequest,
-  CreateSessionResponse,
-  SendPromptResponse,
-  ListSessionsResponse,
-  SpawnChildSessionRequest,
-  CancelChildSessionRequest,
-  SpawnContext,
-  ChildSessionFinalResponse,
-  ChildSessionTrajectory,
-  ChildSessionDetail,
-} from "./session-api";
-
-export {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
   isEnvironmentId,
   environmentRepositoriesInputSchema,
+  environmentRepositorySchema,
+  environmentSchema,
+  listEnvironmentsResponseSchema,
   createEnvironmentInputSchema,
   updateEnvironmentInputSchema,
 } from "./environments";
@@ -201,11 +146,11 @@ export type {
 } from "./environments";
 
 export type {
-  AutomationTriggerType,
   AutomationRunStatus,
   AutomationInvocationSource,
   AutomationInvocationStatus,
 } from "./automations";
+export type { AutomationTriggerType } from "../triggers/types";
 
 export {
   MAX_AUTOMATION_REPOSITORIES,
@@ -230,8 +175,6 @@ export type {
   ImageBuildScopeKind,
   RepositoryShaEntry,
   ImageBuildRecordView,
-  ImageBuildCompleteCallback,
-  ImageBuildFailedCallback,
 } from "./image-builds";
 
 export { ANALYTICS_DAYS, ANALYTICS_BREAKDOWN_BY } from "./analytics";

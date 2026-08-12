@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { SWRConfig } from "swr";
-import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared";
+import { DEFAULT_ENABLED_MODELS } from "@open-inspect/shared/models";
 import { MODEL_PREFERENCES_KEY, useEnabledModels } from "./use-enabled-models";
 
 function wrapper(enabledModels: unknown) {

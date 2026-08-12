@@ -133,7 +133,6 @@ describe("createWsTokenHandler", () => {
       scmUserId: "scm-user-1",
       scmLogin: "octocat-updated",
       scmName: "Updated Octocat",
-      authName: null,
       scmEmail: "updated@example.com",
       scmAccessTokenEncrypted: "enc-access-new",
       scmRefreshTokenEncrypted: "enc-refresh-new",
@@ -177,7 +176,6 @@ describe("createWsTokenHandler", () => {
       scmUserId: null,
       scmLogin: null,
       scmName: null,
-      authName: null,
       scmEmail: null,
       scmAccessTokenEncrypted: null,
       scmRefreshTokenEncrypted: null,
@@ -219,7 +217,6 @@ describe("createWsTokenHandler", () => {
       scmUserId: "scm-user-1",
       scmLogin: "octocat",
       scmName: "The Octocat",
-      authName: null,
       scmEmail: "octocat@example.com",
       scmAccessTokenEncrypted: "enc-access",
       scmRefreshTokenEncrypted: "enc-refresh",
@@ -264,7 +261,6 @@ describe("createWsTokenHandler", () => {
       scmUserId: null,
       scmLogin: null,
       scmName: null,
-      authName: null,
       scmEmail: null,
       scmAccessTokenEncrypted: null,
       scmRefreshTokenEncrypted: null,
@@ -274,7 +270,7 @@ describe("createWsTokenHandler", () => {
     });
   });
 
-  it("persists a provider-agnostic authName for presence (e.g. Google users)", async () => {
+  it("does not copy profile names into new participants", async () => {
     const { handler, repository, getParticipantByUserId } = createHandler();
     const createdParticipant = createParticipant({ id: "participant-new", scm_name: null });
     getParticipantByUserId.mockReturnValueOnce(null).mockReturnValueOnce(createdParticipant);
@@ -283,7 +279,6 @@ describe("createWsTokenHandler", () => {
       new Request("http://internal/internal/ws-token", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        // Google auth: no SCM fields, but a display name is supplied.
         body: JSON.stringify({ userId: "google-sub-123", authName: "Ada Lovelace" }),
       })
     );
@@ -293,12 +288,12 @@ describe("createWsTokenHandler", () => {
       expect.objectContaining({
         userId: "google-sub-123",
         scmName: null,
-        authName: "Ada Lovelace",
       })
     );
+    expect(repository.createParticipant.mock.calls[0]?.[0]).not.toHaveProperty("authName");
   });
 
-  it("persists authName on the update path for an existing participant", async () => {
+  it("does not copy profile names into existing participants", async () => {
     const { handler, repository, getParticipantByUserId } = createHandler();
     // Existing participant → update path (createParticipant is not called).
     getParticipantByUserId.mockReturnValue(createParticipant({ scm_name: null }));
@@ -313,9 +308,6 @@ describe("createWsTokenHandler", () => {
 
     expect(response.status).toBe(200);
     expect(repository.createParticipant).not.toHaveBeenCalled();
-    expect(repository.updateParticipantCoalesce).toHaveBeenCalledWith(
-      "participant-1",
-      expect.objectContaining({ authName: "Ada Lovelace" })
-    );
+    expect(repository.updateParticipantCoalesce.mock.calls[0]?.[1]).not.toHaveProperty("authName");
   });
 });

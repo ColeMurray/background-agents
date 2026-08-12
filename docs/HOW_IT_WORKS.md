@@ -186,6 +186,11 @@ gets its own lightweight database that can handle hundreds of events per second 
 other sessions. The WebSocket Hibernation API keeps connections alive during idle periods without
 incurring compute costs.
 
+Sandbox lifecycle state is authoritative across WebSocket reconnects. Losing the sandbox WebSocket
+does not stop the sandbox: the bridge reconnects while the control plane schedules a heartbeat check
+in case the process is actually gone. Explicit lifecycle paths such as inactivity and stale
+heartbeat persist `stopped` or `stale` before closing the connection, which prevents reconnection.
+
 ### Data Plane (Sandbox Backends)
 
 The data plane is where code actually runs. Each session gets an isolated sandbox with a full
@@ -394,6 +399,31 @@ This lets you send follow-up thoughts while the agent works. Prompts are process
 
 You can also stop the current execution if the agent is going down the wrong path.
 
+### Parent-to-Child Follow-Ups
+
+An agent that created a child with `spawn-child` can continue that same child session with
+`send-child-prompt`. The follow-up enters the child's normal durable queue:
+
+```text
+Child prompt 1 (processing) ──▶ Parent follow-up (queued) ──▶ Child continues
+```
+
+The follow-up does not interrupt active work. Completed and failed children can resume, restoring
+their compatible sandbox snapshot when available. Cancelled children remain terminal, and archived
+children must be explicitly unarchived before they can accept prompts.
+
+The parent token is never exchanged for the child's sandbox token. The control plane authenticates
+the parent session, verifies the direct parent-child relationship in D1, verifies it again in the
+child Durable Object, and attributes the queued prompt to the child owner with source `agent`.
+
+`send-child-prompt` returns after the prompt is durably queued. The parent calls `get-child-status`
+when it needs the follow-up result. An earlier completed response is labeled as such while newer
+child work is still running.
+
+The runtime tool is installed when a sandbox starts from a runtime image that includes it. A parent
+restored from a snapshot created before this capability shipped keeps the older captured runtime and
+will not see `send-child-prompt` until it starts in a fresh sandbox built from the newer runtime.
+
 ---
 
 ## The Agent
@@ -545,6 +575,7 @@ was built for internal use where all employees have access to company repositori
 | User OAuth Token   | Create PRs, identify users                 | Repos the user has access to     |
 | Sandbox Auth Token | Authenticate sandbox → control plane calls | Single session                   |
 | WebSocket Token    | Authenticate client connections            | Single session                   |
+| Managed LLM Token  | Short-lived OpenAI or xAI model access     | Provider account + secret scope  |
 
 Fresh and prebuilt-image sandboxes fetch git credentials on demand through the control plane instead
 of relying on a token embedded in the environment or remote URL. Snapshot restores may still receive
@@ -570,11 +601,19 @@ per-environment scope. A session receives global secrets plus its **session targ
 - Injected into sandboxes at startup
 - Never exposed to clients (only key names are visible)
 
+Managed OpenAI and xAI OAuth refresh tokens are a stricter case: they remain control-plane-only and
+are replaced with non-secret provider markers before sandbox creation. The sandbox uses its session
+auth token to request short-lived model access from a provider-specific broker. Refresh-token
+rotation is persisted back to the global, repository, or environment scope that supplied it. See
+[Using OpenAI Models](./OPENAI_MODELS.md) and
+[Using Grok with a SuperGrok Subscription](./GROK_MODELS.md).
+
 > **Daytona and Vercel users**: LLM API keys (e.g., `ANTHROPIC_API_KEY` for Claude models) must be
 > added as global secrets. Modal injects these automatically via its own secrets mechanism.
 >
 > **Opt-in model providers**: DeepSeek models require `DEEPSEEK_API_KEY`, and Z.AI Coding Plan
-> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider.
+> models require `ZHIPU_API_KEY`, as a global secret with any sandbox provider. SuperGrok models
+> require managed xAI OAuth credentials and must be enabled under **Settings > Models**.
 
 See [Secrets Management](./SECRETS.md) for setup instructions.
 

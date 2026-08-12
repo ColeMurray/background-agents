@@ -66,4 +66,25 @@ describe("session attachment download API route", () => {
     expect(response.headers.get("Content-Range")).toBe("bytes 0-4/10");
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
   });
+
+  it("does not reuse the encoded payload length for a decoded attachment stream", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("decoded attachment", {
+        headers: {
+          "Content-Type": "text/plain",
+          "Content-Encoding": "gzip",
+          "Content-Length": "8",
+        },
+      })
+    );
+
+    const response = await GET(
+      new Request("http://localhost/api/sessions/session-1/attachments/attachment-1"),
+      PARAMS
+    );
+
+    expect(response.headers.get("Content-Encoding")).toBeNull();
+    expect(response.headers.get("Content-Length")).toBeNull();
+    await expect(response.text()).resolves.toBe("decoded attachment");
+  });
 });

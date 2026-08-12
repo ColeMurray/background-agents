@@ -13,18 +13,19 @@ import type {
   EventRow,
   ArtifactRow,
   SandboxRow,
+  SessionRepositoryRow,
 } from "./types";
+import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
-  ArtifactType,
-  SandboxEvent,
-} from "../types";
+} from "@open-inspect/shared/types/sessions";
+import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import {
   eventTimelineCursorFromRow,
   type EventListCursor,
@@ -35,8 +36,10 @@ import type { SessionAttachmentRepository } from "./session-attachment-repositor
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
+type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
+const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 
 /**
  * WS client mapping result for hibernation recovery.
@@ -45,9 +48,11 @@ export interface WsClientMappingResult {
   participant_id: string;
   client_id: string;
   user_id: string;
+  canonical_user_id?: string | null;
   scm_name: string | null;
   scm_login: string | null;
-  auth_name: string | null;
+  /** Dormant legacy column may still be present on older mapping fixtures. */
+  auth_name?: string | null;
 }
 
 /**
@@ -81,25 +86,12 @@ export interface UpsertSessionData {
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   sandboxSettings?: string | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
   createdAt: number;
   updatedAt: number;
-}
-
-/**
- * One member repository row, in position order (position 0 = primary).
- */
-export interface SessionRepositoryRow {
-  position: number;
-  repo_owner: string;
-  repo_name: string;
-  repo_id: number | null;
-  base_branch: string;
-  branch_name: string | null;
-  base_sha: string | null;
-  current_sha: string | null;
 }
 
 /**
@@ -131,10 +123,10 @@ export interface CreateSandboxData {
 export interface CreateParticipantData {
   id: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmUserId?: string | null;
   scmLogin?: string | null;
   scmName?: string | null;
-  authName?: string | null;
   scmEmail?: string | null;
   scmAccessTokenEncrypted?: string | null;
   scmRefreshTokenEncrypted?: string | null;
@@ -147,10 +139,10 @@ export interface CreateParticipantData {
  * Data for updating a participant with COALESCE (only non-null values update).
  */
 export interface UpdateParticipantData {
+  canonicalUserId?: string | null;
   scmUserId?: string | null;
   scmLogin?: string | null;
   scmName?: string | null;
-  authName?: string | null;
   scmEmail?: string | null;
   scmAccessTokenEncrypted?: string | null;
   scmRefreshTokenEncrypted?: string | null;
@@ -299,8 +291,8 @@ export class SessionRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, environment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -315,6 +307,7 @@ export class SessionRepository {
       data.spawnSource ?? "user",
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
+      data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
       data.createdAt,
@@ -519,7 +512,14 @@ export class SessionRepository {
          auth_token_hash = ?,
          auth_token = NULL,
          modal_sandbox_id = ?,
-         modal_object_id = NULL
+         modal_object_id = NULL,
+         code_server_url = NULL,
+         code_server_password = NULL,
+         vnc_url = NULL,
+         vnc_password = NULL,
+         tunnel_urls = NULL,
+         ttyd_url = NULL,
+         ttyd_token = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -600,6 +600,24 @@ export class SessionRepository {
     );
   }
 
+  updateSandboxVnc(url: string, password: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = ?, vnc_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url,
+      password
+    );
+  }
+
+  clearSandboxVnc(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = NULL, vnc_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
+  clearSandboxVncUrl(): void {
+    this.sql.exec(`UPDATE sandbox SET vnc_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`);
+  }
+
   updateSandboxTunnelUrls(urls: Record<string, string>): void {
     this.sql.exec(
       `UPDATE sandbox SET tunnel_urls = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
@@ -665,14 +683,14 @@ export class SessionRepository {
 
   createParticipant(data: CreateParticipantData): void {
     this.sql.exec(
-      `INSERT INTO participants (id, user_id, scm_user_id, scm_login, scm_name, auth_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
+      `INSERT INTO participants (id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.userId,
+      data.canonicalUserId ?? null,
       data.scmUserId ?? null,
       data.scmLogin ?? null,
       data.scmName ?? null,
-      data.authName ?? null,
       data.scmEmail ?? null,
       data.scmAccessTokenEncrypted ?? null,
       data.scmRefreshTokenEncrypted ?? null,
@@ -685,19 +703,19 @@ export class SessionRepository {
   updateParticipantCoalesce(participantId: string, data: UpdateParticipantData): void {
     this.sql.exec(
       `UPDATE participants SET
+         canonical_user_id = COALESCE(?, canonical_user_id),
          scm_user_id = COALESCE(?, scm_user_id),
          scm_login = COALESCE(?, scm_login),
          scm_name = COALESCE(?, scm_name),
-         auth_name = COALESCE(?, auth_name),
          scm_email = COALESCE(?, scm_email),
          scm_access_token_encrypted = COALESCE(?, scm_access_token_encrypted),
          scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
          scm_token_expires_at = COALESCE(?, scm_token_expires_at)
        WHERE id = ?`,
+      data.canonicalUserId ?? null,
       data.scmUserId ?? null,
       data.scmLogin ?? null,
       data.scmName ?? null,
-      data.authName ?? null,
       data.scmEmail ?? null,
       data.scmAccessTokenEncrypted ?? null,
       data.scmRefreshTokenEncrypted ?? null,
@@ -770,6 +788,14 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
+  getProcessingMessageWithCreatedAt(): { id: string; created_at: number } | null {
+    const result = this.sql.exec(
+      `SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`
+    );
+    const rows = result.toArray() as Array<{ id: string; created_at: number }>;
+    return rows[0] ?? null;
+  }
+
   getProcessingMessageWithStartedAt(): { id: string; started_at: number } | null {
     const result = this.sql.exec(
       `SELECT id, started_at FROM messages WHERE status = 'processing' LIMIT 1`
@@ -780,7 +806,7 @@ export class SessionRepository {
 
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`
+      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
@@ -842,6 +868,13 @@ export class SessionRepository {
     );
   }
 
+  listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
+    const result = this.sql.exec(
+      `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
+    );
+    return result.toArray() as Array<{ id: string; created_at: number }>;
+  }
+
   getMessageTimestamps(
     messageId: string
   ): { created_at: number; started_at: number | null } | null {
@@ -890,14 +923,25 @@ export class SessionRepository {
 
   createEvent(data: CreateEventData): void {
     this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})`,
       data.id,
       data.type,
       data.data,
       data.messageId,
       data.createdAt
     );
+  }
+
+  createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
+    this.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE events SET id = ? WHERE id = ?`,
+        `token:${data.messageId}:${data.id}`,
+        `token:${data.messageId}`
+      );
+      this.createEvent(data);
+    });
   }
 
   private upsertEventByMessageId<TType extends UpsertableEventType>(
@@ -908,8 +952,8 @@ export class SessionRepository {
   ): void {
     const id = `${type}:${messageId}`;
     this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
        ON CONFLICT(id) DO UPDATE SET
          data = excluded.data,
          message_id = excluded.message_id,
@@ -924,6 +968,22 @@ export class SessionRepository {
 
   upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
     this.upsertEventByMessageId("token", messageId, event, createdAt);
+  }
+
+  upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
+    const id = `tool_call:${toolCallIdentityKey(event)}`;
+    this.sql.exec(
+      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
+       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
+       ON CONFLICT(id) DO UPDATE SET
+         data = excluded.data,
+         message_id = excluded.message_id`,
+      id,
+      event.type,
+      JSON.stringify(event),
+      messageId,
+      createdAt
+    );
   }
 
   upsertExecutionCompleteEvent(
@@ -968,8 +1028,13 @@ export class SessionRepository {
 
     const cursor = options.cursor;
     if (cursor?.kind === "timeline") {
-      conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
-      params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      if (cursor.sequence !== undefined) {
+        conditions.push(`((created_at < ?) OR (created_at = ? AND timeline_sequence < ?))`);
+        params.push(cursor.createdAt, cursor.createdAt, cursor.sequence);
+      } else {
+        conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
+        params.push(cursor.createdAt, cursor.createdAt, cursor.id);
+      }
     } else if (cursor?.kind === "legacy") {
       conditions.push(`created_at < ?`);
       params.push(cursor.createdAt);
@@ -979,7 +1044,9 @@ export class SessionRepository {
       query += ` WHERE ${conditions.join(" AND ")}`;
     }
 
-    query += ` ORDER BY created_at DESC, id DESC LIMIT ?`;
+    const tieBreaker =
+      cursor?.kind === "timeline" && cursor.sequence === undefined ? "id" : "timeline_sequence";
+    query += ` ORDER BY created_at DESC, ${tieBreaker} DESC LIMIT ?`;
     params.push(options.limit + 1);
 
     const result = this.sql.exec(query, ...params);
@@ -989,17 +1056,6 @@ export class SessionRepository {
     const nextCursor =
       pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
     return { events: pageEvents, hasMore, nextCursor };
-  }
-
-  getEventsForReplay(limit: number): EventRow[] {
-    const result = this.sql.exec(
-      `SELECT * FROM (
-         SELECT * FROM events WHERE type != 'heartbeat'
-         ORDER BY created_at DESC, id DESC LIMIT ?
-       ) sub ORDER BY created_at ASC, id ASC`,
-      limit
-    );
-    return this.rows<EventRow>(result);
   }
 
   // === ARTIFACTS ===
@@ -1054,7 +1110,7 @@ export class SessionRepository {
 
   getWsClientMapping(wsId: string): WsClientMappingResult | null {
     const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, p.user_id, p.scm_name, p.scm_login, p.auth_name
+      `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
        FROM ws_client_mapping m
        JOIN participants p ON m.participant_id = p.id
        WHERE m.ws_id = ?`,

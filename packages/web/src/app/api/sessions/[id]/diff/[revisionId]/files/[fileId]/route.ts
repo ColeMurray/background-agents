@@ -1,4 +1,4 @@
-import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
+import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared/types/session-diffs";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
@@ -33,10 +33,8 @@ export async function GET(
       "X-Content-Type-Options": "nosniff",
       Vary: "Cookie",
     });
-    for (const name of ["Content-Length", "ETag"]) {
-      const value = upstream.headers.get(name);
-      if (value) headers.set(name, value);
-    }
+    const etag = upstream.headers.get("ETag");
+    if (etag) headers.set("ETag", etag);
     return new Response(upstream.body, { status: upstream.status, headers });
   } catch (error) {
     console.error("Failed to fetch session diff file:", error);

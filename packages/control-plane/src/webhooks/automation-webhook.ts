@@ -2,7 +2,7 @@
  * Generic automation webhook route — per-automation inbound HTTP endpoint.
  */
 
-import { normalizeWebhookEvent } from "@open-inspect/shared";
+import { normalizeWebhookEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { verifyWebhookApiKey } from "../auth/webhook-key";
 import type { Route, RequestContext } from "../routes/shared";

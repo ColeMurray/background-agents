@@ -71,12 +71,17 @@ function createMockSql() {
 describe("SessionRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
   let repo: SessionRepository;
+  let transactionSyncCalls: number;
 
   beforeEach(() => {
     mock = createMockSql();
+    transactionSyncCalls = 0;
     repo = new SessionRepository(
       mock.sql,
-      (closure) => closure(),
+      (closure) => {
+        transactionSyncCalls += 1;
+        return closure();
+      },
       new SessionAttachmentRepository(mock.sql)
     );
   });
@@ -132,6 +137,7 @@ describe("SessionRepository", () => {
         "created",
         null,
         "user",
+        0,
         0,
         0,
         null,
@@ -419,6 +425,8 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("modal_sandbox_id");
       expect(mock.calls[0].query).toContain("auth_token = NULL");
       expect(mock.calls[0].query).toContain("modal_object_id = NULL");
+      expect(mock.calls[0].query).toContain("vnc_url = NULL");
+      expect(mock.calls[0].query).toContain("vnc_password = NULL");
       expect(mock.calls[0].params).toEqual(["spawning", 1000, "token-hash-123", "modal-sb-1"]);
     });
   });
@@ -483,6 +491,24 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("VNC access", () => {
+    it("stores and clears VNC credentials", () => {
+      repo.updateSandboxVnc("https://vnc.test", "encrypted-password");
+      repo.clearSandboxVnc();
+
+      expect(mock.calls[0].query).toContain("SET vnc_url = ?, vnc_password = ?");
+      expect(mock.calls[0].params).toEqual(["https://vnc.test", "encrypted-password"]);
+      expect(mock.calls[1].query).toContain("SET vnc_url = NULL, vnc_password = NULL");
+    });
+
+    it("can clear only the VNC URL", () => {
+      repo.clearSandboxVncUrl();
+
+      expect(mock.calls[0].query).toContain("SET vnc_url = NULL");
+      expect(mock.calls[0].query).not.toContain("vnc_password");
+    });
+  });
+
   describe("resetCircuitBreaker", () => {
     it("resets failure count to zero", () => {
       repo.resetCircuitBreaker();
@@ -544,10 +570,10 @@ describe("SessionRepository", () => {
       repo.createParticipant({
         id: "p-1",
         userId: "user-1",
+        canonicalUserId: "canonical-user-1",
         scmUserId: "gh-123",
         scmLogin: "testuser",
         scmName: "Test User",
-        authName: "Authenticated User",
         scmEmail: "test@example.com",
         scmAccessTokenEncrypted: "encrypted-token",
         scmTokenExpiresAt: 9000,
@@ -560,10 +586,10 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].params).toEqual([
         "p-1",
         "user-1",
+        "canonical-user-1",
         "gh-123",
         "testuser",
         "Test User",
-        "Authenticated User",
         "test@example.com",
         "encrypted-token",
         null,
@@ -603,14 +629,15 @@ describe("SessionRepository", () => {
       repo.updateParticipantCoalesce("p-1", {
         scmLogin: "newlogin",
         scmName: null,
-        authName: "Authenticated User",
+        scmEmail: "new@example.com",
       });
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("COALESCE");
-      expect(mock.calls[0].params[0]).toBe(null); // scmUserId
-      expect(mock.calls[0].params[1]).toBe("newlogin");
-      expect(mock.calls[0].params[3]).toBe("Authenticated User");
+      expect(mock.calls[0].params[0]).toBe(null); // canonicalUserId
+      expect(mock.calls[0].params[1]).toBe(null); // scmUserId
+      expect(mock.calls[0].params[2]).toBe("newlogin");
+      expect(mock.calls[0].params[4]).toBe("new@example.com");
       expect(mock.calls[0].params[8]).toBe("p-1"); // participantId
     });
   });
@@ -680,11 +707,11 @@ describe("SessionRepository", () => {
       const message = { id: "msg-1", created_at: 1000 };
       // The query is dynamic, so we match by result
       mock.setData(
-        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`,
+        `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`,
         [message]
       );
       expect(repo.getNextPendingMessage()).toEqual(message);
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
     });
   });
 
@@ -781,6 +808,30 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("listPendingMessagesWithCreatedAt", () => {
+    it("returns pending messages in deterministic queue order", () => {
+      mock.setData(
+        `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`,
+        [{ id: "msg-1", created_at: 1000 }]
+      );
+
+      expect(repo.listPendingMessagesWithCreatedAt()).toEqual([{ id: "msg-1", created_at: 1000 }]);
+
+      expect(mock.calls[0].query).toContain("SELECT id, created_at FROM messages");
+      expect(mock.calls[0].query).toContain("WHERE status = 'pending'");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
+      expect(mock.calls[0].params).toEqual([]);
+    });
+  });
+
+  describe("getNextPendingMessage", () => {
+    it("uses rowid as the stable tie-breaker for equal timestamps", () => {
+      repo.getNextPendingMessage();
+
+      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, rowid ASC");
+    });
+  });
+
   describe("listMessages", () => {
     it("returns messages with pagination", () => {
       repo.listMessages({ limit: 10 });
@@ -851,7 +902,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("timeline_sequence");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "token:msg-1",
@@ -888,6 +939,78 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("createContextCompactionEvent", () => {
+    it("atomically seals the current token and inserts the compaction marker", () => {
+      repo.createContextCompactionEvent({
+        id: "compaction-1",
+        type: "context_compacted",
+        data: '{"type":"context_compacted"}',
+        messageId: "msg-1",
+        createdAt: 1000,
+      });
+
+      expect(transactionSyncCalls).toBe(1);
+      expect(mock.calls).toHaveLength(2);
+      expect(mock.calls[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
+      expect(mock.calls[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO events");
+      expect(mock.calls[1].params).toEqual([
+        "compaction-1",
+        "context_compacted",
+        '{"type":"context_compacted"}',
+        "msg-1",
+        1000,
+      ]);
+    });
+  });
+
+  describe("upsertToolCallEvent", () => {
+    it("scopes child call IDs and preserves the first event position on updates", () => {
+      const event = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: { command: "npm test" },
+        callId: "call-1",
+        status: "running",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+        isSubtask: true,
+        childSessionId: "child-1",
+        taskCallId: "task-1",
+      };
+
+      repo.upsertToolCallEvent("msg-1", event, 1000);
+
+      expect(mock.calls.length).toBe(1);
+      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
+      expect(mock.calls[0].query).not.toContain("created_at = excluded.created_at");
+      expect(mock.calls[0].params).toEqual([
+        'tool_call:["msg-1","child-1","call-1"]',
+        "tool_call",
+        JSON.stringify(event),
+        "msg-1",
+        1000,
+      ]);
+    });
+
+    it("uses a different identity for a parent call with the same call ID", () => {
+      const event = {
+        type: "tool_call" as const,
+        tool: "bash",
+        args: {},
+        callId: "call-1",
+        messageId: "msg-1",
+        sandboxId: "sb-1",
+        timestamp: 1,
+      };
+
+      repo.upsertToolCallEvent("msg-1", event, 1000);
+
+      expect(mock.calls[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
+    });
+  });
+
   describe("upsertExecutionCompleteEvent", () => {
     it("upserts completion event by deterministic message key", () => {
       const event = {
@@ -902,7 +1025,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("VALUES (?, ?, ?, ?, ?)");
+      expect(mock.calls[0].query).toContain("timeline_sequence");
       expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
       expect(mock.calls[0].params).toEqual([
         "execution_complete:msg-1",
@@ -942,7 +1065,7 @@ describe("SessionRepository", () => {
   describe("listEventPage", () => {
     it("returns in deterministic descending order", () => {
       repo.listEventPage({ limit: 50 });
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC");
+      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, timeline_sequence DESC");
     });
 
     it("filters by type", () => {
@@ -973,7 +1096,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore and trims overflow", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e3", created_at: 5000, type: "token", data: "{}" },
         { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
@@ -994,7 +1117,7 @@ describe("SessionRepository", () => {
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toBe(
-        "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?"
+        "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
       );
       expect(mock.calls[0].params).toEqual([51]);
     });
@@ -1027,7 +1150,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore=false when a timeline page fits within the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e2", created_at: 4000, type: "token", data: "{}" },
         { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
@@ -1041,7 +1164,7 @@ describe("SessionRepository", () => {
     });
 
     it("returns hasMore=true and trims overflow when a timeline page exceeds the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, id DESC LIMIT ?";
+      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
       mock.setData(query, [
         { id: "e3", created_at: 5000, type: "token", data: "{}" },
         { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
@@ -1053,19 +1176,6 @@ describe("SessionRepository", () => {
       expect(result.hasMore).toBe(true);
       expect(result.events.map((event) => event.id)).toEqual(["e2", "e3"]);
       expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
-    });
-  });
-
-  describe("getEventsForReplay", () => {
-    it("returns newest events in ascending order via DESC subquery", () => {
-      repo.getEventsForReplay(500);
-
-      expect(mock.calls.length).toBe(1);
-      // Inner subquery selects newest events via DESC
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, id DESC LIMIT ?");
-      // Outer query re-sorts to chronological ASC for replay
-      expect(mock.calls[0].query).toContain("ORDER BY created_at ASC, id ASC");
-      expect(mock.calls[0].params).toEqual([500]);
     });
   });
 

@@ -9,10 +9,11 @@
  * can run the steps out of order or skip one.
  */
 
-import type { AutomationEventSource, ServiceName, SpawnSource } from "@open-inspect/shared";
-
+import type { AutomationEventSource } from "@open-inspect/shared/triggers";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { ServiceName } from "@open-inspect/shared/service-auth";
 import { createLogger } from "./../logger";
-import { CALLBACK_DESTINATIONS } from "./callback-signing";
+import { CALLBACK_DESTINATIONS } from "./service/callback-signing";
 import type { Principal, ResolvedIdentity } from "./principal";
 import type { UserStore } from "../db/user-store";
 import { error, type RequestContext } from "../routes/shared";
@@ -85,7 +86,7 @@ export interface DerivedIdentity {
    * userless service principals.
    */
   actor: ResolvedIdentity | null;
-  /** Session/automation provenance: "user" for web users, the service name for bots; null when the principal never spawns sessions (modal). */
+  /** Session/automation provenance: "user" for web users or the service name for bots. */
   spawnSource: SpawnSource | null;
 }
 
@@ -108,8 +109,8 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
   switch (principal.kind) {
     case "user":
       return {
-        participantUserId: principal.user.participantUserId,
-        canonicalUserId: principal.user.canonicalUserId,
+        participantUserId: principal.userId,
+        canonicalUserId: principal.userId,
         actor: null,
         spawnSource: "user",
       };
@@ -118,9 +119,6 @@ export function deriveIdentity(principal: Principal | undefined): DerivedIdentit
         // Web's userless service credential asserts no one; user-bearing web
         // calls carry a web session token and resolve as user principals.
         return { participantUserId: null, canonicalUserId: null, actor: null, spawnSource: "user" };
-      }
-      if (principal.service === "modal") {
-        return { participantUserId: null, canonicalUserId: null, actor: null, spawnSource: null };
       }
       return {
         participantUserId: principal.actor?.participantUserId ?? null,
@@ -296,63 +294,4 @@ export function requireEventPoster(
   if (expected === null || principal.service === expected) return null;
   logMismatchRejected(`internal-${source}-event`, "service", expected, principal.service, ctx);
   return error("Unauthorized", 401);
-}
-
-/**
- * The action a caller is authorized to take on
- * `PUT /provider-identities/:provider/:id`.
- *
- * - `resolve`: a user principal matching the path identity. Its canonical
- *   user is already fixed by the token it presented, so the route returns
- *   that id verbatim and never touches identity linkage. Crucially, the
- *   request body (and any `providerEmail` in it) is IGNORED — otherwise an
- *   `oi_at_` holder could assert an arbitrary email and have
- *   `resolveOrCreateUser` re-link its provider identity onto another user's
- *   canonical account. Linking stays provider-verified, in the exchange flow.
- * - `deny`: everyone else.
- */
-type ProviderIdentityAuthorization =
-  | { action: "resolve"; canonicalUserId: string }
-  | { action: "deny"; response: Response };
-
-export function authorizeProviderIdentityRequest(
-  ctx: RequestContext,
-  provider: string,
-  providerUserId: string
-): ProviderIdentityAuthorization {
-  const principal = ctx.principal;
-  if (principal?.kind === "user") {
-    if (provider === principal.user.provider && providerUserId === principal.user.providerUserId) {
-      // canonicalUserId is always set for user principals (minted from the
-      // token row); the body is deliberately never consulted here. Fail
-      // closed on the impossible null rather than emitting an invalid id.
-      const canonicalUserId = principal.user.canonicalUserId;
-      if (!canonicalUserId) {
-        return { action: "deny", response: error("User principal has no canonical id", 500) };
-      }
-      return { action: "resolve", canonicalUserId };
-    }
-    logMismatchRejected(
-      "provider-identities",
-      "provider-identity-path",
-      `${principal.user.provider}:${principal.user.providerUserId}`,
-      `${provider}:${providerUserId}`,
-      ctx
-    );
-    return {
-      action: "deny",
-      response: error("Path identity does not match the authenticated user", 403),
-    };
-  }
-  logMismatchRejected(
-    "provider-identities",
-    "principal",
-    "matching user",
-    principal?.kind === "service" ? principal.service : (principal?.kind ?? "none"),
-    ctx
-  );
-  return {
-    action: "deny",
-    response: error("Only the matching user may resolve a provider identity", 403),
-  };
 }

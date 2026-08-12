@@ -231,9 +231,17 @@ ingested once the flag is on.
 A Slack automation must define at least a **Slack Channel** condition; the rest are optional
 filters.
 
-Slack Message automations ingest text only. Slack file uploads have a `file_share` subtype and are
-ignored, so image-only messages do not trigger a run and attachments are not added to prompts. Use
-an interactive bot DM or `@mention` for image input.
+Slack Message automations ingest text only. A message posted with an attachment (a `file_share`
+message) is matched on its text like any other, but the attachment is not added to the prompt, so an
+image-only message with no text triggers nothing. Use an interactive bot DM or `@mention` for image
+input.
+
+When the triggering message is a reply, the thread it belongs to is passed to the agent alongside it
+— up to 20 earlier messages total, preserving the thread's opening message alongside the most recent
+replies — so a reply is read in context instead of on its own. The thread is fetched only after a
+run is admitted, so unmatched messages, follow-ups that steer an existing session, and skipped or
+duplicate firings cost nothing. Conditions still match against the triggering message's text only,
+never the thread.
 
 - **Slack Channel** (required) — the channels to watch. Pick channels by name in the web form;
   channel IDs (for example `C0123ABCD`) also work as a fallback when channel listing is unavailable.
@@ -257,6 +265,14 @@ A triggering message is marked with the 👀 reaction while its run is in flight
 finishes, the agent's final response is posted as a reply in that message's thread — with links to
 any pull requests it opened and to the full web session — and the reaction is cleared. A failed run
 posts a short failure notice in the thread instead.
+
+A run can also **decline to reply**: if the agent's entire final message is `NO_REPLY` (or empty),
+nothing is posted and only the reaction is cleared. Because every reply in a watched thread wakes
+the automation (see below), an automation that watches a busy channel will otherwise answer messages
+that need nothing from it. Mention the sentinel in the automation's instructions — for example _"if
+the message needs nothing from you, reply with exactly `NO_REPLY` and nothing else"_ — since the
+agent will answer everything it is woken for unless told otherwise. A run that opened a pull request
+or produced other artifacts always posts.
 
 Every reply in a thread **continues the same session** — during the run and after it finishes — for
 up to 7 days after the thread's first trigger, exactly like replying in an `@mention` thread. The

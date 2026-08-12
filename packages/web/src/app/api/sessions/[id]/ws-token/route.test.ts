@@ -40,15 +40,13 @@ describe("ws-token API route", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("sends scm* attribution for a GitHub user — never userId or credentials (forbidden under strict)", async () => {
+  it("does not copy profile data into the websocket token request", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
-        provider: "github",
       },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -62,23 +60,16 @@ describe("ws-token API route", () => {
       "/sessions/sess1/ws-token",
       expect.objectContaining({ method: "POST" })
     );
-    expect(sentBody()).toEqual({
-      authName: "Ada Lovelace",
-      scmLogin: "ada",
-      scmName: "Ada Lovelace",
-      scmEmail: "ada@example.com",
-      scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-    });
+    expect(sentBody()).toEqual({});
   });
 
-  it("omits scm* entirely for a Google user — identity comes from the Bearer principal", async () => {
+  it("uses the same empty body regardless of sign-in provider", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: {
-        id: "google-sub-1",
+        id: "fedcba9876543210fedcba9876543210",
         name: "Pat PM",
         email: "pm@gmail.com",
         image: "https://lh3.googleusercontent.com/a/pat",
-        provider: "google",
       },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
@@ -88,6 +79,6 @@ describe("ws-token API route", () => {
     const response = await POST(request(), params("sess2"));
 
     expect(response.status).toBe(200);
-    expect(sentBody()).toEqual({ authName: "Pat PM" });
+    expect(sentBody()).toEqual({});
   });
 });

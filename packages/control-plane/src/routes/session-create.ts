@@ -1,9 +1,8 @@
-import {
-  getValidModelOrDefault,
-  isValidReasoningEffort,
-  type RepositoryRef,
-} from "@open-inspect/shared";
+import type { RepositoryRef, RepositoryPair } from "@open-inspect/shared/types/repositories";
+import { getValidModelOrDefault, isValidReasoningEffort } from "@open-inspect/shared/models";
+import type { CreateSessionResponse } from "@open-inspect/shared/types/session-api";
 import { generateId } from "../auth/crypto";
+import { resolveGitHubCredentialAuthority } from "../source-control/github-credential-authority";
 import { applyIdentityEnforcement, resolveCanonicalUserId } from "../auth/identity-enforcement";
 import { resolveEnvironmentTarget, resolveSessionRepositories } from "../repos/resolve";
 import { resolveScmProviderFromEnv } from "../source-control";
@@ -12,14 +11,13 @@ import { UserStore } from "../db/user-store";
 import { createLogger } from "../logger";
 import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
-import { resolveGitHubEnrichment } from "../session/identity";
+import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
-import type { CreateSessionResponse, Env } from "../types";
+import type { Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
-  type RepositoryPair,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/repositories";
 import {
   error,
   json,
@@ -136,22 +134,19 @@ async function handleCreateSession(
   let scmTokenEncrypted: string | null = null;
   let scmRefreshTokenEncrypted: string | null = null;
 
-  // On GitHub deployments, enrich the owner with their linked GitHub identity
-  // from D1: fill in SCM fields the caller didn't provide (email, display name,
-  // OAuth token). Other SCM deployments retain their provider-native identity
-  // and credentials unchanged.
-  //
-  // This intentionally applies even when the session was authenticated via a
-  // non-GitHub provider (e.g. Google): if the canonical user has ALSO linked a
-  // verified-email GitHub identity, enrichment surfaces THAT identity's token so
-  // the same human keeps GitHub-attributed commits/PRs. resolveGitHubEnrichment
-  // keys off the linked `provider === "github"` identity, never the Google
-  // credential; a user with no linked GitHub identity gets null here and falls
-  // back to the App bot. The invariant is "a Google credential is never used as
-  // an SCM credential", not "a Google-authenticated session carries no SCM state".
+  // Browser sessions resolve a linked GitHub identity/token through Better
+  // Auth only when SCM enrichment is needed. Transitional callers retain the
+  // legacy D1 lookup. A user without a linked GitHub account uses the GitHub
+  // App bot fallback; account linking is intentionally deferred.
   if (githubDeployment) {
     try {
-      const enrichment = await resolveGitHubEnrichment(env, ctx.db, userStore, resolvedUserId);
+      const enrichment = await resolveGitHubEnrichmentForRequest(
+        env,
+        ctx.db,
+        userStore,
+        resolvedUserId,
+        await resolveGitHubCredentialAuthority(ctx, request.headers)
+      );
       if (enrichment) {
         scmUserId = enrichment.scmUserId;
         scmLogin ??= enrichment.scmLogin;
@@ -180,7 +175,7 @@ async function handleCreateSession(
   // two are the same repo by the row-0-mirrors-scalars invariant. Launching
   // from a saved environment layers its overrides on top (design §13.5).
   const scopeMembers = repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []);
-  const { codeServerEnabled, sandboxSettings } = await resolveSessionScopedSettings(
+  const { codeServerEnabled, vncEnabled, sandboxSettings } = await resolveSessionScopedSettings(
     ctx.db,
     scopeMembers,
     environmentId
@@ -210,6 +205,7 @@ async function handleCreateSession(
     scmRefreshTokenEncrypted,
     scmTokenExpiresAt,
     codeServerEnabled,
+    vncEnabled,
     sandboxSettings,
     spawnSource,
   };

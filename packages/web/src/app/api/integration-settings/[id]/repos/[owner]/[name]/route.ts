@@ -1,6 +1,6 @@
-import { integrationSettingsProxy } from "@/lib/integration-settings-proxy";
+import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { GET, PUT, DELETE } = integrationSettingsProxy<{
+export const { GET, PUT, DELETE } = settingsProxy<{
   id: string;
   owner: string;
   name: string;

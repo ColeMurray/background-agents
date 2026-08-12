@@ -1,13 +1,16 @@
 "use client";
 
 import { useRepos } from "@/hooks/use-repos";
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronDownIcon, CheckIcon, PlusIcon } from "@/components/ui/icons";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import useSWR from "swr";
-import type { ConfiguredSandboxPort, SandboxSettings } from "@open-inspect/shared";
+import type {
+  ConfiguredSandboxPort,
+  SandboxSettings,
+} from "@open-inspect/shared/types/integrations";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
@@ -15,11 +18,17 @@ import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
   DEFAULT_TERMINAL_PORT,
-  encodeRepositoryPathSegments,
+  DEFAULT_VNC_PORT,
   findSandboxPortConflict,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_TUNNEL_PORTS,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import { encodeRepositoryPathSegments } from "@open-inspect/shared/types/repositories";
+import {
+  MIN_SANDBOX_TIMEOUT_MINUTES,
+  sandboxTimeoutMinutesFromMs,
+  sandboxTimeoutMsFromMinutes,
+} from "./sandbox-timeout";
 
 const GLOBAL_SCOPE = "__global__";
 type ResourceField = "cpuCores" | "memoryMib";
@@ -66,6 +75,25 @@ function isValidBuildTimeout(value: string): boolean {
   if (!/^\d+$/.test(value)) return false;
   const n = Number(value);
   return n >= 1 && n <= MAX_BUILD_TIMEOUT_SECONDS;
+}
+
+/** Trim, filter empty, validate, parse to number, dedupe. */
+function normalizePorts(input: string[]): { ports: number[]; invalid: string[] } {
+  const ports = new Set<number>();
+  const invalid: string[] = [];
+
+  for (const value of input) {
+    const trimmed = value.trim();
+    if (trimmed === "") continue;
+
+    if (isValidPort(trimmed)) {
+      ports.add(Number(trimmed));
+    } else {
+      invalid.push(value);
+    }
+  }
+
+  return { ports: [...ports], invalid };
 }
 
 const numOrUndef = (v: number | null | undefined): number | undefined =>
@@ -221,11 +249,16 @@ export function SandboxSettingsEditor({
   const currentCodeServerPort: number | undefined =
     ownSettings?.codeServerPort ?? baseDefaults?.codeServerPort;
 
+  const currentVncPort: number | undefined = ownSettings?.vncPort ?? baseDefaults?.vncPort;
+
   const currentTerminalPort: number | undefined =
     ownSettings?.terminalPort ?? baseDefaults?.terminalPort;
 
   const currentBuildTimeoutSeconds: number | undefined =
     ownSettings?.buildTimeoutSeconds ?? baseDefaults?.buildTimeoutSeconds;
+
+  const currentSandboxTimeoutMs: number | undefined =
+    ownSettings?.sandboxTimeoutMs ?? baseDefaults?.sandboxTimeoutMs;
 
   const currentMaxConcurrentChildSessions: number =
     ownSettings?.maxConcurrentChildSessions ??
@@ -243,8 +276,10 @@ export function SandboxSettingsEditor({
   const [portRows, setPortRows] = useState<string[] | null>(null);
   const [terminalEnabled, setTerminalEnabled] = useState<boolean | null>(null);
   const [codeServerPort, setCodeServerPort] = useState<string | null>(null);
+  const [vncPort, setVncPort] = useState<string | null>(null);
   const [terminalPort, setTerminalPort] = useState<string | null>(null);
   const [buildTimeoutSeconds, setBuildTimeoutSeconds] = useState<string | null>(null);
+  const [sandboxTimeoutMinutes, setSandboxTimeoutMinutes] = useState<string | null>(null);
   const [maxConcurrentChildSessions, setMaxConcurrentChildSessions] = useState<string | null>(null);
   const [maxTotalChildSessions, setMaxTotalChildSessions] = useState<string | null>(null);
   const [cpuCores, setCpuCores] = useState<string | null>(null);
@@ -268,11 +303,14 @@ export function SandboxSettingsEditor({
     memoryMib ?? (currentMemoryMib !== undefined ? String(currentMemoryMib) : "");
   const resolvedCodeServerPort =
     codeServerPort ?? (currentCodeServerPort !== undefined ? String(currentCodeServerPort) : "");
+  const resolvedVncPort = vncPort ?? (currentVncPort !== undefined ? String(currentVncPort) : "");
   const resolvedTerminalPort =
     terminalPort ?? (currentTerminalPort !== undefined ? String(currentTerminalPort) : "");
   const resolvedBuildTimeoutSeconds =
     buildTimeoutSeconds ??
     (currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "");
+  const resolvedSandboxTimeoutMinutes =
+    sandboxTimeoutMinutes ?? sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
 
   const handleAddRow = () => {
     if (rows.length >= MAX_TUNNEL_PORTS) return;
@@ -290,17 +328,7 @@ export function SandboxSettingsEditor({
     setPortRows(updated);
   };
 
-  /** Trim, filter empty, validate, parse to number, dedupe. */
-  const normalizePorts = (input: string[]): { ports: number[]; invalid: string[] } => {
-    const nonEmpty = input.filter((r) => r.trim() !== "");
-    const invalid = nonEmpty.filter((r) => !isValidPort(r.trim()));
-    const ports = [
-      ...new Set(nonEmpty.filter((r) => isValidPort(r.trim())).map((r) => Number(r.trim()))),
-    ];
-    return { ports, invalid };
-  };
-
-  const handleSave = useCallback(async () => {
+  const handleSave = async () => {
     setError(null);
     setSuccess(false);
 
@@ -336,6 +364,12 @@ export function SandboxSettingsEditor({
       return;
     }
 
+    const trimmedVncPort = resolvedVncPort.trim();
+    if (trimmedVncPort !== "" && !isValidPort(trimmedVncPort)) {
+      setError("VNC port must be a whole number between 1 and 65535.");
+      return;
+    }
+
     const trimmedTerminalPort = resolvedTerminalPort.trim();
     if (trimmedTerminalPort !== "" && !isValidPort(trimmedTerminalPort)) {
       setError("Terminal port must be a whole number between 1 and 65535.");
@@ -347,6 +381,13 @@ export function SandboxSettingsEditor({
       setError(
         `Build timeout must be a whole number of seconds, at most ${MAX_BUILD_TIMEOUT_SECONDS}.`
       );
+      return;
+    }
+
+    const trimmedSandboxTimeoutMinutes = resolvedSandboxTimeoutMinutes.trim();
+    const editedSandboxTimeoutMs = sandboxTimeoutMsFromMinutes(trimmedSandboxTimeoutMinutes);
+    if (trimmedSandboxTimeoutMinutes !== "" && editedSandboxTimeoutMs === undefined) {
+      setError("Session timeout must be at least one second, in one-second increments.");
       return;
     }
 
@@ -362,17 +403,20 @@ export function SandboxSettingsEditor({
       trimmedTerminalPort !== ""
         ? Number(trimmedTerminalPort)
         : (baseDefaults?.terminalPort ?? DEFAULT_TERMINAL_PORT);
+    const effectiveVncPort =
+      trimmedVncPort !== "" ? Number(trimmedVncPort) : (baseDefaults?.vncPort ?? DEFAULT_VNC_PORT);
     const configuredPorts: ConfiguredSandboxPort[] = [
       ...ports.map((port) => ({ port, label: "tunnel port" })),
       { port: effectiveCodeServerPort, label: "code server port" },
       { port: effectiveTerminalPort, label: "terminal port" },
+      { port: effectiveVncPort, label: "VNC port" },
     ];
     const portConflict = findSandboxPortConflict(configuredPorts);
     if (portConflict) {
       setError(
         portConflict.kind === "reserved"
-          ? `Port ${portConflict.port} is reserved for the internal terminal and cannot be used.`
-          : "Code server, terminal, and tunnel ports must all be different."
+          ? `Port ${portConflict.port} is reserved for an internal sandbox service and cannot be used.`
+          : "Code server, VNC, terminal, and tunnel ports must all be different."
       );
       return;
     }
@@ -398,6 +442,15 @@ export function SandboxSettingsEditor({
       if (codeServerPortValue !== undefined) {
         settingsPayload.codeServerPort = codeServerPortValue;
       }
+      const vncPortValue = numberPayloadValue(
+        isGlobal,
+        vncPort,
+        trimmedVncPort,
+        ownSettings?.vncPort
+      );
+      if (vncPortValue !== undefined) {
+        settingsPayload.vncPort = vncPortValue;
+      }
       const terminalPortValue = numberPayloadValue(
         isGlobal,
         terminalPort,
@@ -415,6 +468,13 @@ export function SandboxSettingsEditor({
       );
       if (buildTimeoutValue !== undefined) {
         settingsPayload.buildTimeoutSeconds = buildTimeoutValue;
+      }
+      const sandboxTimeoutMsValue =
+        isGlobal || sandboxTimeoutMinutes !== null
+          ? editedSandboxTimeoutMs
+          : ownSettings?.sandboxTimeoutMs;
+      if (sandboxTimeoutMsValue !== undefined) {
+        settingsPayload.sandboxTimeoutMs = sandboxTimeoutMsValue;
       }
       if (
         isGlobal ||
@@ -462,8 +522,10 @@ export function SandboxSettingsEditor({
       setCpuCores(null);
       setMemoryMib(null);
       setCodeServerPort(null);
+      setVncPort(null);
       setTerminalPort(null);
       setBuildTimeoutSeconds(null);
+      setSandboxTimeoutMinutes(null);
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     } catch (e) {
@@ -471,33 +533,7 @@ export function SandboxSettingsEditor({
     } finally {
       setSaving(false);
     }
-  }, [
-    rows,
-    isGlobal,
-    apiUrl,
-    mutate,
-    enabledRepos,
-    resolvedTerminalEnabled,
-    resolvedMaxConcurrentChildSessions,
-    resolvedMaxTotalChildSessions,
-    resolvedCpuCores,
-    resolvedMemoryMib,
-    resolvedCodeServerPort,
-    resolvedTerminalPort,
-    resolvedBuildTimeoutSeconds,
-    portRows,
-    terminalEnabled,
-    codeServerPort,
-    terminalPort,
-    buildTimeoutSeconds,
-    cpuCores,
-    memoryMib,
-    maxConcurrentChildSessions,
-    maxTotalChildSessions,
-    ownSettings,
-    baseDefaults?.codeServerPort,
-    baseDefaults?.terminalPort,
-  ]);
+  };
 
   const hasPortChanges =
     portRows !== null &&
@@ -519,12 +555,18 @@ export function SandboxSettingsEditor({
     currentTerminalPort !== undefined ? String(currentTerminalPort) : "";
   const hasCodeServerPortChange =
     codeServerPort !== null && codeServerPort.trim() !== currentCodeServerPortString;
+  const currentVncPortString = currentVncPort !== undefined ? String(currentVncPort) : "";
+  const hasVncPortChange = vncPort !== null && vncPort.trim() !== currentVncPortString;
   const hasTerminalPortChange =
     terminalPort !== null && terminalPort.trim() !== currentTerminalPortString;
   const currentBuildTimeoutSecondsString =
     currentBuildTimeoutSeconds !== undefined ? String(currentBuildTimeoutSeconds) : "";
   const hasBuildTimeoutChange =
     buildTimeoutSeconds !== null && buildTimeoutSeconds.trim() !== currentBuildTimeoutSecondsString;
+  const currentSandboxTimeoutMinutesString = sandboxTimeoutMinutesFromMs(currentSandboxTimeoutMs);
+  const hasSandboxTimeoutChange =
+    sandboxTimeoutMinutes !== null &&
+    sandboxTimeoutMinutes.trim() !== currentSandboxTimeoutMinutesString;
   const hasChanges =
     hasPortChanges ||
     hasTerminalChange ||
@@ -533,8 +575,10 @@ export function SandboxSettingsEditor({
     hasCpuChange ||
     hasMemoryChange ||
     hasCodeServerPortChange ||
+    hasVncPortChange ||
     hasTerminalPortChange ||
-    hasBuildTimeoutChange;
+    hasBuildTimeoutChange ||
+    hasSandboxTimeoutChange;
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
@@ -546,14 +590,21 @@ export function SandboxSettingsEditor({
       <div className="max-w-sm">
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-foreground">Web Terminal</label>
+            <label
+              htmlFor="web-terminal-enabled"
+              className="block text-sm font-medium text-foreground"
+            >
+              Web Terminal
+            </label>
             <p className="text-xs text-muted-foreground">
               Enable a browser-based terminal in sandbox sessions.
             </p>
           </div>
           <button
+            id="web-terminal-enabled"
             type="button"
             role="switch"
+            aria-label="Web Terminal"
             aria-checked={resolvedTerminalEnabled}
             onClick={() => setTerminalEnabled(!resolvedTerminalEnabled)}
             className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
@@ -569,14 +620,15 @@ export function SandboxSettingsEditor({
         </div>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Service Ports</label>
+      <fieldset className="min-w-0">
+        <legend className="block text-sm font-medium text-foreground mb-1.5">Service Ports</legend>
         <p className="text-xs text-muted-foreground mb-2">
-          Ports code-server and the web terminal bind to. Leave blank for the defaults (
-          {DEFAULT_CODE_SERVER_PORT} and {DEFAULT_TERMINAL_PORT}). Change a port to free the default
-          for your own service on a tunnel. Code-server is enabled in its own settings.
+          Ports code-server, noVNC, and the web terminal bind to. Leave blank for the defaults (
+          {DEFAULT_CODE_SERVER_PORT}, {DEFAULT_VNC_PORT}, and {DEFAULT_TERMINAL_PORT}). Change a
+          port to free the default for your own service on a tunnel. Code-server and VNC are enabled
+          in their own settings.
         </p>
-        <div className="grid gap-3 max-w-sm sm:grid-cols-2">
+        <div className="grid gap-3 max-w-lg sm:grid-cols-3">
           <div>
             <label
               htmlFor="code-server-port"
@@ -591,6 +643,22 @@ export function SandboxSettingsEditor({
               value={resolvedCodeServerPort}
               onChange={(e) => setCodeServerPort(e.target.value)}
               placeholder={String(DEFAULT_CODE_SERVER_PORT)}
+            />
+          </div>
+          <div>
+            <label
+              htmlFor="vnc-port"
+              className="block text-xs font-medium text-muted-foreground mb-1"
+            >
+              VNC port
+            </label>
+            <Input
+              id="vnc-port"
+              type="text"
+              inputMode="numeric"
+              value={resolvedVncPort}
+              onChange={(e) => setVncPort(e.target.value)}
+              placeholder={String(DEFAULT_VNC_PORT)}
             />
           </div>
           <div>
@@ -610,11 +678,14 @@ export function SandboxSettingsEditor({
             />
           </div>
         </div>
-      </div>
+      </fieldset>
 
-      <div>
+      <fieldset className="min-w-0">
+        <legend className="sr-only">Tunnel Ports</legend>
         <div className="flex items-center justify-between max-w-sm mb-1.5">
-          <label className="block text-sm font-medium text-foreground">Tunnel Ports</label>
+          <span aria-hidden="true" className="block text-sm font-medium text-foreground">
+            Tunnel Ports
+          </span>
           <Button
             type="button"
             variant="subtle"
@@ -656,10 +727,10 @@ export function SandboxSettingsEditor({
             ))
           )}
         </div>
-      </div>
+      </fieldset>
 
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</label>
+      <fieldset className="min-w-0">
+        <legend className="block text-sm font-medium text-foreground mb-1.5">Child Sessions</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Limit agent-spawned child sessions to prevent runaway sandbox usage.
         </p>
@@ -697,10 +768,10 @@ export function SandboxSettingsEditor({
             />
           </div>
         </div>
-      </div>
+      </fieldset>
 
-      <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Resources</label>
+      <fieldset className="min-w-0">
+        <legend className="block text-sm font-medium text-foreground mb-1.5">Resources</legend>
         <p className="text-xs text-muted-foreground mb-2">
           Reserve CPU and memory for each sandbox. Leave blank to use the provider&apos;s default
           reservation.
@@ -739,6 +810,32 @@ export function SandboxSettingsEditor({
               placeholder="provider default"
             />
           </div>
+        </div>
+      </fieldset>
+
+      <div>
+        <label
+          htmlFor="sandbox-session-timeout"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Session Timeout (minutes)
+        </label>
+        <p className="text-xs text-muted-foreground mb-2">
+          Requested lifetime for each sandbox session, in minutes. Leave blank to inherit a parent
+          setting, or use the provider default if none is configured. Provider support and limits
+          vary.
+        </p>
+        <div className="max-w-sm">
+          <Input
+            id="sandbox-session-timeout"
+            type="number"
+            min={MIN_SANDBOX_TIMEOUT_MINUTES}
+            step={MIN_SANDBOX_TIMEOUT_MINUTES}
+            inputMode="decimal"
+            value={resolvedSandboxTimeoutMinutes}
+            onChange={(e) => setSandboxTimeoutMinutes(e.target.value)}
+            placeholder="provider default"
+          />
         </div>
       </div>
 

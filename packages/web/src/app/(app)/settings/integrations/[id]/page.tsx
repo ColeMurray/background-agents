@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared";
+import { INTEGRATION_DEFINITIONS } from "@open-inspect/shared/types/integrations";
 import {
   CollapsedSidebarControls,
   SidebarToggleButton,

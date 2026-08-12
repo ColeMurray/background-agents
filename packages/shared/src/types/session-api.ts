@@ -1,9 +1,14 @@
 import { z } from "zod";
-import { recordSchema, type AgentResponse } from "./artifacts";
+import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
-import type { Session } from "./sessions";
-import { sessionStatusSchema, type SandboxStatus, type SessionStatus } from "./statuses";
+import {
+  messageSourceSchema,
+  sessionStatusSchema,
+  type SandboxStatus,
+  type Session,
+  type SessionStatus,
+} from "./sessions";
 
 export interface UserPreferences {
   userId: string;
@@ -13,17 +18,29 @@ export interface UserPreferences {
   updatedAt: number;
 }
 
-export interface SlackCallbackContext {
-  source: "slack";
-  channel: string;
-  threadTs: string;
-  repoFullName: string;
-  model: string;
-  reasoningEffort?: string;
-  reactionMessageTs?: string;
-}
-
 const nonEmptyStringSchema = z.string().trim().min(1);
+
+export const MAX_CHILD_FOLLOW_UP_PROMPT_CHARS = 64_000;
+
+export const slackCallbackContextSchema = z.object({
+  source: z.literal("slack"),
+  channel: z.string(),
+  threadTs: z.string(),
+  repoFullName: z.string(),
+  model: z.string(),
+  reasoningEffort: z.string().optional(),
+  reactionMessageTs: z.string().optional(),
+  /**
+   * Set when the session belongs to an automation rather than an interactive
+   * request. A thread follow-up completes through the same callback as an
+   * `@mention` turn, so the route alone cannot tell the two apart, and only the
+   * control plane knows which automation (if any) owns the thread.
+   */
+  automationId: z.string().optional(),
+});
+
+export type SlackCallbackContext = z.infer<typeof slackCallbackContextSchema>;
+
 const linearCallbackContextBaseSchema = z.strictObject({
   source: z.literal("linear"),
   issueId: nonEmptyStringSchema,
@@ -63,17 +80,44 @@ export const linearStartCallbackSchema = z.strictObject({
 
 export type LinearStartCallback = z.infer<typeof linearStartCallbackSchema>;
 
-export interface AutomationCallbackContext {
-  source: "automation";
-  automationId: string;
-  runId: string;
-  automationName: string;
-}
+export const automationCallbackContextSchema = z.object({
+  source: z.literal("automation"),
+  automationId: z.string(),
+  runId: z.string(),
+  automationName: z.string(),
+});
 
-export type CallbackContext =
-  | SlackCallbackContext
-  | LinearCallbackContext
-  | AutomationCallbackContext;
+export type AutomationCallbackContext = z.infer<typeof automationCallbackContextSchema>;
+
+export const callbackContextSchema = z.union([
+  slackCallbackContextSchema,
+  linearCallbackContextSchema,
+  automationCallbackContextSchema,
+]);
+
+export type CallbackContext = z.infer<typeof callbackContextSchema>;
+
+export const sendPromptRequestSchema = z.object({
+  content: z.string().min(1),
+  source: messageSourceSchema.optional(),
+  model: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  attachments: z.unknown().optional(),
+  callbackContext: z.unknown().optional(),
+});
+
+export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
+
+/** Request body for POST /sessions/:parentId/children/:childId/prompt. */
+export const childFollowUpPromptRequestSchema = z.strictObject({
+  content: z
+    .string()
+    .min(1)
+    .max(MAX_CHILD_FOLLOW_UP_PROMPT_CHARS)
+    .refine((content) => content.trim().length > 0, { message: "content must not be blank" }),
+});
+
+export type ChildFollowUpPromptRequest = z.infer<typeof childFollowUpPromptRequestSchema>;
 
 function hasRepositoryIdentifier(value: string | null | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -189,7 +233,7 @@ export const createMediaArtifactRequestSchema = z.object({
   artifactId: z.string(),
   artifactType: z.string(),
   objectKey: z.string(),
-  metadata: recordSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type CreateMediaArtifactRequest = z.infer<typeof createMediaArtifactRequestSchema>;
@@ -233,36 +277,6 @@ export const cancelChildSessionRequestSchema = z.object({
 
 export type CancelChildSessionRequest = z.infer<typeof cancelChildSessionRequestSchema>;
 
-/**
- * Returned by the parent Durable Object's GET /internal/spawn-context.
- *
- * Deliberately scalar in v1: child sessions inherit — and are restricted to —
- * the parent's PRIMARY repository, even for multi-repo parents. The spawn
- * route validates against the scalar mirror. Letting children target another
- * repository requires spawnContext.repositories, a named fast-follow (design
- * §13.13), not a v1 promise.
- */
-export const spawnContextSchema = z.object({
-  repoOwner: z.string().nullable(),
-  repoName: z.string().nullable(),
-  repoId: z.number().nullable(),
-  model: z.string(),
-  reasoningEffort: z.string().nullable(),
-  baseBranch: z.string().nullable(),
-  owner: z.object({
-    userId: z.string(),
-    scmUserId: z.string().nullable(),
-    scmLogin: z.string().nullable(),
-    scmName: z.string().nullable(),
-    scmEmail: z.string().nullable(),
-    scmAccessTokenEncrypted: z.string().nullable(),
-    scmRefreshTokenEncrypted: z.string().nullable(),
-    scmTokenExpiresAt: z.number().nullable(),
-  }),
-});
-
-export type SpawnContext = z.infer<typeof spawnContextSchema>;
-
 /** Returned by the child Durable Object's GET /internal/child-summary. */
 export interface ChildSessionFinalResponse extends AgentResponse {
   messageId: string;
@@ -291,6 +305,7 @@ export interface ChildSessionDetail {
     updatedAt: number;
   };
   sandbox: { status: SandboxStatus } | null;
+  hasUnfinishedPrompt?: boolean;
   artifacts: Array<{ type: string; url: string; metadata: unknown }>;
   recentEvents: Array<{ type: string; data: unknown; createdAt: number }>;
   finalResponse?: ChildSessionFinalResponse | null;

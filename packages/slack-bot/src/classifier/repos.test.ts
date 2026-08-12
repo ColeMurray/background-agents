@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
-import { clearLocalCache, getAvailableRepos, getRoutingRules, getWatchedChannels } from "./repos";
+import {
+  clearLocalCache,
+  getAvailableRepos,
+  getRoutingRules,
+  getWatchedChannels,
+  REPOS_FETCH_TIMEOUT_MS,
+} from "./repos";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -64,6 +70,20 @@ describe("getRoutingRules", () => {
     );
 
     expect(await getRoutingRules(env)).toEqual([{ keyword: "frontend", target: "acme/web" }]);
+  });
+
+  it("fails open when routing rules have a malformed shape", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        settings: {
+          defaults: {
+            routingRules: [{ keyword: "frontend" }],
+          },
+        },
+      })
+    );
+
+    expect(await getRoutingRules(env)).toEqual([]);
   });
 
   it("fails open to an empty list on a non-OK response", async () => {
@@ -174,6 +194,82 @@ describe("getAvailableRepos", () => {
     } as unknown as Env;
 
     await expect(getAvailableRepos(env, "trace-2")).resolves.toEqual(cachedRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+  });
+
+  it("bounds the catalog fetch and serves the KV fallback when it times out", async () => {
+    // The mention handler runs inside waitUntil. An unbounded fetch here eats the
+    // background budget, and the platform cancels the remaining work after the
+    // ack has posted but before a session exists — the request then vanishes
+    // with neither a session nor an error.
+    const cachedRepos = [
+      {
+        id: "acme/web",
+        owner: "acme",
+        name: "web",
+        fullName: "acme/web",
+        displayName: "web",
+        description: "Cached repo",
+        defaultBranch: "main",
+        private: false,
+      },
+    ];
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue(cachedRepos),
+        put: vi.fn().mockResolvedValue(undefined),
+        delete: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" })
+          ),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    const repos = await getAvailableRepos(env, "trace-timeout");
+
+    expect(repos).toEqual(cachedRepos);
+    expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
+    // The bound is what makes the abort happen at all; without it the fetch runs
+    // until the platform kills the whole invocation.
+    expect(timeoutSpy).toHaveBeenCalledWith(REPOS_FETCH_TIMEOUT_MS);
+    const init = vi.mocked(env.CONTROL_PLANE.fetch).mock.calls[0]?.[1] as RequestInit | undefined;
+    // Identity, not just shape: attaching some other signal would pass an
+    // instanceof check while leaving the fetch effectively unbounded.
+    expect(init?.signal).toBe(timeoutSpy.mock.results[0]?.value);
+  });
+
+  it("falls back when the control-plane repository response is malformed", async () => {
+    const env = makeEnv(
+      jsonResponse({
+        repos: [{ owner: "Open-Inspect", name: "Background-Agents" }],
+        cached: false,
+        cachedAt: new Date().toISOString(),
+      })
+    );
+
+    await expect(getAvailableRepos(env, "trace-3")).resolves.toEqual([]);
+    expect(env.SLACK_KV.put).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed cached repositories on the fallback path", async () => {
+    const env = {
+      SLACK_KV: {
+        get: vi.fn().mockResolvedValue([{ id: "acme/web", owner: "acme", private: false }]),
+        put: vi.fn().mockResolvedValue(undefined),
+      },
+      CONTROL_PLANE: {
+        fetch: vi.fn().mockResolvedValue(new Response("error", { status: 503 })),
+      },
+      SERVICE_AUTH_SECRET: "test-secret",
+    } as unknown as Env;
+
+    await expect(getAvailableRepos(env, "trace-4")).resolves.toEqual([]);
     expect(env.SLACK_KV.get).toHaveBeenCalledWith("repos:cache", "json");
   });
 

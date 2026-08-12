@@ -94,6 +94,14 @@ describe("lookupIssueSession", () => {
     expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toEqual(session);
   });
 
+  it("returns null for malformed stored sessions", async () => {
+    const { kv } = createFakeKV({
+      "issue:issue-1": JSON.stringify({ sessionId: "sess-1", issueId: "issue-1" }),
+    });
+
+    expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toBeNull();
+  });
+
   it("returns null when KV throws", async () => {
     expect(await lookupIssueSession(makeLinearBotEnv(errorKv), "issue-1")).toBeNull();
   });

@@ -5,7 +5,7 @@ import * as ToggleGroupPrimitive from "@radix-ui/react-toggle-group";
 import { type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
-import { toggleVariants } from "@/components/ui/toggle";
+import { toggleVariants } from "@/components/ui/toggle-variants";
 
 const ToggleGroupContext = React.createContext<VariantProps<typeof toggleVariants>>({
   size: "default",
@@ -16,15 +16,19 @@ const ToggleGroup = React.forwardRef<
   React.ElementRef<typeof ToggleGroupPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof ToggleGroupPrimitive.Root> &
     VariantProps<typeof toggleVariants>
->(({ className, variant, size, children, ...props }, ref) => (
-  <ToggleGroupPrimitive.Root
-    ref={ref}
-    className={cn("flex items-center justify-center gap-1", className)}
-    {...props}
-  >
-    <ToggleGroupContext.Provider value={{ variant, size }}>{children}</ToggleGroupContext.Provider>
-  </ToggleGroupPrimitive.Root>
-));
+>(({ className, variant, size, children, ...props }, ref) => {
+  const contextValue = React.useMemo(() => ({ variant, size }), [variant, size]);
+
+  return (
+    <ToggleGroupPrimitive.Root
+      ref={ref}
+      className={cn("flex items-center justify-center gap-1", className)}
+      {...props}
+    >
+      <ToggleGroupContext.Provider value={contextValue}>{children}</ToggleGroupContext.Provider>
+    </ToggleGroupPrimitive.Root>
+  );
+});
 
 ToggleGroup.displayName = ToggleGroupPrimitive.Root.displayName;
 

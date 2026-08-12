@@ -2,6 +2,16 @@
 # Cloudflare Workers
 # =============================================================================
 
+resource "cloudflare_queue" "image_build_finalization" {
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-image-build-finalization-${local.name_suffix}"
+}
+
+resource "cloudflare_queue" "image_build_finalization_dlq" {
+  account_id = var.cloudflare_account_id
+  queue_name = "open-inspect-image-build-finalization-dlq-${local.name_suffix}"
+}
+
 # Build control-plane worker bundle (only runs during apply, not plan)
 resource "null_resource" "control_plane_build" {
   triggers = {
@@ -45,6 +55,13 @@ module "control_plane_worker" {
     }
   ]
 
+  queue_bindings = [
+    {
+      binding_name = "IMAGE_BUILD_FINALIZATION_QUEUE"
+      queue_name   = cloudflare_queue.image_build_finalization.queue_name
+    }
+  ]
+
   service_bindings = concat(
     var.enable_slack_bot ? [
       {
@@ -64,15 +81,25 @@ module "control_plane_worker" {
 
   plain_text_bindings = concat(
     [
-      { name = "GITHUB_CLIENT_ID", value = var.github_client_id },
       { name = "WEB_APP_URL", value = local.web_app_url },
+      { name = "ALLOWED_USERS", value = var.allowed_users },
+      { name = "ALLOWED_EMAIL_DOMAINS", value = var.allowed_email_domains },
+      { name = "ALLOWED_EMAILS", value = var.allowed_emails },
+      { name = "ALLOWED_GITHUB_ORGS", value = var.allowed_github_orgs },
+      { name = "UNSAFE_ALLOW_ALL_USERS", value = tostring(var.unsafe_allow_all_users) },
       { name = "WORKER_URL", value = local.control_plane_url },
       { name = "DEPLOYMENT_NAME", value = var.deployment_name },
       { name = "APP_NAME", value = var.app_name },
       { name = "SANDBOX_PROVIDER", value = var.sandbox_provider },
       { name = "SANDBOX_INACTIVITY_TIMEOUT_MS", value = tostring(var.sandbox_inactivity_timeout_ms) },
     ],
-    local.use_modal_backend ? [
+    local.github_oauth_enabled ? [
+      { name = "GITHUB_CLIENT_ID", value = trimspace(var.github_client_id) },
+    ] : [],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_ID", value = trimspace(var.google_client_id) },
+    ] : [],
+    trimspace(var.modal_workspace) != "" ? [
       { name = "MODAL_WORKSPACE", value = var.modal_workspace },
       { name = "MODAL_ENVIRONMENT", value = var.modal_environment },
       { name = "MODAL_ENVIRONMENT_WEB_SUFFIX", value = var.modal_environment_web_suffix },
@@ -84,23 +111,25 @@ module "control_plane_worker" {
     local.use_daytona_backend && var.daytona_target != "" ? [
       { name = "DAYTONA_TARGET", value = var.daytona_target },
     ] : [],
-    local.use_opencomputer_backend ? [
+    trimspace(var.opencomputer_api_url) != "" ? [
       { name = "OPENCOMPUTER_API_URL", value = var.opencomputer_api_url },
-      # Pinned template when provided, otherwise the Terraform-managed base snapshot.
+    ] : [],
+    local.use_opencomputer_backend || trimspace(var.opencomputer_template) != "" ? [
+      # Active deployments use the managed template when no manual pin exists.
       {
         name  = "OPENCOMPUTER_TEMPLATE",
         value = var.opencomputer_template != "" ? var.opencomputer_template : module.opencomputer_infra[0].snapshot_name,
       },
     ] : [],
-    local.use_vercel_backend ? [
+    trimspace(var.vercel_sandbox_project_id) != "" ? [
       { name = "VERCEL_PROJECT_ID", value = var.vercel_sandbox_project_id },
       { name = "VERCEL_RUNTIME", value = var.vercel_sandbox_runtime },
       { name = "VERCEL_SNAPSHOT_EXPIRATION_MS", value = tostring(var.vercel_snapshot_expiration_ms) },
     ] : [],
-    local.use_vercel_backend && var.vercel_sandbox_team_id != "" ? [
+    var.vercel_sandbox_team_id != "" ? [
       { name = "VERCEL_TEAM_ID", value = var.vercel_sandbox_team_id },
     ] : [],
-    local.use_vercel_backend && var.vercel_sandbox_api_base_url != "" ? [
+    var.vercel_sandbox_api_base_url != "" ? [
       { name = "VERCEL_SANDBOX_API_BASE_URL", value = var.vercel_sandbox_api_base_url },
     ] : [],
     local.use_vercel_backend && var.vercel_base_snapshot_id != "" ? [
@@ -119,7 +148,10 @@ module "control_plane_worker" {
 
   secrets = concat(
     [
-      { name = "GITHUB_CLIENT_SECRET", value = var.github_client_secret },
+      # The existing operator-managed auth secret now signs Better Auth state
+      # and cookies in the control plane. Keeping the Terraform input stable
+      # avoids coupling secret rotation to the browser-auth cutover.
+      { name = "BROWSER_AUTH_SECRET", value = var.nextauth_secret },
       { name = "TOKEN_ENCRYPTION_KEY", value = var.token_encryption_key },
       { name = "REPO_SECRETS_ENCRYPTION_KEY", value = var.repo_secrets_encryption_key },
       # Pepper for image-build callback token hashes (see service-auth.tf)
@@ -129,25 +161,28 @@ module "control_plane_worker" {
       { name = "SERVICE_AUTH_SECRET_SLACK_BOT", value = random_password.service_auth_secret_slack_bot.result },
       { name = "SERVICE_AUTH_SECRET_GITHUB_BOT", value = random_password.service_auth_secret_github_bot.result },
       { name = "SERVICE_AUTH_SECRET_LINEAR_BOT", value = random_password.service_auth_secret_linear_bot.result },
-      { name = "SERVICE_AUTH_SECRET_MODAL", value = random_password.service_auth_secret_modal.result },
       # GitHub App credentials for /repos endpoint (listInstallationRepositories)
       { name = "GITHUB_APP_ID", value = var.github_app_id },
       { name = "GITHUB_APP_PRIVATE_KEY", value = var.github_app_private_key },
       { name = "GITHUB_APP_INSTALLATION_ID", value = var.github_app_installation_id },
     ],
-    local.use_modal_backend ? [
-      { name = "MODAL_TOKEN_ID", value = var.modal_token_id },
-      { name = "MODAL_TOKEN_SECRET", value = var.modal_token_secret },
+    local.github_oauth_enabled ? [
+      { name = "GITHUB_CLIENT_SECRET", value = trimspace(var.github_client_secret) },
+    ] : [],
+    local.google_enabled ? [
+      { name = "GOOGLE_CLIENT_SECRET", value = trimspace(var.google_client_secret) },
+    ] : [],
+    var.modal_api_secret != "" && trimspace(var.modal_workspace) != "" ? [
       { name = "MODAL_API_SECRET", value = var.modal_api_secret },
     ] : [],
     local.use_daytona_backend ? [
       { name = "DAYTONA_API_KEY", value = var.daytona_api_key },
     ] : [],
-    local.use_opencomputer_backend ? [
+    var.opencomputer_api_key != "" && trimspace(var.opencomputer_api_url) != "" ? [
       { name = "OPENCOMPUTER_API_KEY", value = var.opencomputer_api_key },
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : [],
-    local.use_vercel_backend ? [
+    var.vercel_sandbox_token != "" && trimspace(var.vercel_sandbox_project_id) != "" ? [
       { name = "VERCEL_TOKEN", value = var.vercel_sandbox_token },
     ] : [],
     local.use_e2b_backend ? [
@@ -174,7 +209,8 @@ module "control_plane_worker" {
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes
 
-  cron_triggers = ["* * * * *"]
+  # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts.
+  cron_triggers = ["* * * * *", "7,37 * * * *"]
 
   depends_on = [
     null_resource.control_plane_build,
@@ -185,5 +221,23 @@ module "control_plane_worker" {
     module.vercel_sandbox_infra,
     module.opencomputer_infra,
     module.e2b_infra,
+    module.modal_app,
   ]
+}
+
+resource "cloudflare_queue_consumer" "image_build_finalization" {
+  account_id        = var.cloudflare_account_id
+  queue_id          = cloudflare_queue.image_build_finalization.queue_id
+  type              = "worker"
+  script_name       = module.control_plane_worker.worker_name
+  dead_letter_queue = cloudflare_queue.image_build_finalization_dlq.queue_name
+  settings = {
+    batch_size       = 1
+    max_wait_time_ms = 1000
+    max_concurrency  = 5
+    max_retries      = 12
+    retry_delay      = 15
+  }
+
+  depends_on = [module.control_plane_worker]
 }

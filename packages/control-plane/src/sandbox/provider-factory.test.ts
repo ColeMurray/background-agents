@@ -64,4 +64,20 @@ describe("createSandboxProviderFromEnv", () => {
       "E2B_AUTO_PAUSE must be a valid boolean"
     );
   });
+
+  it("requires an OpenComputer template for starts but not existing-session cleanup", () => {
+    const env = createEnv({
+      OPENCOMPUTER_API_URL: "https://opencomputer.test",
+      OPENCOMPUTER_API_KEY: "opencomputer-key",
+    });
+
+    expect(() => createSandboxProviderFromEnv(env, "opencomputer")).toThrow(
+      "OPENCOMPUTER_TEMPLATE"
+    );
+    expect(() =>
+      createSandboxProviderFromEnv(env, "opencomputer", {
+        requireOpenComputerTemplate: false,
+      })
+    ).not.toThrow();
+  });
 });

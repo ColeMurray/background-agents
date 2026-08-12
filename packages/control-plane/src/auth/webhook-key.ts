@@ -5,7 +5,7 @@
  * Hashed with SHA-256 (brute-force resistance unnecessary for high-entropy random keys).
  */
 
-import { timingSafeEqual } from "@open-inspect/shared";
+import { timingSafeEqual } from "@open-inspect/shared/auth";
 import { encryptToken, decryptToken } from "./crypto";
 import { base64UrlEncode } from "./encoding";
 

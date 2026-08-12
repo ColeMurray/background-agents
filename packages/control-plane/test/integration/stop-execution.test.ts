@@ -375,4 +375,41 @@ describe("POST /internal/stop", () => {
     clientWs.close();
     if (sandboxWs) sandboxWs.close();
   });
+
+  it("does not stop execution before the client subscribes", async () => {
+    const name = `ws-stop-client-unsubscribed-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+
+    const participants = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants WHERE user_id = 'user-1'"
+    );
+    const participantId = participants[0].id;
+
+    const msgId = "msg-ws-stop-unsubscribed";
+    await seedMessage(stub, {
+      id: msgId,
+      authorId: participantId,
+      content: "Must remain in progress",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now() - 1000,
+      startedAt: Date.now() - 500,
+    });
+
+    const { ws } = await openClientWs(name);
+    const closed = new Promise<{ code: number }>((resolve) => {
+      ws.addEventListener("close", (event) => resolve({ code: event.code }));
+    });
+
+    ws.send(JSON.stringify({ type: "stop" }));
+
+    await expect(closed).resolves.toEqual({ code: 4002 });
+    const messages = await queryDO<{ status: string }>(
+      stub,
+      "SELECT status FROM messages WHERE id = ?",
+      msgId
+    );
+    expect(messages[0].status).toBe("processing");
+  });
 });

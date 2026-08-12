@@ -5,10 +5,19 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final
 
+from .child_activity import (
+    MAX_PENDING_CHILD_ACTIVITY,
+    ChildActivityCorrelator,
+    MessageDisposition,
+    PendingChildActivity,
+    PendingChildError,
+    PendingChildMessage,
+)
 from .opencode_client import (
     SSEConnectionError,
     SSEInactivityTimeoutError,
@@ -78,8 +87,7 @@ class _PromptState:
     pending_parts: dict[str, list[_PendingPart]] = field(default_factory=dict)
     pending_parts_total: int = 0
     pending_drop_logged: bool = False
-    # Child session tracking (sub-tasks)
-    tracked_child_session_ids: set[str] = field(default_factory=set)
+    child_activity: ChildActivityCorrelator = field(default_factory=ChildActivityCorrelator)
     # Compaction tracking: after compaction, parentID changes so we must
     # accept all non-summary assistant messages from the parent session
     compaction_occurred: bool = False
@@ -99,6 +107,10 @@ class _Disposition(Enum):
     FINISHED_IDLE = "finished_idle"
     # Parent session errored: the error event was emitted, finish immediately.
     FAILED = "failed"
+
+
+class _PromptMaxDurationTimeout(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -132,12 +144,14 @@ class OpenCodePromptStream:
         log: StructuredLogger,
         sse_inactivity_timeout_seconds: float,
         prompt_max_duration_seconds: float,
+        prompt_cleanup_timeout_seconds: float,
     ) -> None:
         self._client = client
         self._attachment_processor = attachment_processor
         self._log = log
         self._sse_inactivity_timeout_seconds = sse_inactivity_timeout_seconds
         self._prompt_max_duration_seconds = prompt_max_duration_seconds
+        self._prompt_cleanup_timeout_seconds = prompt_cleanup_timeout_seconds
         # Session title dedupe survives across prompts so an unchanged title
         # is forwarded to the control plane at most once.
         self._last_forwarded_session_title: str | None = None
@@ -171,16 +185,37 @@ class OpenCodePromptStream:
         )
         state.user_message_ids.add(opencode_message_id)
         loop = asyncio.get_running_loop()
-
+        prompt_deadline = loop.time() + self._prompt_max_duration_seconds
         try:
-            async with self._client.events(
-                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
-            ) as sse_events:
-                prompt_start = loop.time()
-                await self._client.post_prompt(opencode_session_id, request_body)
+            async with AsyncExitStack() as stack:
+                try:
+                    async with asyncio.timeout(prompt_deadline - loop.time()):
+                        sse_events = await stack.enter_async_context(
+                            self._client.events(
+                                inactivity_timeout_seconds=self._sse_inactivity_timeout_seconds
+                            )
+                        )
+                        await self._client.post_prompt(opencode_session_id, request_body)
+                except TimeoutError as error:
+                    raise _PromptMaxDurationTimeout from error
+                event_iterator = aiter(sse_events)
 
-                async for sse_event in sse_events:
+                while True:
+                    remaining_seconds = prompt_deadline - loop.time()
+                    if remaining_seconds <= 0:
+                        raise _PromptMaxDurationTimeout
+                    try:
+                        async with asyncio.timeout(remaining_seconds):
+                            sse_event = await anext(event_iterator)
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError as error:
+                        raise _PromptMaxDurationTimeout from error
+
                     step = self._apply_sse_event(state, sse_event)
+                    if step.disposition is not _Disposition.CONTINUE:
+                        for event in self._flush_unassociated_child_activity(state):
+                            yield event
                     for event in step.events:
                         yield event
 
@@ -191,23 +226,39 @@ class OpenCodePromptStream:
                     if step.disposition is _Disposition.FAILED:
                         return
 
-                    if loop.time() > prompt_start + self._prompt_max_duration_seconds:
-                        elapsed = time.time() - state.start_time
-                        self._log.error(
-                            "bridge.prompt_max_duration_timeout",
-                            timeout_ms=int(self._prompt_max_duration_seconds * 1000),
-                            elapsed_ms=int(elapsed * 1000),
-                            message_id=message_id,
-                        )
-                        await self._client.request_stop(
-                            opencode_session_id, reason="prompt_max_duration_timeout"
-                        )
-                        async for final_event in self._fetch_final_message_state(state):
-                            yield final_event
-                        raise RuntimeError(
-                            f"Prompt exceeded max duration of "
-                            f"{self._prompt_max_duration_seconds:.0f}s."
-                        )
+                for event in self._flush_unassociated_child_activity(state):
+                    yield event
+
+        except _PromptMaxDurationTimeout:
+            elapsed = time.time() - state.start_time
+            self._log.error(
+                "bridge.prompt_max_duration_timeout",
+                timeout_ms=int(self._prompt_max_duration_seconds * 1000),
+                elapsed_ms=int(elapsed * 1000),
+                message_id=message_id,
+            )
+            pending_child_events = self._flush_unassociated_child_activity(state)
+            for event in pending_child_events:
+                yield event
+            final_events: list[dict[str, Any]] = []
+            try:
+                async with asyncio.timeout(self._prompt_cleanup_timeout_seconds):
+                    await self._client.request_stop(
+                        opencode_session_id, reason="prompt_max_duration_timeout"
+                    )
+                    async for event in self._fetch_final_message_state(state):
+                        final_events.append(event)
+            except TimeoutError:
+                self._log.error(
+                    "bridge.prompt_timeout_cleanup_timeout",
+                    timeout_ms=int(self._prompt_cleanup_timeout_seconds * 1000),
+                    message_id=message_id,
+                )
+            for final_event in final_events:
+                yield final_event
+            raise RuntimeError(
+                f"Prompt exceeded max duration of {self._prompt_max_duration_seconds:.0f}s."
+            )
 
         except SSEInactivityTimeoutError:
             elapsed = time.time() - state.start_time
@@ -219,6 +270,9 @@ class OpenCodePromptStream:
                 operation="bridge.sse",
                 message_id=message_id,
             )
+            pending_child_events = self._flush_unassociated_child_activity(state)
+            for event in pending_child_events:
+                yield event
             await self._client.request_stop(opencode_session_id, reason="inactivity_timeout")
             async for final_event in self._fetch_final_message_state(state):
                 yield final_event
@@ -228,6 +282,8 @@ class OpenCodePromptStream:
             )
 
         except SSEStreamDisconnectedError as e:
+            for event in self._flush_unassociated_child_activity(state):
+                yield event
             async for final_event in self._fetch_final_message_state(state):
                 yield final_event
             raise SSEConnectionError(
@@ -259,7 +315,7 @@ class OpenCodePromptStream:
             return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
 
         event_session_id = props.get("sessionID") or props.get("part", {}).get("sessionID")
-        is_child = event_session_id in state.tracked_child_session_ids
+        is_child = state.child_activity.is_tracked(event_session_id)
         if event_session_id and event_session_id != state.opencode_session_id and not is_child:
             return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
 
@@ -292,6 +348,7 @@ class OpenCodePromptStream:
                 state.compaction_occurred = True
                 state.pending_overflow_error = None
                 self._log.info("bridge.session_compacted", message_id=state.message_id)
+                events.append({"type": "context_compacted", "messageId": state.message_id})
 
         return _StreamStep(events=events, disposition=_Disposition.CONTINUE)
 
@@ -300,12 +357,12 @@ class OpenCodePromptStream:
         child_id = info.get("id")
         child_parent = info.get("parentID")
         if child_id and child_parent == state.opencode_session_id:
-            state.tracked_child_session_ids.add(child_id)
-            self._log.info(
-                "bridge.child_session_detected",
-                child_session_id=child_id,
-                source="session.created",
-            )
+            if state.child_activity.track(child_id):
+                self._log.info(
+                    "bridge.child_session_detected",
+                    child_session_id=child_id,
+                    source="session.created",
+                )
 
     def _on_message_updated(
         self, state: _PromptState, props: dict[str, Any]
@@ -376,11 +433,18 @@ class OpenCodePromptStream:
                 )
             return events
 
-        if msg_session_id in state.tracked_child_session_ids:
-            # Child session: authorize all assistant messages
+        if state.child_activity.is_tracked(msg_session_id):
             oc_msg_id = info.get("id", "")
             role = info.get("role", "")
             if role == "assistant" and oc_msg_id:
+                disposition = state.child_activity.authorize_or_queue_message(
+                    msg_session_id, oc_msg_id
+                )
+                if disposition is MessageDisposition.DROPPED:
+                    self._log_pending_child_drop(state)
+                    return []
+                if disposition is MessageDisposition.QUEUED:
+                    return []
                 state.allowed_assistant_msg_ids.add(oc_msg_id)
                 return self._drain_pending_parts(state, oc_msg_id, is_subtask=True)
 
@@ -392,25 +456,43 @@ class OpenCodePromptStream:
         delta = props.get("delta")
         oc_msg_id = part.get("messageID", "")
         part_session_id = part.get("sessionID", "")
+        events: list[dict[str, Any]] = []
+        correlated_child_sid: str | None = None
 
         # Discover child sessions from task tool metadata (covers task_id resume)
         if part.get("tool") == "task" and part_session_id == state.opencode_session_id:
-            metadata = part.get("metadata")
+            tool_state = part.get("state", {})
+            metadata = tool_state.get("metadata") if isinstance(tool_state, dict) else None
             child_sid = metadata.get("sessionId") if isinstance(metadata, dict) else None
-            if child_sid and child_sid not in state.tracked_child_session_ids:
-                state.tracked_child_session_ids.add(child_sid)
-                self._log.info(
-                    "bridge.child_session_detected",
-                    child_session_id=child_sid,
-                    source="task_metadata",
-                )
+            task_call_id = part.get("callID")
+            if child_sid:
+                if task_call_id:
+                    is_new_child = state.child_activity.associate(child_sid, task_call_id)
+                    correlated_child_sid = child_sid
+                else:
+                    is_new_child = state.child_activity.track(child_sid)
+                if is_new_child:
+                    self._log.info(
+                        "bridge.child_session_detected",
+                        child_session_id=child_sid,
+                        source="task_metadata",
+                    )
 
         if oc_msg_id in state.allowed_assistant_msg_ids:
-            is_subtask = part_session_id in state.tracked_child_session_ids
-            return self._handle_part(state, part, delta, is_subtask=is_subtask)
-        if oc_msg_id:
+            is_subtask = state.child_activity.is_tracked(part_session_id)
+            events.extend(self._handle_part(state, part, delta, is_subtask=is_subtask))
+        elif oc_msg_id:
             self._buffer_part(state, oc_msg_id, part, delta)
-        return []
+
+        if correlated_child_sid:
+            events.extend(self._release_child_activity(state, correlated_child_sid))
+
+        if part.get("tool") == "task":
+            status = part.get("state", {}).get("status", "")
+            if status in ("completed", "error"):
+                state.child_activity.close(part.get("callID", ""))
+
+        return events
 
     def _on_session_error(self, state: _PromptState, props: dict[str, Any]) -> _StreamStep:
         error_session_id = props.get("sessionID")
@@ -441,7 +523,7 @@ class OpenCodePromptStream:
                 disposition=_Disposition.FAILED,
             )
 
-        if error_session_id in state.tracked_child_session_ids:
+        if isinstance(error_session_id, str) and state.child_activity.is_tracked(error_session_id):
             error = props.get("error", {})
             if isinstance(error, dict) and error.get("name") == CONTEXT_OVERFLOW_ERROR_NAME:
                 # Child sessions recover through the same automatic compaction;
@@ -460,14 +542,20 @@ class OpenCodePromptStream:
                 child_session_id=error_session_id,
             )
             # Stream does not end — the parent continues after a sub-task error
+            normalized_error = error_msg or "Sub-task error"
+            task_call_id = state.child_activity.task_for_activity(error_session_id)
+            if not task_call_id:
+                if not state.child_activity.queue_error(error_session_id, normalized_error):
+                    self._log_pending_child_drop(state)
+                return _StreamStep(events=[], disposition=_Disposition.CONTINUE)
             return _StreamStep(
                 events=[
-                    {
-                        "type": "error",
-                        "error": error_msg or "Sub-task error",
-                        "messageId": state.message_id,
-                        "isSubtask": True,
-                    }
+                    self._child_error_event(
+                        state,
+                        error_session_id,
+                        normalized_error,
+                        task_call_id,
+                    )
                 ],
                 disposition=_Disposition.CONTINUE,
             )
@@ -547,7 +635,12 @@ class OpenCodePromptStream:
                 status = tool_state.get("status", "")
                 call_id = part.get("callID", "")
                 part_sid = part.get("sessionID", "")
-                tool_key = f"tool:{part_sid}:{call_id}:{status}"
+                child_session_id = state.child_activity.child_for_task(call_id) or ""
+                tool_key = f"tool:{part_sid}:{call_id}:{status}:{child_session_id}"
+
+                if part.get("tool") == "task":
+                    if child_session_id:
+                        tool_event["childSessionId"] = child_session_id
 
                 if tool_key not in state.emitted_tool_states:
                     state.emitted_tool_states.add(tool_key)
@@ -573,9 +666,74 @@ class OpenCodePromptStream:
             )
 
         if is_subtask:
+            child_session_id = part.get("sessionID", "")
             for ev in events:
                 ev["isSubtask"] = True
+                if child_session_id:
+                    ev["childSessionId"] = child_session_id
+                    task_call_id = state.child_activity.task_for_message(part.get("messageID", ""))
+                    if task_call_id:
+                        ev["taskCallId"] = task_call_id
         return events
+
+    def _release_child_activity(
+        self, state: _PromptState, child_session_id: str
+    ) -> list[dict[str, Any]]:
+        return [
+            event
+            for activity in state.child_activity.release(child_session_id)
+            for event in self._emit_pending_child_activity(state, activity)
+        ]
+
+    def _flush_unassociated_child_activity(self, state: _PromptState) -> list[dict[str, Any]]:
+        return [
+            event
+            for activity in state.child_activity.flush()
+            for event in self._emit_pending_child_activity(state, activity)
+        ]
+
+    def _emit_pending_child_activity(
+        self, state: _PromptState, activity: PendingChildActivity
+    ) -> list[dict[str, Any]]:
+        task_call_id = state.child_activity.task_for_pending(activity)
+        if isinstance(activity, PendingChildError):
+            return [
+                self._child_error_event(
+                    state, activity.child_session_id, activity.error, task_call_id
+                )
+            ]
+
+        if not isinstance(activity, PendingChildMessage):
+            return []
+        state.allowed_assistant_msg_ids.add(activity.message_id)
+        return self._drain_pending_parts(state, activity.message_id, is_subtask=True)
+
+    def _log_pending_child_drop(self, state: _PromptState) -> None:
+        if not state.child_activity.should_log_drop():
+            return
+        self._log.warn(
+            "bridge.pending_child_activity_dropped",
+            message_id=state.message_id,
+            limit=MAX_PENDING_CHILD_ACTIVITY,
+        )
+
+    def _child_error_event(
+        self,
+        state: _PromptState,
+        child_session_id: str,
+        error: str,
+        task_call_id: str | None,
+    ) -> dict[str, Any]:
+        event = {
+            "type": "error",
+            "error": error,
+            "messageId": state.message_id,
+            "isSubtask": True,
+            "childSessionId": child_session_id,
+        }
+        if task_call_id:
+            event["taskCallId"] = task_call_id
+        return event
 
     def _buffer_part(
         self, state: _PromptState, oc_msg_id: str, part: dict[str, Any], delta: Any
@@ -703,6 +861,8 @@ class OpenCodePromptStream:
                         "reasoningEffort": reasoning_effort,
                         "reasoningSummary": "auto",
                     }
+                elif provider_id == "xai":
+                    request_body["variant"] = reasoning_effort
 
             request_body["model"] = model_spec
 

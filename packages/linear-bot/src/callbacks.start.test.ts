@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { callbacksRouter } from "./callbacks";
 import { createStartCallbackRouter } from "./callbacks/start-callback";
-import { computeHmacHex } from "@open-inspect/shared";
+import { computeHmacHex } from "@open-inspect/shared/auth";
 import { createFakeKV, makeExecutionContext, makeLinearBotEnv } from "./test-helpers";
 import type { LinearApiClient } from "./utils/linear-client";
 

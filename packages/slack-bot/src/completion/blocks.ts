@@ -2,17 +2,18 @@
  * Build Slack Block Kit messages for completion notifications.
  */
 
-import type { AgentResponse, SlackCallbackContext } from "../types";
-import { escapeMrkdwnText, type ManualPullRequestArtifactMetadata } from "@open-inspect/shared";
+import type { AgentResponse } from "@open-inspect/shared/types/artifacts";
+import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";
+import type {
+  SlackActionsBlock,
+  SlackButtonElement,
+  SlackContextBlock,
+  SlackSectionBlock,
+} from "../slack-blocks";
+import { escapeMrkdwnText, splitIntoSlackSections } from "@open-inspect/shared/slack";
+import type { ManualPullRequestArtifactMetadata } from "@open-inspect/shared/types/artifacts";
 
-/**
- * Slack Block Kit block type (subset).
- */
-interface SlackBlock {
-  type: string;
-  text?: { type: string; text: string };
-  elements?: Array<{ type: string; text?: unknown; url?: string; action_id?: string }>;
-}
+type CompletionSlackBlock = SlackSectionBlock | SlackContextBlock | SlackActionsBlock;
 
 /**
  * Status emoji constants.
@@ -25,8 +26,6 @@ const STATUS_EMOJI = {
 /**
  * Truncation limits.
  */
-const TRUNCATE_LIMIT = 2000;
-const FALLBACK_TEXT_LIMIT = 150;
 const ERROR_FOOTER_LIMIT = 200;
 
 /**
@@ -37,15 +36,18 @@ export function buildCompletionBlocks(
   response: AgentResponse,
   context: SlackCallbackContext,
   webAppUrl: string
-): SlackBlock[] {
-  const blocks: SlackBlock[] = [];
+): CompletionSlackBlock[] {
+  const blocks: CompletionSlackBlock[] = [];
 
-  // 1. Response text (truncated)
-  const text = truncateForSlack(response.textContent, TRUNCATE_LIMIT);
-  blocks.push({
-    type: "section",
-    text: { type: "mrkdwn", text: text || "_Agent completed._" },
-  });
+  // 1. Response text, split across as many section blocks as it needs
+  const sections = splitIntoSlackSections(response.textContent);
+  if (sections.length === 0) {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: "_Agent completed._" } });
+  } else {
+    for (const section of sections) {
+      blocks.push({ type: "section", expand: true, text: { type: "mrkdwn", text: section } });
+    }
+  }
 
   // 2. Artifacts (PRs, branches)
   if (response.artifacts.length > 0) {
@@ -91,12 +93,7 @@ export function buildCompletionBlocks(
 
   const hasPrArtifact = response.artifacts.some((artifact) => artifact.type === "pr");
   const manualCreatePrUrl = getManualCreatePrUrl(response.artifacts);
-  const actionElements: Array<{
-    type: string;
-    text: { type: string; text: string };
-    url: string;
-    action_id: string;
-  }> = [
+  const actionElements: SlackButtonElement[] = [
     {
       type: "button",
       text: { type: "plain_text", text: "View Session" },
@@ -121,26 +118,6 @@ export function buildCompletionBlocks(
   });
 
   return blocks;
-}
-
-/**
- * Get truncated text for Slack's fallback text field.
- */
-export function getFallbackText(response: AgentResponse): string {
-  return response.textContent.slice(0, FALLBACK_TEXT_LIMIT) || "Agent completed.";
-}
-
-/**
- * Truncate text for Slack display with smart sentence breaks.
- */
-function truncateForSlack(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  const truncated = text.slice(0, maxLen);
-  const lastPeriod = truncated.lastIndexOf(". ");
-  if (lastPeriod > maxLen * 0.7) {
-    return truncated.slice(0, lastPeriod + 1) + "\n\n_...truncated_";
-  }
-  return truncated + "...\n\n_...truncated_";
 }
 
 /**

@@ -9,14 +9,19 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
+import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
 import {
-  DEFAULT_MODEL,
-  clientMessageSchema,
-  resolveAppName,
-  sandboxEventSchema,
-  timingSafeEqual,
-  type SessionAttachmentReference,
-} from "@open-inspect/shared";
+  sessionSnapshotSchema,
+  type ServerMessage,
+  type SessionSnapshotState,
+} from "@open-inspect/shared/types/server-messages";
+import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
+import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
+import { resolveAppName } from "@open-inspect/shared/app-name";
+import { timingSafeEqual } from "@open-inspect/shared/auth";
+import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import { generateId, hashToken, encryptToken, decryptToken } from "../auth/crypto";
 import { buildModalSandboxDashboardUrl } from "../sandbox/client";
 import { resolveSandboxBackendName } from "../sandbox/provider-name";
@@ -39,23 +44,19 @@ import {
 } from "../sandbox/lifecycle/manager";
 import { McpServerStore } from "../db/mcp-servers";
 import { IntegrationSettingsStore, resolveSlackSettings } from "../db/integration-settings";
+import { ScmSettingsStore } from "../db/scm-settings";
 import { SessionIndexStore } from "../db/session-index";
-import { DEFAULT_EXECUTION_TIMEOUT_MS } from "../sandbox/lifecycle/decisions";
+import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
+import { DEFAULT_SANDBOX_TIMEOUT_SECONDS } from "../sandbox/provider";
+import { parsePersistedSandboxSettings } from "../sandbox/settings";
 import {
   createSourceControlProviderFromEnv,
   resolveScmProviderFromEnv,
   type SourceControlProvider,
   type GitPushSpec,
 } from "../source-control";
-import type {
-  Env,
-  ClientInfo,
-  ServerMessage,
-  SandboxEvent,
-  SessionRepositoryState,
-  SessionState,
-  SandboxStatus,
-} from "../types";
+import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
+import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
@@ -78,8 +79,10 @@ import {
   parseSecretsCapMode,
 } from "../db/secrets-validation";
 import { buildSessionTargetSecretSources } from "./session-target-secrets";
-import type { SessionRepositoryEntry } from "./repository-target";
+import type { RepoIdentity, SessionRepositoryEntry } from "./repository-target";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
+import { XaiTokenRefreshService } from "./xai-token-refresh-service";
+import { prepareManagedProviderEnv } from "../sandbox/managed-provider-env";
 import { ScmCredentialsService } from "./scm-credentials-service";
 import { ParticipantService, getAvatarUrl } from "./participant-service";
 import { UserScmTokenStore } from "../db/user-scm-tokens";
@@ -88,6 +91,7 @@ import { DOFetcherAdapter } from "../scheduler/do-fetcher-adapter";
 import { PresenceService } from "./presence-service";
 import { SessionMessageQueue } from "./message-queue";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
+import { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import { SessionEventStream } from "./event-stream";
 import { createSessionInternalRoutes } from "./http/routes";
 import { createMessagesHandler, type MessagesHandler } from "./http/handlers/messages.handler";
@@ -117,6 +121,7 @@ import {
 } from "./http/handlers/participants.handler";
 import { MessageService } from "./services/message.service";
 import { createAlarmHandler, type AlarmHandler } from "./alarm/handler";
+import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import { SessionDiffStore } from "./diffs/store";
 import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
@@ -143,6 +148,11 @@ type BoundarySchema<T> = {
     input: unknown
   ): { success: true; data: T } | { success: false; error: { issues: unknown } };
 };
+
+interface SessionSnapshotEnrichment {
+  environmentId: string | null;
+  environmentName: string | null;
+}
 
 export class SessionDO extends DurableObject<Env> {
   private sql: SqlStorage;
@@ -201,15 +211,19 @@ export class SessionDO extends DurableObject<Env> {
   private _participantsHandler: ParticipantsHandler | null = null;
   // Alarm handler (lazily initialized)
   private _alarmHandler: AlarmHandler | null = null;
+  private _alarmScheduler: AlarmScheduler | null = null;
   // Sandbox event processor (lazily initialized)
   private _sandboxEventProcessor: SessionSandboxEventProcessor | null = null;
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
+  private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
     init: (request, _url, log) => this.sessionLifecycleHandler.init(request, log),
     state: () => this.sessionLifecycleHandler.getState(),
+    snapshot: () => this.handleSnapshot(),
+    sandboxAccess: () => this.handleSandboxAccess(),
     prompt: (request, _url, log) => this.messagesHandler.enqueuePrompt(request, log),
     stop: () => this.messagesHandler.stop(),
     sandboxEvent: (request) => this.sandboxHandler.sandboxEvent(request),
@@ -237,10 +251,12 @@ export class SessionDO extends DurableObject<Env> {
     verifySandboxToken: (request, _url, log) =>
       this.sandboxHandler.verifySandboxToken(request, log),
     openaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.openaiTokenRefresh(log),
+    xaiTokenRefresh: (_request, _url, log) => this.sandboxHandler.xaiTokenRefresh(log),
     scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
     tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
+    parentPrompt: (request) => this.childSessionsHandler.parentPrompt(request),
     cancel: () => this.sessionLifecycleHandler.cancel(),
     childSessionUpdate: (request) => this.childSessionsHandler.childSessionUpdate(request),
     diffState: () => this.diffsHandler.state(),
@@ -339,7 +355,6 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._presenceService) {
       this._presenceService = new PresenceService({
         getAuthenticatedClients: () => this.wsManager.getAuthenticatedClients(),
-        getClientInfo: (ws) => this.getClientInfo(ws),
         messenger: this.messenger,
         send: (ws, msg) => this.safeSend(ws, msg),
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
@@ -366,7 +381,27 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private get executionTimeoutMs(): number {
-    return parseInt(this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_EXECUTION_TIMEOUT_MS), 10);
+    try {
+      const sandboxTimeoutMs = parsePersistedSandboxSettings(
+        this.repository.getSession()?.sandbox_settings ?? null
+      ).sandboxTimeoutMs;
+      // This watchdog starts before bridge setup, so it must not race the
+      // bridge's earlier snapshot-reserved prompt deadline.
+      if (sandboxTimeoutMs !== undefined) return sandboxTimeoutMs;
+    } catch {
+      this.log.warn("Failed to parse sandbox_settings for execution timeout, using fallback");
+    }
+    return parseInt(
+      this.env.EXECUTION_TIMEOUT_MS || String(DEFAULT_SANDBOX_TIMEOUT_SECONDS * 1000),
+      10
+    );
+  }
+
+  private get alarmScheduler(): AlarmScheduler {
+    if (!this._alarmScheduler) {
+      this._alarmScheduler = createEarliestAlarmScheduler(this.ctx.storage);
+    }
+    return this._alarmScheduler;
   }
 
   private get messageQueue(): SessionMessageQueue {
@@ -384,11 +419,27 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager,
         this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
-        this.executionTimeoutMs
+        this.alarmScheduler,
+        this.executionTimeoutMs,
+        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
 
     return this._messageQueue;
+  }
+
+  private get terminalMessageProjection(): SessionTerminalMessageProjection {
+    if (!this._terminalMessageProjection) {
+      this._terminalMessageProjection = new SessionTerminalMessageProjection(
+        this.db ? new SessionIndexStore(this.db) : null,
+        () => {
+          const session = this.getSession();
+          return session ? this.getPublicSessionId(session) : null;
+        },
+        this.log
+      );
+    }
+    return this._terminalMessageProjection;
   }
 
   private get messageService(): MessageService {
@@ -431,6 +482,7 @@ export class SessionDO extends DurableObject<Env> {
         getPublicSessionId: (session) => this.getPublicSessionId(session),
         parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
         messenger: this.messenger,
+        messageService: this.messageService,
       });
     }
 
@@ -454,7 +506,16 @@ export class SessionDO extends DurableObject<Env> {
           );
           return service.refresh(session);
         },
-        isOpenAISecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
+        refreshXaiToken: async (session, log) => {
+          const service = new XaiTokenRefreshService(
+            this.db!,
+            this.env.REPO_SECRETS_ENCRYPTION_KEY!,
+            (sessionRow) => this.ensureRepoId(sessionRow),
+            log
+          );
+          return service.refresh(session);
+        },
+        isManagedSecretsConfigured: () => Boolean(this.db && this.env.REPO_SECRETS_ENCRYPTION_KEY),
         getScmCredentials: (log) =>
           new ScmCredentialsService(this.sourceControlProvider, log).getCredentials(),
         messenger: this.messenger,
@@ -494,10 +555,7 @@ export class SessionDO extends DurableObject<Env> {
         repository: this.repository,
         getDurableObjectId: () => this.ctx.id.toString(),
         tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
-        encryptToken: async (token, encryptionKey) => {
-          const { encryptToken } = await import("../auth/crypto");
-          return encryptToken(token, encryptionKey);
-        },
+        encryptToken: (token, encryptionKey) => encryptToken(token, encryptionKey),
         validateReasoningEffort: (model, effort) =>
           validateReasoningEffort(model, effort, this.log),
         generateId: (bytes) => generateId(bytes),
@@ -509,7 +567,9 @@ export class SessionDO extends DurableObject<Env> {
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
         statusService: this.statusService,
         applySessionTitleUpdate: (title, options) => this.applySessionTitleUpdate(title, options),
-        stopExecution: (options) => this.stopExecution(options),
+        cancelSession: async () => {
+          await this.statusService.cancel(() => this.messageQueue.cancelExecution());
+        },
         getSandboxSocket: () => this.wsManager.getSandboxSocket(),
         sendToSandbox: (ws, message) => this.wsManager.send(ws, message),
         updateSandboxStatus: (status) => this.updateSandboxStatus(status),
@@ -542,6 +602,7 @@ export class SessionDO extends DurableObject<Env> {
             messenger: this.messenger,
             appName: resolveAppName(this.env),
             sessionPullRequests: this.db ? new SessionPullRequestStore(this.db) : undefined,
+            resolveScmSettings: (repo) => this.resolveScmSettings(repo),
           });
 
           return pullRequestService.createPullRequest(input);
@@ -600,12 +661,25 @@ export class SessionDO extends DurableObject<Env> {
     return this._participantsHandler;
   }
 
+  /**
+   * Resolves SCM settings (global defaults merged with the per-repo override)
+   * for the pull request's target repository. A deployment without D1 cannot
+   * have this policy configured, so it retains the built-in defaults; storage
+   * failures propagate to fail closed.
+   */
+  private async resolveScmSettings(repo: RepoIdentity): Promise<ScmSettings> {
+    if (!this.db) return {};
+    const scmSettingsStore = new ScmSettingsStore(this.db);
+    return scmSettingsStore.getResolvedSettings(`${repo.repoOwner}/${repo.repoName}`);
+  }
+
   private get alarmHandler(): AlarmHandler {
     if (!this._alarmHandler) {
       this._alarmHandler = createAlarmHandler({
         repository: this.repository,
         messageQueue: this.messageQueue,
         lifecycleManager: this.lifecycleManager,
+        alarmScheduler: this.alarmScheduler,
         executionTimeoutMs: this.executionTimeoutMs,
         now: () => Date.now(),
         log: this.log,
@@ -630,7 +704,8 @@ export class SessionDO extends DurableObject<Env> {
         this.statusService,
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
-        () => this.messageQueue.processMessageQueue()
+        () => this.messageQueue.processMessageQueue(),
+        (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
 
@@ -706,6 +781,14 @@ export class SessionDO extends DurableObject<Env> {
       },
       clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
       clearSandboxCodeServerUrl: () => this.repository.clearSandboxCodeServerUrl(),
+      updateSandboxVnc: async (url, password) => {
+        const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
+          ? await encryptToken(password, this.env.REPO_SECRETS_ENCRYPTION_KEY)
+          : password;
+        this.repository.updateSandboxVnc(url, encrypted);
+      },
+      clearSandboxVnc: () => this.repository.clearSandboxVnc(),
+      clearSandboxVncUrl: () => this.repository.clearSandboxVncUrl(),
       updateSandboxTunnelUrls: (urls) => this.repository.updateSandboxTunnelUrls(urls),
       clearSandboxTunnelUrls: () => this.repository.clearSandboxTunnelUrls(),
       updateSandboxTtyd: async (url, token) => {
@@ -737,13 +820,6 @@ export class SessionDO extends DurableObject<Env> {
         return ws ? this.wsManager.send(ws, message) : false;
       },
       getConnectedClientCount: () => this.wsManager.getConnectedClientCount(),
-    };
-
-    // Alarm scheduler adapter
-    const alarmScheduler: AlarmScheduler = {
-      scheduleAlarm: async (timestamp) => {
-        await this.ctx.storage.setAlarm(timestamp);
-      },
     };
 
     // ID generator adapter
@@ -822,7 +898,7 @@ export class SessionDO extends DurableObject<Env> {
       storage,
       broadcaster,
       wsManager,
-      alarmScheduler,
+      this.alarmScheduler,
       idGenerator,
       config,
       {
@@ -957,7 +1033,7 @@ export class SessionDO extends DurableObject<Env> {
       // Deliberately narrower than isDeadSandboxStatus: a "failed" sandbox may
       // still connect — a slow boot that outlived the connecting watchdog
       // self-heals here by flipping the status back to ready.
-      if (sandbox?.status === "stopped" || sandbox?.status === "stale") {
+      if (sandbox && isSandboxReconnectBlockedStatus(sandbox.status)) {
         log.warn("ws.connect", {
           event: "ws.connect",
           ws_type: "sandbox",
@@ -1007,6 +1083,9 @@ export class SessionDO extends DurableObject<Env> {
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
       if (isSandbox) {
+        // The lifecycle manager publishes access after any pending provider
+        // startup has persisted its URLs and credentials.
+        const accessIsPersisted = !this.lifecycleManager.isProviderStartupPending();
         const { replaced } = this.wsManager.acceptAndSetSandboxSocket(
           server,
           sandboxId ?? undefined
@@ -1016,11 +1095,15 @@ export class SessionDO extends DurableObject<Env> {
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
         this.broadcast({ type: "sandbox_status", status: "ready" });
+        if (accessIsPersisted) {
+          this.broadcast({ type: "sandbox_access_changed" });
+        }
 
         // Set initial activity timestamp and schedule inactivity check
         // IMPORTANT: Must await to ensure alarm is scheduled before returning
         const now = Date.now();
         this.updateLastActivity(now);
+        this.repository.updateSandboxHeartbeat(now);
         await this.scheduleInactivityCheck();
 
         log.info("ws.connect", {
@@ -1033,7 +1116,13 @@ export class SessionDO extends DurableObject<Env> {
         });
 
         // Process any pending messages now that sandbox is connected
-        this.processMessageQueue();
+        this.ctx.waitUntil(
+          this.processMessageQueue().catch((error) => {
+            log.error("message_queue.process.background_error", {
+              error: error instanceof Error ? error : String(error),
+            });
+          })
+        );
       } else {
         const wsId = `ws-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
         this.wsManager.acceptClientSocket(server, wsId);
@@ -1067,12 +1156,17 @@ export class SessionDO extends DurableObject<Env> {
   /**
    * Handle WebSocket close.
    */
-  async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
+  async webSocketClose(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean
+  ): Promise<void> {
     this.ensureInitialized();
-    const { kind } = this.wsManager.classify(ws);
+    const connection = this.wsManager.classify(ws);
 
     try {
-      if (kind === "sandbox") {
+      if (connection.kind === "sandbox") {
         const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
         if (!wasActive) {
           // sandboxWs points to a different socket — this close is for a replaced connection.
@@ -1080,16 +1174,20 @@ export class SessionDO extends DurableObject<Env> {
           return;
         }
 
-        const isNormalClose = code === 1000 || code === 1001;
-        if (isNormalClose) {
-          this.updateSandboxStatus("stopped");
-        } else {
-          // Abnormal close (e.g., 1006): leave status unchanged so the bridge can reconnect.
-          // Schedule a heartbeat check to detect truly dead sandboxes.
-          this.log.warn("Sandbox WebSocket abnormal close", {
-            event: "sandbox.abnormal_close",
+        const sandboxStatus = this.getSandbox()?.status;
+        const reconnectBlocked =
+          sandboxStatus !== undefined && isSandboxReconnectBlockedStatus(sandboxStatus);
+        if (!reconnectBlocked) {
+          // A close frame only ends this transport connection. Explicit lifecycle
+          // paths persist stopped/stale before closing the socket; otherwise the
+          // bridge must be allowed to reconnect regardless of the peer close code.
+          this.log.warn("Sandbox WebSocket disconnected; awaiting reconnect", {
+            event: "sandbox.disconnected",
             code,
             reason,
+            was_clean: wasClean,
+            sandbox_status: sandboxStatus,
+            sandbox_id: connection.sandboxId,
           });
           await this.lifecycleManager.scheduleDisconnectCheck();
         }
@@ -1192,17 +1290,22 @@ export class SessionDO extends DurableObject<Env> {
         return;
       }
 
+      if (data.type === "ping") {
+        this.safeSend(ws, { type: "pong", timestamp: Date.now() });
+        return;
+      }
+
+      if (data.type === "subscribe") {
+        await this.handleSubscribe(ws, data);
+        return;
+      }
+
+      const client = this.getClientInfo(ws);
+      if (!client) return;
+
       switch (data.type) {
-        case "ping":
-          this.safeSend(ws, { type: "pong", timestamp: Date.now() });
-          break;
-
-        case "subscribe":
-          await this.handleSubscribe(ws, data);
-          break;
-
         case "prompt":
-          await this.handlePromptMessage(ws, data);
+          await this.handlePromptMessage(ws, client, data);
           break;
 
         case "stop":
@@ -1214,11 +1317,11 @@ export class SessionDO extends DurableObject<Env> {
           break;
 
         case "fetch_history":
-          this.handleFetchHistory(ws, data);
+          this.handleFetchHistory(ws, client, data);
           break;
 
         case "presence":
-          this.presenceService.updatePresence(ws, data);
+          this.presenceService.updatePresence(client, data);
           break;
       }
     } catch (e) {
@@ -1280,104 +1383,122 @@ export class SessionDO extends DurableObject<Env> {
       return;
     }
 
-    // Hash the incoming token and look up participant
-    const tokenHash = await hashToken(data.token);
-    const participant = this.participantService.getByWsTokenHash(tokenHash);
-
-    if (!participant) {
-      this.log.warn("ws.connect", {
-        event: "ws.connect",
-        ws_type: "client",
-        outcome: "auth_failed",
-        reject_reason: "invalid_token",
-      });
-      ws.close(4001, "Invalid authentication token");
+    if (this.wsManager.isClientAuthenticated(ws) || this.wsManager.isClientSynchronizing(ws)) {
+      this.wsManager.close(ws, 4003, "Already subscribed");
       return;
     }
+    this.wsManager.setClientSynchronizing(ws, true);
 
-    // Reject tokens older than the TTL
-    if (
-      participant.ws_token_created_at === null ||
-      Date.now() - participant.ws_token_created_at > WS_TOKEN_TTL_MS
-    ) {
-      this.log.warn("ws.connect", {
+    try {
+      // Hash the incoming token and look up participant
+      const tokenHash = await hashToken(data.token);
+      const participant = this.participantService.getByWsTokenHash(tokenHash);
+
+      if (!participant) {
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "client",
+          outcome: "auth_failed",
+          reject_reason: "invalid_token",
+        });
+        ws.close(4001, "Invalid authentication token");
+        return;
+      }
+
+      // Reject tokens older than the TTL
+      if (
+        participant.ws_token_created_at === null ||
+        Date.now() - participant.ws_token_created_at > WS_TOKEN_TTL_MS
+      ) {
+        this.log.warn("ws.connect", {
+          event: "ws.connect",
+          ws_type: "client",
+          outcome: "auth_failed",
+          reject_reason: "token_expired",
+          participant_id: participant.id,
+          user_id: participant.user_id,
+        });
+        ws.close(4001, "Token expired");
+        return;
+      }
+
+      this.log.info("ws.connect", {
         event: "ws.connect",
         ws_type: "client",
-        outcome: "auth_failed",
-        reject_reason: "token_expired",
+        outcome: "success",
         participant_id: participant.id,
         user_id: participant.user_id,
+        client_id: data.clientId,
       });
-      ws.close(4001, "Token expired");
-      return;
-    }
 
-    this.log.info("ws.connect", {
-      event: "ws.connect",
-      ws_type: "client",
-      outcome: "success",
-      participant_id: participant.id,
-      user_id: participant.user_id,
-      client_id: data.clientId,
-    });
-
-    // Build client info from participant data
-    const clientInfo: ClientInfo = {
-      participantId: participant.id,
-      userId: participant.user_id,
-      name: resolveParticipantName(participant),
-      avatar: getAvatarUrl(participant.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
-      status: "active",
-      lastSeen: Date.now(),
-      clientId: data.clientId,
-      ws,
-    };
-
-    this.wsManager.setClient(ws, clientInfo);
-
-    const parsed = this.wsManager.classify(ws);
-    if (parsed.kind === "client" && parsed.wsId) {
-      this.wsManager.persistClientMapping(parsed.wsId, participant.id, data.clientId);
-      this.log.debug("Stored ws_client_mapping", {
-        ws_id: parsed.wsId,
-        participant_id: participant.id,
-      });
-    }
-
-    // Gather session state and replay events, then send as a single message.
-    // Fetch sandbox once and thread it through to avoid a redundant SQLite read.
-    const sandbox = this.getSandbox();
-    const state = await this.getSessionState(sandbox);
-    const artifacts = this.messageService.listArtifacts();
-    const replay = this.eventStream.getReplay();
-
-    this.safeSend(ws, {
-      type: "subscribed",
-      sessionId: state.id,
-      state,
-      artifacts: artifacts.artifacts,
-      participantId: participant.id,
-      participant: {
+      // Build client info from participant data
+      const clientInfo: ClientInfo = {
         participantId: participant.id,
+        userId: participant.canonical_user_id ?? participant.user_id,
         name: resolveParticipantName(participant),
         avatar: getAvatarUrl(
           participant.scm_login,
           resolveScmProviderFromEnv(this.env.SCM_PROVIDER)
         ),
-      },
-      replay,
-      spawnError: sandbox?.last_spawn_error ?? null,
-    } as ServerMessage);
+        status: "active",
+        lastSeen: Date.now(),
+        clientId: data.clientId,
+        ws,
+      };
 
-    // Send current presence
-    this.presenceService.sendPresence(ws);
+      const enrichment = await this.resolveSessionSnapshotEnrichment();
+      if (!this.completeClientSubscription(ws, clientInfo, enrichment)) {
+        this.wsManager.close(ws, 4009, "Session synchronization failed");
+        return;
+      }
 
-    // Notify others
-    this.presenceService.broadcastPresence();
+      this.presenceService.sendPresence(ws);
+      this.presenceService.broadcastPresence();
+      this.schedulePullRequestRefresh("open");
+    } finally {
+      this.wsManager.setClientSynchronizing(ws, false);
+    }
+  }
 
-    // Read-through backstop (design §5.3): opening the session refreshes its
-    // PR state from the provider; changes arrive as artifact_updated.
-    this.schedulePullRequestRefresh("open");
+  /**
+   * Finish the snapshot-to-stream handoff synchronously. Keeping the final read,
+   * send, and registration in a non-async method makes the no-await invariant
+   * structural rather than a convention inside the async authentication flow.
+   */
+  private completeClientSubscription(
+    ws: WebSocket,
+    client: ClientInfo,
+    enrichment: SessionSnapshotEnrichment
+  ): boolean {
+    const snapshot = this.readSessionSnapshot(enrichment);
+    if (!snapshot) return false;
+
+    if (
+      !this.safeSend(ws, {
+        type: "subscribed",
+        ...snapshot,
+        participantId: client.participantId,
+        participant: {
+          participantId: client.participantId,
+          userId: client.userId,
+          name: client.name,
+          avatar: client.avatar,
+        },
+      } satisfies ServerMessage)
+    ) {
+      return false;
+    }
+
+    this.wsManager.setClient(ws, client);
+    const parsed = this.wsManager.classify(ws);
+    if (parsed.kind === "client" && parsed.wsId) {
+      this.wsManager.persistClientMapping(parsed.wsId, client.participantId, client.clientId);
+      this.log.debug("Stored ws_client_mapping", {
+        ws_id: parsed.wsId,
+        participant_id: client.participantId,
+      });
+    }
+    return true;
   }
 
   /**
@@ -1400,7 +1521,7 @@ export class SessionDO extends DurableObject<Env> {
     this.log.info("Recovered client info from DB", { user_id: mapping.user_id });
     const clientInfo: ClientInfo = {
       participantId: mapping.participant_id,
-      userId: mapping.user_id,
+      userId: mapping.canonical_user_id ?? mapping.user_id,
       name: resolveParticipantName(mapping),
       avatar: getAvatarUrl(mapping.scm_login, resolveScmProviderFromEnv(this.env.SCM_PROVIDER)),
       status: "active",
@@ -1419,6 +1540,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async handlePromptMessage(
     ws: WebSocket,
+    client: ClientInfo,
     data: {
       content: string;
       model?: string;
@@ -1426,16 +1548,6 @@ export class SessionDO extends DurableObject<Env> {
       attachments?: SessionAttachmentReference[];
     }
   ): Promise<void> {
-    const client = this.getClientInfo(ws);
-    if (!client) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "NOT_SUBSCRIBED",
-        message: "Must subscribe first",
-      });
-      return;
-    }
-
     await this.messageQueue.handlePromptMessage(ws, client, data);
   }
 
@@ -1444,23 +1556,16 @@ export class SessionDO extends DurableObject<Env> {
    */
   private handleFetchHistory(
     ws: WebSocket,
-    data: { cursor?: { timestamp: number; id: string }; limit?: number }
+    client: ClientInfo,
+    data: { cursor?: { timestamp: number; id: string; sequence?: number }; limit?: number }
   ): void {
-    const client = this.getClientInfo(ws);
-    if (!client) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "NOT_SUBSCRIBED",
-        message: "Must subscribe first",
-      });
-      return;
-    }
-
     // Validate cursor
     if (
       !data.cursor ||
       typeof data.cursor.timestamp !== "number" ||
-      typeof data.cursor.id !== "string"
+      typeof data.cursor.id !== "string" ||
+      (data.cursor.sequence !== undefined &&
+        (!Number.isSafeInteger(data.cursor.sequence) || data.cursor.sequence < 0))
     ) {
       this.safeSend(ws, {
         type: "error",
@@ -1486,13 +1591,12 @@ export class SessionDO extends DurableObject<Env> {
       cursor: data.cursor,
       limit: data.limit,
     });
-
     this.safeSend(ws, {
       type: "history_page",
       items: page.items,
       hasMore: page.hasMore,
       cursor: page.cursor,
-    } as ServerMessage);
+    } satisfies ServerMessage);
   }
 
   /**
@@ -1617,72 +1721,125 @@ export class SessionDO extends DurableObject<Env> {
     return { ok: true, title: titleText };
   }
 
-  /**
-   * Get current session state.
-   * Accepts an optional pre-fetched sandbox row to avoid a redundant SQLite read.
-   */
-  private async getSessionState(sandbox?: SandboxRow | null): Promise<SessionState> {
+  private async resolveSessionSnapshotEnrichment(): Promise<SessionSnapshotEnrichment> {
     const session = this.getSession();
-    sandbox ??= this.getSandbox();
-    const messageCount = this.repository.getMessageCount();
-    const isProcessing = this.getIsProcessing();
-
-    // Decrypt code-server password if stored encrypted
-    let codeServerPassword: string | null = sandbox?.code_server_password ?? null;
-    if (codeServerPassword && this.env.REPO_SECRETS_ENCRYPTION_KEY) {
-      try {
-        codeServerPassword = await decryptToken(
-          codeServerPassword,
-          this.env.REPO_SECRETS_ENCRYPTION_KEY
-        );
-      } catch {
-        // Key mismatch or corruption — don't leak ciphertext to clients
-        codeServerPassword = null;
-      }
-    }
-
-    // Decrypt ttyd token if stored encrypted
-    let ttydToken: string | null = sandbox?.ttyd_token ?? null;
-    if (ttydToken && this.env.REPO_SECRETS_ENCRYPTION_KEY) {
-      try {
-        ttydToken = await decryptToken(ttydToken, this.env.REPO_SECRETS_ENCRYPTION_KEY);
-      } catch {
-        ttydToken = null;
-      }
-    }
-
-    // Environment provenance: the id is stored on the session; the name is
-    // resolved live (resolveEnvironmentName) so a deleted environment surfaces
-    // as null — the UI renders "environment deleted" (§7.6).
     const environmentId = session?.environment_id ?? null;
     const environmentName = await this.resolveEnvironmentName(environmentId);
+    return { environmentId, environmentName };
+  }
 
-    return {
+  private async decryptStoredAccessValue(value: string | null): Promise<string | null> {
+    if (!value) return null;
+    if (!this.env.REPO_SECRETS_ENCRYPTION_KEY) return value;
+    try {
+      return await decryptToken(value, this.env.REPO_SECRETS_ENCRYPTION_KEY);
+    } catch (error) {
+      this.log.warn("Failed to decrypt stored sandbox access value", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  private readSessionState(
+    enrichment: SessionSnapshotEnrichment
+  ): { session: SessionSnapshotState; sandbox: SandboxRow | null } | null {
+    const session = this.getSession();
+    if (!session) return null;
+    const sandbox = this.getSandbox();
+    const publicSession: SessionSnapshotState = {
       id: this.getPublicSessionId(session),
-      title: session?.title ?? null,
-      repoOwner: session?.repo_owner ?? null,
-      repoName: session?.repo_name ?? null,
-      baseBranch: session?.base_branch ?? null,
-      branchName: session?.branch_name ?? null,
-      status: session?.status ?? "created",
+      title: session.title,
+      repoOwner: session.repo_owner,
+      repoName: session.repo_name,
+      baseBranch: session.base_branch,
+      branchName: session.branch_name,
+      status: session.status,
       sandboxStatus: sandbox?.status ?? "pending",
-      messageCount,
-      createdAt: session?.created_at ?? Date.now(),
-      model: session?.model ?? DEFAULT_MODEL,
-      reasoningEffort: session?.reasoning_effort ?? undefined,
-      isProcessing,
-      parentSessionId: session?.parent_session_id ?? null,
-      totalCost: session?.total_cost ?? 0,
+      messageCount: this.repository.getMessageCount(),
+      createdAt: session.created_at,
+      model: session.model ?? DEFAULT_MODEL,
+      reasoningEffort: session.reasoning_effort ?? undefined,
+      isProcessing: this.getIsProcessing(),
+      parentSessionId: session.parent_session_id,
+      totalCost: session.total_cost ?? 0,
       codeServerUrl: sandbox?.code_server_url ?? null,
-      codeServerPassword,
+      vncUrl: sandbox?.vnc_url ?? null,
       tunnelUrls: sandbox?.tunnel_urls ? this.safeParseTunnelUrls(sandbox.tunnel_urls) : null,
       ttydUrl: sandbox?.ttyd_url ?? null,
-      ttydToken,
       sandboxDashboardUrl: this.getSandboxDashboardUrl(sandbox?.modal_object_id),
       repositories: this.getSessionRepositoryStates(session),
-      environmentId,
-      environmentName,
+      environmentId: session.environment_id ?? null,
+      environmentName:
+        session.environment_id === enrichment.environmentId ? enrichment.environmentName : null,
     };
+    return { session: publicSession, sandbox };
+  }
+
+  private readSessionSnapshot(enrichment: SessionSnapshotEnrichment) {
+    return this.ctx.storage.transactionSync(() => {
+      const local = this.readSessionState(enrichment);
+      if (!local) return null;
+      return {
+        session: local.session,
+        artifacts: this.messageService.listArtifacts().artifacts,
+        timeline: this.eventStream.getReplay(),
+        spawnError: local.sandbox?.last_spawn_error ?? null,
+      };
+    });
+  }
+
+  private async handleSnapshot(): Promise<Response> {
+    const headers = { "Cache-Control": "private, no-store" };
+    const enrichment = await this.resolveSessionSnapshotEnrichment();
+    const snapshot = this.readSessionSnapshot(enrichment);
+    if (!snapshot) {
+      return Response.json({ error: "Session not found" }, { status: 404, headers });
+    }
+    return Response.json(sessionSnapshotSchema.parse(snapshot), { headers });
+  }
+
+  private async handleSandboxAccess(): Promise<Response> {
+    const headers = { "Cache-Control": "private, no-store" };
+    if (!this.getSession()) {
+      return Response.json({ error: "Session not found" }, { status: 404, headers });
+    }
+    const sandbox = this.getSandbox();
+    if (!sandbox || (sandbox.status !== "ready" && sandbox.status !== "running")) {
+      return Response.json({ error: "Sandbox access is unavailable" }, { status: 409, headers });
+    }
+
+    const [codeServerPassword, vncPassword, ttydToken] = await Promise.all([
+      this.decryptStoredAccessValue(sandbox.code_server_password),
+      this.decryptStoredAccessValue(sandbox.vnc_password),
+      this.decryptStoredAccessValue(sandbox.ttyd_token),
+    ]);
+    const current = this.getSandbox();
+    if (
+      !current ||
+      current.id !== sandbox.id ||
+      (current.status !== "ready" && current.status !== "running") ||
+      current.code_server_url !== sandbox.code_server_url ||
+      current.code_server_password !== sandbox.code_server_password ||
+      current.vnc_url !== sandbox.vnc_url ||
+      current.vnc_password !== sandbox.vnc_password ||
+      current.ttyd_url !== sandbox.ttyd_url ||
+      current.ttyd_token !== sandbox.ttyd_token
+    ) {
+      return Response.json({ error: "Sandbox access changed; retry" }, { status: 409, headers });
+    }
+    return Response.json(
+      {
+        codeServer:
+          current.code_server_url && codeServerPassword
+            ? { url: current.code_server_url, password: codeServerPassword }
+            : null,
+        vnc:
+          current.vnc_url && vncPassword ? { url: current.vnc_url, password: vncPassword } : null,
+        ttyd: current.ttyd_url && ttydToken ? { url: current.ttyd_url, token: ttydToken } : null,
+      },
+      { headers }
+    );
   }
 
   /**
@@ -1818,10 +1975,11 @@ export class SessionDO extends DurableObject<Env> {
 
     const repoStore = new RepoSecretsStore(this.db, encryptionKey);
     const environmentSecretsStore = new EnvironmentSecretsStore(this.db, encryptionKey);
+    const members = this.repository.getSessionRepositories();
     const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,
-      members: this.repository.getSessionRepositories(),
+      members,
       loadMemberSecrets: (member) => this.loadMemberRepoSecrets(session, member, repoStore),
       loadEnvironmentSecrets: (environmentId) =>
         environmentSecretsStore.getDecryptedSecrets(environmentId),
@@ -1845,7 +2003,21 @@ export class SessionDO extends DurableObject<Env> {
       });
     }
 
-    return mergedCount === 0 ? undefined : merge.merged;
+    if (mergedCount === 0) return undefined;
+    const primary = members.find((member) => member.isPrimary);
+    const managedSources = session.environment_id
+      ? sources
+      : sources.filter(
+          (source) =>
+            source.label === "global" ||
+            (primary && source.label === `${primary.repoOwner}/${primary.repoName}`)
+        );
+    const managedSecrets = mergeSecretSources(managedSources).merged;
+    const sandboxEnv = prepareManagedProviderEnv({
+      exposedSecrets: merge.merged,
+      brokerSecrets: managedSecrets,
+    });
+    return Object.keys(sandboxEnv).length === 0 ? undefined : sandboxEnv;
   }
 
   /**

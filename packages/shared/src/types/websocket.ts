@@ -20,7 +20,13 @@ export const clientMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("fetch_history"),
-    cursor: z.object({ timestamp: z.number(), id: z.string() }).optional(),
+    cursor: z
+      .object({
+        timestamp: z.number(),
+        id: z.string(),
+        sequence: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
     limit: z.number().optional(),
   }),
 ]);

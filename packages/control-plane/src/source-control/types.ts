@@ -4,7 +4,8 @@
  * Core interfaces and type definitions for source control platform abstraction.
  */
 
-import type { InstallationRepository, PullRequestLifecycleState } from "@open-inspect/shared";
+import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
+import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
 
 /**
  * Repository information.
@@ -360,6 +361,12 @@ export interface SourceControlProvider {
    * @throws SourceControlProviderError on configuration or API errors
    */
   listBranches(config: GetRepositoryConfig): Promise<{ name: string }[]>;
+
+  /**
+   * Resolve one branch tip with app-level credentials. A confirmed 404 is
+   * absence; authentication, throttling, and transport failures throw.
+   */
+  getBranchHead(config: GetRepositoryConfig & { branch: string }): Promise<string | null>;
 
   /**
    * Read the current state of a pull request.

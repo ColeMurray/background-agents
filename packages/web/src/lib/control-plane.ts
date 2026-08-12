@@ -5,54 +5,33 @@
  * vs. URL-based fetch) to `control-plane-transport.ts`.
  */
 
-import { dispatchControlPlaneFetch, getControlPlaneUrl } from "@/lib/control-plane-transport";
+import { cookies } from "next/headers";
+import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
+import { dispatchWebServiceRequest } from "@/lib/control-plane-service";
 import { createLogger } from "@/lib/logger";
-import { getOiAccessTokenFromCookies } from "@/lib/oi-session";
 import { getCorrelationLogFields } from "@/lib/request-correlation";
 import { getRequestCorrelation } from "@/lib/request-context";
 
 const log = createLogger("control-plane-client");
 
-/**
- * Create authenticated headers for a control plane request.
- *
- * Returns the signed-in user's web session token (`Authorization: Bearer
- * oi_at_…`), which resolves to a verified user principal at the control
- * plane. User-facing calls never fall back to web's broad service credential:
- * without a live token the caller receives a local 401 and must reauthenticate.
- */
-async function getControlPlaneHeaders(request: {
-  method: string;
-  url: string;
-  traceId: string;
-}): Promise<HeadersInit | null> {
-  const oiAccessToken = await getOiAccessTokenFromCookies();
-  if (oiAccessToken) {
-    return {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${oiAccessToken}`,
-      "x-trace-id": request.traceId,
-    };
-  }
-  log.warn("auth.user_session_missing", {
-    event: "auth.user_session_missing",
-    http_path: new URL(request.url).pathname,
-    http_method: request.method,
-    trace_id: request.traceId,
-  });
-  return null;
+function unauthorizedResponse(correlation: { requestId: string; traceId: string }): Response {
+  return Response.json(
+    { error: "Unauthorized" },
+    {
+      status: 401,
+      headers: {
+        "x-request-id": correlation.requestId,
+        "x-trace-id": correlation.traceId,
+      },
+    }
+  );
 }
 
 /**
- * Make a user-authenticated request to the control plane.
+ * Make a browser-session-authenticated request to the control plane.
  *
- * The credential is applied after caller-supplied headers, so an
- * `Authorization` header in `options` can never override the identity
- * attached here.
- *
- * @param path - API path (e.g., "/sessions")
- * @param options - Fetch options (method, body, etc.)
- * @returns Fetch Response
+ * Every request carries both a fresh `service:web` signature and the opaque
+ * Better Auth session cookie. Caller-supplied identity headers are discarded.
  */
 export async function controlPlaneUserFetch(
   path: string,
@@ -63,45 +42,34 @@ export async function controlPlaneUserFetch(
   const correlationFields = getCorrelationLogFields(correlation);
 
   try {
-    const url = `${getControlPlaneUrl()}${normalizedPath}`;
-    const credentialHeaderValues = await getControlPlaneHeaders({
-      method: options.method ?? "GET",
-      url,
+    const method = options.method ?? "GET";
+    const cookieHeader = serializeBrowserSessionCookies((await cookies()).getAll());
+    if (!cookieHeader) {
+      log.warn("auth.user_session_missing", {
+        event: "auth.user_session_missing",
+        http_path: normalizedPath.split("?", 1)[0],
+        http_method: method,
+        trace_id: correlation.traceId,
+      });
+      return unauthorizedResponse(correlation);
+    }
+
+    const requestHeaders = new Headers(options.headers);
+    requestHeaders.set("Cookie", cookieHeader);
+    if (!requestHeaders.has("Content-Type")) {
+      requestHeaders.set("Content-Type", "application/json");
+    }
+    const { method: _method, headers: _headers, body, ...transportOptions } = options;
+
+    return await dispatchWebServiceRequest({
+      method,
+      path: normalizedPath,
+      headers: requestHeaders,
+      body,
       traceId: correlation.traceId,
+      correlationFields,
+      transportOptions,
     });
-    if (!credentialHeaderValues) {
-      return Response.json(
-        { error: "Unauthorized" },
-        {
-          status: 401,
-          headers: {
-            "x-request-id": correlation.requestId,
-            "x-trace-id": correlation.traceId,
-          },
-        }
-      );
-    }
-    const credentialHeaders = new Headers(credentialHeaderValues);
-
-    // Caller headers first, credential headers on top: the credential wins
-    // over any caller-supplied Authorization or signature header. Content-Type
-    // is the one caller-overridable credential header — it defaults to JSON
-    // and is not signature-covered (e.g. buffered multipart uploads).
-    const mergedHeaders = new Headers(options.headers);
-    const callerContentType = mergedHeaders.get("Content-Type");
-    credentialHeaders.forEach((value, key) => {
-      mergedHeaders.set(key, value);
-    });
-    if (callerContentType !== null) {
-      mergedHeaders.set("Content-Type", callerContentType);
-    }
-
-    const fetchOptions: RequestInit = {
-      ...options,
-      headers: mergedHeaders,
-    };
-
-    return await dispatchControlPlaneFetch(url, fetchOptions, correlationFields);
   } catch (error) {
     log.error("control_plane.fetch_failed", {
       ...correlationFields,

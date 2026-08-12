@@ -1,9 +1,9 @@
+import { escapeRegExp } from "@open-inspect/shared/regex";
 import {
   createSessionResponseSchema,
-  escapeRegExp,
-  resolveAppName,
   sendPromptResponseSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
+import { resolveAppName } from "@open-inspect/shared/app-name";
 import { signedControlPlaneFetch } from "./internal-auth";
 import type {
   Env,
@@ -291,11 +291,6 @@ export async function handlePullRequestOpened(
     return { outcome: "skipped", skip_reason: "draft_pr" };
   }
 
-  if (pr.user.login === env.GITHUB_BOT_USERNAME) {
-    log.debug("handler.self_pr_ignored", { trace_id: traceId, pull_number: pr.number });
-    return { outcome: "skipped", skip_reason: "self_pr" };
-  }
-
   const config = await getGitHubConfig(env, repoFullName, log);
 
   if (config.enabledRepos !== null && !config.enabledRepos.includes(repoFullName)) {
@@ -360,6 +355,7 @@ export async function handlePullRequestOpened(
     head: pr.head.ref,
     isPublic: !repo.private,
     codeReviewInstructions: config.codeReviewInstructions,
+    isSelfReview: pr.user.login.toLowerCase() === env.GITHUB_BOT_USERNAME.toLowerCase(),
   });
 
   const messageId = await sendPrompt(env, traceId, sessionId, {

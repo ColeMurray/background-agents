@@ -45,6 +45,25 @@ describe("session diff file API route", () => {
     await expect(response.text()).resolves.toContain("diff --git");
   });
 
+  it("does not reuse the encoded payload length for a decoded patch stream", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      new Response("decoded patch", {
+        headers: {
+          "Content-Type": "text/x-diff",
+          "Content-Encoding": "br",
+          "Content-Length": "5",
+        },
+      })
+    );
+
+    const response = await GET(new Request("http://local/patch"), context);
+
+    expect(response.headers.get("Content-Encoding")).toBeNull();
+    expect(response.headers.get("Content-Length")).toBeNull();
+    await expect(response.text()).resolves.toBe("decoded patch");
+  });
+
   it("preserves the stale-revision payload and status", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(

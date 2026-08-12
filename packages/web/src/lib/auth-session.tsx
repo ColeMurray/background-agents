@@ -1,24 +1,21 @@
 "use client";
 
-import type { ReactNode } from "react";
+import useSWR, { mutate } from "swr";
+import { z } from "zod";
+import type { SignInProvider } from "@open-inspect/shared/sign-in-provider";
 import {
-  SessionProvider,
-  signIn as nextAuthSignIn,
-  signOut as nextAuthSignOut,
-  useSession,
-} from "next-auth/react";
-import type { AuthProvider } from "./build-auth-identity";
+  browserAuthSessionResponseSchema,
+  type BrowserAuthSessionUser,
+} from "./browser-auth-session-contract";
+import { browserApiFetch } from "./browser-api-fetch";
 
-export interface AuthSessionUser {
-  name?: string | null;
-  image?: string | null;
-}
+const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
+
+export type AuthSessionUser = BrowserAuthSessionUser;
 
 export interface AuthSession {
-  user?: AuthSessionUser | null;
+  user: AuthSessionUser;
 }
-
-export type SignInProvider = AuthProvider;
 
 export type AuthSessionState =
   | {
@@ -27,33 +24,67 @@ export type AuthSessionState =
     }
   | {
       data: null;
-      status: "loading" | "unauthenticated";
+      status: "loading" | "unauthenticated" | "unavailable";
     };
 
-export type AuthSessionStatus = AuthSessionState["status"];
-
-export function AuthSessionProvider({ children }: { children: ReactNode }) {
-  return <SessionProvider refetchOnWindowFocus={false}>{children}</SessionProvider>;
-}
-
 export async function signIn(provider: SignInProvider): Promise<void> {
-  await nextAuthSignIn(provider);
+  const response = await browserApiFetch("/api/auth/sign-in/social", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider,
+      callbackURL: "/",
+      disableRedirect: true,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Sign-in failed with status ${response.status}`);
+  }
+
+  const { url } = z.object({ url: z.url() }).parse(await response.json());
+  const destination = new URL(url);
+  if (destination.protocol !== "https:") {
+    throw new Error("Sign-in returned an insecure redirect URL");
+  }
+  globalThis.location.assign(destination.href);
 }
 
 export async function signOut(): Promise<void> {
-  await nextAuthSignOut();
+  const response = await browserApiFetch("/api/auth/sign-out", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) {
+    throw new Error(`Sign-out failed with status ${response.status}`);
+  }
+  await mutate(BROWSER_AUTH_SESSION_PATH, null, false);
 }
 
 /**
  * App-owned client authentication boundary.
- *
- * The current implementation delegates to NextAuth. Terminal browser auth can
- * replace this module without another repository-wide consumer migration.
  */
 export function useAuthSession(): AuthSessionState {
-  const state = useSession();
-  if (state.status === "authenticated") {
-    return { data: state.data, status: state.status };
+  const { data, error, isLoading } = useSWR<AuthSession | null>(
+    BROWSER_AUTH_SESSION_PATH,
+    async () => {
+      const response = await browserApiFetch(BROWSER_AUTH_SESSION_PATH);
+      if (!response.ok) {
+        throw new Error(`Session lookup failed with status ${response.status}`);
+      }
+      const payload: unknown = await response.json();
+      if (payload === null) return null;
+      const session = browserAuthSessionResponseSchema.parse(payload);
+      return { user: session.user };
+    }
+  );
+
+  if (data) return { data, status: "authenticated" };
+  if (error) {
+    return { data: null, status: "unavailable" };
   }
-  return { data: null, status: state.status };
+  if (isLoading || data === undefined) {
+    return { data: null, status: "loading" };
+  }
+  return { data: null, status: "unauthenticated" };
 }

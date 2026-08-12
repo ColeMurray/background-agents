@@ -8,19 +8,19 @@ import { TasksSection } from "./sidebar/tasks-section";
 import { FilesChangedSection } from "./sidebar/files-changed-section";
 import { MediaSection } from "./sidebar/media-section";
 import { CodeServerSection } from "./sidebar/code-server-section";
+import { VncSection } from "./sidebar/vnc-section";
 import { TunnelUrlsSection } from "./sidebar/tunnel-urls-section";
 import { ChildSessionsSection } from "./sidebar/child-sessions-section";
 import { TerminalIcon, LinkIcon } from "@/components/ui/icons";
 import { buildAuthenticatedUrl } from "@/lib/urls";
 import { extractLatestTasks } from "@/lib/tasks";
 import type { Artifact, SandboxEvent } from "@/types/session";
+import type { ParticipantPresence, SessionState } from "@open-inspect/shared/types/server-messages";
 import type {
-  ParticipantPresence,
   SessionDiffFile,
   SessionDiffRepository,
   SessionDiffState,
-  SessionState,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-diffs";
 import type { DiffSelection } from "@/lib/session-diffs";
 import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
@@ -29,6 +29,7 @@ interface SessionRightSidebarProps {
   sessionId: string;
   sessionState: SessionState | null;
   participants: ParticipantPresence[];
+  presenceSynced: boolean;
   events: SandboxEvent[];
   artifacts: Artifact[];
   terminalOpen?: boolean;
@@ -46,6 +47,7 @@ export function SessionRightSidebarContent({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -99,7 +101,7 @@ export function SessionRightSidebarContent({
     <>
       {/* Participants */}
       <div className="px-4 py-4 border-b border-border-muted">
-        <ParticipantsSection participants={participants} />
+        <ParticipantsSection participants={participants} presenceSynced={presenceSynced} />
       </div>
 
       {/* Metadata */}
@@ -129,6 +131,17 @@ export function SessionRightSidebarContent({
           <CodeServerSection
             url={sessionState.codeServerUrl}
             password={sessionState.codeServerPassword ?? null}
+            sandboxStatus={sessionState.sandboxStatus}
+          />
+        </div>
+      )}
+
+      {/* VNC Desktop */}
+      {sessionState.vncUrl && (
+        <div className="px-4 py-4 border-b border-border-muted">
+          <VncSection
+            url={sessionState.vncUrl}
+            password={sessionState.vncPassword ?? null}
             sandboxStatus={sessionState.sandboxStatus}
           />
         </div>
@@ -259,6 +272,7 @@ export function SessionRightSidebar({
   sessionId,
   sessionState,
   participants,
+  presenceSynced,
   events,
   artifacts,
   terminalOpen,
@@ -275,6 +289,7 @@ export function SessionRightSidebar({
         sessionId={sessionId}
         sessionState={sessionState}
         participants={participants}
+        presenceSynced={presenceSynced}
         events={events}
         artifacts={artifacts}
         terminalOpen={terminalOpen}

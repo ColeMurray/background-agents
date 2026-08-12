@@ -1,9 +1,9 @@
-import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared";
+import { SESSION_DIFF_ID_PATTERN } from "@open-inspect/shared/types/session-diffs";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-/** Request a best-effort diff refresh after verifying the browser's NextAuth session. */
+/** Request a best-effort diff refresh after verifying the browser session. */
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }

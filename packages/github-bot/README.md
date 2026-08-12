@@ -81,9 +81,15 @@ The bot is deployed via Terraform as a standalone Cloudflare Worker alongside th
 
 ### GitHub App Configuration
 
-The existing GitHub App needs these additions:
+The GitHub bot uses the same repository permissions configured for the main GitHub App setup. In
+particular, it requires:
 
 **Permissions**: `Pull requests: Read & write`, `Issues: Read & write`
+
+The control plane does not need Issues permission to label session-created pull requests; the
+required `Pull requests: Read & write` permission authorizes those label operations. See the
+[GitHub App setup](../../docs/GETTING_STARTED.md#step-3-create-github-app) for the complete
+permission list.
 
 **Event subscriptions**: `Pull request`, `Issue comment`, `Pull request review comment`
 
@@ -123,10 +129,12 @@ All events are processed asynchronously via `executionCtx.waitUntil()`. The webh
 **Pull Request Opened (Auto-Review):**
 
 1. Check `pull_request.draft` — skip draft PRs
-2. Check `pull_request.user.login !== GITHUB_BOT_USERNAME` — prevent loops on bot-created PRs
+2. Apply the configured trigger-user gate — bot-created PRs are reviewed when the bot login is
+   explicitly listed in `allowedTriggerUsers`
 3. Post eyes reaction on the PR (fire-and-forget)
 4. Create session via control plane
-5. Send code review prompt (includes PR metadata + `gh` CLI instructions)
+5. Send code review prompt (includes PR metadata + `gh` CLI instructions). Reviews of the bot's own
+   PRs use `COMMENT`, because GitHub does not allow pull request authors to approve their own PRs.
 
 **Review Requested (compatibility path):**
 

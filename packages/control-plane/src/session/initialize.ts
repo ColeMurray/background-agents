@@ -1,6 +1,8 @@
 import type { Env } from "../types";
 import type { RequestContext } from "../routes/shared";
-import type { RepositoryRef, SpawnSource, SandboxSettings } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
@@ -42,6 +44,7 @@ export interface SessionInitInput {
   model: string;
   reasoningEffort: string | null;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   sandboxSettings?: SandboxSettings;
 
   // Identity
@@ -176,6 +179,7 @@ export async function initializeSession(
           model: input.model,
           reasoningEffort: input.reasoningEffort,
           userId: input.participantUserId,
+          canonicalUserId: input.platformUserId,
           scmLogin: input.scmLogin,
           scmName: input.scmName,
           scmEmail: input.scmEmail,
@@ -184,6 +188,7 @@ export async function initializeSession(
           scmTokenExpiresAt: input.scmTokenExpiresAt,
           scmUserId: input.scmUserId,
           codeServerEnabled: input.codeServerEnabled,
+          vncEnabled: input.vncEnabled,
           sandboxSettings: input.sandboxSettings,
           parentSessionId: input.parentSessionId,
           spawnSource: input.spawnSource,

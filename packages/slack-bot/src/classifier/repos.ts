@@ -6,14 +6,19 @@
  * GitHub App installation to get the list of accessible repositories.
  */
 
-import type { Env, RepoConfig, ControlPlaneRepo, ControlPlaneReposResponse } from "../types";
+import type { Env } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
-  createKvCacheStore,
   normalizeRoutingRules,
-  type SlackGlobalConfig,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/integrations";
+import {
+  controlPlaneReposResponseSchema,
+  repoConfigSchema,
+  type RepoConfig,
+} from "@open-inspect/shared/types/repository-catalog";
+import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createCachedResource } from "./cached-resource";
 import {
   controlPlaneFetch,
@@ -33,6 +38,20 @@ const log = createLogger("repos");
 const FALLBACK_REPOS: RepoConfig[] = [];
 
 /**
+ * Bound on the catalog fetch, because it sits on the critical path of every
+ * mention and those handlers run inside `waitUntil`. A cold control-plane cache
+ * can make `GET /repos` take tens of seconds; left unbounded it consumes the
+ * whole background-task budget and the platform cancels the remaining work
+ * mid-flight — after the "Working on..." ack has posted but before a session
+ * exists, so the request disappears with neither a session nor an error.
+ *
+ * Giving up early costs a possibly-stale catalog from the KV fallback, which is
+ * a far better outcome than dropping the request. A warm fetch takes well under
+ * a second, so this only trips when something is genuinely wrong.
+ */
+export const REPOS_FETCH_TIMEOUT_MS = 5_000;
+
+/**
  * Local in-memory cache for repos.
  */
 let localCache: {
@@ -48,11 +67,13 @@ const watchedChannelsResponseSchema = z.object({
   channels: watchedChannelsSchema.optional(),
 });
 
+type ParsedControlPlaneRepo = z.infer<typeof controlPlaneReposResponseSchema>["repos"][number];
+
 /**
  * Convert a control plane repo to a RepoConfig.
  * Normalizes identifiers to lowercase for consistent comparison.
  */
-function toRepoConfig(repo: ControlPlaneRepo): RepoConfig {
+function toRepoConfig(repo: ParsedControlPlaneRepo): RepoConfig {
   const normalizedOwner = repo.owner.toLowerCase();
   const normalizedName = repo.name.toLowerCase();
 
@@ -90,7 +111,7 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 
   const startTime = Date.now();
   try {
-    const response = await controlPlaneFetch(env, "/repos", traceId);
+    const response = await controlPlaneFetch(env, "/repos", traceId, REPOS_FETCH_TIMEOUT_MS);
 
     if (!response.ok) {
       log.error("control_plane.fetch_repos", {
@@ -102,8 +123,17 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
       return getFromCacheOrFallback(env);
     }
 
-    const data = (await response.json()) as ControlPlaneReposResponse;
-    const repos = data.repos.map(toRepoConfig);
+    const parsed = controlPlaneReposResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      log.error("control_plane.fetch_repos", {
+        trace_id: traceId,
+        outcome: "invalid_response",
+        duration_ms: Date.now() - startTime,
+      });
+      return getFromCacheOrFallback(env);
+    }
+
+    const repos = parsed.data.repos.map(toRepoConfig);
 
     // Update local cache
     localCache = {
@@ -149,9 +179,10 @@ export async function getAvailableRepos(env: Env, traceId?: string): Promise<Rep
 async function getFromCacheOrFallback(env: Env): Promise<RepoConfig[]> {
   try {
     const cached = await createKvCacheStore(env.SLACK_KV).get("repos:cache", "json");
-    if (cached && Array.isArray(cached)) {
+    const parsed = z.array(repoConfigSchema).safeParse(cached);
+    if (parsed.success) {
       log.info("control_plane.fetch_repos", { source: "kv_cache" });
-      return cached as RepoConfig[];
+      return parsed.data;
     }
   } catch (e) {
     log.warn("kv.get", {
@@ -183,8 +214,9 @@ const routingRules = createCachedResource<SlackRoutingRule[]>({
   kvKey: "slack:routing-rules",
   load: async (env, traceId) => {
     const body = await fetchControlPlaneJson(env, "/integration-settings/slack", traceId);
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse(body);
     return normalizeRoutingRules(
-      (body as { settings?: SlackGlobalConfig | null }).settings?.defaults?.routingRules
+      parsed.success ? parsed.data.settings?.defaults?.routingRules : []
     );
   },
   deserialize: (cached) =>

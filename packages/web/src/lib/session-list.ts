@@ -1,4 +1,4 @@
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
@@ -26,12 +26,14 @@ export function buildSessionsPageKey({
   offset = 0,
   status,
   excludeStatus,
+  excludeAutomationLineage,
   createdBy,
 }: {
   limit?: number;
   offset?: number;
   status?: string;
   excludeStatus?: string;
+  excludeAutomationLineage?: boolean;
   createdBy?: readonly string[];
 }): BrowserApiPath {
   const searchParams = new URLSearchParams({
@@ -45,6 +47,10 @@ export function buildSessionsPageKey({
 
   if (excludeStatus) {
     searchParams.set("excludeStatus", excludeStatus);
+  }
+
+  if (excludeAutomationLineage) {
+    searchParams.set("excludeAutomationLineage", "true");
   }
 
   for (const userId of createdBy ?? []) {
@@ -92,6 +98,29 @@ export function applyTitleUpdate(
   };
 }
 
+export function applySessionReadState(
+  data: SessionListResponse | undefined,
+  sessionId: string,
+  readState: Session["readState"]
+): SessionListResponse | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    sessions: data.sessions.map((session) => {
+      if (session.id !== sessionId) return session;
+      if (!readState) return session;
+      const currentMessageId = session.readState?.latestMessageId;
+      if (currentMessageId !== undefined && currentMessageId !== readState.latestMessageId) {
+        return session;
+      }
+      return {
+        ...session,
+        readState,
+      };
+    }),
+  };
+}
+
 export function mergeUniqueSessions(existing: Session[], incoming: Session[]) {
   const seen = new Set(existing.map((session) => session.id));
   const merged = [...existing];
@@ -117,4 +146,25 @@ export function buildSessionSearchValue(session: Session): string {
     : [formatRepoLabel(session.repoOwner, session.repoName)];
 
   return [session.id, session.title, ...repositoryLabels].filter(Boolean).join(" ");
+}
+
+/**
+ * The session-detail route for a list entry, carrying the repo and title as
+ * query params so the destination page can render its header before the
+ * session payload loads.
+ */
+export function buildSessionHref(session: Session) {
+  const query: Record<string, string> = {};
+  if (session.repoOwner && session.repoName) {
+    query.repoOwner = session.repoOwner;
+    query.repoName = session.repoName;
+  }
+  if (session.title) {
+    query.title = session.title;
+  }
+
+  return {
+    pathname: `/session/${session.id}`,
+    query,
+  };
 }

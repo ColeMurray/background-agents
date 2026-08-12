@@ -1,8 +1,13 @@
-import { getServerSession } from "next-auth";
-import { authOptions } from "./auth";
-import type { AuthIdentityUser } from "./build-auth-identity";
+import { cookies } from "next/headers";
+import { dispatchBrowserAuthRequest } from "./browser-auth-proxy";
+import {
+  browserAuthSessionResponseSchema,
+  type BrowserAuthSessionUser,
+} from "./browser-auth-session-contract";
+import { AuthenticationUnavailableError } from "./authentication-unavailable-error";
+import { serializeBrowserSessionCookies } from "./browser-session-cookie";
 
-export type ServerAuthUser = AuthIdentityUser;
+export type ServerAuthUser = BrowserAuthSessionUser;
 
 /**
  * App-owned session contract consumed by server-side BFF routes.
@@ -11,16 +16,38 @@ export type ServerAuthUser = AuthIdentityUser;
  * route authorization does not depend on framework-owned session types.
  */
 export interface ServerAuthSession {
-  user?: ServerAuthUser | null;
+  user: ServerAuthUser;
 }
 
 /**
  * Server-side authentication seam for BFF routes.
  *
- * This deliberately delegates to the existing NextAuth implementation. A
- * later terminal-auth change can replace this boundary without another
- * repository-wide route migration.
+ * The web is a framework-free BFF for browser authentication. Only the opaque
+ * Better Auth session cookie crosses this boundary; OAuth transaction cookies
+ * and unrelated browser cookies are never forwarded by server-side callers.
  */
-export function getServerAuthSession(): Promise<ServerAuthSession | null> {
-  return getServerSession(authOptions);
+export async function getServerAuthSession(): Promise<ServerAuthSession | null> {
+  const cookieStore = await cookies();
+  const cookieHeader = serializeBrowserSessionCookies(cookieStore.getAll());
+  if (!cookieHeader) return null;
+
+  try {
+    const response = await dispatchBrowserAuthRequest({
+      method: "GET",
+      pathname: "/api/auth/get-session",
+      headers: { Cookie: cookieHeader },
+    });
+
+    if (response.status === 401) return null;
+    if (!response.ok) {
+      throw new Error(`Browser authentication failed with status ${response.status}`);
+    }
+
+    const payload: unknown = await response.json();
+    if (payload === null) return null;
+    const session = browserAuthSessionResponseSchema.parse(payload);
+    return { user: session.user };
+  } catch (cause) {
+    throw new AuthenticationUnavailableError(cause);
+  }
 }

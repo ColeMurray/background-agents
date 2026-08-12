@@ -45,13 +45,23 @@ export default defineConfig({
           configPath: "./wrangler.jsonc",
         },
         miniflare: {
+          // Match the Terraform-managed production runtime. The Vitest pool
+          // otherwise defaults its runner to today's compatibility date.
+          compatibilityDate: "2024-09-23",
+          compatibilityFlags: ["nodejs_compat"],
+          queueProducers: ["IMAGE_BUILD_FINALIZATION_QUEUE"],
           bindings: {
             IMAGE_CALLBACK_TOKEN_PEPPER: "test-callback-pepper",
             SERVICE_AUTH_SECRET_WEB: "test-service-secret-web",
             SERVICE_AUTH_SECRET_SLACK_BOT: "test-service-secret-slack-bot",
             SERVICE_AUTH_SECRET_GITHUB_BOT: "test-service-secret-github-bot",
             SERVICE_AUTH_SECRET_LINEAR_BOT: "test-service-secret-linear-bot",
-            SERVICE_AUTH_SECRET_MODAL: "test-service-secret-modal",
+            BROWSER_AUTH_SECRET: "test-browser-auth-secret-with-at-least-32-characters",
+            GITHUB_CLIENT_ID: "github-app-client-id",
+            GITHUB_CLIENT_SECRET: "github-app-client-secret",
+            GOOGLE_CLIENT_ID: "google-client-id",
+            GOOGLE_CLIENT_SECRET: "google-client-secret",
+            UNSAFE_ALLOW_ALL_USERS: "true",
             // Must be valid base64 for 32 bytes — the exchange route's SCM
             // capture encrypts with it inline (fail-closed) rather than
             // inside a swallowed waitUntil.
@@ -72,5 +82,32 @@ export default defineConfig({
   test: {
     include: ["test/integration/**/*.test.ts"],
     setupFiles: ["test/integration/apply-migrations.ts"],
+    onUnhandledError(error) {
+      // Better Auth implements redirects and invalid-token responses as thrown
+      // APIError values. Its handler catches and converts them to HTTP responses,
+      // but the Workers pool reports the intermediate rejection as unhandled.
+      const betterAuthStack =
+        "errorStack" in error && typeof error.errorStack === "string"
+          ? error.errorStack
+          : error.stack;
+      const betterAuthErrorCode =
+        "body" in error &&
+        typeof error.body === "object" &&
+        error.body !== null &&
+        "code" in error.body &&
+        typeof error.body.code === "string"
+          ? error.body.code
+          : null;
+      if (
+        error.name === "APIError" &&
+        "statusCode" in error &&
+        typeof error.statusCode === "number" &&
+        ((error.statusCode >= 300 && error.statusCode < 400) ||
+          (error.statusCode === 401 && betterAuthErrorCode === "INVALID_TOKEN")) &&
+        betterAuthStack?.includes("/better-auth/dist/api/routes/")
+      ) {
+        return false;
+      }
+    },
   },
 });

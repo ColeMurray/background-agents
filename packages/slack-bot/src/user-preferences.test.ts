@@ -1,4 +1,4 @@
-import { getDefaultReasoningEffort } from "@open-inspect/shared";
+import { getDefaultReasoningEffort } from "@open-inspect/shared/models";
 import { describe, expect, it, vi } from "vitest";
 import type { Env } from "./types";
 import {

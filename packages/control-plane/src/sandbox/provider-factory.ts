@@ -62,15 +62,21 @@ function createVercelProviderFromEnv(env: Env): VercelSandboxProvider {
       env.VERCEL_SNAPSHOT_EXPIRATION_MS,
       0
     ),
-    codeServerPasswordSecret: env.VERCEL_TOKEN,
+    sandboxAccessPasswordSecret: env.VERCEL_TOKEN,
   });
 }
 
-function createOpenComputerProviderFromEnv(env: Env): OpenComputerSandboxProvider {
-  if (!env.OPENCOMPUTER_API_URL || !env.OPENCOMPUTER_API_KEY || !env.OPENCOMPUTER_TEMPLATE) {
+function createOpenComputerProviderFromEnv(
+  env: Env,
+  options: { requireOpenComputerTemplate: boolean }
+): OpenComputerSandboxProvider {
+  if (!env.OPENCOMPUTER_API_URL || !env.OPENCOMPUTER_API_KEY) {
     throw new Error(
-      "OPENCOMPUTER_API_URL, OPENCOMPUTER_API_KEY, and OPENCOMPUTER_TEMPLATE are required when SANDBOX_PROVIDER=opencomputer"
+      "OPENCOMPUTER_API_URL and OPENCOMPUTER_API_KEY are required when SANDBOX_PROVIDER=opencomputer"
     );
+  }
+  if (options.requireOpenComputerTemplate && !env.OPENCOMPUTER_TEMPLATE) {
+    throw new Error("OPENCOMPUTER_TEMPLATE is required to start OpenComputer sandboxes");
   }
 
   const client = createOpenComputerRestClient({
@@ -81,7 +87,7 @@ function createOpenComputerProviderFromEnv(env: Env): OpenComputerSandboxProvide
 
   return createOpenComputerProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    codeServerPasswordSecret: env.OPENCOMPUTER_API_KEY,
+    sandboxAccessPasswordSecret: env.OPENCOMPUTER_API_KEY,
     llmEnvVars: {
       ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
     },
@@ -115,7 +121,7 @@ function createDaytonaProviderFromEnv(env: Env): DaytonaSandboxProvider {
   return createDaytonaProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
     gitlabAccessToken: env.GITLAB_ACCESS_TOKEN,
-    codeServerPasswordSecret: env.DAYTONA_API_KEY,
+    sandboxAccessPasswordSecret: env.DAYTONA_API_KEY,
   });
 }
 
@@ -132,7 +138,7 @@ function createE2BProviderFromEnv(env: Env): E2BSandboxProvider {
 
   return createE2BProvider(client, {
     scmProvider: resolveScmProviderFromEnv(env.SCM_PROVIDER),
-    codeServerPasswordSecret: env.E2B_API_KEY,
+    sandboxAccessPasswordSecret: env.E2B_API_KEY,
     sandboxTimeoutSeconds: parseNumericEnv(
       "E2B_SANDBOX_TIMEOUT_SECONDS",
       env.E2B_SANDBOX_TIMEOUT_SECONDS,
@@ -148,15 +154,18 @@ export function createSandboxProviderFromEnv(env: Env, backend: "modal"): ModalS
 export function createSandboxProviderFromEnv(env: Env, backend: "vercel"): VercelSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
-  backend: "opencomputer"
+  backend: "opencomputer",
+  options?: { requireOpenComputerTemplate?: boolean }
 ): OpenComputerSandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
-  backend?: SandboxBackendName
+  backend?: SandboxBackendName,
+  options?: { requireOpenComputerTemplate?: boolean }
 ): SandboxProvider;
 export function createSandboxProviderFromEnv(
   env: Env,
-  backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER)
+  backend: SandboxBackendName = resolveSandboxBackendName(env.SANDBOX_PROVIDER),
+  options: { requireOpenComputerTemplate?: boolean } = {}
 ): SandboxProvider {
   switch (backend) {
     case "daytona":
@@ -164,7 +173,9 @@ export function createSandboxProviderFromEnv(
     case "vercel":
       return createVercelProviderFromEnv(env);
     case "opencomputer":
-      return createOpenComputerProviderFromEnv(env);
+      return createOpenComputerProviderFromEnv(env, {
+        requireOpenComputerTemplate: options.requireOpenComputerTemplate ?? true,
+      });
     case "e2b":
       return createE2BProviderFromEnv(env);
     case "modal":

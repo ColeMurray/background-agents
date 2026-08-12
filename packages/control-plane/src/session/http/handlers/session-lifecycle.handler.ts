@@ -1,7 +1,13 @@
 import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
-import { getValidModelOrDefault, isValidModel, type RepositoryRef } from "@open-inspect/shared";
-import type { SandboxStatus, SessionStatus, SpawnSource } from "../../../types";
+import type { RepositoryRef } from "@open-inspect/shared/types/repositories";
+import { getValidModelOrDefault, isValidModel } from "@open-inspect/shared/models";
+import { normalizeSandboxSettings } from "../../../sandbox/settings";
+import type {
+  SandboxStatus,
+  SessionStatus,
+  SpawnSource,
+} from "@open-inspect/shared/types/sessions";
 import type { SessionRepository } from "../../repository";
 import type { SessionStatusService } from "../../session-status-service";
 import {
@@ -16,7 +22,11 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "canc
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<
     SessionRepository,
-    "upsertSession" | "replaceSessionRepositories" | "createSandbox" | "createParticipant"
+    | "upsertSession"
+    | "replaceSessionRepositories"
+    | "createSandbox"
+    | "createParticipant"
+    | "getPendingOrProcessingCount"
   >;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -34,7 +44,7 @@ export interface SessionLifecycleHandlerDeps {
     title: string,
     options?: SessionTitleUpdateOptions
   ) => SessionTitleUpdateResult;
-  stopExecution: (options?: { suppressStatusReconcile?: boolean }) => Promise<void>;
+  cancelSession: () => Promise<void>;
   getSandboxSocket: () => WebSocket | null;
   sendToSandbox: (ws: WebSocket, message: string | object) => boolean;
   updateSandboxStatus: (status: SandboxStatus) => void;
@@ -67,7 +77,7 @@ const repositoryRefSchema = z.object({
   repoName: z.string(),
   repoId: z.number(),
   baseBranch: z.string(),
-});
+}) satisfies z.ZodType<RepositoryRef>;
 
 const spawnSourceSchema = z.enum([
   "user",
@@ -77,20 +87,6 @@ const spawnSourceSchema = z.enum([
   "linear-bot",
   "slack-bot",
 ] satisfies [SpawnSource, ...SpawnSource[]]);
-
-const sandboxSettingsSchema = z
-  .object({
-    tunnelPorts: z.array(z.number()).optional(),
-    terminalEnabled: z.boolean().optional(),
-    codeServerPort: z.number().optional(),
-    terminalPort: z.number().optional(),
-    maxConcurrentChildSessions: z.number().optional(),
-    maxTotalChildSessions: z.number().optional(),
-    cpuCores: z.number().nullable().optional(),
-    memoryMib: z.number().nullable().optional(),
-    buildTimeoutSeconds: z.number().optional(),
-  })
-  .optional();
 
 /**
  * Request body for the /internal/init endpoint.
@@ -114,11 +110,13 @@ const initRequestSchema = z.object({
   environmentId: z.string().nullable().optional(),
   title: z.string().optional(),
   model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
+  reasoningEffort: z.string().nullable().optional(),
   userId: z.string(),
-  scmLogin: z.string().optional(),
-  scmName: z.string().optional(),
-  scmEmail: z.string().optional(),
+  /** Canonical platform user ID for analytics attribution; null when unresolved. */
+  canonicalUserId: z.string().nullable().optional(),
+  scmLogin: z.string().nullable().optional(),
+  scmName: z.string().nullable().optional(),
+  scmEmail: z.string().nullable().optional(),
   scmToken: z.string().nullable().optional(),
   scmTokenEncrypted: z.string().nullable().optional(),
   scmRefreshTokenEncrypted: z.string().nullable().optional(),
@@ -128,7 +126,14 @@ const initRequestSchema = z.object({
   spawnSource: spawnSourceSchema.optional(),
   spawnDepth: z.number().optional(),
   codeServerEnabled: z.boolean().optional(),
-  sandboxSettings: sandboxSettingsSchema,
+  vncEnabled: z.boolean().optional(),
+  /**
+   * Opaque here on purpose: `normalizeSandboxSettings` is the single boundary
+   * validator for this blob (port ranges, collisions, timeout shape). Restating
+   * the field list as a Zod object would silently strip any setting added to
+   * SandboxSettings later, so the shape is validated at the use site instead.
+   */
+  sandboxSettings: z.unknown().optional(),
 });
 
 type InitRequest = z.infer<typeof initRequestSchema>;
@@ -204,7 +209,10 @@ export function createSessionLifecycleHandler(
         });
       }
 
-      const reasoningEffort = deps.validateReasoningEffort(model, body.reasoningEffort);
+      const reasoningEffort = deps.validateReasoningEffort(
+        model,
+        body.reasoningEffort ?? undefined
+      );
       const baseBranch = hasRepoOwner ? body.branch || body.defaultBranch || "main" : null;
 
       const repositories = body.repositories ?? [];
@@ -246,7 +254,10 @@ export function createSessionLifecycleHandler(
         spawnSource: body.spawnSource ?? "user",
         spawnDepth: body.spawnDepth ?? 0,
         codeServerEnabled: body.codeServerEnabled ?? false,
-        sandboxSettings: body.sandboxSettings ? JSON.stringify(body.sandboxSettings) : null,
+        vncEnabled: body.vncEnabled ?? false,
+        sandboxSettings: body.sandboxSettings
+          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+          : null,
         environmentId: body.environmentId ?? null,
         createdAt: now,
         updatedAt: now,
@@ -281,6 +292,7 @@ export function createSessionLifecycleHandler(
       deps.repository.createParticipant({
         id: participantId,
         userId: body.userId,
+        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
         scmUserId: body.scmUserId ?? null,
         scmLogin: body.scmLogin ?? null,
         scmName: body.scmName ?? null,
@@ -404,6 +416,17 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Not authorized to archive this session" }, { status: 403 });
       }
 
+      if (session.status === "cancelled") {
+        return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
+      }
+
+      if (deps.repository.getPendingOrProcessingCount() > 0) {
+        return Response.json(
+          { error: "Cannot archive a session with queued work" },
+          { status: 409 }
+        );
+      }
+
       await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
@@ -438,6 +461,10 @@ export function createSessionLifecycleHandler(
         );
       }
 
+      if (session.status !== "archived") {
+        return Response.json({ error: "Session is not archived" }, { status: 409 });
+      }
+
       await deps.statusService.transition("active");
 
       return Response.json({ status: "active" });
@@ -453,8 +480,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: `Session already ${session.status}` }, { status: 409 });
       }
 
-      await deps.stopExecution({ suppressStatusReconcile: true });
-      await deps.statusService.transition("cancelled");
+      await deps.cancelSession();
 
       const sandbox = deps.getSandbox();
       if (sandbox && sandbox.status !== "stopped" && sandbox.status !== "failed") {

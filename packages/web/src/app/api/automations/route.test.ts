@@ -9,10 +9,9 @@ vi.mock("@/lib/control-plane", () => ({
   controlPlaneUserFetch: vi.fn(),
 }));
 
-// NOTE: @/lib/build-auth-identity is intentionally NOT mocked — these tests
-// exercise the real chokepoint to prove the route's outgoing body is correct.
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
+import { hostileIdentityFields } from "../hostile-identity.test-fixture";
 import { POST } from "./route";
 
 function postRequest(body: unknown) {
@@ -48,17 +47,27 @@ describe("automations API route (POST)", () => {
     expect(controlPlaneUserFetch).not.toHaveBeenCalled();
   });
 
-  it("sends auth* display and scm* attribution for a GitHub user — never identity or credentials", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
+  it.each([
+    {
+      provider: "GitHub",
       user: {
-        id: "12345",
-        login: "ada",
+        id: "0123456789abcdef0123456789abcdef",
         name: "Ada Lovelace",
         email: "ada@example.com",
         image: "https://avatars.githubusercontent.com/u/12345",
-        provider: "github",
       },
-    } as never);
+    },
+    {
+      provider: "Google",
+      user: {
+        id: "fedcba9876543210fedcba9876543210",
+        name: "Pat PM",
+        email: "pm@gmail.com",
+        image: "https://lh3.googleusercontent.com/a/pat",
+      },
+    },
+  ])("sends the same profile-independent body for a $provider session", async ({ user }) => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto1" } }, { status: 201 })
     );
@@ -71,68 +80,12 @@ describe("automations API route (POST)", () => {
       expect.objectContaining({ method: "POST" })
     );
     const sent = controlPlaneBody();
-    expect(sent).toMatchObject({
-      name: "Daily sync",
-      repositories: [{ repoOwner: "o", repoName: "r" }],
-      authEmail: "ada@example.com",
-      authName: "Ada Lovelace",
-      authAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-      scmLogin: "ada",
-      scmName: "Ada Lovelace",
-      scmEmail: "ada@example.com",
-      scmAvatarUrl: "https://avatars.githubusercontent.com/u/12345",
-    });
-    // Forbidden under strict identity enforcement: the control plane derives
-    // created_by from the Bearer principal.
-    expect(sent.userId).toBeUndefined();
-    expect(sent.spawnSource).toBeUndefined();
-    expect(sent.authProvider).toBeUndefined();
-    expect(sent.authUserId).toBeUndefined();
-    expect(sent.scmUserId).toBeUndefined();
-    expect(sent.scmToken).toBeUndefined();
-    expect(sent.scmRefreshToken).toBeUndefined();
-    expect(sent.scmTokenExpiresAt).toBeUndefined();
-  });
-
-  it("sends auth* display but no scm* for a Google user (F1/F2: a Google sub must never become a GitHub identity)", async () => {
-    vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: {
-        id: "google-sub-1",
-        name: "Pat PM",
-        email: "pm@gmail.com",
-        image: "https://lh3.googleusercontent.com/a/pat",
-        provider: "google",
-      },
-    } as never);
-    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
-      Response.json({ automation: { id: "auto2" } }, { status: 201 })
-    );
-
-    const response = await POST(postRequest(validBody));
-
-    expect(response.status).toBe(201);
-    const sent = controlPlaneBody();
-    expect(sent).toMatchObject({
-      authEmail: "pm@gmail.com",
-      authName: "Pat PM",
-    });
-    expect(sent.userId).toBeUndefined();
-    expect(sent.authProvider).toBeUndefined();
-    expect(sent.authUserId).toBeUndefined();
-    // Regression guard: the bug sent scmUserId = user.id = the Google sub, which
-    // the control plane then stored under provider='github'. After the fix there
-    // is no scm* block at all for a Google user.
-    expect(sent.scmUserId).toBeUndefined();
-    expect(sent.scmToken).toBeUndefined();
-    expect(sent.scmLogin).toBeUndefined();
-    expect(sent.scmName).toBeUndefined();
-    expect(sent.scmEmail).toBeUndefined();
-    expect(sent.scmAvatarUrl).toBeUndefined();
+    expect(sent).toEqual(validBody);
   });
 
   it("drops non-allowlisted fields (including client-asserted identity) from the forwarded body", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
-      user: { id: "12345", login: "ada", provider: "github" },
+      user: { id: "0123456789abcdef0123456789abcdef" },
     } as never);
     vi.mocked(controlPlaneUserFetch).mockResolvedValue(
       Response.json({ automation: { id: "auto3" } }, { status: 201 })
@@ -141,27 +94,12 @@ describe("automations API route (POST)", () => {
     const response = await POST(
       postRequest({
         ...validBody,
-        userId: "attacker",
-        spawnSource: "user",
-        authProvider: "github",
-        authUserId: "someone-else",
-        actorUserId: "someone-else",
-        scmUserId: "someone-else",
-        scmToken: "gho_forged",
-        scmRefreshToken: "ghr_forged",
+        ...hostileIdentityFields,
       })
     );
 
     expect(response.status).toBe(201);
     const sent = controlPlaneBody();
-    expect(sent.name).toBe("Daily sync");
-    expect(sent.userId).toBeUndefined();
-    expect(sent.spawnSource).toBeUndefined();
-    expect(sent.authProvider).toBeUndefined();
-    expect(sent.authUserId).toBeUndefined();
-    expect(sent.actorUserId).toBeUndefined();
-    expect(sent.scmUserId).toBeUndefined();
-    expect(sent.scmToken).toBeUndefined();
-    expect(sent.scmRefreshToken).toBeUndefined();
+    expect(sent).toEqual(validBody);
   });
 });

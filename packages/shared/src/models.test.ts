@@ -40,6 +40,8 @@ const OPENAI_MODELS = [
   "openai/gpt-5.3-codex-spark",
 ] as const;
 
+const XAI_MODELS = ["xai/grok-4.5", "xai/grok-build-0.1"] as const;
+
 const ZEN_MODELS = [
   "opencode/kimi-k2.5",
   "opencode/kimi-k2.6",
@@ -97,6 +99,7 @@ describe("model utilities", () => {
     for (const model of [
       ...ANTHROPIC_MODELS,
       ...OPENAI_MODELS,
+      ...XAI_MODELS,
       ...ZEN_MODELS,
       ...ZAI_CODING_PLAN_MODELS,
       ...DEEPSEEK_MODELS,
@@ -239,6 +242,7 @@ describe("model utilities", () => {
     expect(supportsReasoning("claude-opus-4-8")).toBe(true);
     expect(supportsReasoning("openai/gpt-5.4")).toBe(true);
     expect(supportsReasoning("openai/gpt-5.6-terra")).toBe(true);
+    expect(supportsReasoning("xai/grok-build-0.1")).toBe(false);
     expect(supportsReasoning("deepseek/deepseek-v4-flash")).toBe(false);
     expect(supportsReasoning("invalid")).toBe(false);
 
@@ -250,6 +254,7 @@ describe("model utilities", () => {
     expect(getDefaultReasoningEffort("openai/gpt-5.3-codex")).toBe("high");
     expect(getDefaultReasoningEffort("openai/gpt-5.5")).toBeUndefined();
     expect(getDefaultReasoningEffort("openai/gpt-5.6-luna")).toBeUndefined();
+    expect(getDefaultReasoningEffort("xai/grok-build-0.1")).toBeUndefined();
     expect(getDefaultReasoningEffort("deepseek/deepseek-v4-pro")).toBeUndefined();
   });
 
@@ -278,10 +283,15 @@ describe("model utilities", () => {
       efforts: ["none", "low", "medium", "high", "xhigh"],
       default: undefined,
     });
+    expect(getReasoningConfig("openai/gpt-5.6-luna")).toEqual({
+      efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      default: undefined,
+    });
     expect(getReasoningConfig("openai/gpt-5.3-codex")).toEqual({
       efforts: ["low", "medium", "high", "xhigh"],
       default: "high",
     });
+    expect(getReasoningConfig("xai/grok-build-0.1")).toBeUndefined();
     expect(getReasoningConfig("deepseek/deepseek-v4-flash")).toBeUndefined();
   });
 
@@ -296,7 +306,10 @@ describe("model utilities", () => {
     expect(isValidReasoningEffort("openai/gpt-5.4", "none")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.6-sol", "xhigh")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.6-sol", "max")).toBe(false);
+    expect(isValidReasoningEffort("openai/gpt-5.6-luna", "max")).toBe(true);
     expect(isValidReasoningEffort("openai/gpt-5.3-codex", "max")).toBe(false);
+    expect(isValidReasoningEffort("xai/grok-build-0.1", "high")).toBe(false);
+    expect(isValidReasoningEffort("xai/grok-build-0.1", "xhigh")).toBe(false);
     expect(isValidReasoningEffort("deepseek/deepseek-v4-pro", "high")).toBe(false);
     expect(isValidReasoningEffort("invalid", "high")).toBe(false);
     expect(isValidReasoningEffort("anthropic/claude-sonnet-4-5", "")).toBe(false);
@@ -310,6 +323,9 @@ describe("model utilities", () => {
       MODEL_OPTIONS.find((group) => group.category === "OpenAI")?.models.map((m) => m.id)
     ).toEqual(OPENAI_MODELS);
     expect(
+      MODEL_OPTIONS.find((group) => group.category === "xAI / SuperGrok")?.models.map((m) => m.id)
+    ).toEqual(XAI_MODELS);
+    expect(
       MODEL_OPTIONS.find((group) => group.category === "OpenCode Zen")?.models.map((m) => m.id)
     ).toEqual(ZEN_MODELS);
     expect(
@@ -320,7 +336,12 @@ describe("model utilities", () => {
     ).toEqual(DEEPSEEK_MODELS);
 
     expect(DEFAULT_ENABLED_MODELS).toEqual([...ANTHROPIC_MODELS, ...OPENAI_MODELS]);
-    for (const optInModel of [...ZEN_MODELS, ...ZAI_CODING_PLAN_MODELS, ...DEEPSEEK_MODELS]) {
+    for (const optInModel of [
+      ...XAI_MODELS,
+      ...ZEN_MODELS,
+      ...ZAI_CODING_PLAN_MODELS,
+      ...DEEPSEEK_MODELS,
+    ]) {
       expect(DEFAULT_ENABLED_MODELS).not.toContain(optInModel);
     }
   });

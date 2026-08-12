@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Env, Environment } from "../types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { Env } from "../types";
 import {
   clearEnvironmentsLocalCache,
   getAvailableEnvironments,

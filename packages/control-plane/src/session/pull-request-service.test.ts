@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
 import type { Logger } from "../logger";
 import type { SourceControlProvider } from "../source-control";
 import * as branchResolution from "../source-control/branch-resolution";
-import type { SessionRepositoryRow } from "./repository";
+import type { SessionRepositoryRow } from "./types";
 import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
 import {
@@ -51,6 +52,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -124,7 +126,7 @@ function createRepositoryRow(overrides: Partial<SessionRepositoryRow> = {}): Ses
   };
 }
 
-function createTestHarness() {
+function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
   const log = createMockLogger();
   const provider = createMockProvider();
   const artifacts: ArtifactRow[] = [];
@@ -182,6 +184,7 @@ function createTestHarness() {
     messenger: { broadcast: vi.fn(), sendToSandbox: vi.fn(() => true) },
     appName: "Open-Inspect",
     sessionPullRequests,
+    resolveScmSettings: vi.fn(async () => options.scmSettings ?? {}),
   };
 
   const service = new SessionPullRequestService(deps);
@@ -323,6 +326,71 @@ describe("SessionPullRequestService", () => {
       repoOwner: "acme",
       repoName: "web",
     });
+  });
+
+  it("passes draft=false to the provider by default", async () => {
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: false })
+    );
+  });
+
+  it("forwards an explicit draft flag from the request", async () => {
+    await harness.service.createPullRequest(createInput({ draft: true }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("falls back to the always-draft default when draft is unspecified", async () => {
+    harness = createTestHarness({ scmSettings: { alwaysUseDraftMode: true } });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("forces draft when always-draft is enabled, even if the request sets draft=false", async () => {
+    harness = createTestHarness({ scmSettings: { alwaysUseDraftMode: true } });
+
+    await harness.service.createPullRequest(createInput({ draft: false }));
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ draft: true })
+    );
+  });
+
+  it("fails before push when SCM policy cannot be resolved", async () => {
+    vi.mocked(harness.deps.resolveScmSettings).mockRejectedValueOnce(new Error("D1 unavailable"));
+
+    const result = await harness.service.createPullRequest(createInput());
+
+    expect(result).toEqual({
+      kind: "error",
+      status: 503,
+      error: "Pull request policy is temporarily unavailable",
+    });
+    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+  });
+
+  it("passes the configured pull request label to the provider", async () => {
+    harness = createTestHarness({ scmSettings: { pullRequestLabel: "open-inspect" } });
+
+    await harness.service.createPullRequest(createInput());
+
+    expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ labels: ["open-inspect"] })
+    );
   });
 
   it("creates PR with OAuth token and stores PR artifact", async () => {
@@ -483,6 +551,27 @@ describe("SessionPullRequestService", () => {
       });
       expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
         expect.objectContaining({ owner: "acme", name: "backend" })
+      );
+    });
+
+    it("resolves SCM policy for the target member repository", async () => {
+      vi.mocked(harness.deps.resolveScmSettings).mockImplementation(async (repo) =>
+        repo.repoName === "backend"
+          ? { alwaysUseDraftMode: true, pullRequestLabel: "backend-generated" }
+          : {}
+      );
+
+      await harness.service.createPullRequest(
+        createInput({ repoOwner: "acme", repoName: "backend", draft: false })
+      );
+
+      expect(harness.deps.resolveScmSettings).toHaveBeenCalledWith({
+        repoOwner: "acme",
+        repoName: "backend",
+      });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ draft: true, labels: ["backend-generated"] })
       );
     });
 

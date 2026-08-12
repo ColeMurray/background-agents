@@ -6,17 +6,14 @@
  * same-account worker-to-worker fetch restrictions (error 1042). Falls back
  * to URL-based fetch for Vercel / local development.
  *
- * This module sits below both `control-plane.ts` (user-credentialed
- * requests) and `oi-session.ts` (token exchange/refresh), keeping the import
- * graph a DAG.
+ * This module sits below both the browser-auth proxy and resource-request
+ * transport, keeping platform-specific dispatch outside their protocol logic.
  */
 
-import { buildServiceAuthHeaders } from "@open-inspect/shared";
 import { createLogger } from "@/lib/logger";
-import { getCorrelationLogFields } from "@/lib/request-correlation";
-import { getRequestCorrelation } from "@/lib/request-context";
 
 const log = createLogger("control-plane-transport");
+export const CONTROL_PLANE_FETCH_TIMEOUT_MS = 15_000;
 
 /**
  * Get the control plane base URL (no trailing slash) from environment.
@@ -90,75 +87,21 @@ export async function dispatchControlPlaneFetch(
   fetchOptions: RequestInit,
   correlationFields: Record<string, string>
 ): Promise<Response> {
+  const timeoutSignal = AbortSignal.timeout(CONTROL_PLANE_FETCH_TIMEOUT_MS);
+  const signal = fetchOptions.signal
+    ? AbortSignal.any([fetchOptions.signal, timeoutSignal])
+    : timeoutSignal;
+  const boundedFetchOptions = {
+    ...fetchOptions,
+    signal,
+  };
+
   // On Cloudflare Workers, use the service binding to call the control plane
   const binding = await getServiceBinding(correlationFields);
   if (binding) {
-    return binding.fetch(url, fetchOptions);
+    return binding.fetch(url, boundedFetchOptions);
   }
 
   // Fallback: direct fetch (works on Vercel / local dev)
-  return fetch(url, fetchOptions);
-}
-
-/**
- * Make a control-plane request signed with web's own sig1 service
- * credential — never a user token.
- *
- * Reserved for the token endpoints (exchange/refresh): issuance must be
- * reachable only through web's per-service identity. Throws when
- * SERVICE_AUTH_SECRET is not configured; callers treat that as an exchange
- * failure.
- */
-/**
- * Token calls sit on the sign-in path and the background refresh check — an
- * unresponsive control plane must fail fast into the callers' existing
- * exchange_fallback/request_failed paths, not hang until the platform's own
- * timeout.
- */
-const SERVICE_FETCH_TIMEOUT_MS = 10_000;
-
-export async function controlPlaneTokenFetch(
-  path: string,
-  init: { method: string; body?: string }
-): Promise<Response> {
-  if (
-    init.method !== "POST" ||
-    (path !== "/auth/tokens/exchange" && path !== "/auth/tokens/refresh")
-  ) {
-    throw new Error("Service authentication is restricted to token endpoints");
-  }
-  const secret = process.env.SERVICE_AUTH_SECRET;
-  if (!secret) {
-    throw new Error("SERVICE_AUTH_SECRET not configured");
-  }
-
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  const correlation = await getRequestCorrelation();
-  const correlationFields = getCorrelationLogFields(correlation);
-  // The signature covers method, path, query, and body hash — not the host —
-  // so signing the URL-based form stays valid across the service binding.
-  const url = `${getControlPlaneUrl()}${normalizedPath}`;
-
-  const headers = {
-    "Content-Type": "application/json",
-    ...(await buildServiceAuthHeaders({
-      service: "web",
-      secret,
-      method: init.method,
-      url,
-      body: init.body,
-      traceId: correlation.traceId,
-    })),
-  };
-
-  return dispatchControlPlaneFetch(
-    url,
-    {
-      method: init.method,
-      headers,
-      body: init.body,
-      signal: AbortSignal.timeout(SERVICE_FETCH_TIMEOUT_MS),
-    },
-    correlationFields
-  );
+  return fetch(url, boundedFetchOptions);
 }

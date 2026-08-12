@@ -5,14 +5,15 @@
 import {
   DEFAULT_MAX_CONCURRENT_CHILD_SESSIONS,
   DEFAULT_MAX_TOTAL_CHILD_SESSIONS,
-  isValidReasoningEffort,
   type CodeServerSettings,
   type EnvironmentSettingsIntegrationId,
   type GitHubBotSettings,
   type IntegrationId,
   type LinearBotSettings,
   type SandboxSettings,
-} from "@open-inspect/shared";
+  type VncSettings,
+} from "@open-inspect/shared/types/integrations";
+import { isValidReasoningEffort } from "@open-inspect/shared/models";
 import {
   IntegrationSettingsStore,
   IntegrationSettingsValidationError,
@@ -448,6 +449,18 @@ async function handleGetResolvedConfig(
     });
   }
 
+  if (id === "vnc") {
+    const vncSettings = settings as VncSettings;
+    return json({
+      integrationId: id,
+      repo,
+      config: {
+        enabled: vncSettings.enabled ?? false,
+        enabledRepos,
+      },
+    });
+  }
+
   if (id === "sandbox") {
     const sandboxSettings = settings as SandboxSettings;
     return json({
@@ -463,6 +476,7 @@ async function handleGetResolvedConfig(
         // null → use the provider's default reservation (no override configured).
         cpuCores: sandboxSettings.cpuCores ?? null,
         memoryMib: sandboxSettings.memoryMib ?? null,
+        sandboxTimeoutMs: sandboxSettings.sandboxTimeoutMs ?? null,
         enabledRepos,
       },
     });
@@ -510,7 +524,7 @@ export const integrationSettingsRoutes: Route[] = [
     handler: handleDeleteRepoSettings,
   },
   // Integration settings — per-environment (design §13.5; sandbox and
-  // code-server only)
+  // code-server, and VNC only)
   {
     method: "GET",
     pattern: parsePattern("/integration-settings/:id/environments/:environmentId"),

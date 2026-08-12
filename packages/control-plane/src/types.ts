@@ -3,37 +3,13 @@
  */
 
 import type {
-  ArtifactType,
   MessageSource,
   MessageStatus,
   ParticipantRole,
   SessionStatus,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
-
-export type {
-  ArtifactType,
-  ClientMessage,
-  CreateSessionRequest,
-  CreateSessionResponse,
-  EventResponse,
-  EventType,
-  GitSyncStatus,
-  ListEventsResponse,
-  MessageSource,
-  MessageStatus,
-  ParticipantRole,
-  ParticipantPresence,
-  SessionAttachmentReference,
-  ResolvedSessionAttachment,
-  SpawnSource,
-  SandboxEvent,
-  SandboxStatus,
-  ServerMessage,
-  SessionRepositoryState,
-  SessionState,
-  SessionStatus,
-} from "@open-inspect/shared";
+import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 // Environment bindings
 export interface Env {
@@ -53,12 +29,18 @@ export interface Env {
   // D1 database
   DB: D1Database;
 
+  // Durable callback-to-finalizer handoff for provider-session image builds.
+  IMAGE_BUILD_FINALIZATION_QUEUE?: Queue<ImageBuildFinalizationJob>;
+
   // R2 buckets
   MEDIA_BUCKET: R2Bucket;
 
   // Secrets
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  BROWSER_AUTH_SECRET?: string;
   TOKEN_ENCRYPTION_KEY: string;
   REPO_SECRETS_ENCRYPTION_KEY?: string;
   MODAL_TOKEN_ID?: string;
@@ -76,7 +58,6 @@ export interface Env {
   SERVICE_AUTH_SECRET_SLACK_BOT?: string;
   SERVICE_AUTH_SECRET_GITHUB_BOT?: string;
   SERVICE_AUTH_SECRET_LINEAR_BOT?: string;
-  SERVICE_AUTH_SECRET_MODAL?: string;
   SLACK_BOT_TOKEN?: string; // Slack bot token for agent-initiated chat.postMessage calls
 
   // GitHub App secrets (for git operations)
@@ -94,6 +75,11 @@ export interface Env {
   SCM_PROVIDER?: string; // Source control provider for this deployment (default: github)
   WORKER_URL?: string; // Base URL for the worker (for callbacks)
   WEB_APP_URL?: string; // Base URL for the web app (for PR links)
+  ALLOWED_USERS?: string;
+  ALLOWED_EMAIL_DOMAINS?: string;
+  ALLOWED_EMAILS?: string;
+  ALLOWED_GITHUB_ORGS?: string;
+  UNSAFE_ALLOW_ALL_USERS?: string;
   CF_ACCOUNT_ID?: string; // Cloudflare account ID
   SANDBOX_PROVIDER?: string; // "modal" (default), "daytona", "vercel", "opencomputer", or "e2b"
   MODAL_WORKSPACE?: string; // Modal workspace name
@@ -174,18 +160,10 @@ export interface MessageResponse {
   completedAt: number | null;
 }
 
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-  updatedAt: number;
-}
-
 export interface ParticipantResponse {
   id: string;
   userId: string;
+  canonicalUserId?: string | null;
   scmLogin: string | null;
   scmName: string | null;
   role: ParticipantRole;

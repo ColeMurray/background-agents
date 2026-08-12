@@ -110,28 +110,35 @@ variable "modal_environment_web_suffix" {
 }
 
 # =============================================================================
-# GitHub OAuth App Credentials
+# GitHub OAuth Sign-In Credentials
 # =============================================================================
 
 variable "github_client_id" {
-  description = "GitHub OAuth App client ID"
+  description = "GitHub App client ID used for OAuth sign-in. Set together with github_client_secret to enable GitHub sign-in; leave both empty for Google-only sign-in."
   type        = string
+  default     = ""
+
+  validation {
+    condition     = (trimspace(var.github_client_id) == "") == (trimspace(var.github_client_secret) == "")
+    error_message = "github_client_id and github_client_secret must be set together with non-whitespace values, or both left empty."
+  }
 }
 
 variable "github_client_secret" {
-  description = "GitHub OAuth App client secret"
+  description = "GitHub App client secret used for OAuth sign-in. Set together with github_client_id to enable GitHub sign-in."
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 # =============================================================================
 # Google OAuth Credentials (Optional — enables "Sign in with Google")
 # =============================================================================
 # Set both google_client_id and google_client_secret to enable Google login for
-# non-developer users (PMs, support agents). Leave both empty for GitHub-only
-# deployments, which stay byte-unchanged. A Google session authenticates the user
-# but carries no SCM credentials; git operations continue to use the shared
-# GitHub App installation, and PRs fall back to the App bot.
+# non-developer users (PMs, support agents). Leave both empty when Google sign-in
+# is not wanted. A Google session authenticates the user but carries no SCM
+# credentials; git operations continue to use the shared GitHub App installation,
+# and PRs fall back to the App bot.
 
 variable "google_client_id" {
   description = "Google OAuth 2.0 client ID. Set together with google_client_secret to enable Google login; leave both empty to keep the deployment GitHub-only."
@@ -139,8 +146,8 @@ variable "google_client_id" {
   default     = ""
 
   validation {
-    condition     = (var.google_client_id == "") == (var.google_client_secret == "")
-    error_message = "google_client_id and google_client_secret must be set together (both non-empty) or both left empty. Setting only one silently disables Google login."
+    condition     = (trimspace(var.google_client_id) == "") == (trimspace(var.google_client_secret) == "")
+    error_message = "google_client_id and google_client_secret must be set together with non-whitespace values, or both left empty."
   }
 }
 
@@ -288,6 +295,12 @@ variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
   sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = trimspace(var.anthropic_api_key) != ""
+    error_message = "anthropic_api_key must be non-blank."
+  }
 }
 
 # =============================================================================
@@ -486,9 +499,14 @@ variable "e2b_auto_pause" {
 }
 
 variable "nextauth_secret" {
-  description = "NextAuth.js secret (generate with: openssl rand -base64 32)"
+  description = "Browser authentication secret used by the control plane (legacy Terraform input name; generate with: openssl rand -base64 32)"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = length(regexall("\\S", var.nextauth_secret)) >= 32
+    error_message = "nextauth_secret must contain at least 32 non-whitespace characters."
+  }
 }
 
 # =============================================================================
@@ -532,12 +550,6 @@ variable "app_name" {
   description = "Display name shown in the web UI tab title, sign-in page, bot messages (Slack, Linear), PR body footer, and outbound HTTP User-Agent headers."
   type        = string
   default     = "Open-Inspect"
-}
-
-variable "app_short_name" {
-  description = "Short brand label shown only in the web sidebar header. Defaults to 'Inspect' to keep the sidebar visually compact."
-  type        = string
-  default     = "Inspect"
 }
 
 variable "app_icon_url" {
