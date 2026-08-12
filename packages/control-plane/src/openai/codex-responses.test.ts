@@ -150,29 +150,6 @@ describe("OpenAI Codex Responses client", () => {
     ]);
   });
 
-  it("fails clearly without EGRESS and never falls back to global fetch", async () => {
-    await expect(
-      requestOpenAICodexFunction(
-        {
-          accessToken: "secret-access-token",
-          requestId: "request-123",
-          traceId: "trace-123",
-          model: "gpt-5.6-luna",
-          systemPrompt: "Classify the target.",
-          prompt: "route this request",
-          tool: {
-            name: TOOL_NAME,
-            description: "Select the target.",
-            parameters: { type: "object", additionalProperties: false },
-          },
-        },
-        undefined
-      )
-    ).rejects.toMatchObject({ message: "EGRESS binding is not configured" });
-    expect(fetch).not.toHaveBeenCalled();
-    expect(mockEgressFetch).not.toHaveBeenCalled();
-  });
-
   it("uses output_item.done when response.completed has no output", async () => {
     mockEgressFetch.mockResolvedValueOnce(
       fragmentedSseResponse(

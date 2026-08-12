@@ -1,5 +1,5 @@
 import { waitForAbort } from "./bounded-json-sse";
-import { OpenAICodexConfigurationError, OpenAICodexUpstreamError } from "./codex-errors";
+import { OpenAICodexUpstreamError } from "./codex-errors";
 import { parseOpenAIResponsesStream } from "./responses-stream";
 
 const CODEX_SUBSCRIPTION_RESPONSES_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
@@ -51,12 +51,8 @@ function buildBody(request: OpenAICodexFunctionRequest): string {
 /** Executes one Responses function call via the required VPC egress binding. */
 export async function requestOpenAICodexFunction(
   request: OpenAICodexFunctionRequest,
-  egress: Fetcher | undefined
+  egress: Fetcher
 ): Promise<unknown> {
-  if (!egress) {
-    throw new OpenAICodexConfigurationError("EGRESS binding is not configured");
-  }
-
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), CODEX_RESPONSES_TIMEOUT_MS);
   try {

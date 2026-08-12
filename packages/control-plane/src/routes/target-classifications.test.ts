@@ -1,35 +1,26 @@
-import {
-  CLASSIFIER_PROMPT_MAX_CHARS,
-  TARGET_CLASSIFIER_SYSTEM_PROMPT,
-} from "@open-inspect/shared/types/target-classification";
+import { CLASSIFIER_PROMPT_MAX_CHARS } from "@open-inspect/shared/types/target-classification";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  OpenAITokenNotConfiguredError,
-  OpenAITokenUnauthorizedError,
-} from "../auth/openai-token-broker";
-import type * as OpenAITokenBrokerModule from "../auth/openai-token-broker";
-import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "../openai/codex-errors";
+  InvalidTargetClassificationResponseError,
+  OpenAIOAuthNotConfiguredError,
+  OpenAIOAuthUnavailableError,
+  TargetClassifierUpstreamUnavailableError,
+} from "../target-classifications/service";
+import type * as TargetClassificationServiceModule from "../target-classifications/service";
 import { handleRequest } from "../router";
 import { signedServiceRequest, TEST_SERVICE_SECRETS } from "../router.test-support";
 
 const mocks = vi.hoisted(() => ({
-  refreshGlobal: vi.fn(),
-  requestFunction: vi.fn(),
+  createTargetClassification: vi.fn(),
 }));
 
-vi.mock("../auth/openai-token-broker", async (importOriginal) => {
-  const actual = await importOriginal<typeof OpenAITokenBrokerModule>();
+vi.mock("../target-classifications/service", async (importOriginal) => {
+  const actual = await importOriginal<typeof TargetClassificationServiceModule>();
   return {
     ...actual,
-    OpenAITokenBroker: class {
-      refreshGlobal = mocks.refreshGlobal;
-    },
+    createTargetClassification: mocks.createTargetClassification,
   };
 });
-
-vi.mock("../openai/codex-responses", () => ({
-  requestOpenAICodexFunction: mocks.requestFunction,
-}));
 
 const egress = { fetch: vi.fn() };
 
@@ -85,12 +76,7 @@ async function targetClassificationRequest(
 describe("POST /internal/target-classifications", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.refreshGlobal.mockResolvedValue({
-      accessToken: "secret-access-token",
-      expiresIn: 1800,
-      accountId: "account-123",
-    });
-    mocks.requestFunction.mockResolvedValue(decision);
+    mocks.createTargetClassification.mockResolvedValue(decision);
   });
 
   it("rejects requests without service authentication", async () => {
@@ -104,14 +90,14 @@ describe("POST /internal/target-classifications", () => {
     );
 
     expect(response.status).toBe(401);
-    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+    expect(mocks.createTargetClassification).not.toHaveBeenCalled();
   });
 
   it("allows only the slack-bot service principal", async () => {
     const response = await targetClassificationRequest(validRequest(), "github-bot");
 
     expect(response.status).toBe(403);
-    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+    expect(mocks.createTargetClassification).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -127,7 +113,7 @@ describe("POST /internal/target-classifications", () => {
     const response = await targetClassificationRequest(body);
 
     expect(response.status).toBe(400);
-    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+    expect(mocks.createTargetClassification).not.toHaveBeenCalled();
   });
 
   it("rejects malformed JSON before token brokerage", async () => {
@@ -141,22 +127,19 @@ describe("POST /internal/target-classifications", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+    expect(mocks.createTargetClassification).not.toHaveBeenCalled();
   });
 
   it("returns 503 without configured global OAuth", async () => {
-    mocks.refreshGlobal.mockRejectedValue(
-      new OpenAITokenNotConfiguredError("OPENAI_OAUTH_REFRESH_TOKEN not configured")
-    );
+    mocks.createTargetClassification.mockRejectedValue(new OpenAIOAuthNotConfiguredError());
 
     const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth is not configured" });
-    expect(mocks.requestFunction).not.toHaveBeenCalled();
   });
 
-  it("returns 503 before token brokerage when secret encryption is not configured", async () => {
+  it("returns 503 before classification when secret encryption is not configured", async () => {
     const { REPO_SECRETS_ENCRYPTION_KEY: _omitted, ...envWithoutEncryption } = env;
     const response = await handleRequest(
       await signedServiceRequest("https://internal/internal/target-classifications", {
@@ -169,10 +152,10 @@ describe("POST /internal/target-classifications", () => {
 
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth is not configured" });
-    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
+    expect(mocks.createTargetClassification).not.toHaveBeenCalled();
   });
 
-  it("returns 503 before token brokerage when EGRESS is not configured", async () => {
+  it("returns 503 before classification when EGRESS is not configured", async () => {
     const { EGRESS: _omitted, ...envWithoutEgress } = env;
     const response = await handleRequest(
       await signedServiceRequest("https://internal/internal/target-classifications", {
@@ -187,62 +170,33 @@ describe("POST /internal/target-classifications", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Classifier egress is not configured",
     });
-    expect(mocks.refreshGlobal).not.toHaveBeenCalled();
-    expect(mocks.requestFunction).not.toHaveBeenCalled();
+    expect(mocks.createTargetClassification).not.toHaveBeenCalled();
   });
 
-  it("delegates the forced classifier call to the Codex Responses client", async () => {
+  it("delegates validated requests to the classification service", async () => {
     const response = await targetClassificationRequest(validRequest("route this request"));
 
     expect(response.status).toBe(200);
-    expect(mocks.requestFunction).toHaveBeenCalledWith(
-      {
-        accessToken: "secret-access-token",
-        accountId: "account-123",
+    expect(mocks.createTargetClassification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "route this request",
+        targets: expect.arrayContaining([
+          expect.objectContaining({ kind: "repository", id: "acme/api" }),
+        ]),
+      }),
+      expect.objectContaining({
+        encryptionKey: "encryption-key",
+        egress,
         requestId: expect.any(String),
         traceId: expect.any(String),
-        model: "gpt-5.6-luna",
-        systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
-        prompt: expect.stringContaining("## User's Message\nroute this request"),
-        tool: {
-          name: "classify_target",
-          description: "Select the best target for the Slack request.",
-          parameters: expect.objectContaining({ additionalProperties: false }),
-        },
-      },
-      egress
+      })
     );
     await expect(response.json()).resolves.toEqual(decision);
   });
 
-  it("rejects invalid structured classifier output", async () => {
-    mocks.requestFunction.mockResolvedValue({ ...decision, confidence: "certain" });
-
-    const response = await targetClassificationRequest(validRequest());
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({
-      error: "Classifier returned an invalid response",
-    });
-  });
-
-  it.each([
-    ["primary target", { ...decision, targetId: "acme/unknown" }],
-    ["alternative", { ...decision, alternatives: ["acme/unknown"] }],
-  ])("rejects a classifier decision with an unknown %s", async (_name, output) => {
-    mocks.requestFunction.mockResolvedValue(output);
-
-    const response = await targetClassificationRequest(validRequest());
-
-    expect(response.status).toBe(502);
-    await expect(response.json()).resolves.toEqual({
-      error: "Classifier returned an invalid response",
-    });
-  });
-
-  it("maps invalid provider output without exposing details", async () => {
-    mocks.requestFunction.mockRejectedValue(
-      new InvalidOpenAICodexResponseError("sensitive provider output")
+  it("maps invalid classifier output without exposing details", async () => {
+    mocks.createTargetClassification.mockRejectedValue(
+      new InvalidTargetClassificationResponseError("sensitive provider output")
     );
 
     const response = await targetClassificationRequest(validRequest());
@@ -254,8 +208,8 @@ describe("POST /internal/target-classifications", () => {
   });
 
   it("maps upstream failures without exposing details", async () => {
-    mocks.requestFunction.mockRejectedValue(
-      new OpenAICodexUpstreamError("sensitive upstream failure", 429)
+    mocks.createTargetClassification.mockRejectedValue(
+      new TargetClassifierUpstreamUnavailableError("sensitive upstream failure")
     );
 
     const response = await targetClassificationRequest(validRequest());
@@ -264,8 +218,8 @@ describe("POST /internal/target-classifications", () => {
     await expect(response.json()).resolves.toEqual({ error: "Classifier upstream unavailable" });
   });
 
-  it("does not misclassify unexpected Codex client failures", async () => {
-    mocks.requestFunction.mockRejectedValue(new Error("unexpected client failure"));
+  it("does not misclassify unexpected service failures", async () => {
+    mocks.createTargetClassification.mockRejectedValue(new Error("unexpected client failure"));
 
     const response = await targetClassificationRequest(validRequest());
 
@@ -273,22 +227,12 @@ describe("POST /internal/target-classifications", () => {
     await expect(response.text()).resolves.not.toContain("unexpected client failure");
   });
 
-  it("maps broker authorization failure to 502", async () => {
-    mocks.refreshGlobal.mockRejectedValue(new OpenAITokenUnauthorizedError("refresh rejected"));
+  it("maps OAuth failures to 502", async () => {
+    mocks.createTargetClassification.mockRejectedValue(new OpenAIOAuthUnavailableError());
 
     const response = await targetClassificationRequest(validRequest());
 
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({ error: "OpenAI OAuth unavailable" });
-    expect(mocks.requestFunction).not.toHaveBeenCalled();
-  });
-
-  it("does not misclassify unexpected service failures", async () => {
-    mocks.refreshGlobal.mockRejectedValue(new Error("unexpected internal failure"));
-
-    const response = await targetClassificationRequest(validRequest());
-
-    expect(response.status).toBe(500);
-    await expect(response.text()).resolves.not.toContain("unexpected internal failure");
   });
 });

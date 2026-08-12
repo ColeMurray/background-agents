@@ -82,7 +82,7 @@ module "slack_bot_worker" {
       { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
       { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
     ],
-    var.slack_classification_model == "anthropic/claude-haiku-4-5" ? [
+    local.slack_classifier_uses_anthropic ? [
       { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
     ] : []
   )

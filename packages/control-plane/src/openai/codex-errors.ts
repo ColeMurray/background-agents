@@ -1,5 +1,3 @@
-export class OpenAICodexConfigurationError extends Error {}
-
 export class OpenAICodexUpstreamError extends Error {
   constructor(
     message: string,
