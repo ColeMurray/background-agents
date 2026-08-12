@@ -4,6 +4,7 @@ import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+import { SessionIndexStore } from "../../src/db/session-index";
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
@@ -266,6 +267,25 @@ export async function seedMessage(
 // WebSocket test helpers
 // ---------------------------------------------------------------------------
 
+async function ensureSessionIndexed(sessionName: string): Promise<void> {
+  const sessionStore = new SessionIndexStore(env.DB);
+  if (await sessionStore.get(sessionName)) return;
+
+  const now = Date.now();
+  await sessionStore.create({
+    id: sessionName,
+    title: null,
+    repoOwner: null,
+    repoName: null,
+    model: "anthropic/claude-haiku-4-5",
+    reasoningEffort: null,
+    baseBranch: null,
+    status: "created",
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 /**
  * Create a session using idFromName() so the worker's /sessions/:name/ws
  * route can locate the DO via the same name. Returns stub + sessionName.
@@ -346,6 +366,8 @@ export async function openClientWs(
   sessionName: string,
   opts?: { subscribe?: boolean; userId?: string; canonicalUserId?: string }
 ) {
+  await ensureSessionIndexed(sessionName);
+
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },
   });
@@ -401,6 +423,7 @@ export async function openSandboxWs(
   sessionName: string,
   opts: { authToken: string; sandboxId: string }
 ) {
+  await ensureSessionIndexed(sessionName);
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws?type=sandbox`, {
     headers: {
       Upgrade: "websocket",

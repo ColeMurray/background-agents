@@ -79,6 +79,19 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   }
 
   const sessionId = match[1];
+  // eslint-disable-next-line no-restricted-syntax -- composition root: reject invalid upgrades before allocating a session DO
+  const session = await env.DB.prepare("SELECT 1 FROM sessions WHERE id = ?")
+    .bind(sessionId)
+    .first();
+  if (!session) {
+    logger.warn("WebSocket session not found", {
+      event: "ws.session_not_found",
+      http_path: url.pathname,
+      session_id: sessionId,
+    });
+    return new Response("Session not found", { status: 404 });
+  }
+
   logger.info("WebSocket upgrade", {
     event: "ws.connect",
     http_path: url.pathname,

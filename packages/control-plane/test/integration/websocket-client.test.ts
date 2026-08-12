@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { env } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import {
   initNamedSession,
   openClientWs,
@@ -11,6 +11,24 @@ import {
 import { DEFAULT_REPLAY_LIMIT } from "../../src/session/event-stream";
 
 describe("Client WebSocket (via SELF.fetch)", () => {
+  it("rejects a nonexistent session before initializing its Durable Object", async () => {
+    const name = `ws-client-nonexistent-${Date.now()}`;
+
+    const response = await SELF.fetch(`https://test.local/sessions/${name}/ws`, {
+      headers: { Upgrade: "websocket" },
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.webSocket).toBeNull();
+
+    const stub = env.SESSION.get(env.SESSION.idFromName(name));
+    const tables = await queryDO<{ name: string }>(
+      stub,
+      "SELECT name FROM sqlite_master WHERE type = 'table'"
+    );
+    expect(tables).toEqual([]);
+  });
+
   it("upgrade returns 101 with webSocket", async () => {
     const name = `ws-client-upgrade-${Date.now()}`;
     await initNamedSession(name);
