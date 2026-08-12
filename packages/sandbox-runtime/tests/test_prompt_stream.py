@@ -12,14 +12,21 @@ from unittest.mock import MagicMock
 import pytest
 
 from sandbox_runtime.constants import MAX_SNAPSHOT_RESERVE_SECONDS
+from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _Disposition,
     _PromptState,
 )
+from tests.conftest import oc_message_id
 
 PARENT_SESSION_ID = "oc-session-123"
 CHILD_SESSION_ID = "oc-child-456"
+
+# Anchor for ID-boundary tests: the prompt's user message sits at a fixed
+# (timestamp, counter) so neighbouring IDs can be placed exactly around it.
+PROMPT_TS_MS = 1_754_000_000_000
+PROMPT_MESSAGE_ID = oc_message_id(PROMPT_TS_MS, 2, "p")
 
 
 def make_stream() -> OpenCodePromptStream:
@@ -33,19 +40,30 @@ def make_stream() -> OpenCodePromptStream:
     )
 
 
-def make_state() -> _PromptState:
+def make_state(opencode_message_id: str = "msg_test") -> _PromptState:
     state = _PromptState(
         opencode_session_id=PARENT_SESSION_ID,
         message_id="cp-msg-1",
-        opencode_message_id="msg_test",
+        opencode_message_id=opencode_message_id,
         start_time=time.time(),
     )
-    state.user_message_ids.add("msg_test")
+    state.user_message_ids.add(opencode_message_id)
     return state
 
 
 def sse(event_type: str, properties: dict) -> dict:
     return {"type": event_type, "properties": properties}
+
+
+def test_oc_message_id_matches_real_generator_format():
+    """The fixture helper must reproduce OpenCodeIdentifier's encoding, so
+    boundary tests exercise the real ID contract rather than ad-hoc strings."""
+    real = OpenCodeIdentifier.ascending("message")
+    encoded = int(real[4:16], 16)
+    rebuilt = oc_message_id(encoded // 0x1000, encoded % 0x1000)
+
+    assert rebuilt[:16] == real[:16]
+    assert len(rebuilt) == len(real)
 
 
 class TestApplySseEventDispositions:
@@ -648,8 +666,10 @@ class TestApplySseEventDispositions:
         """The compaction fallback must not claim messages that predate the
         prompt (IDs below the prompt's user message): forwarding them would
         replay prior turns' text as current output."""
+        prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
+        prior_user_id = oc_message_id(PROMPT_TS_MS - 61_000, 1, "u")
         stream = make_stream()
-        state = make_state()
+        state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(
             state,
             sse(
@@ -659,7 +679,7 @@ class TestApplySseEventDispositions:
                         "type": "text",
                         "id": "part-prior",
                         "sessionID": PARENT_SESSION_ID,
-                        "messageID": "msg_a-prior-turn",
+                        "messageID": prior_assistant_id,
                         "text": "Stale text from an earlier turn",
                     }
                 },
@@ -673,22 +693,24 @@ class TestApplySseEventDispositions:
                 "message.updated",
                 {
                     "info": {
-                        "id": "msg_a-prior-turn",
+                        "id": prior_assistant_id,
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
-                        "parentID": "msg_a-prior-user",
+                        "parentID": prior_user_id,
                     }
                 },
             ),
         )
 
-        assert "msg_a-prior-turn" not in state.allowed_assistant_msg_ids
-        assert "msg_a-prior-turn" in state.pending_parts
+        assert prior_assistant_id not in state.allowed_assistant_msg_ids
+        assert prior_assistant_id in state.pending_parts
         assert step.events == []
 
     def test_post_compaction_later_message_is_accepted(self):
+        continuation_id = oc_message_id(PROMPT_TS_MS + 5_000, 1, "r")
+        continue_user_id = oc_message_id(PROMPT_TS_MS + 4_000, 1, "v")
         stream = make_stream()
-        state = make_state()
+        state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
 
         stream._apply_sse_event(
@@ -697,10 +719,10 @@ class TestApplySseEventDispositions:
                 "message.updated",
                 {
                     "info": {
-                        "id": "msg_x-continuation",
+                        "id": continuation_id,
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
-                        "parentID": "msg_x-continue-user",
+                        "parentID": continue_user_id,
                     }
                 },
             ),
@@ -714,14 +736,14 @@ class TestApplySseEventDispositions:
                         "type": "text",
                         "id": "part-continuation",
                         "sessionID": PARENT_SESSION_ID,
-                        "messageID": "msg_x-continuation",
+                        "messageID": continuation_id,
                         "text": "Continuing after compaction",
                     }
                 },
             ),
         )
 
-        assert "msg_x-continuation" in state.allowed_assistant_msg_ids
+        assert continuation_id in state.allowed_assistant_msg_ids
         assert step.events == [
             {
                 "type": "token",
@@ -730,9 +752,39 @@ class TestApplySseEventDispositions:
             }
         ]
 
-    def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
+    def test_post_compaction_same_timestamp_counter_boundary(self):
+        """Within one millisecond the encoded counter decides ordering: an
+        assistant ID one counter tick below the prompt's user message is
+        rejected, one tick above is accepted."""
+        same_ms_below_id = oc_message_id(PROMPT_TS_MS, 1, "s")
+        same_ms_above_id = oc_message_id(PROMPT_TS_MS, 3, "t")
         stream = make_stream()
-        state = make_state()
+        state = make_state(PROMPT_MESSAGE_ID)
+        stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
+
+        for oc_msg_id in (same_ms_below_id, same_ms_above_id):
+            stream._apply_sse_event(
+                state,
+                sse(
+                    "message.updated",
+                    {
+                        "info": {
+                            "id": oc_msg_id,
+                            "role": "assistant",
+                            "sessionID": PARENT_SESSION_ID,
+                            "parentID": oc_message_id(PROMPT_TS_MS, 0, "w"),
+                        }
+                    },
+                ),
+            )
+
+        assert same_ms_below_id not in state.allowed_assistant_msg_ids
+        assert same_ms_above_id in state.allowed_assistant_msg_ids
+
+    def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
+        prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
+        stream = make_stream()
+        state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
 
         step = stream._apply_sse_event(
@@ -741,10 +793,10 @@ class TestApplySseEventDispositions:
                 "message.updated",
                 {
                     "info": {
-                        "id": "msg_a-prior-turn",
+                        "id": prior_assistant_id,
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
-                        "parentID": "msg_a-prior-user",
+                        "parentID": oc_message_id(PROMPT_TS_MS - 61_000, 1, "u"),
                         "error": {"name": "SomeError", "data": {"message": "Old failure"}},
                     }
                 },

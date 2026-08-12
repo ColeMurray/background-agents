@@ -26,7 +26,7 @@ from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _PromptState,
 )
-from tests.conftest import MockResponse, wire_opencode_transport
+from tests.conftest import MockResponse, oc_message_id, wire_opencode_transport
 
 MOCK_HTTP_TIMEOUT_SECONDS = 30.0
 PROMPT_TIMEOUT_TEST_BUDGET_SECONDS = 0.8
@@ -1075,29 +1075,38 @@ class TestFetchFinalMessageState:
         after this prompt's user message are eligible."""
         bridge = bridge_with_mock_client
 
+        prompt_ts_ms = 1_754_000_000_000
+        prompt_user_id = oc_message_id(prompt_ts_ms, 2, "p")
+        prior_assistant_id = oc_message_id(prompt_ts_ms - 60_000, 1, "a")
+        prior_user_id = oc_message_id(prompt_ts_ms - 61_000, 1, "u")
+        compaction_user_id = oc_message_id(prompt_ts_ms + 900, 1, "w")
+        summary_id = oc_message_id(prompt_ts_ms + 1_000, 1, "s")
+        continue_user_id = oc_message_id(prompt_ts_ms + 1_500, 1, "v")
+        continuation_id = oc_message_id(prompt_ts_ms + 2_000, 1, "c")
+
         all_messages = [
             {
                 "info": {
-                    "id": "msg_0001prior1",
+                    "id": prior_assistant_id,
                     "role": "assistant",
-                    "parentID": "msg_0001prior0",
+                    "parentID": prior_user_id,
                 },
                 "parts": [{"id": "part-prior", "type": "text", "text": "Prior turn final report"}],
             },
             {
                 "info": {
-                    "id": "msg_0003summary",
+                    "id": summary_id,
                     "role": "assistant",
-                    "parentID": "msg_0003compaction",
+                    "parentID": compaction_user_id,
                     "summary": True,
                 },
                 "parts": [{"id": "part-summary", "type": "text", "text": "Internal summary"}],
             },
             {
                 "info": {
-                    "id": "msg_0004continue",
+                    "id": continuation_id,
                     "role": "assistant",
-                    "parentID": "msg_0004synthetic",
+                    "parentID": continue_user_id,
                 },
                 "parts": [
                     {
@@ -1117,7 +1126,7 @@ class TestFetchFinalMessageState:
         events = []
         state = make_prompt_state(
             "cp-msg-1",
-            "msg_0002prompt",
+            prompt_user_id,
             cumulative_text=cumulative_text,
             compaction_occurred=True,
         )
