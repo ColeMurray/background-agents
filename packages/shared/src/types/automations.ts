@@ -123,8 +123,8 @@ export interface UpdateAutomationRequest {
 export interface AutomationRun {
   id: string;
   automationId: string;
-  /** The firing this run belongs to. Never null after the 0030 backfill. */
-  invocationId: string | null;
+  /** The firing this run belongs to. */
+  invocationId: string;
   sessionId: string | null;
   status: AutomationRunStatus;
   skipReason: string | null;

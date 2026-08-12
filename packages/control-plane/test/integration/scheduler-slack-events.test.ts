@@ -107,7 +107,7 @@ describe("SchedulerDO /internal/event — slack (integration)", () => {
     const runs = await fetchRuns(id);
     expect(runs.length).toBeGreaterThanOrEqual(1);
     // The firing keys and message coordinates live on the invocation.
-    const invocation = await store.getInvocationById(runs[0]!.invocation_id!);
+    const invocation = await store.getInvocationById(runs[0]!.invocation_id);
     expect(invocation!.trigger_key).toBe(event.triggerKey);
     const metadata = JSON.parse(invocation!.trigger_metadata!);
     expect(metadata.channel).toBe("C1");

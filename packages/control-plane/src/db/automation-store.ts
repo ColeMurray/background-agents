@@ -996,7 +996,7 @@ export class AutomationStore {
 
     const childrenByInvocation = new Map<string, AutomationRun[]>();
     for (const child of childResult.results ?? []) {
-      const invocationId = child.invocation_id!;
+      const invocationId = child.invocation_id;
       const bucket = childrenByInvocation.get(invocationId) ?? [];
       bucket.push(toAutomationRun(child));
       childrenByInvocation.set(invocationId, bucket);
