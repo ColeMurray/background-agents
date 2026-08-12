@@ -69,29 +69,21 @@ vi.mock("../db/repo-secrets", () => ({
       return value === undefined ? null : { value, ciphertext: cipherOf(value) };
     }
 
-    async casUpdateSecret(
-      repoId: number,
-      key: string,
-      expectedCiphertext: string,
-      value: string
-    ): Promise<boolean> {
-      await mockState.repoCasImpl(repoId, key, expectedCiphertext, value);
-      const existing = mockState.repoSecrets.get(repoId) ?? {};
-      const current = existing[key];
-      if (current === undefined || cipherOf(current) !== expectedCiphertext) return false;
-      mockState.repoSecrets.set(repoId, { ...existing, [key]: value });
-      return true;
-    }
-
-    async setSecrets(
+    async casWriteSecrets(
       repoId: number,
       owner: string,
       name: string,
+      guardKey: string,
+      expectedCiphertext: string,
       secrets: Record<string, string>
-    ): Promise<void> {
-      mockState.repoWrites.push({ repoId, owner, name, secrets });
+    ): Promise<boolean> {
+      await mockState.repoCasImpl(repoId, guardKey, expectedCiphertext, secrets);
       const existing = mockState.repoSecrets.get(repoId) ?? {};
+      const current = existing[guardKey];
+      if (current === undefined || cipherOf(current) !== expectedCiphertext) return false;
       mockState.repoSecrets.set(repoId, { ...existing, ...secrets });
+      mockState.repoWrites.push({ repoId, owner, name, secrets });
+      return true;
     }
   },
 }));
@@ -110,19 +102,15 @@ vi.mock("../db/global-secrets", () => ({
       return value === undefined ? null : { value, ciphertext: cipherOf(value) };
     }
 
-    async casUpdateSecret(
-      key: string,
+    async casWriteSecrets(
+      guardKey: string,
       expectedCiphertext: string,
-      value: string
+      secrets: Record<string, string>
     ): Promise<boolean> {
-      const current = mockState.globalSecrets[key];
+      const current = mockState.globalSecrets[guardKey];
       if (current === undefined || cipherOf(current) !== expectedCiphertext) return false;
-      mockState.globalSecrets = { ...mockState.globalSecrets, [key]: value };
-      return true;
-    }
-
-    async setSecrets(secrets: Record<string, string>): Promise<void> {
       mockState.globalSecrets = { ...mockState.globalSecrets, ...secrets };
+      return true;
     }
   },
 }));
@@ -141,23 +129,18 @@ vi.mock("../db/environment-secrets", () => ({
       return value === undefined ? null : { value, ciphertext: cipherOf(value) };
     }
 
-    async casUpdateSecret(
+    async casWriteSecrets(
       environmentId: string,
-      key: string,
+      guardKey: string,
       expectedCiphertext: string,
-      value: string
+      secrets: Record<string, string>
     ): Promise<boolean> {
       const existing = mockState.environmentSecrets.get(environmentId) ?? {};
-      const current = existing[key];
+      const current = existing[guardKey];
       if (current === undefined || cipherOf(current) !== expectedCiphertext) return false;
-      mockState.environmentSecrets.set(environmentId, { ...existing, [key]: value });
-      return true;
-    }
-
-    async setSecrets(environmentId: string, secrets: Record<string, string>): Promise<void> {
-      mockState.environmentWrites.push({ environmentId, secrets });
-      const existing = mockState.environmentSecrets.get(environmentId) ?? {};
       mockState.environmentSecrets.set(environmentId, { ...existing, ...secrets });
+      mockState.environmentWrites.push({ environmentId, secrets });
+      return true;
     }
   },
 }));

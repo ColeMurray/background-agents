@@ -107,18 +107,63 @@ export class GlobalSecretsStore {
     }
   }
 
-  async casUpdateSecret(key: string, expectedCiphertext: string, value: string): Promise<boolean> {
-    const encryptedValue = await encryptSecretValue(value, this.encryptionKey);
-    const result = await this.db
-      .prepare(
-        `UPDATE global_secrets
-         SET encrypted_value = ?, updated_at = ?
-         WHERE key = ? AND encrypted_value = ?`
-      )
-      .bind(encryptedValue, Date.now(), normalizeKey(key), expectedCiphertext)
-      .run();
+  /**
+   * Atomically persist a rotated credential bundle. Every statement in the
+   * batch is conditioned on `guardKey` still holding `expectedCiphertext`, and
+   * the guard row itself is swapped last, so the whole bundle commits or
+   * nothing does. Returns false — having written nothing — when the guard did
+   * not match: a concurrent rotation won, or the guard row was deleted.
+   */
+  async casWriteSecrets(
+    guardKey: string,
+    expectedCiphertext: string,
+    secrets: Record<string, string>
+  ): Promise<boolean> {
+    const now = Date.now();
+    const normalized = prepareSecretsForWrite(secrets);
+    const guard = normalizeKey(guardKey);
+    const { [guard]: guardValue, ...companionValues } = normalized;
+    if (guardValue === undefined) {
+      throw new Error(`casWriteSecrets requires secrets to include guard key '${guard}'`);
+    }
 
-    return (result.meta?.changes ?? 0) > 0;
+    const existingKeys = await this.db
+      .prepare("SELECT key FROM global_secrets")
+      .all<{ key: string }>();
+    const existingKeySet = new Set((existingKeys.results || []).map((r) => r.key));
+    assertScopeKeyCapacity("Global secrets", existingKeySet, Object.keys(normalized));
+
+    const { entries } = await encryptSecretEntries(
+      companionValues,
+      existingKeySet,
+      this.encryptionKey
+    );
+    const guardEncrypted = await encryptSecretValue(guardValue, this.encryptionKey);
+
+    const statements = [
+      ...entries.map((entry) =>
+        this.db
+          .prepare(
+            `INSERT INTO global_secrets (key, encrypted_value, created_at, updated_at)
+             SELECT ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM global_secrets WHERE key = ? AND encrypted_value = ?)
+             ON CONFLICT(key) DO UPDATE SET
+               encrypted_value = excluded.encrypted_value,
+               updated_at = excluded.updated_at`
+          )
+          .bind(entry.key, entry.encryptedValue, now, now, guard, expectedCiphertext)
+      ),
+      this.db
+        .prepare(
+          `UPDATE global_secrets
+           SET encrypted_value = ?, updated_at = ?
+           WHERE key = ? AND encrypted_value = ?`
+        )
+        .bind(guardEncrypted, now, guard, expectedCiphertext),
+    ];
+
+    const results = await this.db.batch(statements);
+    return (results[results.length - 1]?.meta?.changes ?? 0) > 0;
   }
 
   async deleteSecret(key: string): Promise<boolean> {

@@ -24,7 +24,13 @@ export async function resolveSessionOAuthSecretScope(
     return { kind: "environment", environmentId: session.environment_id };
   }
   if (pair) {
-    return { kind: "repo", repoId: await ensureRepoId(session), ...pair };
+    // ensureRepoId must resolve the same canonical identity the scope reports.
+    const normalizedSession: SessionRow = {
+      ...session,
+      repo_owner: pair.repoOwner,
+      repo_name: pair.repoName,
+    };
+    return { kind: "repo", repoId: await ensureRepoId(normalizedSession), ...pair };
   }
   return null;
 }

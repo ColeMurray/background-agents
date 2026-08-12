@@ -126,23 +126,82 @@ export class RepoSecretsStore {
     }
   }
 
-  async casUpdateSecret(
+  /**
+   * Atomically persist a rotated credential bundle. Every statement in the
+   * batch is conditioned on `guardKey` still holding `expectedCiphertext`, and
+   * the guard row itself is swapped last, so the whole bundle commits or
+   * nothing does. Returns false — having written nothing — when the guard did
+   * not match: a concurrent rotation won, or the guard row was deleted.
+   */
+  async casWriteSecrets(
     repoId: number,
-    key: string,
+    repoOwner: string,
+    repoName: string,
+    guardKey: string,
     expectedCiphertext: string,
-    value: string
+    secrets: Record<string, string>
   ): Promise<boolean> {
-    const encryptedValue = await encryptSecretValue(value, this.encryptionKey);
-    const result = await this.db
-      .prepare(
-        `UPDATE repo_secrets
-         SET encrypted_value = ?, updated_at = ?
-         WHERE repo_id = ? AND key = ? AND encrypted_value = ?`
-      )
-      .bind(encryptedValue, Date.now(), repoId, normalizeKey(key), expectedCiphertext)
-      .run();
+    const owner = repoOwner.toLowerCase();
+    const name = repoName.toLowerCase();
+    const now = Date.now();
+    const normalized = prepareSecretsForWrite(secrets);
+    const guard = normalizeKey(guardKey);
+    const { [guard]: guardValue, ...companionValues } = normalized;
+    if (guardValue === undefined) {
+      throw new Error(`casWriteSecrets requires secrets to include guard key '${guard}'`);
+    }
 
-    return (result.meta?.changes ?? 0) > 0;
+    const existingKeys = await this.db
+      .prepare("SELECT key FROM repo_secrets WHERE repo_id = ?")
+      .bind(repoId)
+      .all<{ key: string }>();
+    const existingKeySet = new Set((existingKeys.results || []).map((r) => r.key));
+    assertScopeKeyCapacity("Repository", existingKeySet, Object.keys(normalized));
+
+    const { entries } = await encryptSecretEntries(
+      companionValues,
+      existingKeySet,
+      this.encryptionKey
+    );
+    const guardEncrypted = await encryptSecretValue(guardValue, this.encryptionKey);
+
+    const statements = [
+      ...entries.map((entry) =>
+        this.db
+          .prepare(
+            `INSERT INTO repo_secrets (repo_id, repo_owner, repo_name, key, encrypted_value, created_at, updated_at)
+             SELECT ?, ?, ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM repo_secrets WHERE repo_id = ? AND key = ? AND encrypted_value = ?)
+             ON CONFLICT(repo_id, key) DO UPDATE SET
+               repo_owner = excluded.repo_owner,
+               repo_name = excluded.repo_name,
+               encrypted_value = excluded.encrypted_value,
+               updated_at = excluded.updated_at`
+          )
+          .bind(
+            repoId,
+            owner,
+            name,
+            entry.key,
+            entry.encryptedValue,
+            now,
+            now,
+            repoId,
+            guard,
+            expectedCiphertext
+          )
+      ),
+      this.db
+        .prepare(
+          `UPDATE repo_secrets
+           SET encrypted_value = ?, updated_at = ?
+           WHERE repo_id = ? AND key = ? AND encrypted_value = ?`
+        )
+        .bind(guardEncrypted, now, repoId, guard, expectedCiphertext),
+    ];
+
+    const results = await this.db.batch(statements);
+    return (results[results.length - 1]?.meta?.changes ?? 0) > 0;
   }
 
   async deleteSecret(repoId: number, key: string): Promise<boolean> {

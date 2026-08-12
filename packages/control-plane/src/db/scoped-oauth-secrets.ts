@@ -72,64 +72,40 @@ export class ScopedOAuthSecretsStore {
   }
 
   /**
-   * Rotation write guarded by the ciphertext `guard.key` was read at: the guard
-   * row is swapped only if it is unchanged, then the remaining secrets are
-   * upserted. Returns false — writing nothing — when the guard row changed
-   * underneath us, i.e. a concurrent rotation persisted first. The guard row is
-   * written before the rest so a failure between the two writes can never leave
-   * an older guard value over a newer one; the worst case is a stale companion
-   * row (a cached access token), which ages out on its own.
+   * Atomic rotation write guarded by the ciphertext `guard.key` was read at:
+   * every statement in the underlying batch is conditioned on the guard row
+   * being unchanged, and the guard row itself is swapped last, so the whole
+   * bundle commits or nothing does. Returns false — having written nothing —
+   * when the guard did not match: a concurrent rotation persisted first, or
+   * the guard row was deleted (distinguish by re-reading the guard key).
    */
-  async casWrite(
+  casWrite(
     scope: OAuthSecretScope,
     guard: { key: string; expectedCiphertext: string },
     secrets: Record<string, string>
   ): Promise<boolean> {
-    const { [guard.key]: guardValue, ...companions } = secrets;
-    if (guardValue === undefined) {
-      throw new Error(`casWrite requires secrets to include guard key '${guard.key}'`);
-    }
-
-    const swapped = await this.casUpdateSecret(
-      scope,
-      guard.key,
-      guard.expectedCiphertext,
-      guardValue
-    );
-    if (!swapped) return false;
-
-    if (Object.keys(companions).length > 0) {
-      await this.write(scope, companions);
-    }
-    return true;
-  }
-
-  private casUpdateSecret(
-    scope: OAuthSecretScope,
-    key: string,
-    expectedCiphertext: string,
-    value: string
-  ): Promise<boolean> {
     switch (scope.kind) {
       case "environment":
-        return new EnvironmentSecretsStore(this.db, this.encryptionKey).casUpdateSecret(
+        return new EnvironmentSecretsStore(this.db, this.encryptionKey).casWriteSecrets(
           scope.environmentId,
-          key,
-          expectedCiphertext,
-          value
+          guard.key,
+          guard.expectedCiphertext,
+          secrets
         );
       case "repo":
-        return new RepoSecretsStore(this.db, this.encryptionKey).casUpdateSecret(
+        return new RepoSecretsStore(this.db, this.encryptionKey).casWriteSecrets(
           scope.repoId,
-          key,
-          expectedCiphertext,
-          value
+          scope.repoOwner,
+          scope.repoName,
+          guard.key,
+          guard.expectedCiphertext,
+          secrets
         );
       case "global":
-        return new GlobalSecretsStore(this.db, this.encryptionKey).casUpdateSecret(
-          key,
-          expectedCiphertext,
-          value
+        return new GlobalSecretsStore(this.db, this.encryptionKey).casWriteSecrets(
+          guard.key,
+          guard.expectedCiphertext,
+          secrets
         );
     }
   }

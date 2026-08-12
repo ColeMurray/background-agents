@@ -100,6 +100,22 @@ describe("ScopedOAuthSecretsStore", () => {
     expect(stored.ciphertext).toBe(row?.encrypted_value);
   });
 
+  it("returns false and writes nothing when the guard row was deleted", async () => {
+    const scope: OAuthSecretScope = { kind: "global" };
+    await store().write(scope, { [REFRESH_KEY]: "rt-old" });
+    const stale = await readGuard(scope);
+    await env.DB.prepare("DELETE FROM global_secrets WHERE key = ?").bind(REFRESH_KEY).run();
+
+    const swapped = await store().casWrite(
+      scope,
+      { key: REFRESH_KEY, expectedCiphertext: stale.ciphertext },
+      { [REFRESH_KEY]: "rt-new", OPENAI_OAUTH_ACCESS_TOKEN: "at-new" }
+    );
+
+    expect(swapped).toBe(false);
+    await expect(store().read(scope)).resolves.toEqual({});
+  });
+
   it("returns null for a missing secret", async () => {
     await expect(
       store().readSecretWithCiphertext({ kind: "global" }, REFRESH_KEY)

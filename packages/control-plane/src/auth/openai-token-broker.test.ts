@@ -15,7 +15,6 @@ const mockState = vi.hoisted(() => ({
   globalSecrets: {} as Record<string, string>,
   refreshImpl: vi.fn(),
   globalWrites: [] as Array<Record<string, string>>,
-  globalWriteImpl: vi.fn(),
   globalCasImpl: vi.fn(),
   globalReadImpl: vi.fn(),
 }));
@@ -66,22 +65,17 @@ vi.mock("../db/global-secrets", () => ({
       return value === undefined ? null : { value, ciphertext: cipherOf(value) };
     }
 
-    async casUpdateSecret(
-      key: string,
+    async casWriteSecrets(
+      guardKey: string,
       expectedCiphertext: string,
-      value: string
+      secrets: Record<string, string>
     ): Promise<boolean> {
-      await mockState.globalCasImpl(key, expectedCiphertext, value);
-      const current = mockState.globalSecrets[key];
+      await mockState.globalCasImpl(guardKey, expectedCiphertext, secrets);
+      const current = mockState.globalSecrets[guardKey];
       if (current === undefined || cipherOf(current) !== expectedCiphertext) return false;
-      mockState.globalSecrets = { ...mockState.globalSecrets, [key]: value };
-      return true;
-    }
-
-    async setSecrets(secrets: Record<string, string>): Promise<void> {
-      await mockState.globalWriteImpl(secrets);
-      mockState.globalWrites.push(secrets);
       mockState.globalSecrets = { ...mockState.globalSecrets, ...secrets };
+      mockState.globalWrites.push(secrets);
+      return true;
     }
   },
 }));
@@ -114,8 +108,6 @@ describe("OpenAITokenBroker", () => {
     mockState.globalSecrets = {};
     mockState.globalWrites = [];
     mockState.refreshImpl.mockReset();
-    mockState.globalWriteImpl.mockReset();
-    mockState.globalWriteImpl.mockResolvedValue(undefined);
     mockState.globalCasImpl.mockReset();
     mockState.globalCasImpl.mockResolvedValue(undefined);
     mockState.globalReadImpl.mockReset();
@@ -285,29 +277,32 @@ describe("OpenAITokenBroker", () => {
     expect(mockState.globalWrites).toHaveLength(0);
   });
 
-  it("keeps its fresh token when the companion write fails after the guard swap", async () => {
-    vi.useFakeTimers();
+  it("returns its fresh token and warns when the credential was removed mid-rotation", async () => {
     mockState.globalSecrets = {
       OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-old",
       OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
     };
-    mockState.refreshImpl.mockResolvedValue({
-      access_token: "global-access-new",
-      refresh_token: "global-refresh-new",
-      expires_in: 1800,
+    mockState.refreshImpl.mockImplementationOnce(async () => {
+      // The user disconnects OAuth between our read and our write.
+      mockState.globalSecrets = {};
+      return {
+        access_token: "fresh-access",
+        refresh_token: "fresh-refresh",
+        expires_in: 1800,
+      };
     });
-    mockState.globalWriteImpl.mockRejectedValue(new Error("companion write failed"));
+    const log = createLogger();
 
-    const promise = broker().refreshGlobal();
-    await vi.runAllTimersAsync();
+    const result = await new OpenAITokenBroker(TEST_DB, "enc-key", log).refreshGlobal();
 
-    // The guard swap already persisted the new refresh token; the retry
-    // conflicts against our own write and the fresh token is still returned.
-    await expect(promise).resolves.toMatchObject({ accessToken: "global-access-new" });
-    expect(mockState.globalSecrets).toMatchObject({
-      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-new",
-    });
-    expect(mockState.globalSecrets.OPENAI_OAUTH_ACCESS_TOKEN).toBeUndefined();
+    expect(result).toMatchObject({ accessToken: "fresh-access" });
+    // Deletion is respected: nothing is written back.
+    expect(mockState.globalSecrets).toEqual({});
+    expect(mockState.globalWrites).toHaveLength(0);
+    expect(log.warn).toHaveBeenCalledWith(
+      "OpenAI refresh token removed during rotation; using unsaved token",
+      { scope: "global" }
+    );
   });
 
   it("uses a concurrently rotated global access token after refresh gets 401", async () => {

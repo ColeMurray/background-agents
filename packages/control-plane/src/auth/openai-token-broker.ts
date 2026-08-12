@@ -161,11 +161,24 @@ export class OpenAITokenBroker {
         has_account_id: !!accountId,
       });
     } else {
-      // A concurrent rotation persisted first. Its refresh token stays
-      // authoritative; the one minted here is still valid to hand out once.
-      this.log.info("OpenAI token rotation lost the persistence race; using unsaved token", {
-        scope: tokenState.scope.kind,
-      });
+      // The guard did not match: either a concurrent rotation persisted first
+      // (its refresh token stays authoritative) or the credential was removed
+      // mid-rotation (deletion is respected). The token minted here is still
+      // valid to hand out once. A reread failure must not fail the successful
+      // refresh, so it falls back to the benign concurrent-rotation reading.
+      const guardStillPresent = await this.secrets
+        .readSecretWithCiphertext(tokenState.scope, OPENAI_REFRESH_TOKEN_KEY)
+        .then((stored) => stored !== null)
+        .catch(() => true);
+      if (guardStillPresent) {
+        this.log.info("OpenAI token rotation lost the persistence race; using unsaved token", {
+          scope: tokenState.scope.kind,
+        });
+      } else {
+        this.log.warn("OpenAI refresh token removed during rotation; using unsaved token", {
+          scope: tokenState.scope.kind,
+        });
+      }
     }
     return {
       accessToken: tokens.access_token,

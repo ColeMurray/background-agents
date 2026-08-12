@@ -83,6 +83,10 @@ describe("resolveSessionOAuthSecretScope", () => {
         ensureRepoId
       )
     ).resolves.toEqual({ kind: "repo", repoId: 123, repoOwner: "acme", repoName: "web" });
+    // The resolver must see the same canonical identity the scope reports.
+    expect(ensureRepoId).toHaveBeenCalledWith(
+      expect.objectContaining({ repo_owner: "acme", repo_name: "web" })
+    );
   });
 
   it("resolves a complete historical repository target", async () => {

@@ -123,23 +123,70 @@ export class EnvironmentSecretsStore {
     }
   }
 
-  async casUpdateSecret(
+  /**
+   * Atomically persist a rotated credential bundle. Every statement in the
+   * batch is conditioned on `guardKey` still holding `expectedCiphertext`, and
+   * the guard row itself is swapped last, so the whole bundle commits or
+   * nothing does. Returns false — having written nothing — when the guard did
+   * not match: a concurrent rotation won, or the guard row was deleted.
+   */
+  async casWriteSecrets(
     environmentId: string,
-    key: string,
+    guardKey: string,
     expectedCiphertext: string,
-    value: string
+    secrets: Record<string, string>
   ): Promise<boolean> {
-    const encryptedValue = await encryptSecretValue(value, this.encryptionKey);
-    const result = await this.db
-      .prepare(
-        `UPDATE environment_secrets
-         SET encrypted_value = ?, updated_at = ?
-         WHERE environment_id = ? AND key = ? AND encrypted_value = ?`
-      )
-      .bind(encryptedValue, Date.now(), environmentId, normalizeKey(key), expectedCiphertext)
-      .run();
+    const now = Date.now();
+    const normalized = prepareSecretsForWrite(secrets);
+    const guard = normalizeKey(guardKey);
+    const { [guard]: guardValue, ...companionValues } = normalized;
+    if (guardValue === undefined) {
+      throw new Error(`casWriteSecrets requires secrets to include guard key '${guard}'`);
+    }
 
-    return (result.meta?.changes ?? 0) > 0;
+    const existingKeySet = await this.existingKeys(environmentId);
+    assertScopeKeyCapacity("Environment", existingKeySet, Object.keys(normalized));
+
+    const { entries } = await encryptSecretEntries(
+      companionValues,
+      existingKeySet,
+      this.encryptionKey
+    );
+    const guardEncrypted = await encryptSecretValue(guardValue, this.encryptionKey);
+
+    const statements = [
+      ...entries.map((entry) =>
+        this.db
+          .prepare(
+            `INSERT INTO environment_secrets (environment_id, key, encrypted_value, created_at, updated_at)
+             SELECT ?, ?, ?, ?, ?
+             WHERE EXISTS (SELECT 1 FROM environment_secrets WHERE environment_id = ? AND key = ? AND encrypted_value = ?)
+             ON CONFLICT(environment_id, key) DO UPDATE SET
+               encrypted_value = excluded.encrypted_value,
+               updated_at = excluded.updated_at`
+          )
+          .bind(
+            environmentId,
+            entry.key,
+            entry.encryptedValue,
+            now,
+            now,
+            environmentId,
+            guard,
+            expectedCiphertext
+          )
+      ),
+      this.db
+        .prepare(
+          `UPDATE environment_secrets
+           SET encrypted_value = ?, updated_at = ?
+           WHERE environment_id = ? AND key = ? AND encrypted_value = ?`
+        )
+        .bind(guardEncrypted, now, environmentId, guard, expectedCiphertext),
+    ];
+
+    const results = await this.db.batch(statements);
+    return (results[results.length - 1]?.meta?.changes ?? 0) > 0;
   }
 
   async deleteSecret(environmentId: string, key: string): Promise<boolean> {
