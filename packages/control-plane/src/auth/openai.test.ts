@@ -32,6 +32,7 @@ describe("openai", () => {
       const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(url).toBe("https://auth.openai.com/oauth/token");
       expect(init.method).toBe("POST");
+      expect(init.signal).toBeInstanceOf(AbortSignal);
       expect(init.headers["Content-Type"]).toBe("application/x-www-form-urlencoded");
       expect(init.body).toContain("grant_type=refresh_token");
       expect(init.body).toContain("refresh_token=rt_old");

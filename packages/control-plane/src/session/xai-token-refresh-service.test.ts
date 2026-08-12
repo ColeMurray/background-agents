@@ -212,7 +212,7 @@ describe("XaiTokenRefreshService", () => {
     });
 
     const result = service().refresh(session());
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.runAllTimersAsync();
 
     await expect(result).resolves.toMatchObject({ ok: true, accessToken: "concurrent-access" });
     expect(state.refresh).toHaveBeenCalledTimes(1);
@@ -241,7 +241,81 @@ describe("XaiTokenRefreshService", () => {
     });
     expect(log.error).toHaveBeenCalledWith(
       "xAI token refreshed but failed to persist rotated tokens",
-      { source: "repo", error: "write failed" }
+      { scope: "repo", error: "write failed" }
     );
+  });
+
+  it("returns a bounded failure when the session scope cannot be read", async () => {
+    const refreshService = new XaiTokenRefreshService(
+      {} as SqlDatabase,
+      "key",
+      async () => {
+        throw new Error("repository lookup failed");
+      },
+      logger()
+    );
+
+    await expect(refreshService.refresh(session())).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "Failed to read token state",
+    });
+  });
+
+  it("returns a bounded failure when token refresh fails unexpectedly", async () => {
+    state.repo.set(123, { XAI_OAUTH_REFRESH_TOKEN: "refresh" });
+    state.refresh.mockRejectedValue(new Error("upstream connection failed"));
+
+    await expect(service().refresh(session())).resolves.toEqual({
+      ok: false,
+      status: 502,
+      error: "xAI token refresh failed",
+    });
+  });
+
+  it("retries with a refresh token written by a concurrent rotation", async () => {
+    vi.useFakeTimers();
+    state.repo.set(123, { XAI_OAUTH_REFRESH_TOKEN: "stale-refresh" });
+    state.refresh
+      .mockImplementationOnce(async () => {
+        state.repo.set(123, { XAI_OAUTH_REFRESH_TOKEN: "rotated-refresh" });
+        throw new XaiTokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockResolvedValueOnce({ access_token: "fresh-access", expires_in: 1800 });
+
+    const result = service().refresh(session());
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual({
+      ok: true,
+      accessToken: "fresh-access",
+      expiresIn: 1800,
+    });
+    expect(state.refresh).toHaveBeenNthCalledWith(2, "rotated-refresh");
+  });
+
+  it("returns unauthorized when the post-401 scope reread fails", async () => {
+    vi.useFakeTimers();
+    state.repo.set(123, { XAI_OAUTH_REFRESH_TOKEN: "stale-refresh" });
+    state.refresh.mockRejectedValue(new XaiTokenRefreshError("unauthorized", 401, "unauthorized"));
+    const ensureRepoId = vi
+      .fn<() => Promise<number>>()
+      .mockResolvedValueOnce(123)
+      .mockRejectedValueOnce(new Error("repository reread failed"));
+    const refreshService = new XaiTokenRefreshService(
+      {} as SqlDatabase,
+      "key",
+      ensureRepoId,
+      logger()
+    );
+
+    const result = refreshService.refresh(session());
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      status: 401,
+      error: "xAI token refresh failed: unauthorized",
+    });
   });
 });
