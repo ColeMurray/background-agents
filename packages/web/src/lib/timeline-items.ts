@@ -176,24 +176,14 @@ export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimeli
       (candidate, candidateIndex) =>
         candidateIndex > index &&
         candidate.type === "single" &&
-        candidate.event.type === "execution_complete" &&
-        candidate.event.messageId === userMessage.messageId
+        (candidate.event.type === "user_message" || candidate.event.type === "execution_complete")
     );
-    if (completionIndex < 0) {
-      result.push(item);
-      continue;
-    }
-
-    const crossesTurnBoundary = items
-      .slice(index + 1, completionIndex)
-      .some(
-        (candidate) =>
-          candidate.type === "single" &&
-          (candidate.event.type === "user_message" ||
-            (candidate.event.type === "execution_complete" &&
-              candidate.event.messageId !== userMessage.messageId))
-      );
-    if (crossesTurnBoundary) {
+    const completion = items[completionIndex];
+    if (
+      completion?.type !== "single" ||
+      completion.event.type !== "execution_complete" ||
+      completion.event.messageId !== userMessage.messageId
+    ) {
       result.push(item);
       continue;
     }
@@ -213,8 +203,6 @@ export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimeli
     const activityEndIndex = finalOutputIndex >= 0 ? finalOutputIndex : completionIndex;
     const activity = items.slice(index + 1, activityEndIndex);
     result.push(item);
-    const completion = items[completionIndex];
-    if (completion.type !== "single" || completion.event.type !== "execution_complete") continue;
     result.push({
       type: "work_group",
       messageId: userMessage.messageId,
