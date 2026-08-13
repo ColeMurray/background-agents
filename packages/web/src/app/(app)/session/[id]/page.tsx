@@ -268,41 +268,79 @@ export default function SessionPage() {
 
   const sessionWorkspace = (
     <div className="flex h-full min-h-0 flex-1 flex-col overflow-clip">
-      <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
-        <Panel
-          defaultSize={showTerminal ? "70%" : "100%"}
-          minSize="30%"
-          style={{ minHeight: 0, overflow: "clip" }}
-        >
-          <SessionTimeline
-            events={events}
-            sessionId={sessionId}
-            currentParticipantId={currentParticipantId}
-            participantProfiles={profiles}
-            isProcessing={isProcessing}
-            promptQueue={promptQueue}
-            loadingHistory={loadingHistory}
-            showSkeleton={false}
-            onLoadOlder={loadOlderEvents}
-            onOpenMedia={setSelectedMediaArtifactId}
-            terminalMessageReadObservationEnabled={
-              !loadingHistory &&
-              !isDetailsOpen &&
-              selectedMediaArtifactId === null &&
-              resolvedDiff === null
-            }
-            onMarkMessageRead={attemptMarkVisibleMessageRead}
-          />
-        </Panel>
-        {showTerminal && (
-          <>
-            <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
-            <Panel defaultSize="30%" minSize="15%" maxSize="70%">
-              <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
-            </Panel>
-          </>
-        )}
-      </PanelGroup>
+      <div className="min-h-0 min-w-0 flex-1 overflow-clip">
+        <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
+          <Panel
+            defaultSize={showTerminal ? "70%" : "100%"}
+            minSize="30%"
+            style={{ minHeight: 0, overflow: "clip" }}
+          >
+            <SessionTimeline
+              events={events}
+              sessionId={sessionId}
+              currentParticipantId={currentParticipantId}
+              participantProfiles={profiles}
+              isProcessing={isProcessing}
+              promptQueue={promptQueue}
+              loadingHistory={loadingHistory}
+              showSkeleton={false}
+              onLoadOlder={loadOlderEvents}
+              onOpenMedia={setSelectedMediaArtifactId}
+              terminalMessageReadObservationEnabled={
+                !loadingHistory &&
+                !isDetailsOpen &&
+                selectedMediaArtifactId === null &&
+                resolvedDiff === null
+              }
+              onMarkMessageRead={attemptMarkVisibleMessageRead}
+            />
+          </Panel>
+          {showTerminal && (
+            <>
+              <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
+              <Panel defaultSize="30%" minSize="15%" maxSize="70%">
+                <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
+              </Panel>
+            </>
+          )}
+        </PanelGroup>
+      </div>
+      <QueuedPromptStack promptQueue={promptQueue} />
+      <SessionPromptComposer
+        session={{
+          id: sessionId,
+          status: sessionState?.status ?? "created",
+          artifacts,
+          primaryRepo,
+          onArchive: handleArchive,
+          onUnarchive: handleUnarchive,
+        }}
+        prompt={{
+          value: prompt,
+          isProcessing: ready && isProcessing,
+          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
+          submitError,
+          inputRef,
+          onSubmit: handleSubmit,
+          onChange: handleInputChange,
+          onKeyDown: handleKeyDown,
+          onStopExecution: stopExecution,
+        }}
+        attachments={{
+          items: sessionAttachments.attachments,
+          error: sessionAttachments.attachmentError,
+          isUploading: sessionAttachments.isUploading,
+          onAdd: sessionAttachments.addFiles,
+          onRemove: sessionAttachments.removeAttachment,
+        }}
+        model={{
+          selectedModel,
+          reasoningEffort,
+          items: modelItems,
+          onModelChange: handleModelChange,
+          onReasoningEffortChange: setReasoningEffort,
+        }}
+      />
     </div>
   );
 
@@ -452,43 +490,6 @@ export default function SessionPage() {
           if (!open) {
             setSelectedMediaArtifactId(null);
           }
-        }}
-      />
-
-      <QueuedPromptStack promptQueue={promptQueue} />
-      <SessionPromptComposer
-        session={{
-          id: sessionId,
-          status: sessionState?.status ?? "created",
-          artifacts,
-          primaryRepo,
-          onArchive: handleArchive,
-          onUnarchive: handleUnarchive,
-        }}
-        prompt={{
-          value: prompt,
-          isProcessing: ready && isProcessing,
-          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
-          submitError,
-          inputRef,
-          onSubmit: handleSubmit,
-          onChange: handleInputChange,
-          onKeyDown: handleKeyDown,
-          onStopExecution: stopExecution,
-        }}
-        attachments={{
-          items: sessionAttachments.attachments,
-          error: sessionAttachments.attachmentError,
-          isUploading: sessionAttachments.isUploading,
-          onAdd: sessionAttachments.addFiles,
-          onRemove: sessionAttachments.removeAttachment,
-        }}
-        model={{
-          selectedModel,
-          reasoningEffort,
-          items: modelItems,
-          onModelChange: handleModelChange,
-          onReasoningEffortChange: setReasoningEffort,
         }}
       />
     </div>
