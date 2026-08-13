@@ -33,6 +33,8 @@ export interface Env {
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
   ANTHROPIC_API_KEY: string;
+  CLASSIFICATION_MODEL?: string; // Optional override, e.g. "gpt-5.4-mini"; defaults to Anthropic claude-haiku-4-5
+  OPENAI_API_KEY?: string; // Only required when CLASSIFICATION_MODEL selects an OpenAI model
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }

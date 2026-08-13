@@ -17,6 +17,11 @@ const log = createLogger("classifier");
 const CLASSIFY_REPO_TOOL_NAME = "classify_repository";
 export const CLASSIFIER_REQUEST_TIMEOUT_MS = 10_000;
 
+/** Bound on every classification request (Anthropic or OpenAI). */
+export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 15_000;
+
+const DEFAULT_CLASSIFICATION_MODEL = "claude-haiku-4-5";
+
 export const classifyToolInputSchema = z.object({
   repoId: z.string().nullable(),
   confidence: z.enum(["high", "medium", "low"]),
@@ -35,6 +40,67 @@ export const anthropicMessagesResponseSchema = z.object({
     })
   ),
 });
+
+export const openaiChatCompletionResponseSchema = z.object({
+  choices: z.array(
+    z.object({
+      message: z.object({
+        content: z.string().nullable(),
+        refusal: z.string().nullable().optional(),
+      }),
+    })
+  ),
+});
+
+type ClassificationProvider = "anthropic" | "openai";
+
+/**
+ * Resolve which provider serves a classification model id, stripping any
+ * `anthropic/`/`openai/` prefix so callers send the bare id to the provider.
+ */
+function resolveClassificationProvider(modelId: string): {
+  provider: ClassificationProvider;
+  model: string;
+} {
+  if (modelId.startsWith("anthropic/")) {
+    return { provider: "anthropic", model: modelId.slice("anthropic/".length) };
+  }
+  if (modelId.startsWith("openai/")) {
+    return { provider: "openai", model: modelId.slice("openai/".length) };
+  }
+  if (modelId.startsWith("claude-")) return { provider: "anthropic", model: modelId };
+  if (modelId.startsWith("gpt-")) return { provider: "openai", model: modelId };
+  throw new Error(`Unrecognized classification model id: ${modelId}`);
+}
+
+/**
+ * JSON schema for the classification result, shared by the Anthropic tool
+ * definition and the OpenAI strict structured-output schema.
+ */
+const classifyRepoJsonSchema = {
+  type: "object",
+  properties: {
+    repoId: {
+      type: ["string", "null"],
+      description: "Repository ID (owner/name) if confident, otherwise null.",
+    },
+    confidence: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+    reasoning: {
+      type: "string",
+      description: "Brief explanation.",
+    },
+    alternatives: {
+      type: "array",
+      items: { type: "string" },
+      description: "Alternative repo IDs when not confident.",
+    },
+  },
+  required: ["repoId", "confidence", "reasoning", "alternatives"],
+  additionalProperties: false,
+} as const;
 
 /**
  * Build classification prompt from Linear issue context.
@@ -86,13 +152,17 @@ Consider:
 5. Project name associations
 6. Label associations
 
-Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool.`;
+Return your decision with the fields repoId, confidence, reasoning, and alternatives.`;
 }
 
 /**
  * Call Anthropic API directly (no SDK — Workers can't use CJS imports).
  */
-async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyToolInput> {
+async function callAnthropic(
+  apiKey: string,
+  prompt: string,
+  model: string
+): Promise<ClassifyToolInput> {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -101,7 +171,7 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5",
+      model,
       max_tokens: 500,
       temperature: 0,
       tools: [
@@ -160,6 +230,65 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
 }
 
 /**
+ * Call the OpenAI Chat Completions API with strict JSON-schema structured
+ * output, matching the same {@link classifyToolInputSchema} shape the
+ * Anthropic tool call produces.
+ */
+async function callOpenAI(
+  apiKey: string,
+  prompt: string,
+  model: string
+): Promise<ClassifyToolInput> {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      max_completion_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: CLASSIFY_REPO_TOOL_NAME,
+          strict: true,
+          schema: classifyRepoJsonSchema,
+        },
+      },
+    }),
+    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const errText = (await response.text()).slice(0, 500);
+    throw new Error(`OpenAI API error ${response.status}: ${errText}`);
+  }
+
+  const data = openaiChatCompletionResponseSchema.safeParse(await response.json());
+  if (!data.success) throw new Error("Malformed OpenAI response");
+
+  const message = data.data.choices[0]?.message;
+  if (!message) throw new Error("No choices in OpenAI response");
+  if (message.refusal) throw new Error(`OpenAI refused to classify: ${message.refusal}`);
+  if (!message.content) throw new Error("Empty OpenAI response content");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message.content);
+  } catch {
+    throw new Error("Failed to parse OpenAI response content as JSON");
+  }
+
+  const input = classifyToolInputSchema.safeParse(parsed);
+  if (!input.success) throw new Error("Malformed OpenAI tool input");
+
+  return input.data;
+}
+
+/**
  * Classify which repository a Linear issue belongs to.
  */
 export async function classifyRepo(
@@ -206,7 +335,18 @@ export async function classifyRepo(
       traceId
     );
 
-    const result = await callAnthropic(env.ANTHROPIC_API_KEY, prompt);
+    const modelId = env.CLASSIFICATION_MODEL || DEFAULT_CLASSIFICATION_MODEL;
+    const { provider, model } = resolveClassificationProvider(modelId);
+
+    let result: ClassifyToolInput;
+    if (provider === "anthropic") {
+      result = await callAnthropic(env.ANTHROPIC_API_KEY, prompt, model);
+    } else {
+      if (!env.OPENAI_API_KEY) {
+        throw new Error(`Classification model "${modelId}" requires OPENAI_API_KEY to be set`);
+      }
+      result = await callOpenAI(env.OPENAI_API_KEY, prompt, model);
+    }
 
     let matchedRepo: RepoConfig | null = null;
     if (result.repoId) {
