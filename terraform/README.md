@@ -261,6 +261,8 @@ LINEAR_WEBHOOK_SECRET
 
 # API Keys
 ANTHROPIC_API_KEY
+CLASSIFICATION_OPENAI_API_KEY # Required when classification_model is an OpenAI model
+CLASSIFICATION_ANTHROPIC_API_KEY # Optional; falls back to ANTHROPIC_API_KEY
 
 # Security Secrets
 TOKEN_ENCRYPTION_KEY

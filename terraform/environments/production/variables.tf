@@ -303,6 +303,59 @@ variable "anthropic_api_key" {
   }
 }
 
+variable "classification_model" {
+  description = "Model backing the Slack and Linear bots' target classifiers. An \"anthropic/\"-prefixed or bare \"claude-\" id is served by classification_anthropic_api_key; an \"openai/\"-prefixed or bare \"gpt-\" id is served by classification_openai_api_key."
+  type        = string
+  default     = "claude-haiku-4-5"
+
+  validation {
+    condition = (
+      startswith(var.classification_model, "anthropic/") ||
+      startswith(var.classification_model, "claude-") ||
+      startswith(var.classification_model, "openai/") ||
+      startswith(var.classification_model, "gpt-")
+    )
+    error_message = "classification_model must be an Anthropic id (\"anthropic/...\" or \"claude-...\") or an OpenAI id (\"openai/...\" or \"gpt-...\")."
+  }
+}
+
+variable "classification_anthropic_api_key" {
+  description = "Anthropic API key used specifically by the Slack and Linear bot classifiers. Defaults to anthropic_api_key when blank, so existing deployments need no new value."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      startswith(var.classification_model, "openai/") ||
+      startswith(var.classification_model, "gpt-") ||
+      trimspace(var.classification_anthropic_api_key) != "" ||
+      trimspace(var.anthropic_api_key) != ""
+    )
+    error_message = "An Anthropic classification_model needs a key: set classification_anthropic_api_key, or rely on anthropic_api_key."
+  }
+}
+
+variable "classification_openai_api_key" {
+  description = "OpenAI API key used specifically by the Slack and Linear bot classifiers. Required when classification_model is an OpenAI model and a classifier bot is enabled."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  # Fail closed once a deployed classifier is pointed at OpenAI: CI renders an
+  # unset secret as an empty string, which would otherwise deploy a
+  # credential-less classifier that rejects every message.
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      !(startswith(var.classification_model, "openai/") || startswith(var.classification_model, "gpt-")) ||
+      trimspace(var.classification_openai_api_key) != ""
+    )
+    error_message = "classification_openai_api_key must be non-blank when the Slack or Linear bot is enabled and classification_model is an OpenAI model."
+  }
+}
+
 # =============================================================================
 # Security Secrets
 # =============================================================================
