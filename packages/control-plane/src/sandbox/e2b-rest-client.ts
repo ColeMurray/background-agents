@@ -153,7 +153,7 @@ export class E2BRestClient {
             metadata: params.metadata,
             timeout: params.timeoutSeconds,
             secure: params.secure ?? false,
-        allow_internet_access: params.allowInternetAccess,
+            allow_internet_access: params.allowInternetAccess,
             autoPause: params.autoPause ?? false,
             autoResume: { enabled: params.autoResume ?? false },
           },
@@ -261,9 +261,9 @@ export class E2BRestClient {
    * Connect answers with the create-style `Sandbox` shape — `sandboxID`/`templateID`,
    * no `state`, which only `GET /sandboxes/{id}` returns. Callers re-read state
    * through getSandbox when they need it. The body is returned rather than
-   * discarded because a secure sandbox's envd access token is reissued on
-   * connect: a cold boot invalidates the create-time token, so the restore path
-   * needs the fresh one to write the per-session env.
+   * discarded because it carries the secure sandbox's current envd access token:
+   * the restore path connects a sandbox it did not create, so this is where it
+   * gets the token to write the per-session env with.
    */
   async connectSandbox(id: string, timeoutSeconds: number): Promise<E2BSandboxCreated> {
     return this.requestJson(

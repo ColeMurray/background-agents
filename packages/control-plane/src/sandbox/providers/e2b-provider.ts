@@ -169,7 +169,7 @@ export class E2BSandboxProvider implements SandboxProvider {
       });
 
       // Drop the captured process memory, then cold-boot the template launcher.
-      // connect reissues the envd token the cold boot invalidated.
+      // connect reports the sandbox's current envd token, which the env write below uses.
       await this.client.pauseSandbox(sandbox.sandboxID, { memory: false });
       const connected = await this.client.connectSandbox(sandbox.sandboxID, timeoutSeconds);
       await this.client.updateSandboxNetwork(sandbox.sandboxID, { allowInternetAccess: true });
