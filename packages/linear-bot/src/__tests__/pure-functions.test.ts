@@ -298,6 +298,10 @@ describe("isValidPayload", () => {
     expect(isValidPayload(validPayload)).toBe(true);
   });
 
+  it("accepts an optional error message on failed payloads", () => {
+    expect(isValidPayload({ ...validPayload, success: false, error: "failed" })).toBe(true);
+  });
+
   it("rejects null", () => {
     expect(isValidPayload(null)).toBe(false);
   });
@@ -309,6 +313,11 @@ describe("isValidPayload", () => {
 
   it("rejects missing context.issueId", () => {
     const bad = { ...validPayload, context: { ...validPayload.context, issueId: undefined } };
+    expect(isValidPayload(bad)).toBe(false);
+  });
+
+  it("rejects partial callback context", () => {
+    const bad = { ...validPayload, context: { source: "linear", issueId: "issue-1" } };
     expect(isValidPayload(bad)).toBe(false);
   });
 

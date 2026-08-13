@@ -144,6 +144,21 @@ describe("isValidToolCallPayload", () => {
     expect(isValidToolCallPayload(valid)).toBe(true);
   });
 
+  it("accepts agent callback context with required OAuth fields", () => {
+    expect(
+      isValidToolCallPayload({
+        ...valid,
+        context: {
+          ...valid.context,
+          organizationId: "org-1",
+          appUserId: "app-user-1",
+          agentSessionId: "agent-session-1",
+          transitionIssueOnStart: true,
+        },
+      })
+    ).toBe(true);
+  });
+
   it("rejects null", () => {
     expect(isValidToolCallPayload(null)).toBe(false);
   });
@@ -159,6 +174,11 @@ describe("isValidToolCallPayload", () => {
 
   it("rejects missing tool", () => {
     const { tool: _, ...rest } = valid;
+    expect(isValidToolCallPayload(rest)).toBe(false);
+  });
+
+  it("rejects missing args", () => {
+    const { args: _, ...rest } = valid;
     expect(isValidToolCallPayload(rest)).toBe(false);
   });
 

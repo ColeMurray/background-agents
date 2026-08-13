@@ -134,6 +134,26 @@ describe("getUserPreferences", () => {
     expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toEqual(prefs);
   });
 
+  it("returns parsed preferences with optional fields", async () => {
+    const prefs = {
+      userId: "user-1",
+      model: "claude-opus-4-5",
+      reasoningEffort: "high",
+      branch: "feature/linear",
+      updatedAt: 123,
+    };
+    const { kv } = createFakeKV({ "user_prefs:user-1": JSON.stringify(prefs) });
+    expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toEqual(prefs);
+  });
+
+  it("returns null for malformed stored preferences", async () => {
+    const { kv } = createFakeKV({
+      "user_prefs:user-1": JSON.stringify({ userId: "user-1", updatedAt: "now" }),
+    });
+
+    expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toBeNull();
+  });
+
   it("returns null when KV throws", async () => {
     expect(await getUserPreferences(makeLinearBotEnv(errorKv), "user-1")).toBeNull();
   });

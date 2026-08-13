@@ -4,7 +4,13 @@
  */
 
 import { Hono } from "hono";
-import type { Env, CompletionCallback, ToolCallCallback } from "./types";
+import {
+  completionCallbackSchema,
+  toolCallCallbackSchema,
+  type Env,
+  type CompletionCallback,
+  type ToolCallCallback,
+} from "./types";
 import {
   getLinearClient,
   emitAgentActivity,
@@ -31,18 +37,7 @@ export function formatCompletionComment(
 }
 
 export function isValidPayload(payload: unknown): payload is CompletionCallback {
-  if (!payload || typeof payload !== "object") return false;
-  const p = payload as Record<string, unknown>;
-  return (
-    typeof p.sessionId === "string" &&
-    typeof p.messageId === "string" &&
-    typeof p.success === "boolean" &&
-    typeof p.timestamp === "number" &&
-    typeof p.signature === "string" &&
-    p.context !== null &&
-    typeof p.context === "object" &&
-    typeof (p.context as Record<string, unknown>).issueId === "string"
-  );
+  return completionCallbackSchema.safeParse(payload).success;
 }
 
 export const callbacksRouter = new Hono<{ Bindings: Env }>();
@@ -115,16 +110,7 @@ export function formatToolAction(
 }
 
 export function isValidToolCallPayload(payload: unknown): payload is ToolCallCallback {
-  if (!payload || typeof payload !== "object") return false;
-  const p = payload as Record<string, unknown>;
-  return (
-    typeof p.sessionId === "string" &&
-    typeof p.tool === "string" &&
-    typeof p.timestamp === "number" &&
-    typeof p.signature === "string" &&
-    p.context !== null &&
-    typeof p.context === "object"
-  );
+  return toolCallCallbackSchema.safeParse(payload).success;
 }
 
 callbacksRouter.post("/tool_call", async (c) => {
