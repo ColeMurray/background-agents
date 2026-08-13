@@ -16,7 +16,7 @@ export type SessionTimelineItem =
   | {
       type: "work_group";
       messageId: string;
-      durationSeconds: number;
+      durationMs: number;
       activity: TimelineItem[];
       id: string;
     };
@@ -156,26 +156,6 @@ export function buildTimelineItems(events: SandboxEvent[]): TimelineItem[] {
   return items;
 }
 
-function isVisibleActivity(item: TimelineItem): boolean {
-  if (item.type !== "single") return true;
-
-  const event = item.event;
-  switch (event.type) {
-    case "token":
-      return Boolean(event.content);
-    case "tool_result":
-      return Boolean(event.error);
-    case "git_sync":
-    case "artifact":
-    case "error":
-    case "warning":
-    case "context_compacted":
-      return true;
-    default:
-      return false;
-  }
-}
-
 /**
  * Collapses completed turn activity while leaving in-flight and partial-history
  * events in their existing flat presentation.
@@ -204,6 +184,20 @@ export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimeli
       continue;
     }
 
+    const crossesTurnBoundary = items
+      .slice(index + 1, completionIndex)
+      .some(
+        (candidate) =>
+          candidate.type === "single" &&
+          (candidate.event.type === "user_message" ||
+            (candidate.event.type === "execution_complete" &&
+              candidate.event.messageId !== userMessage.messageId))
+      );
+    if (crossesTurnBoundary) {
+      result.push(item);
+      continue;
+    }
+
     let finalOutputIndex = -1;
     for (let candidateIndex = index + 1; candidateIndex < completionIndex; candidateIndex += 1) {
       const candidate = items[candidateIndex];
@@ -217,14 +211,14 @@ export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimeli
     }
 
     const activityEndIndex = finalOutputIndex >= 0 ? finalOutputIndex : completionIndex;
-    const activity = items.slice(index + 1, activityEndIndex).filter(isVisibleActivity);
+    const activity = items.slice(index + 1, activityEndIndex);
     result.push(item);
     const completion = items[completionIndex];
     if (completion.type !== "single" || completion.event.type !== "execution_complete") continue;
     result.push({
       type: "work_group",
       messageId: userMessage.messageId,
-      durationSeconds: Math.max(0, completion.event.timestamp - userMessage.timestamp),
+      durationMs: Math.max(0, completion.event.timestamp - userMessage.timestamp) * 1000,
       activity,
       id: `work:${userMessage.messageId}`,
     });

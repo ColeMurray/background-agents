@@ -234,7 +234,7 @@ export function SessionTimeline({
     item.type === "work_group" ? (
       <SessionWorkGroup
         key={item.id}
-        durationSeconds={item.durationSeconds}
+        durationMs={item.durationMs}
         isExpanded={expandedWorkGroups.has(item.messageId)}
         onToggle={() => toggleWorkGroup(item.messageId)}
       >
