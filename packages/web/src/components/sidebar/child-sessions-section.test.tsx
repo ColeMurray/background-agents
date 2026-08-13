@@ -21,9 +21,8 @@ vi.mock("next/link", () => ({
 }));
 
 describe("ChildSessionsSection", () => {
-  it("keeps sub-tasks collapsed until opened", async () => {
+  it("shows child sessions expanded by default", async () => {
     const sessionId = "parent-session";
-    const user = userEvent.setup();
     render(
       <SWRConfig
         value={{
@@ -53,18 +52,13 @@ describe("ChildSessionsSection", () => {
       </SWRConfig>
     );
 
-    const toggle = await screen.findByRole("button", { name: "Sub-tasks" });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(toggle).toHaveAttribute("aria-controls");
-    expect(screen.queryByRole("link", { name: /Child session/ })).not.toBeInTheDocument();
-
-    await user.click(toggle);
-
+    const toggle = await screen.findByRole("button", { name: "Child sessions" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-controls");
     expect(screen.getByRole("link", { name: /Child session/ })).toBeInTheDocument();
   });
 
-  it("collapses sub-tasks when navigating to another session", async () => {
+  it("shows child sessions expanded when navigating to another session", async () => {
     const user = userEvent.setup();
     const swrConfig = {
       fallback: Object.fromEntries(
@@ -96,9 +90,9 @@ describe("ChildSessionsSection", () => {
         <ChildSessionsSection sessionId="parent-a" />
       </SWRConfig>
     );
-    const toggle = await screen.findByRole("button", { name: "Sub-tasks" });
+    const toggle = await screen.findByRole("button", { name: "Child sessions" });
     await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
 
     rerender(
       <SWRConfig value={swrConfig}>
@@ -106,16 +100,15 @@ describe("ChildSessionsSection", () => {
       </SWRConfig>
     );
 
-    expect(await screen.findByRole("button", { name: "Sub-tasks" })).toHaveAttribute(
+    expect(await screen.findByRole("button", { name: "Child sessions" })).toHaveAttribute(
       "aria-expanded",
-      "false"
+      "true"
     );
-    expect(screen.queryByRole("link", { name: /Child parent-b/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Child parent-b/ })).toBeInTheDocument();
   });
 
   it("renders a child's pull request state icon", async () => {
     const sessionId = "parent-session";
-    const user = userEvent.setup();
     render(
       <SWRConfig
         value={{
@@ -151,8 +144,6 @@ describe("ChildSessionsSection", () => {
         <ChildSessionsSection sessionId={sessionId} />
       </SWRConfig>
     );
-
-    await user.click(await screen.findByRole("button", { name: "Sub-tasks" }));
 
     const childLink = (await screen.findByText("Child session")).closest("a");
     expect(childLink).toBeInTheDocument();
