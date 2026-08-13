@@ -24,12 +24,6 @@ interface ToolCallItemProps {
   showTime?: boolean;
 }
 
-const WRAPPING_OUTPUT_TOOLS = new Set(["grep", "glob", "read", "search", "webfetch", "websearch"]);
-
-function shouldWrapOutput(tool: string | undefined): boolean {
-  return WRAPPING_OUTPUT_TOOLS.has(tool?.toLowerCase() ?? "");
-}
-
 function ToolIcon({ name }: { name: string | null }) {
   if (!name) return null;
 
@@ -60,7 +54,6 @@ function ToolIcon({ name }: { name: string | null }) {
 function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
   const formatted = formatToolCall(event);
   const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
-  const wrapsOutput = shouldWrapOutput(event.tool);
   const { args, output } = formatted.getDetails();
   const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;
   const nonPatchArgs =
@@ -70,33 +63,27 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
   const hasNonPatchArgs = !!nonPatchArgs && Object.keys(nonPatchArgs).length > 0;
 
   return (
-    <div className="p-3 bg-card border border-border-muted text-xs overflow-hidden">
+    <div className="min-w-0 max-w-full overflow-hidden border border-border-muted bg-card p-3 text-xs">
       {hasNonPatchArgs && (
-        <div className="mb-2">
+        <div className="mb-2 min-w-0 max-w-full">
           <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
-          <pre className="max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">
+          <pre className="w-full max-w-full overflow-x-auto whitespace-pre text-foreground">
             {JSON.stringify(nonPatchArgs, null, 2)}
           </pre>
         </div>
       )}
       {patchText && (
-        <div className="mb-2">
+        <div className="mb-2 min-w-0 max-w-full">
           <div className="text-muted-foreground mb-1 font-medium">Patch:</div>
-          <pre className="max-h-64 max-w-full overflow-x-auto whitespace-pre text-foreground">
+          <pre className="max-h-64 w-full max-w-full overflow-x-auto whitespace-pre text-foreground">
             {patchText}
           </pre>
         </div>
       )}
       {output && (
-        <div>
+        <div className="min-w-0 max-w-full">
           <div className="text-muted-foreground mb-1 font-medium">Output:</div>
-          <pre
-            className={`max-h-48 max-w-full text-foreground ${
-              wrapsOutput
-                ? "overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
-                : "overflow-x-auto whitespace-pre"
-            }`}
-          >
+          <pre className="max-h-48 w-full max-w-full overflow-x-auto whitespace-pre text-foreground">
             {output}
           </pre>
         </div>
@@ -124,7 +111,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
   const time = formatSessionEventTime(event.timestamp);
 
   return (
-    <div className="py-0.5">
+    <div className="min-w-0 max-w-full py-0.5">
       <button
         type="button"
         onClick={onToggle}
@@ -142,7 +129,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
       </button>
 
       {isExpanded && (
-        <div className="mt-2 ml-0 sm:ml-5">
+        <div className="mt-2 min-w-0 w-full max-w-full sm:ml-5 sm:w-[calc(100%_-_1.25rem)]">
           <ToolCallDetails event={event} />
         </div>
       )}

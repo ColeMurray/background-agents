@@ -27,37 +27,26 @@ describe("ToolCallItem", () => {
     expect(button.querySelector(".truncate")).toBeNull();
   });
 
-  it("wraps complete long Grep arguments and output", () => {
-    const pattern = `needle-${"x".repeat(160)}`;
-    const path = `/workspace/${"deep-directory/".repeat(12)}source.ts`;
-    const output = `${path}:42:${"matching-source-text".repeat(12)}`;
-    const args = { pattern, path };
+  it("keeps long TodoWrite arguments in a contained horizontal scroller", () => {
+    const content = `implement-${"unbroken-task-description".repeat(20)}`;
+    const args = {
+      todos: [{ content, status: "in_progress", priority: "high" }],
+    };
     const event: Extract<SandboxEvent, { type: "tool_call" }> = {
       type: "tool_call",
       sandboxId: "sandbox-1",
       messageId: "message-call-2",
       callId: "call-2",
-      tool: "Grep",
+      tool: "TodoWrite",
       args,
-      output,
       timestamp: 1,
     };
 
     render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
 
     const argumentsPre = screen.getByText("Arguments:").nextElementSibling;
-    const outputPre = screen.getByText("Output:").nextElementSibling;
-    expect(argumentsPre).toHaveTextContent(pattern);
     expect(argumentsPre?.textContent).toBe(JSON.stringify(args, null, 2));
-    expect(argumentsPre).toHaveClass("whitespace-pre-wrap", "[overflow-wrap:anywhere]");
-    expect(argumentsPre).not.toHaveClass("overflow-x-auto", "whitespace-pre");
-    expect(outputPre?.textContent).toBe(output);
-    expect(outputPre).toHaveClass(
-      "overflow-y-auto",
-      "whitespace-pre-wrap",
-      "[overflow-wrap:anywhere]"
-    );
-    expect(outputPre).not.toHaveClass("overflow-x-auto", "whitespace-pre");
+    expect(argumentsPre).toHaveClass("w-full", "max-w-full", "overflow-x-auto", "whitespace-pre");
   });
 
   it("keeps Apply Patch content preformatted and horizontally scrollable", () => {
