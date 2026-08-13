@@ -43,7 +43,7 @@ vi.mock("./environments", async (importOriginal) => ({
   getEnvironmentById: vi.fn(),
 }));
 
-import { RepoClassifier } from "./index";
+import { CLASSIFICATION_REQUEST_TIMEOUT_MS, RepoClassifier } from "./index";
 
 const TEST_REPOS: RepoConfig[] = [
   {
@@ -139,7 +139,8 @@ describe("RepoClassifier", () => {
           name: "classify_target",
         }),
         tools: [expect.objectContaining({ name: "classify_target" })],
-      })
+      }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
     const prompt = mockMessagesCreate.mock.calls[0][0].messages[0].content as string;
     expect(prompt).toContain("## Available Repositories\n- acme/prod\n- acme/web");
@@ -669,6 +670,121 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("web app issue");
 
       expect(result.reasoning).toBe("Mentions &lt;!channel&gt; &amp; the web app.");
+    });
+  });
+
+  describe("provider selection", () => {
+    function openAiEnv(overrides: Partial<Env> = {}): Env {
+      return {
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "gpt-5.4-mini",
+        OPENAI_API_KEY: "test-openai-key",
+        ...overrides,
+      } as Env;
+    }
+
+    function openAiFetchResponse(content: Record<string, unknown>, status = 200): Response {
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }),
+        { status }
+      );
+    }
+
+    it("sends the OpenAI chat-completions contract for a gpt-* model", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        openAiFetchResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "Mentions prod.",
+          alternatives: [],
+        })
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const classifier = new RepoClassifier(openAiEnv());
+      const result = await classifier.classify("please fix prod slack alerts");
+
+      expect(classifiedRepoFullName(result)).toBe("acme/prod");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("https://api.openai.com/v1/chat/completions");
+      expect(init.headers).toMatchObject({
+        Authorization: "Bearer test-openai-key",
+        "Content-Type": "application/json",
+      });
+
+      const body = JSON.parse(init.body as string);
+      // The bare model id — no "openai/" prefix reaches the wire.
+      expect(body.model).toBe("gpt-5.4-mini");
+      expect(body.temperature).toBe(0);
+      expect(body.max_completion_tokens).toBe(2000);
+      // gpt-5.x rejects `max_tokens` outright ("Unsupported parameter").
+      expect(body).not.toHaveProperty("max_tokens");
+
+      const jsonSchema = body.response_format.json_schema;
+      expect(jsonSchema.name).toBe("classify_target");
+      expect(jsonSchema.strict).toBe(true);
+      expect(jsonSchema.schema.additionalProperties).toBe(false);
+      expect(jsonSchema.schema.required).toEqual([
+        "targetId",
+        "confidence",
+        "reasoning",
+        "alternatives",
+      ]);
+      expect(jsonSchema.schema.properties.targetId.type).toEqual(["string", "null"]);
+    });
+
+    it("degrades to the picker on a non-2xx OpenAI response", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response("rate limited", { status: 429 }))
+      );
+
+      const classifier = new RepoClassifier(openAiEnv());
+      const result = await classifier.classify("please fix prod slack alerts");
+
+      expect(result.target).toBeNull();
+      expect(result.confidence).toBe("low");
+      expect(result.needsClarification).toBe(true);
+      expect(result.reasoning).toContain("structured model output");
+    });
+
+    it("bounds the Anthropic classification request with a timeout and degrades to the picker when it fires", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      mockMessagesCreate.mockRejectedValue(
+        Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" })
+      );
+
+      const classifier = new RepoClassifier(TEST_ENV);
+      const result = await classifier.classify("please fix prod slack alerts");
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(result.reasoning).toContain("structured model output");
+      expect(timeoutSpy).toHaveBeenCalledWith(CLASSIFICATION_REQUEST_TIMEOUT_MS);
+      const [, options] = mockMessagesCreate.mock.calls[0] as [unknown, { signal?: unknown }];
+      // Identity, not just shape: attaching some other signal would pass an
+      // instanceof check while leaving the request effectively unbounded.
+      expect(options?.signal).toBe(timeoutSpy.mock.results[0]?.value);
+    });
+
+    it("degrades to the picker for an unrecognized model prefix without calling either provider", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const classifier = new RepoClassifier({
+        ...TEST_ENV,
+        CLASSIFICATION_MODEL: "mistral-large-latest",
+      } as Env);
+      const result = await classifier.classify("please fix prod slack alerts");
+
+      expect(result.target).toBeNull();
+      expect(result.needsClarification).toBe(true);
+      expect(result.reasoning).toContain("structured model output");
+      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });
