@@ -5,6 +5,7 @@ import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import type { ToolCallEvent } from "@/lib/timeline-items";
 import { BoxIcon, ChevronRightIcon } from "@/components/ui/icons";
+import { TimelineRowContent } from "./timeline-row-content";
 
 function stringArg(event: ToolCallEvent, key: string): string | null {
   const value = event.args?.[key];
@@ -84,14 +85,9 @@ export function TaskActivityItem({
             className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse flex-shrink-0"
           />
         )}
-        <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
-          <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
-            {formatted.toolName} {formatted.summary}
-          </span>
-          <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
-            {formatSessionEventTime(event.timestamp)}
-          </span>
-        </span>
+        <TimelineRowContent time={formatSessionEventTime(event.timestamp)}>
+          {formatted.toolName} {formatted.summary}
+        </TimelineRowContent>
       </button>
       {isRunning && (
         <span role="status" className="sr-only">

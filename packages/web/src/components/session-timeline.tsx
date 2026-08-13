@@ -13,6 +13,7 @@ import {
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
 import { TaskActivityItem } from "@/components/task-activity-item";
+import { TimelineRowContent } from "@/components/timeline-row-content";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import {
@@ -399,14 +400,7 @@ function StatusRow({
   return (
     <div className={`flex min-w-0 items-start gap-2 text-sm ${textClassName}`}>
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotClassName}`} />
-      <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
-        <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
-          {children}
-        </span>
-        <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
-          {time}
-        </span>
-      </span>
+      <TimelineRowContent time={time}>{children}</TimelineRowContent>
     </div>
   );
 }
@@ -520,14 +514,7 @@ function ToolResultEvent({ event }: EventRendererProps) {
   return (
     <div className="flex min-w-0 items-start gap-2 py-1 text-sm text-destructive">
       <ErrorIcon className="h-4 w-4 shrink-0" />
-      <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
-        <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
-          {event.error}
-        </span>
-        <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
-          {formatEventTime(event)}
-        </span>
-      </span>
+      <TimelineRowContent time={formatEventTime(event)}>{event.error}</TimelineRowContent>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import { formatSessionEventTime } from "@/lib/time";
 import { getSafeExternalUrl } from "@/lib/urls";
 import { APP_NAME } from "@/lib/site-config";
 import { ChevronRightIcon, ErrorIcon, LinkIcon, SlackIcon } from "@/components/ui/icons";
+import { TimelineRowContent } from "./timeline-row-content";
 
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 
@@ -115,16 +116,9 @@ export function SlackNotifyEvent({
         ) : (
           <SlackIcon className="w-3.5 h-3.5 shrink-0 text-secondary-foreground" />
         )}
-        <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
-          <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
-            slack-notify {summaryLine}
-          </span>
-          {showTime && (
-            <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
-              {time}
-            </span>
-          )}
-        </span>
+        <TimelineRowContent time={showTime ? time : undefined}>
+          slack-notify {summaryLine}
+        </TimelineRowContent>
       </button>
 
       {isExpanded && (

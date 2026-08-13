@@ -36,7 +36,7 @@ function getStringArg(
 ): string | undefined {
   for (const key of keys) {
     const value = args?.[key];
-    if (typeof value === "string") return value;
+    if (typeof value === "string" && value.trim()) return value;
   }
   return undefined;
 }

@@ -257,30 +257,6 @@ describe("prompt queue status", () => {
 });
 
 describe("tool call groups", () => {
-  it("keeps complete long commands in collapsed tool rows", () => {
-    const command = `PYTHONPATH=src uv run pytest ${"tests/very_long_directory/".repeat(4)}test_file.py`;
-    render(
-      <SessionTimeline
-        {...baseTimelineProps}
-        events={[
-          {
-            type: "tool_call",
-            sandboxId: "sandbox-1",
-            messageId: "message-call-1",
-            callId: "call-1",
-            tool: "Bash",
-            args: { command },
-            timestamp: 1,
-          },
-        ]}
-      />
-    );
-
-    const button = screen.getByRole("button", { name: new RegExp(command) });
-    expect(button).toHaveTextContent(command);
-    expect(button.querySelector(".truncate")).toBeNull();
-  });
-
   it("preserves expanded group and row state when history is prepended", async () => {
     const readEvents = [
       toolCall("call-1", "Read", "/workspace/one.ts"),

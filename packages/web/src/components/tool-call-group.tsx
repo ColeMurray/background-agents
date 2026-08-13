@@ -6,6 +6,7 @@ import { formatSessionEventTime } from "@/lib/time";
 import { formatToolGroup } from "@/lib/tool-formatters";
 import { toolCallKey } from "@/lib/timeline-items";
 import { ToolCallItem } from "./tool-call-item";
+import { TimelineRowContent } from "./timeline-row-content";
 import {
   ChevronRightIcon,
   FileIcon,
@@ -73,15 +74,10 @@ export const ToolCallGroup = memo(
             }`}
           />
           <ToolIcon toolName={formatted.toolName} />
-          <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
-            <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
-              <span className="font-medium text-foreground">{formatted.toolName}</span>{" "}
-              <span className="text-muted-foreground">{formatted.summary}</span>
-            </span>
-            <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
-              {time}
-            </span>
-          </span>
+          <TimelineRowContent time={time}>
+            <span className="font-medium text-foreground">{formatted.toolName}</span>{" "}
+            <span className="text-muted-foreground">{formatted.summary}</span>
+          </TimelineRowContent>
         </button>
 
         {isExpanded && (

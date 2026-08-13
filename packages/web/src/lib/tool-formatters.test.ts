@@ -54,4 +54,12 @@ describe("formatToolCall summaries", () => {
     expect(formatToolCall(toolCall("task", { prompt })).summary).toBe("task");
     expect(formatToolCall(toolCall("custom-tool", args)).summary).toBe("2 arguments");
   });
+
+  it("uses fallback summaries for empty and whitespace-only display arguments", () => {
+    expect(formatToolCall(toolCall("task", { description: "   " })).summary).toBe("task");
+    expect(formatToolCall(toolCall("webfetch", { url: "" })).summary).toBe("url");
+    expect(formatToolCall(toolCall("get-child-status", { childId: "\t" })).summary).toBe(
+      "List Children"
+    );
+  });
 });
