@@ -42,6 +42,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -291,6 +292,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-123",
         promptingAuth: { authType: "oauth", token: "token" },
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: undefined,
       },
       log
     );
@@ -337,6 +339,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-123",
         promptingAuth: null,
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: undefined,
       },
       log
     );
@@ -374,6 +377,7 @@ describe("createPullRequestHandler", () => {
           body: "desc",
           baseBranch: "release",
           headBranch: "feature/pr",
+          draft: true,
         }),
       })
     );
@@ -395,6 +399,7 @@ describe("createPullRequestHandler", () => {
         promptingUserId: "user-1",
         promptingAuth: null,
         sessionUrl: "https://app.example.com/session/public-session-1",
+        draft: true,
       },
       log
     );

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MediaArtifactInfo } from "@open-inspect/shared";
+import type { MediaArtifactInfo } from "@open-inspect/shared/types/artifacts";
 import { deliverMediaArtifacts, SLACK_MEDIA_MAX_FILES_PER_COMPLETION } from "./media-upload";
 import type { Env } from "../types";
 

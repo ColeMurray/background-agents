@@ -26,7 +26,7 @@ from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _PromptState,
 )
-from tests.conftest import MockResponse, wire_opencode_transport
+from tests.conftest import MockResponse, oc_message_id, wire_opencode_transport
 
 MOCK_HTTP_TIMEOUT_SECONDS = 30.0
 PROMPT_TIMEOUT_TEST_BUDGET_SECONDS = 0.8
@@ -114,10 +114,10 @@ def make_prompt_state(
         opencode_message_id=opencode_message_id,
         start_time=0.0,
     )
-    state.user_message_ids.add(opencode_message_id)
     if cumulative_text is not None:
         state.cumulative_text = cumulative_text
-    state.compaction_occurred = compaction_occurred
+    if compaction_occurred:
+        state.attribution.mark_compacted()
     return state
 
 
@@ -1064,6 +1064,79 @@ class TestFetchFinalMessageState:
         assert len(events) == 1
         assert events[0]["content"] == "Assistant response"
 
+    @pytest.mark.asyncio
+    async def test_compaction_fallback_skips_prior_prompt_messages(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        """After compaction the API's full-history response must not replay
+        prior turns' text: their parts were never streamed this prompt, so
+        every one of them reads as "longer than sent" and the last re-emitted
+        part would overwrite this prompt's final output. Only messages created
+        after this prompt's user message are eligible."""
+        bridge = bridge_with_mock_client
+
+        prompt_ts_ms = 1_754_000_000_000
+        prompt_user_id = oc_message_id(prompt_ts_ms, 2, "p")
+        prior_assistant_id = oc_message_id(prompt_ts_ms - 60_000, 1, "a")
+        prior_user_id = oc_message_id(prompt_ts_ms - 61_000, 1, "u")
+        compaction_user_id = oc_message_id(prompt_ts_ms + 900, 1, "w")
+        summary_id = oc_message_id(prompt_ts_ms + 1_000, 1, "s")
+        continue_user_id = oc_message_id(prompt_ts_ms + 1_500, 1, "v")
+        continuation_id = oc_message_id(prompt_ts_ms + 2_000, 1, "c")
+
+        all_messages = [
+            {
+                "info": {
+                    "id": prior_assistant_id,
+                    "role": "assistant",
+                    "parentID": prior_user_id,
+                },
+                "parts": [{"id": "part-prior", "type": "text", "text": "Prior turn final report"}],
+            },
+            {
+                "info": {
+                    "id": summary_id,
+                    "role": "assistant",
+                    "parentID": compaction_user_id,
+                    "summary": True,
+                },
+                "parts": [{"id": "part-summary", "type": "text", "text": "Internal summary"}],
+            },
+            {
+                "info": {
+                    "id": continuation_id,
+                    "role": "assistant",
+                    "parentID": continue_user_id,
+                },
+                "parts": [
+                    {
+                        "id": "part-continue",
+                        "type": "text",
+                        "text": "Final answer after compaction",
+                    }
+                ],
+            },
+        ]
+
+        bridge.http_client.get = AsyncMock(return_value=MockResponse(200, all_messages))
+
+        # The continuation's text was partially streamed before idle.
+        cumulative_text = {"part-continue": "Final answer"}
+
+        events = []
+        state = make_prompt_state(
+            "cp-msg-1",
+            prompt_user_id,
+            cumulative_text=cumulative_text,
+            compaction_occurred=True,
+        )
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+            events.append(event)
+
+        assert len(events) == 1
+        assert events[0]["content"] == "Final answer after compaction"
+        assert events[0]["messageId"] == "cp-msg-1"
+
 
 class TestExtractErrorMessage:
     """Tests for _extract_error_message static method."""
@@ -1750,7 +1823,7 @@ class TestSubtaskStreaming:
     async def test_child_session_tool_events_streamed(
         self, bridge: AgentBridge, opencode_message_id: str
     ):
-        """Child session tool events should be forwarded with isSubtask=True."""
+        """Child tools emitted before Task completion should retain Task ownership."""
         http_client = bridge.http_client
 
         http_client.sse_events = [
@@ -1826,6 +1899,27 @@ class TestSubtaskStreaming:
                     }
                 },
             ),
+            # Foreground Tasks expose their child metadata on the completed tool state,
+            # after the child activity has already streamed.
+            create_sse_event(
+                "message.part.updated",
+                {
+                    "part": {
+                        "type": "tool",
+                        "id": "parent-part-1",
+                        "sessionID": "oc-session-123",
+                        "messageID": "oc-msg-1",
+                        "tool": "task",
+                        "callID": "task-call-1",
+                        "state": {
+                            "status": "completed",
+                            "input": {"prompt": "inspect files"},
+                            "output": '<task id="child-1" state="completed">...</task>',
+                            "metadata": {"sessionId": "child-1"},
+                        },
+                    }
+                },
+            ),
             create_sse_event("session.idle", {"sessionID": "oc-session-123"}),
         ]
 
@@ -1834,12 +1928,17 @@ class TestSubtaskStreaming:
             events.append(event)
 
         tool_events = [e for e in events if e["type"] == "tool_call"]
-        assert len(tool_events) == 2
-        assert tool_events[0]["status"] == "running"
-        assert tool_events[0]["isSubtask"] is True
-        assert tool_events[0]["messageId"] == "cp-msg-1"
-        assert tool_events[1]["status"] == "completed"
+        assert len(tool_events) == 3
+        assert tool_events[0]["tool"] == "task"
+        assert tool_events[0]["childSessionId"] == "child-1"
+        assert tool_events[1]["status"] == "running"
         assert tool_events[1]["isSubtask"] is True
+        assert tool_events[1]["childSessionId"] == "child-1"
+        assert tool_events[1]["taskCallId"] == "task-call-1"
+        assert tool_events[1]["messageId"] == "cp-msg-1"
+        assert tool_events[2]["status"] == "completed"
+        assert tool_events[2]["isSubtask"] is True
+        assert tool_events[2]["taskCallId"] == "task-call-1"
 
     @pytest.mark.asyncio
     async def test_child_text_events_not_forwarded(
@@ -2079,6 +2178,7 @@ class TestSubtaskStreaming:
         assert len(error_events) == 1
         assert error_events[0]["error"] == "Sub-task failed"
         assert error_events[0]["isSubtask"] is True
+        assert error_events[0]["childSessionId"] == "child-1"
 
         token_events = [e for e in events if e["type"] == "token"]
         assert len(token_events) == 1
@@ -2176,7 +2276,7 @@ class TestSubtaskStreaming:
                 },
             ),
             # NO session.created — child was resumed via task_id
-            # Parent task tool part with metadata.sessionId
+            # Parent task tool part with state.metadata.sessionId
             create_sse_event(
                 "message.part.updated",
                 {
@@ -2187,11 +2287,11 @@ class TestSubtaskStreaming:
                         "messageID": "oc-msg-1",
                         "tool": "task",
                         "callID": "task-call-1",
-                        "metadata": {"sessionId": "child-1"},
                         "state": {
                             "status": "running",
                             "input": {"prompt": "do something"},
                             "output": "",
+                            "metadata": {"sessionId": "child-1"},
                         },
                     }
                 },
@@ -2238,9 +2338,12 @@ class TestSubtaskStreaming:
         child_tools = [e for e in tool_events if e.get("isSubtask")]
         assert len(parent_tools) == 1
         assert parent_tools[0]["tool"] == "task"
+        assert parent_tools[0]["childSessionId"] == "child-1"
         assert len(child_tools) == 1
         assert child_tools[0]["tool"] == "Bash"
         assert child_tools[0]["isSubtask"] is True
+        assert child_tools[0]["childSessionId"] == "child-1"
+        assert child_tools[0]["taskCallId"] == "task-call-1"
 
     @pytest.mark.asyncio
     async def test_parent_child_callid_collision(
@@ -2629,6 +2732,15 @@ class TestCompactionHandling:
         assert [event["content"] for event in events if event["type"] == "token"] == [
             "Before compaction",
             "After compaction",
+        ]
+        assert [event for event in events if event["type"] == "context_compacted"] == [
+            {"type": "context_compacted", "messageId": "cp-msg-1"}
+        ]
+        assert [event["type"] for event in events] == [
+            "token",
+            "context_compacted",
+            "token",
+            "execution_complete",
         ]
         assert [event for event in events if event["type"] == "error"] == []
         assert events[-1] == {

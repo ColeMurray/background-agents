@@ -6,6 +6,8 @@
 export const SessionInternalPaths = {
   init: "/internal/init",
   state: "/internal/state",
+  snapshot: "/internal/snapshot",
+  sandboxAccess: "/internal/sandbox-access",
   prompt: "/internal/prompt",
   stop: "/internal/stop",
   sandboxEvent: "/internal/sandbox-event",
@@ -29,7 +31,9 @@ export const SessionInternalPaths = {
   scmCredentials: "/internal/scm-credentials",
   tunnelUrls: "/internal/tunnel-urls",
   spawnContext: "/internal/spawn-context",
+  activePromptAuthor: "/internal/active-prompt-author",
   childSummary: "/internal/child-summary",
+  parentPrompt: "/internal/parent-prompt",
   updateTitle: "/internal/update-title",
   cancel: "/internal/cancel",
   childSessionUpdate: "/internal/child-session-update",

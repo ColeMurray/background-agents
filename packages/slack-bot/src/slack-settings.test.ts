@@ -43,6 +43,20 @@ describe("getSlackSettings", () => {
     expect(config.sessionInstructions).toBeUndefined();
   });
 
+  it("returns an empty config when settings are null", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ settings: null })));
+
+    await expect(getSlackSettings(makeEnv(fetch))).resolves.toEqual({});
+  });
+
+  it("returns an empty config on a malformed settings response", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ settings: { defaults: { model: 123 } } })));
+
+    await expect(getSlackSettings(makeEnv(fetch))).resolves.toEqual({});
+  });
+
   it("returns no instructions when whitespace-only", async () => {
     const fetch = vi.fn().mockResolvedValue(settingsResponse({ sessionInstructions: "   \n" }));
 

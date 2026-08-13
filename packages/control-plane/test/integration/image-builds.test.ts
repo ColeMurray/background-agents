@@ -164,7 +164,7 @@ describe("Image builds", () => {
         "im-new",
         REPOSITORY_SHAS,
         RUNTIME_VERSION,
-        12_500
+        12.5
       );
 
       expect(result.type).toBe("marked_ready");
@@ -211,7 +211,7 @@ describe("Image builds", () => {
         "im-late",
         REPOSITORY_SHAS,
         RUNTIME_VERSION,
-        10_000
+        10
       );
 
       expect(result.type).toBe("superseded_by_newer_ready");
@@ -843,13 +843,20 @@ describe("Image builds", () => {
     });
 
     it.each([
+      ["missing provider_session_id", { provider_session_id: undefined }],
       ["missing runtime_version", { runtime_version: undefined }],
       ["unparseable runtime_version", { runtime_version: "53-no-prefix" }],
       ["missing repository_shas", { repository_shas: undefined }],
+      ["empty repository_shas", { repository_shas: [] }],
       [
         "repository_shas entry without baseSha",
         { repository_shas: [{ repoOwner: "a", repoName: "b" }] },
       ],
+      ["missing build_duration_seconds", { build_duration_seconds: undefined }],
+      ["negative build_duration_seconds", { build_duration_seconds: -1 }],
+      // Finite but beyond MAX_SAFE_INTEGER seconds — would lose integer
+      // precision in the persisted row and hash canonicalization.
+      ["overflowing build_duration_seconds", { build_duration_seconds: 1e308 }],
     ])("fails registration closed on %s", async (_label, overrides) => {
       const environmentId = await seedEnvironment();
       await registerBuild(environmentId, "cb-invalid");
@@ -869,6 +876,40 @@ describe("Image builds", () => {
 
       expect(response.status).toBe(400);
       expect((await getRow("cb-invalid"))?.status).toBe("building");
+    });
+
+    it("rejects a malformed callback body before authentication", async () => {
+      // No token at all: field presence is checked first (400, not 401) —
+      // required-ness lives at the route boundary and leaks nothing.
+      const response = await SELF.fetch(`${BASE}/image-builds/build-complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          build_id: "cb-preauth",
+          repository_shas: REPOSITORY_SHAS,
+          runtime_version: RUNTIME_VERSION,
+          build_duration_seconds: 1,
+        }),
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("rejects a build-failed callback without provider_session_id", async () => {
+      const environmentId = await seedEnvironment();
+      await registerBuild(environmentId, "cb-failed-no-session");
+
+      const response = await SELF.fetch(`${BASE}/image-builds/build-failed`, {
+        method: "POST",
+        headers: tokenHeaders(MODAL_BUILD_TOKEN),
+        body: JSON.stringify({
+          build_id: "cb-failed-no-session",
+          error: "setup.failed: boom",
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect((await getRow("cb-failed-no-session"))?.status).toBe("building");
     });
 
     it("POST /image-builds/build-failed marks the build failed", async () => {

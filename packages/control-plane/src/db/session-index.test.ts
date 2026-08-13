@@ -43,6 +43,7 @@ const QUERY_PATTERNS = {
   SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
   DELETE_SESSION_REPOS: /^DELETE FROM session_repositories WHERE session_id = \?$/,
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
+  SELECT_EXISTS: /^SELECT 1 AS ok FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
@@ -87,6 +88,11 @@ class FakeD1Database {
     if (QUERY_PATTERNS.SELECT_BY_ID.test(normalized)) {
       const id = args[0] as string;
       return this.rows.get(id) ?? null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_EXISTS.test(normalized)) {
+      const id = args[0] as string;
+      return this.rows.has(id) ? { ok: 1 } : null;
     }
 
     if (QUERY_PATTERNS.SELECT_COUNT.test(normalized)) {
@@ -579,6 +585,15 @@ describe("SessionIndexStore", () => {
     });
   });
 
+  describe("exists", () => {
+    it("returns whether the session exists without loading it", async () => {
+      await store.create(makeSession());
+
+      await expect(store.exists("test-id")).resolves.toBe(true);
+      await expect(store.exists("nonexistent")).resolves.toBe(false);
+    });
+  });
+
   describe("list", () => {
     it("returns sessions sorted by updatedAt descending", async () => {
       await store.create(makeSession({ id: "old", updatedAt: 1000 }));
@@ -892,18 +907,6 @@ describe("SessionIndexStore", () => {
 
       it("returns an empty array when no descendants exist", async () => {
         await expect(store.listActiveDescendantIds("no-children")).resolves.toEqual([]);
-      });
-    });
-
-    describe("countActiveChildren", () => {
-      it("excludes completed/failed/archived/cancelled", async () => {
-        const count = await store.countActiveChildren(parentId);
-        expect(count).toBe(1); // child-1 is "created", child-2 is "completed"
-      });
-
-      it("returns 0 when no children exist", async () => {
-        const count = await store.countActiveChildren("no-children");
-        expect(count).toBe(0);
       });
     });
 

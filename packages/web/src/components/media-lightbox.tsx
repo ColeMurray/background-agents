@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Artifact } from "@/types/session";
 import { buildSessionMediaUrl } from "@/lib/media";
 import {
@@ -23,13 +23,6 @@ export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: Media
   const isVideo = artifact?.type === "video";
   const caption = artifact?.metadata?.caption || (isVideo ? "Video recording" : "Screenshot");
   const mediaUrl = artifact ? buildSessionMediaUrl(sessionId, artifact.id) : null;
-  const [isLoaded, setIsLoaded] = useState(false);
-  const [hasError, setHasError] = useState(false);
-
-  useEffect(() => {
-    setIsLoaded(false);
-    setHasError(false);
-  }, [mediaUrl, open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -46,52 +39,77 @@ export function MediaLightbox({ sessionId, artifact, open, onOpenChange }: Media
             (isVideo ? "Session video recording" : "Session screenshot")}
         </DialogDescription>
 
-        <div className="min-h-0 overflow-auto bg-muted">
-          {!artifact ? (
-            <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
-              No media selected
-            </div>
-          ) : (
-            <>
-              {!hasError && mediaUrl && isVideo ? (
-                <video
-                  src={mediaUrl}
-                  aria-label={`${caption} video`}
-                  className={isLoaded ? "mx-auto h-auto max-h-full max-w-full" : "invisible"}
-                  controls
-                  preload="metadata"
-                  onLoadedMetadata={() => setIsLoaded(true)}
-                  onError={() => {
-                    setHasError(true);
-                    setIsLoaded(false);
-                  }}
-                />
-              ) : !hasError && mediaUrl ? (
-                <img
-                  src={mediaUrl}
-                  alt={caption}
-                  className={isLoaded ? "mx-auto h-auto max-w-full object-contain" : "invisible"}
-                  onLoad={() => setIsLoaded(true)}
-                  onError={() => {
-                    setHasError(true);
-                    setIsLoaded(false);
-                  }}
-                />
-              ) : null}
-              {isVideo && !isLoaded && (
-                <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
-                  {hasError ? "Preview unavailable" : "Loading video..."}
-                </div>
-              )}
-              {!isVideo && !isLoaded && (
-                <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
-                  {hasError ? "Preview unavailable" : "Loading screenshot..."}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+        <MediaPreview
+          key={`${open}:${mediaUrl ?? "empty"}`}
+          artifact={artifact}
+          caption={caption}
+          isVideo={isVideo}
+          mediaUrl={mediaUrl}
+        />
       </DialogContent>
     </Dialog>
+  );
+}
+
+function MediaPreview({
+  artifact,
+  caption,
+  isVideo,
+  mediaUrl,
+}: {
+  artifact: Artifact | null;
+  caption: string;
+  isVideo: boolean;
+  mediaUrl: string | null;
+}) {
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
+
+  return (
+    <div className="min-h-0 overflow-auto bg-muted">
+      {!artifact ? (
+        <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+          No media selected
+        </div>
+      ) : (
+        <>
+          {!hasError && mediaUrl && isVideo ? (
+            <video
+              src={mediaUrl}
+              aria-label={`${caption} video`}
+              className={isLoaded ? "mx-auto h-auto max-h-full max-w-full" : "invisible"}
+              controls
+              preload="metadata"
+              onLoadedMetadata={() => setIsLoaded(true)}
+              onError={() => {
+                setHasError(true);
+                setIsLoaded(false);
+              }}
+            />
+          ) : !hasError && mediaUrl ? (
+            <img
+              src={mediaUrl}
+              alt={caption}
+              className={isLoaded ? "mx-auto h-auto max-w-full object-contain" : "invisible"}
+              onLoad={() => setIsLoaded(true)}
+              onError={() => {
+                setHasError(true);
+                setIsLoaded(false);
+              }}
+            />
+          ) : null}
+          {isVideo && !isLoaded && (
+            <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+              {hasError ? "Preview unavailable" : "Loading video..."}
+            </div>
+          )}
+          {!isVideo && !isLoaded && (
+            <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+              {hasError ? "Preview unavailable" : "Loading screenshot..."}
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }

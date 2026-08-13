@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
-import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import {
   excludeSupersededBuilds,
-  type ImageBuildEnabledRepoView,
-  type ImageBuildUnitView,
+  imageBuildsEnabledReposResponseSchema,
+  imageBuildsEnabledResponseSchema,
+  imageBuildsStatusResponseSchema,
 } from "@/lib/image-builds";
 import { supportsRepoImages } from "@/lib/sandbox-provider";
 
@@ -46,18 +46,24 @@ export async function GET() {
       enabledReposResponse.json(),
       statusResponse.json(),
     ]);
+    const parsedEnabled = imageBuildsEnabledResponseSchema.safeParse(enabledData);
+    const parsedEnabledRepos = imageBuildsEnabledReposResponseSchema.safeParse(enabledReposData);
+    const parsedStatus = imageBuildsStatusResponseSchema.safeParse(statusData);
+    if (!parsedEnabled.success || !parsedEnabledRepos.success || !parsedStatus.success) {
+      return NextResponse.json({ error: "Failed to fetch image builds" }, { status: 502 });
+    }
 
     // Serve the enabled scope identities and current fingerprints that the
     // status fold keys on.
-    const units = ((enabledData.units ?? []) as ImageBuildUnitView[]).map((unit) => ({
+    const units = parsedEnabled.data.units.map((unit) => ({
       scopeKind: unit.scopeKind,
       scopeId: unit.scopeId,
       repositoriesFingerprint: unit.repositoriesFingerprint,
     }));
     // Persisted repo flags, unlike units, never drop a scope on a transient
     // resolution failure — the settings toggles read these.
-    const enabledRepos = (enabledReposData.repos ?? []) as ImageBuildEnabledRepoView[];
-    const images = excludeSupersededBuilds((statusData.images ?? []) as ImageBuildRecordView[]);
+    const enabledRepos = parsedEnabledRepos.data.repos;
+    const images = excludeSupersededBuilds(parsedStatus.data.images);
 
     return NextResponse.json({ units, enabledRepos, images });
   } catch (error) {

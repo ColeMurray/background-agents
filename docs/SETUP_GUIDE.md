@@ -91,8 +91,6 @@ SERVICE_AUTH_SECRET=your_web_service_secret
 # inlined into the client bundle at build time — restart `npm run dev`
 # after changing them.
 NEXT_PUBLIC_APP_NAME=Open-Inspect
-# Short label for the sidebar header.
-NEXT_PUBLIC_APP_SHORT_NAME=Inspect
 NEXT_PUBLIC_APP_ICON_URL=
 ```
 

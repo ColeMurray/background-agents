@@ -142,6 +142,11 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       "libcairo2",
       "ffmpeg",
       "procps",
+      "xvfb",
+      "fluxbox",
+      "x11vnc",
+      "websockify",
+      "novnc",
     ])
     .pipInstall(["uv"])
     .runCommands(
@@ -240,7 +245,7 @@ function buildImage(options: Pick<BuildOptions, "repoRoot" | "builderMemoryMb">)
       OPENINSPECT_BIN_INSTALL_DIR: USER_BIN,
       NO_PROXY: LOCAL_NO_PROXY,
       no_proxy: LOCAL_NO_PROXY,
-      SANDBOX_VERSION: "v56-opencode-1-18-11",
+      SANDBOX_VERSION: "v57-vnc-opencode-1-18-11",
     })
     .workdir(`${SANDBOX_HOME}/workspace`)
     .builderMemory(options.builderMemoryMb);

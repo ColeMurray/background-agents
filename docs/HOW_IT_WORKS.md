@@ -399,6 +399,31 @@ This lets you send follow-up thoughts while the agent works. Prompts are process
 
 You can also stop the current execution if the agent is going down the wrong path.
 
+### Parent-to-Child Follow-Ups
+
+An agent that created a child with `spawn-child` can continue that same child session with
+`send-child-prompt`. The follow-up enters the child's normal durable queue:
+
+```text
+Child prompt 1 (processing) ──▶ Parent follow-up (queued) ──▶ Child continues
+```
+
+The follow-up does not interrupt active work. Completed and failed children can resume, restoring
+their compatible sandbox snapshot when available. Cancelled children remain terminal, and archived
+children must be explicitly unarchived before they can accept prompts.
+
+The parent token is never exchanged for the child's sandbox token. The control plane authenticates
+the parent session, verifies the direct parent-child relationship in D1, verifies it again in the
+child Durable Object, and attributes the queued prompt to the child owner with source `agent`.
+
+`send-child-prompt` returns after the prompt is durably queued. The parent calls `get-child-status`
+when it needs the follow-up result. An earlier completed response is labeled as such while newer
+child work is still running.
+
+The runtime tool is installed when a sandbox starts from a runtime image that includes it. A parent
+restored from a snapshot created before this capability shipped keeps the older captured runtime and
+will not see `send-child-prompt` until it starts in a fresh sandbox built from the newer runtime.
+
 ---
 
 ## The Agent

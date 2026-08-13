@@ -14,7 +14,7 @@ OPENCODE_VERSION = "1.18.11"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v4-opencode-1-18-11"
+SANDBOX_VERSION = "daytona-v5-vnc-opencode-1-18-11"
 
 
 def build_base_image(repo_root: Path) -> Image:
@@ -31,7 +31,8 @@ def build_base_image(repo_root: Path) -> Image:
             "openssh-client jq unzip libnss3 libnspr4 libatk1.0-0 "
             "libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 "
             "libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 "
-            "libpango-1.0-0 libcairo2 ffmpeg",
+            "libpango-1.0-0 libcairo2 ffmpeg xvfb fluxbox x11vnc "
+            "websockify novnc",
             "curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg "
             "| dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg",
             "echo 'deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] "

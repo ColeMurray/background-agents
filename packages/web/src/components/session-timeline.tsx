@@ -12,94 +12,23 @@ import {
 } from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
+import { TaskActivityItem } from "@/components/task-activity-item";
+import { TimelineRowContent } from "@/components/timeline-row-content";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
+import {
+  buildTimelineItems,
+  toolCallKey,
+  type FlatTimelineItem,
+  type ToolCallEvent,
+} from "@/lib/timeline-items";
 import type { Artifact, SandboxEvent } from "@/types/session";
-import type { SessionParticipantProfile } from "@open-inspect/shared";
+import type { SessionParticipantProfile } from "@open-inspect/shared/types/sessions";
 import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
 import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
 import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
-
-type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-
-export type EventGroup =
-  | { type: "tool_group"; events: ToolCallEvent[]; id: string }
-  | { type: "single"; event: SandboxEvent; id: string };
-
-function groupEvents(events: SandboxEvent[]): EventGroup[] {
-  const groups: EventGroup[] = [];
-  let currentToolGroup: ToolCallEvent[] = [];
-  let groupIndex = 0;
-
-  const flushToolGroup = () => {
-    if (currentToolGroup.length > 0) {
-      groups.push({
-        type: "tool_group",
-        events: [...currentToolGroup],
-        id: `tool-group-${groupIndex++}`,
-      });
-      currentToolGroup = [];
-    }
-  };
-
-  for (const event of events) {
-    if (event.type === "tool_call") {
-      if (currentToolGroup.length > 0 && currentToolGroup[0].tool === event.tool) {
-        currentToolGroup.push(event);
-      } else {
-        flushToolGroup();
-        currentToolGroup = [event];
-      }
-    } else {
-      flushToolGroup();
-      groups.push({
-        type: "single",
-        event,
-        id: `single-${event.type}-${("messageId" in event ? event.messageId : undefined) || event.timestamp}-${groupIndex++}`,
-      });
-    }
-  }
-
-  flushToolGroup();
-
-  return groups;
-}
-
-export function dedupeAndGroupEvents(events: SandboxEvent[]): EventGroup[] {
-  const filteredEvents: Array<SandboxEvent | null> = [];
-  const seenToolCalls = new Map<string, number>();
-  const seenCompletions = new Set<string>();
-  const seenTokens = new Map<string, number>();
-
-  for (const event of events) {
-    if (event.type === "tool_call" && event.callId) {
-      const existingIdx = seenToolCalls.get(event.callId);
-      if (existingIdx !== undefined) {
-        filteredEvents[existingIdx] = event;
-      } else {
-        seenToolCalls.set(event.callId, filteredEvents.length);
-        filteredEvents.push(event);
-      }
-    } else if (event.type === "execution_complete" && event.messageId) {
-      if (!seenCompletions.has(event.messageId)) {
-        seenCompletions.add(event.messageId);
-        filteredEvents.push(event);
-      }
-    } else if (event.type === "token" && event.messageId) {
-      const existingIdx = seenTokens.get(event.messageId);
-      if (existingIdx !== undefined) {
-        filteredEvents[existingIdx] = null;
-      }
-      seenTokens.set(event.messageId, filteredEvents.length);
-      filteredEvents.push(event);
-    } else {
-      filteredEvents.push(event);
-    }
-  }
-
-  return groupEvents(filteredEvents.filter((event): event is SandboxEvent => event !== null));
-}
+import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 
 export function SessionTimeline({
   events,
@@ -107,6 +36,7 @@ export function SessionTimeline({
   currentParticipantId,
   participantProfiles,
   isProcessing,
+  promptQueue = [],
   loadingHistory,
   showSkeleton,
   onLoadOlder,
@@ -119,6 +49,7 @@ export function SessionTimeline({
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
   isProcessing: boolean;
+  promptQueue?: PromptQueueItem[];
   loadingHistory: boolean;
   showSkeleton: boolean;
   onLoadOlder: () => void;
@@ -126,7 +57,16 @@ export function SessionTimeline({
   terminalMessageReadObservationEnabled?: boolean;
   onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
-  const groupedEvents = useMemo(() => dedupeAndGroupEvents(events), [events]);
+  const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
+  const pendingMessageIds = useMemo(
+    () =>
+      new Set(
+        promptQueue.filter((item) => item.status === "pending").map((item) => item.messageId)
+      ),
+    [promptQueue]
+  );
+  const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
+  const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
   const latestTerminalMessageId = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
@@ -136,29 +76,29 @@ export function SessionTimeline({
   }, [events]);
   const latestTerminalMessageGroupRange = useMemo(() => {
     if (!latestTerminalMessageId) return null;
-    const completionIndex = groupedEvents.findIndex(
-      (group) =>
-        group.type === "single" &&
-        group.event.type === "execution_complete" &&
-        group.event.messageId === latestTerminalMessageId
+    const completionIndex = timelineItems.findIndex(
+      (item) =>
+        item.type === "single" &&
+        item.event.type === "execution_complete" &&
+        item.event.messageId === latestTerminalMessageId
     );
     if (completionIndex < 0) return null;
-    const outputIndex = groupedEvents.findIndex(
-      (group) =>
-        group.type === "single" &&
-        group.event.type === "token" &&
-        group.event.messageId === latestTerminalMessageId
+    const outputIndex = timelineItems.findIndex(
+      (item) =>
+        item.type === "single" &&
+        item.event.type === "token" &&
+        item.event.messageId === latestTerminalMessageId
     );
     return {
       start: outputIndex >= 0 ? Math.min(outputIndex, completionIndex) : completionIndex,
       end: Math.max(outputIndex, completionIndex),
     };
-  }, [groupedEvents, latestTerminalMessageId]);
+  }, [timelineItems, latestTerminalMessageId]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasScrolledRef = useRef(false);
   const isPrependingRef = useRef(false);
+  const didPrependRef = useRef(false);
   const prevScrollHeightRef = useRef(0);
   const isNearBottomRef = useRef(true);
 
@@ -199,34 +139,90 @@ export function SessionTimeline({
       const el = scrollContainerRef.current;
       el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
       isPrependingRef.current = false;
+      didPrependRef.current = true;
     }
   }, [events]);
 
-  const renderGroup = (group: EventGroup) =>
-    group.type === "tool_group" ? (
-      <ToolCallGroup key={group.id} events={group.events} groupId={group.id} />
-    ) : (
+  useLayoutEffect(() => {
+    if (didPrependRef.current) {
+      didPrependRef.current = false;
+      return;
+    }
+    if (isNearBottomRef.current) {
+      const container = scrollContainerRef.current;
+      if (container) container.scrollTop = container.scrollHeight;
+    }
+  }, [events, isProcessing]);
+
+  const toggleToolCall = useCallback((event: ToolCallEvent) => {
+    const key = toolCallKey(event);
+    setExpandedToolCalls((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const toggleToolGroup = useCallback((events: ToolCallEvent[]) => {
+    const keys = events.map(toolCallKey);
+    setExpandedToolGroups((expanded) => {
+      const next = new Set(expanded);
+      if (keys.some((key) => next.has(key))) {
+        for (const key of keys) next.delete(key);
+      } else {
+        for (const key of keys) next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const renderFlatItem = (item: FlatTimelineItem): ReactNode => {
+    if (item.type === "tool_group") {
+      return (
+        <ToolCallGroup
+          key={item.id}
+          events={item.events}
+          isExpanded={item.events.some((event) => expandedToolGroups.has(toolCallKey(event)))}
+          expandedToolCallIds={expandedToolCalls}
+          onToggleGroup={() => toggleToolGroup(item.events)}
+          onToggleTool={toggleToolCall}
+        />
+      );
+    }
+    if (
+      item.event.type === "user_message" &&
+      item.event.messageId &&
+      pendingMessageIds.has(item.event.messageId)
+    ) {
+      return null;
+    }
+    return (
       <EventItem
-        key={group.id}
-        event={group.event}
+        key={item.id}
+        event={item.event}
         sessionId={sessionId}
         currentParticipantId={currentParticipantId}
         participantProfiles={participantProfiles}
         onOpenMedia={onOpenMedia}
       />
     );
+  };
 
-  useEffect(() => {
-    if (isNearBottomRef.current && !isPrependingRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-    }
-  }, [events]);
+  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
+    item.type === "task_group" ? (
+      <TaskActivityItem key={item.id} event={item.event} hasActivity={item.activity.length > 0}>
+        {item.activity.map(renderFlatItem)}
+      </TaskActivityItem>
+    ) : (
+      renderFlatItem(item)
+    );
 
   return (
     <div
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="h-full overflow-y-auto overflow-x-hidden p-4"
+      className="h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
       <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
         <div ref={topSentinelRef} className="h-1" />
@@ -236,7 +232,7 @@ export function SessionTimeline({
         {showSkeleton ? (
           <TimelineSkeleton />
         ) : (
-          groupedEvents.map((group, index) => {
+          timelineItems.map((item, index) => {
             if (
               latestTerminalMessageGroupRange &&
               onMarkMessageRead &&
@@ -249,12 +245,12 @@ export function SessionTimeline({
                   enabled={terminalMessageReadObservationEnabled}
                   onMarkMessageRead={onMarkMessageRead}
                 >
-                  {groupedEvents
+                  {timelineItems
                     .slice(
                       latestTerminalMessageGroupRange.start,
                       latestTerminalMessageGroupRange.end + 1
                     )
-                    .map(renderGroup)}
+                    .map(renderTimelineItem)}
                 </TerminalMessageReadObserver>
               );
             }
@@ -265,12 +261,11 @@ export function SessionTimeline({
             ) {
               return null;
             }
-            return renderGroup(group);
+            return renderTimelineItem(item);
           })
         )}
         {isProcessing && <ThinkingIndicator />}
-
-        <div ref={messagesEndRef} />
+        <div />
       </div>
     </div>
   );
@@ -288,16 +283,16 @@ function ThinkingIndicator() {
 function TimelineSkeleton() {
   return (
     <div className="space-y-3 py-2 animate-pulse">
-      <div className="bg-card p-4 space-y-2">
+      <div className="bg-card p-3 space-y-2 sm:p-4">
         <div className="h-3 w-24 bg-muted rounded" />
         <div className="h-3 w-full bg-muted rounded" />
         <div className="h-3 w-5/6 bg-muted rounded" />
       </div>
-      <div className="bg-accent-muted p-4 ml-8 space-y-2">
+      <div className="bg-accent-muted p-3 space-y-2 sm:ml-8 sm:p-4">
         <div className="h-3 w-20 bg-muted rounded" />
         <div className="h-3 w-4/5 bg-muted rounded" />
       </div>
-      <div className="bg-card p-4 space-y-2">
+      <div className="bg-card p-3 space-y-2 sm:p-4">
         <div className="h-3 w-32 bg-muted rounded" />
         <div className="h-3 w-3/4 bg-muted rounded" />
       </div>
@@ -359,10 +354,10 @@ function MessageFrame({
   children,
 }: MessageFrameProps) {
   return (
-    <div className={className}>
-      <div className="flex items-center justify-between mb-2">
+    <div className={`min-w-0 ${className}`}>
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
         {label}
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <CopyButton
             copied={copied}
             className={copyButtonClassName}
@@ -403,10 +398,9 @@ function StatusRow({
           : "text-muted-foreground";
 
   return (
-    <div className={`flex items-center gap-2 text-sm ${textClassName}`}>
-      <span className={`w-2 h-2 rounded-full ${dotClassName}`} />
-      {children}
-      <span className="text-xs text-secondary-foreground">{time}</span>
+    <div className={`flex min-w-0 items-start gap-2 text-sm ${textClassName}`}>
+      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotClassName}`} />
+      <TimelineRowContent time={time}>{children}</TimelineRowContent>
     </div>
   );
 }
@@ -423,10 +417,10 @@ function UserMessageAttachments({
 }) {
   return (
     <div className="min-w-0 max-w-full flex flex-wrap gap-2 mt-3">
-      {attachments.map((attachment, index) => {
+      {attachments.map((attachment) => {
         return (
           <img
-            key={`${attachment.attachmentId}-${index}`}
+            key={attachment.attachmentId}
             src={`/api/sessions/${sessionId}/attachments/${attachment.attachmentId}`}
             alt={attachment.name}
             title={attachment.name}
@@ -470,7 +464,7 @@ function UserMessageEvent({
   return (
     <MessageFrame
       label={
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {!isCurrentUser && avatar && (
             <img src={avatar} alt={authorName} className="w-5 h-5 rounded-full" />
           )}
@@ -480,12 +474,14 @@ function UserMessageEvent({
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-accent-muted p-4 ml-8"
+      className="group bg-accent-muted p-3 sm:ml-8 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
       {event.content && (
-        <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+        <pre className="whitespace-pre-wrap text-sm text-foreground [overflow-wrap:anywhere]">
+          {event.content}
+        </pre>
       )}
       {attachments.length > 0 && (
         <UserMessageAttachments attachments={attachments} sessionId={sessionId} />
@@ -503,7 +499,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-card p-4"
+      className="group bg-card p-3 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
@@ -516,10 +512,9 @@ function ToolResultEvent({ event }: EventRendererProps) {
   if (event.type !== "tool_result" || !event.error) return null;
 
   return (
-    <div className="flex items-center gap-2 text-sm text-destructive py-1">
-      <ErrorIcon className="w-4 h-4" />
-      <span className="truncate">{event.error}</span>
-      <span className="text-xs text-secondary-foreground ml-auto">{formatEventTime(event)}</span>
+    <div className="flex min-w-0 items-start gap-2 py-1 text-sm text-destructive">
+      <ErrorIcon className="h-4 w-4 shrink-0" />
+      <TimelineRowContent time={formatEventTime(event)}>{event.error}</TimelineRowContent>
     </div>
   );
 }
@@ -544,7 +539,7 @@ function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
   }
 
   return (
-    <div className="space-y-2 border border-border-muted bg-card p-4">
+    <div className="space-y-2 border border-border-muted bg-card p-3 sm:p-4">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
           {event.artifactType === "video" ? "Video" : "Screenshot"}
@@ -600,6 +595,18 @@ function ExecutionCompleteEvent({ event }: EventRendererProps) {
   );
 }
 
+function ContextCompactedEvent({ event }: EventRendererProps) {
+  if (event.type !== "context_compacted") return null;
+
+  return (
+    <div className="flex items-center gap-3 py-1 text-xs text-muted-foreground">
+      <span aria-hidden="true" className="flex-1 border-t border-border-muted" />
+      <span className="shrink-0">Context compacted</span>
+      <span aria-hidden="true" className="flex-1 border-t border-border-muted" />
+    </div>
+  );
+}
+
 function formatEventTime(event: SandboxEvent): string {
   return new Date(event.timestamp * 1000).toLocaleTimeString();
 }
@@ -615,6 +622,7 @@ const eventRenderers: Partial<
   error: ErrorEvent,
   warning: WarningEvent,
   execution_complete: ExecutionCompleteEvent,
+  context_compacted: ContextCompactedEvent,
 };
 
 export const EventItem = memo(function EventItem({

@@ -42,7 +42,14 @@ export {
   sentryConditions,
   normalizeSentryEvent,
   buildSentryContextBlock,
+  buildSentryIssueWebhookContextBlock,
+  buildSentryMetricContextBlock,
   verifySentrySignature,
+} from "./sentry";
+export type {
+  SentryIssueAlertPayload,
+  SentryIssueWebhookPayload,
+  SentryMetricAlertPayload,
 } from "./sentry";
 
 // Webhook source module
@@ -59,6 +66,8 @@ export {
 export {
   slackSource,
   normalizeSlackEvent,
+  buildSlackContextBlock,
+  slackChannelLabel,
   SLACK_TEXT_MAX_LENGTH,
   REGEX_PATTERN_MAX_LENGTH,
   ALLOWED_REGEX_FLAGS,

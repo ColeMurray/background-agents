@@ -25,6 +25,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user",
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -51,6 +52,8 @@ function createSandbox(overrides: Partial<SandboxRow> = {}): SandboxRow {
     last_spawn_error_at: null,
     code_server_url: null,
     code_server_password: null,
+    vnc_url: null,
+    vnc_password: null,
     tunnel_urls: null,
     ttyd_url: null,
     ttyd_token: null,
@@ -85,6 +88,7 @@ function createHandler() {
     replaceSessionRepositories: vi.fn(),
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
+    getPendingOrProcessingCount: vi.fn(() => 0),
   };
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
@@ -106,7 +110,7 @@ function createHandler() {
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
   const statusService = { transition } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
-  const stopExecution = vi.fn();
+  const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
   const sendToSandbox = vi.fn();
   const updateSandboxStatus = vi.fn();
@@ -126,7 +130,7 @@ function createHandler() {
     getParticipantByUserId,
     statusService,
     applySessionTitleUpdate,
-    stopExecution,
+    cancelSession,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
@@ -155,7 +159,7 @@ function createHandler() {
     getParticipantByUserId,
     transition,
     applySessionTitleUpdate,
-    stopExecution,
+    cancelSession,
     getSandboxSocket,
     sendToSandbox,
     updateSandboxStatus,
@@ -234,6 +238,7 @@ describe("createSessionLifecycleHandler", () => {
           parentSessionId: "parent-1",
           spawnSource: "agent",
           spawnDepth: 1,
+          vncEnabled: true,
         }),
       })
     );
@@ -255,6 +260,7 @@ describe("createSessionLifecycleHandler", () => {
       spawnSource: "agent",
       spawnDepth: 1,
       codeServerEnabled: false,
+      vncEnabled: true,
       sandboxSettings: null,
       environmentId: null,
       createdAt: 1234,
@@ -345,6 +351,129 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(repository.replaceSessionRepositories).toHaveBeenCalledWith([]);
+  });
+
+  it("accepts nullable init fields and sandbox settings", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue(null);
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          environmentId: null,
+          // initialize.ts forwards these straight from SessionInitInput, where
+          // every one of them is nullable — the schema must accept null, not
+          // just absence, or session creation 400s.
+          reasoningEffort: null,
+          canonicalUserId: null,
+          scmLogin: null,
+          scmName: null,
+          scmEmail: null,
+          scmToken: null,
+          scmTokenEncrypted: null,
+          scmRefreshTokenEncrypted: null,
+          scmTokenExpiresAt: null,
+          scmUserId: null,
+          parentSessionId: null,
+          sandboxSettings: { cpuCores: null, memoryMib: null, tunnelPorts: [3000] },
+          userId: "user-1",
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoOwner: null,
+        repoName: null,
+        repoId: null,
+        environmentId: null,
+        parentSessionId: null,
+      })
+    );
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-1",
+        scmLogin: null,
+        scmName: null,
+        scmEmail: null,
+      })
+    );
+    const upsert = repository.upsertSession.mock.calls[0]![0];
+    expect(JSON.parse(upsert.sandboxSettings!)).toEqual({
+      cpuCores: null,
+      memoryMib: null,
+      tunnelPorts: [3000],
+    });
+  });
+
+  it("preserves optional init fields the schema must not silently drop", async () => {
+    const { handler, repository, validateReasoningEffort, generateId } = createHandler();
+    validateReasoningEffort.mockReturnValue("high");
+    generateId.mockReturnValueOnce("sandbox-1").mockReturnValueOnce("participant-1");
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          repoId: null,
+          userId: "user-1",
+          canonicalUserId: "platform-user-1",
+          vncEnabled: true,
+          // sandboxTimeoutMs is validated by normalizeSandboxSettings, not by a
+          // restated field list — a hand-copied schema would drop it here.
+          sandboxSettings: { sandboxTimeoutMs: 14_400_000, vncPort: 6080 },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(repository.upsertSession).toHaveBeenCalledWith(
+      expect.objectContaining({ vncEnabled: true })
+    );
+    expect(repository.createParticipant).toHaveBeenCalledWith(
+      expect.objectContaining({ canonicalUserId: "platform-user-1" })
+    );
+    const upsert = repository.upsertSession.mock.calls[0]![0];
+    expect(JSON.parse(upsert.sandboxSettings!)).toEqual({
+      sandboxTimeoutMs: 14_400_000,
+      vncPort: 6080,
+    });
+  });
+
+  it("rejects malformed init bodies before creating records", async () => {
+    const { handler, repository, scheduleWarmSandbox } = createHandler();
+
+    const response = await handler.init(
+      new Request("http://internal/internal/init", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          sessionName: "session-public-id",
+          repoOwner: null,
+          repoName: null,
+          userId: 123,
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(repository.upsertSession).not.toHaveBeenCalled();
+    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(repository.createParticipant).not.toHaveBeenCalled();
+    expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });
 
   it("rejects a repositories list whose primary does not match the scalar mirror", async () => {
@@ -664,6 +793,23 @@ describe("createSessionLifecycleHandler", () => {
     expect(await response.json()).toEqual({ error: "Invalid request body" });
   });
 
+  it("returns 400 for malformed archive fields", async () => {
+    const { handler, getSession, getParticipantByUserId } = createHandler();
+    getSession.mockReturnValue(createSession());
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ userId: 123 }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid request body" });
+    expect(getParticipantByUserId).not.toHaveBeenCalled();
+  });
+
   it("returns 403 when archive user is not a participant", async () => {
     const { handler, getSession, getParticipantByUserId } = createHandler();
     getSession.mockReturnValue(createSession());
@@ -700,6 +846,39 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("archived");
   });
 
+  it("returns 409 when archiving a session with queued work", async () => {
+    const { handler, getSession, getParticipantByUserId, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession());
+    getParticipantByUserId.mockReturnValue(createParticipant());
+    repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when archiving a cancelled session", async () => {
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "cancelled" }));
+    getParticipantByUserId.mockReturnValue(createParticipant());
+
+    const response = await handler.archive(
+      new Request("http://internal/internal/archive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("unarchives successfully for participant", async () => {
     const { handler, getSession, getParticipantByUserId, transition } = createHandler();
     getSession.mockReturnValue(createSession({ status: "archived" }));
@@ -719,6 +898,22 @@ describe("createSessionLifecycleHandler", () => {
     expect(transition).toHaveBeenCalledWith("active");
   });
 
+  it("returns 409 when unarchiving a session that is not archived", async () => {
+    const { handler, getSession, getParticipantByUserId, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "cancelled" }));
+    getParticipantByUserId.mockReturnValue(createParticipant());
+
+    const response = await handler.unarchive(
+      new Request("http://internal/internal/unarchive", {
+        method: "POST",
+        body: JSON.stringify({ userId: "user-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("returns 409 when cancelling terminal session", async () => {
     const { handler, getSession } = createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
@@ -734,8 +929,7 @@ describe("createSessionLifecycleHandler", () => {
       handler,
       getSession,
       getSandbox,
-      stopExecution,
-      transition,
+      cancelSession,
       getSandboxSocket,
       sendToSandbox,
       updateSandboxStatus,
@@ -743,16 +937,14 @@ describe("createSessionLifecycleHandler", () => {
     const ws = {} as WebSocket;
     getSession.mockReturnValue(createSession({ status: "active" }));
     getSandbox.mockReturnValue(createSandbox({ status: "running" }));
-    stopExecution.mockResolvedValue(undefined);
-    transition.mockResolvedValue(true);
+    cancelSession.mockResolvedValue(undefined);
     getSandboxSocket.mockReturnValue(ws);
 
     const response = await handler.cancel();
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "cancelled" });
-    expect(stopExecution).toHaveBeenCalledWith({ suppressStatusReconcile: true });
-    expect(transition).toHaveBeenCalledWith("cancelled");
+    expect(cancelSession).toHaveBeenCalledOnce();
     expect(sendToSandbox).toHaveBeenCalledWith(ws, { type: "shutdown" });
     expect(updateSandboxStatus).toHaveBeenCalledWith("stopped");
   });

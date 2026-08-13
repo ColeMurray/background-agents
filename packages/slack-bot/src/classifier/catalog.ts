@@ -5,7 +5,9 @@
  * is a single explicit value rather than a fetch threaded through each stage.
  */
 
-import type { Env, Environment, RepoConfig } from "../types";
+import type { Environment } from "@open-inspect/shared/types/environments";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 import { getAvailableRepos } from "./repos";
 import { getAvailableEnvironments } from "./environments";
 

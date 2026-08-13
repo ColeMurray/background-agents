@@ -1,15 +1,15 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
-import { Suspense, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
+import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import {
   Group as PanelGroup,
@@ -54,33 +54,31 @@ import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-p
 import { useSessionTabs } from "@/components/session-tabs";
 import { formatRepoLabel } from "@/lib/repo-label";
 import {
+  promptRequestSignature,
+  resolvePromptRequestIdentity,
+  type PromptRequestIdentity,
+} from "@/lib/prompt-request-id";
+import {
   classifySessionReadAttempt,
   markMessageRead,
   reconcileSessionReadState,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
+import { useSessionSnapshot } from "./session-snapshot-provider";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
+const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
+
 export default function SessionPage() {
-  const params = useParams();
-  const sessionId = params.id as string;
-
-  return (
-    <Suspense>
-      <SessionPageContent key={sessionId} sessionId={sessionId} />
-    </Suspense>
-  );
-}
-
-function SessionPageContent({ sessionId }: { sessionId: string }) {
-  const searchParams = useSearchParams();
+  const initialSnapshot = useSessionSnapshot();
+  const sessionId = initialSnapshot.session.id;
   const { registerSession, closeSession, updateSessionTitle } = useSessionTabs();
-
   const {
     connected,
     connecting,
-    replaying,
+    ready,
+    presenceSynced,
     authError,
     connectionError,
     sessionState,
@@ -89,27 +87,25 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
     artifacts,
     currentParticipantId,
     isProcessing,
+    promptQueue,
     loadingHistory,
     sendPrompt,
     stopExecution,
     sendTyping,
     reconnect,
     loadOlderEvents,
-  } = useSessionSocket(sessionId);
+  } = useSessionSocket(sessionId, initialSnapshot);
   const { profiles, participants: profiledParticipants } = useSessionParticipantProfiles(
     sessionId,
     participants,
     events
   );
 
-  const fallbackSessionInfo = useMemo(
-    () => ({
-      repoOwner: searchParams.get("repoOwner") || null,
-      repoName: searchParams.get("repoName") || null,
-      title: searchParams.get("title") || null,
-    }),
-    [searchParams]
-  );
+  const fallbackSessionInfo = {
+    repoOwner: initialSnapshot.session.repoOwner,
+    repoName: initialSnapshot.session.repoName,
+    title: initialSnapshot.session.title,
+  };
 
   const tabTitle =
     sessionState?.title ??
@@ -160,17 +156,18 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
     sessionAttachments,
     inputRef,
     isSubmitting,
+    submitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
   } = usePromptInput(
     sessionId,
-    isProcessing,
     sendPrompt,
     sendTyping,
     selectedModel,
     reasoningEffort,
-    loadingEnabledModels
+    loadingEnabledModels,
+    sessionState?.status ?? "created"
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
@@ -185,20 +182,30 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Terminal panel state
-  const [terminalOpen, setTerminalOpen] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("terminal-visible") === "true";
-  });
-  const toggleTerminal = useCallback(() => {
-    const next = !terminalOpen;
-    localStorage.setItem("terminal-visible", String(next));
-    setTerminalOpen(next);
-  }, [terminalOpen]);
-  const closeTerminal = useCallback(() => {
-    setTerminalOpen(false);
-    localStorage.setItem("terminal-visible", "false");
+  // Terminal panel state. Starts closed so the server and the client render the
+  // same markup, then adopts the stored preference after hydration.
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  useEffect(() => {
+    try {
+      setTerminalOpen(localStorage.getItem(TERMINAL_VISIBLE_STORAGE_KEY) === "true");
+    } catch {
+      // Storage is optional; the terminal stays closed when it is unavailable.
+    }
   }, []);
+  const applyTerminalOpen = useCallback((next: boolean) => {
+    setTerminalOpen(next);
+    try {
+      localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, String(next));
+    } catch {
+      // Continue with the in-memory preference when storage is unavailable.
+    }
+  }, []);
+  const toggleTerminal = useCallback(() => {
+    applyTerminalOpen(!terminalOpen);
+  }, [applyTerminalOpen, terminalOpen]);
+  const closeTerminal = useCallback(() => {
+    applyTerminalOpen(false);
+  }, [applyTerminalOpen]);
   const ttydUrl = sessionState?.ttydUrl;
   const ttydToken = sessionState?.ttydToken;
   const showTerminal = !!(ttydUrl && ttydToken && terminalOpen && !isBelowLg);
@@ -234,7 +241,6 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
       ? { repoOwner: sessionState.repoOwner, repoName: sessionState.repoName }
       : null);
 
-  const showTimelineSkeleton = events.length === 0 && (connecting || replaying);
   const resolvedDiff = useMemo(
     () =>
       selectedDiff && diffState?.current
@@ -298,48 +304,90 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
   }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
-    <div className="flex h-full flex-1 flex-col overflow-hidden">
-      <PanelGroup orientation="vertical" id="session-terminal">
-        <Panel defaultSize={showTerminal ? "70%" : "100%"} minSize="30%">
-          <SessionTimeline
-            events={events}
-            sessionId={sessionId}
-            currentParticipantId={currentParticipantId}
-            participantProfiles={profiles}
-            isProcessing={isProcessing}
-            loadingHistory={loadingHistory}
-            showSkeleton={showTimelineSkeleton}
-            onLoadOlder={loadOlderEvents}
-            onOpenMedia={setSelectedMediaArtifactId}
-            terminalMessageReadObservationEnabled={
-              !replaying &&
-              !loadingHistory &&
-              !isDetailsOpen &&
-              selectedMediaArtifactId === null &&
-              resolvedDiff === null
-            }
-            onMarkMessageRead={attemptMarkVisibleMessageRead}
-          />
-        </Panel>
-        {showTerminal && (
-          <>
-            <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
-            <Panel defaultSize="30%" minSize="15%" maxSize="70%">
-              <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
-            </Panel>
-          </>
-        )}
-      </PanelGroup>
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-clip">
+      <div className="min-h-0 min-w-0 flex-1 overflow-clip">
+        <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
+          <Panel
+            defaultSize={showTerminal ? "70%" : "100%"}
+            minSize="30%"
+            style={{ minHeight: 0, overflow: "clip" }}
+          >
+            <SessionTimeline
+              events={events}
+              sessionId={sessionId}
+              currentParticipantId={currentParticipantId}
+              participantProfiles={profiles}
+              isProcessing={isProcessing}
+              promptQueue={promptQueue}
+              loadingHistory={loadingHistory}
+              showSkeleton={false}
+              onLoadOlder={loadOlderEvents}
+              onOpenMedia={setSelectedMediaArtifactId}
+              terminalMessageReadObservationEnabled={
+                !loadingHistory &&
+                !isDetailsOpen &&
+                selectedMediaArtifactId === null &&
+                resolvedDiff === null
+              }
+              onMarkMessageRead={attemptMarkVisibleMessageRead}
+            />
+          </Panel>
+          {showTerminal && (
+            <>
+              <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
+              <Panel defaultSize="30%" minSize="15%" maxSize="70%">
+                <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
+              </Panel>
+            </>
+          )}
+        </PanelGroup>
+      </div>
+      <QueuedPromptStack promptQueue={promptQueue} />
+      <SessionPromptComposer
+        session={{
+          id: sessionId,
+          status: sessionState?.status ?? "created",
+          artifacts,
+          primaryRepo,
+          onArchive: handleArchiveAndCloseTab,
+          onUnarchive: handleUnarchive,
+        }}
+        prompt={{
+          value: prompt,
+          isProcessing: ready && isProcessing,
+          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
+          submitError,
+          inputRef,
+          onSubmit: handleSubmit,
+          onChange: handleInputChange,
+          onKeyDown: handleKeyDown,
+          onStopExecution: stopExecution,
+        }}
+        attachments={{
+          items: sessionAttachments.attachments,
+          error: sessionAttachments.attachmentError,
+          isUploading: sessionAttachments.isUploading,
+          onAdd: sessionAttachments.addFiles,
+          onRemove: sessionAttachments.removeAttachment,
+        }}
+        model={{
+          selectedModel,
+          reasoningEffort,
+          items: modelItems,
+          onModelChange: handleModelChange,
+          onReasoningEffortChange: setReasoningEffort,
+        }}
+      />
     </div>
   );
 
   return (
-    <div className="h-full min-w-0 overflow-x-hidden flex flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-clip">
       <SessionHeader
         sessionState={sessionState}
         fallbackSessionInfo={fallbackSessionInfo}
-        connected={connected}
-        connecting={connecting}
+        connected={connected && ready}
+        connecting={connecting || (connected && !ready)}
         isDetailsOpen={isDetailsOpen}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
@@ -371,7 +419,7 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
       )}
 
       {/* Main content */}
-      <main className="min-w-0 flex-1 flex overflow-hidden">
+      <main className="flex min-h-0 min-w-0 flex-1 overflow-clip">
         {!isBelowLg ? (
           <SessionDesktopLayout
             workspace={sessionWorkspace}
@@ -380,6 +428,7 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}
+                presenceSynced={presenceSynced}
                 events={events}
                 artifacts={artifacts}
                 terminalOpen={terminalOpen}
@@ -412,6 +461,7 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
               sessionId={sessionId}
               sessionState={sessionState}
               participants={profiledParticipants}
+              presenceSynced={presenceSynced}
               events={events}
               artifacts={artifacts}
               terminalOpen={terminalOpen}
@@ -435,6 +485,7 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
           sessionId={sessionId}
           sessionState={sessionState}
           participants={profiledParticipants}
+          presenceSynced={presenceSynced}
           events={events}
           artifacts={artifacts}
           terminalOpen={terminalOpen}
@@ -476,41 +527,6 @@ function SessionPageContent({ sessionId }: { sessionId: string }) {
           if (!open) {
             setSelectedMediaArtifactId(null);
           }
-        }}
-      />
-
-      <SessionPromptComposer
-        session={{
-          id: sessionId,
-          status: sessionState?.status ?? "created",
-          artifacts,
-          primaryRepo,
-          onArchive: handleArchiveAndCloseTab,
-          onUnarchive: handleUnarchive,
-        }}
-        prompt={{
-          value: prompt,
-          isProcessing,
-          draftLocked: isSubmitting || sessionAttachments.isUploading,
-          inputRef,
-          onSubmit: handleSubmit,
-          onChange: handleInputChange,
-          onKeyDown: handleKeyDown,
-          onStopExecution: stopExecution,
-        }}
-        attachments={{
-          items: sessionAttachments.attachments,
-          error: sessionAttachments.attachmentError,
-          isUploading: sessionAttachments.isUploading,
-          onAdd: sessionAttachments.addFiles,
-          onRemove: sessionAttachments.removeAttachment,
-        }}
-        model={{
-          selectedModel,
-          reasoningEffort,
-          items: modelItems,
-          onModelChange: handleModelChange,
-          onReasoningEffortChange: setReasoningEffort,
         }}
       />
     </div>
@@ -669,19 +685,24 @@ function useModelSelection(sessionState: SessionState) {
  */
 function usePromptInput(
   sessionId: string,
-  isProcessing: boolean,
   sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
   sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
   selectedModel: string,
   reasoningEffort: string | undefined,
-  loadingEnabledModels: boolean
+  loadingEnabledModels: boolean,
+  sessionStatus: NonNullable<SessionState>["status"]
 ) {
   const [prompt, setPrompt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
+  const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
+  const attachmentDraftSignature = sessionAttachments.attachments
+    .map((attachment) => attachment.id)
+    .join("\u0000");
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -691,6 +712,9 @@ function usePromptInput(
   }, []);
 
   useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
+  useEffect(() => {
+    retryRequestRef.current = null;
+  }, [selectedModel, reasoningEffort, attachmentDraftSignature]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -698,7 +722,8 @@ function usePromptInput(
     if (
       submitInFlightRef.current ||
       (!prompt.trim() && !hasAttachments) ||
-      isProcessing ||
+      sessionStatus === "archived" ||
+      sessionStatus === "cancelled" ||
       loadingEnabledModels ||
       sessionAttachments.isUploading
     ) {
@@ -707,26 +732,49 @@ function usePromptInput(
 
     submitInFlightRef.current = true;
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
+      const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
       let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {
           attachments = await sessionAttachments.uploadAll(sessionId);
-        } catch {
+        } catch (error) {
+          setSubmitError(error instanceof Error ? error.message : "Failed to upload attachments");
           return;
         }
       }
 
       // Drop any queued typing indicator — the prompt supersedes it
       clearTypingTimeout();
-      const accepted = await sendPrompt(
-        prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+      const signature = promptRequestSignature({
+        content,
+        model: selectedModel,
+        reasoningEffort,
+        attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
+      });
+      const requestIdentity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
+      retryRequestRef.current = requestIdentity;
+      const result = await sendPrompt(
+        content,
         selectedModel,
         reasoningEffort,
-        attachments
+        attachments,
+        requestIdentity.clientRequestId
       );
-      if (!accepted) return;
+      if (!result.ok) {
+        setSubmitError(
+          result.message ??
+            (result.reason === "timeout"
+              ? "Confirmation timed out. Retry while this page is open to reuse the same request."
+              : result.reason === "disconnected"
+                ? "Disconnected before confirmation. Retry on this page after reconnecting."
+                : "The prompt could not be queued.")
+        );
+        return;
+      }
 
+      retryRequestRef.current = null;
       setPrompt("");
       sessionAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
@@ -748,6 +796,8 @@ function usePromptInput(
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setPrompt(e.target.value);
+    setSubmitError(null);
+    retryRequestRef.current = null;
 
     // Send typing indicator (debounced)
     clearTypingTimeout();
@@ -761,6 +811,7 @@ function usePromptInput(
     sessionAttachments,
     inputRef,
     isSubmitting,
+    submitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,

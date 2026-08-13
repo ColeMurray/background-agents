@@ -16,7 +16,7 @@ import {
   SESSIONS_PAGE_SIZE,
   type SessionListResponse,
 } from "@/lib/session-list";
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import {
   markLatestMessageRead,
   reconcileSessionReadState,
@@ -24,6 +24,7 @@ import {
 } from "@/lib/session-read-state";
 
 const VISIBLE_SESSION_LIST_POLL_MS = 30_000;
+export const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
 
 export type SessionItem = Session;
 
@@ -31,12 +32,36 @@ type SessionCreatorFilter = "all" | "mine";
 
 export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
-  const [sessionCreatorFilter, setSessionCreatorFilter] = useState<SessionCreatorFilter>("all");
+  const [sessionCreatorFilter, setSessionCreatorFilterState] =
+    useState<SessionCreatorFilter | null>(null);
   const [extraPageRequest, setExtraPageRequest] = useState({
     key: null as string | null,
     count: 0,
   });
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let initialFilter: SessionCreatorFilter = "all";
+    try {
+      const storedFilter = localStorage.getItem(SESSION_CREATOR_FILTER_STORAGE_KEY);
+      if (storedFilter === "all" || storedFilter === "mine") {
+        initialFilter = storedFilter;
+      }
+    } catch {
+      // Storage is optional; the default remains usable in restricted browsers.
+    } finally {
+      setSessionCreatorFilterState(initialFilter);
+    }
+  }, []);
+
+  const setSessionCreatorFilter = useCallback((value: SessionCreatorFilter) => {
+    setSessionCreatorFilterState(value);
+    try {
+      localStorage.setItem(SESSION_CREATOR_FILTER_STORAGE_KEY, value);
+    } catch {
+      // Continue with the in-memory preference when storage is unavailable.
+    }
+  }, []);
 
   const sidebarSessionListOptions = useMemo(
     () => ({
@@ -52,10 +77,10 @@ export function useSidebarSessions() {
   );
 
   const sidebarSessionsKey = useMemo(() => {
-    if (!authSession) return null;
+    if (!authSession || sessionCreatorFilter === null) return null;
 
     return buildSessionsPageKey(sidebarSessionListOptions);
-  }, [authSession, sidebarSessionListOptions]);
+  }, [authSession, sessionCreatorFilter, sidebarSessionListOptions]);
   const {
     data: firstPage,
     error: sessionsError,
@@ -103,7 +128,7 @@ export function useSidebarSessions() {
     refreshWhenHidden: false,
     revalidateAll: true,
   });
-  const loading = sessionsLoading;
+  const loading = sessionCreatorFilter === null || sessionsLoading;
   const loadingMore = isValidating && extraPages?.[size - 1] === undefined;
   const hasMorePages = extraPages?.at(-1)?.hasMore ?? firstPage?.hasMore ?? false;
 

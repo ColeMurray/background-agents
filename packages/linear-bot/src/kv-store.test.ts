@@ -29,6 +29,42 @@ describe("getTeamRepoMapping", () => {
     expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual(mapping);
   });
 
+  it("returns parsed environment targets from KV", async () => {
+    const mapping = { "team-1": [{ environmentId: "env_123", label: "frontend" }] };
+    const { kv } = createFakeKV({ "config:team-repos": JSON.stringify(mapping) });
+    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual(mapping);
+  });
+
+  it("drops only the malformed team and keeps the valid ones", async () => {
+    const { kv } = createFakeKV({
+      "config:team-repos": JSON.stringify({
+        "team-1": [{ owner: "org", name: "repo" }],
+        "team-2": [{ owner: "org" }],
+      }),
+    });
+
+    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "team-1": [{ owner: "org", name: "repo" }],
+    });
+  });
+
+  it("keeps a mixed-shape entry pointed at its environment", async () => {
+    const { kv } = createFakeKV({
+      "config:team-repos": JSON.stringify({
+        "team-1": [{ owner: "org", name: "repo", environmentId: "env_123" }],
+      }),
+    });
+
+    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "team-1": [{ environmentId: "env_123" }],
+    });
+  });
+
+  it("returns {} when the stored value is not an object", async () => {
+    const { kv } = createFakeKV({ "config:team-repos": JSON.stringify("team-1") });
+    expect(await getTeamRepoMapping(makeLinearBotEnv(kv))).toEqual({});
+  });
+
   it("returns {} when KV throws", async () => {
     expect(await getTeamRepoMapping(makeLinearBotEnv(errorKv))).toEqual({});
   });
@@ -46,6 +82,37 @@ describe("getProjectRepoMapping", () => {
     const mapping = { "proj-1": { owner: "org", name: "repo" } };
     const { kv } = createFakeKV({ "config:project-repos": JSON.stringify(mapping) });
     expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual(mapping);
+  });
+
+  it("returns parsed environment mappings from KV", async () => {
+    const mapping = { "proj-1": { environmentId: "env_123" } };
+    const { kv } = createFakeKV({ "config:project-repos": JSON.stringify(mapping) });
+    expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual(mapping);
+  });
+
+  it("drops only the malformed project and keeps the valid ones", async () => {
+    const { kv } = createFakeKV({
+      "config:project-repos": JSON.stringify({
+        "proj-1": { owner: "org", name: "repo" },
+        "proj-2": { owner: "org" },
+      }),
+    });
+
+    expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "proj-1": { owner: "org", name: "repo" },
+    });
+  });
+
+  it("keeps a mixed-shape entry pointed at its environment", async () => {
+    const { kv } = createFakeKV({
+      "config:project-repos": JSON.stringify({
+        "proj-1": { owner: "org", name: "repo", environmentId: "env_123" },
+      }),
+    });
+
+    expect(await getProjectRepoMapping(makeLinearBotEnv(kv))).toEqual({
+      "proj-1": { environmentId: "env_123" },
+    });
   });
 
   it("returns {} when KV throws", async () => {
@@ -92,6 +159,14 @@ describe("lookupIssueSession", () => {
     };
     const { kv } = createFakeKV({ "issue:issue-1": JSON.stringify(session) });
     expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toEqual(session);
+  });
+
+  it("returns null for malformed stored sessions", async () => {
+    const { kv } = createFakeKV({
+      "issue:issue-1": JSON.stringify({ sessionId: "sess-1", issueId: "issue-1" }),
+    });
+
+    expect(await lookupIssueSession(makeLinearBotEnv(kv), "issue-1")).toBeNull();
   });
 
   it("returns null when KV throws", async () => {

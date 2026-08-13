@@ -1,15 +1,19 @@
-import type {
-  ClientMessage,
-  EventResponse,
-  ListEventsResponse,
-  SandboxEvent,
-  ServerMessage,
-} from "../types";
-import { encodeEventTimelineCursor, type EventListCursor } from "./event-cursor";
+import type { ClientMessage } from "@open-inspect/shared/types/websocket";
+import type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
+import {
+  encodeEventTimelineCursor,
+  type EventListCursor,
+  type EventTimelineCursor,
+} from "./event-cursor";
 import type { EventRow } from "./types";
 import type { SessionRepository } from "./repository";
+import {
+  sessionTimelineEventSchema,
+  type ServerMessage,
+  type SessionTimelineEvent,
+} from "@open-inspect/shared/types/server-messages";
 
-const DEFAULT_REPLAY_LIMIT = 500;
+export const DEFAULT_REPLAY_LIMIT = 500;
 const DEFAULT_HISTORY_LIMIT = 200;
 const MIN_HISTORY_LIMIT = 1;
 const MAX_HISTORY_LIMIT = 500;
@@ -18,12 +22,14 @@ const HISTORY_EXCLUDED_TYPES = ["heartbeat"];
 export type EventStreamCursor = NonNullable<
   Extract<ClientMessage, { type: "fetch_history" }>["cursor"]
 >;
-export type SessionReplay = NonNullable<Extract<ServerMessage, { type: "subscribed" }>["replay"]>;
+export type SessionTimeline = NonNullable<
+  Extract<ServerMessage, { type: "subscribed" }>["timeline"]
+>;
 export type SessionHistoryPage = Omit<Extract<ServerMessage, { type: "history_page" }>, "type">;
 
 export type SessionEventStreamRepository = Pick<
   SessionRepository,
-  "getEventsForReplay" | "getEventTimelinePage" | "listEventPage"
+  "getEventTimelinePage" | "listEventPage"
 >;
 
 export interface SessionEventListRequest {
@@ -36,15 +42,16 @@ export interface SessionEventListRequest {
 export class SessionEventStream {
   constructor(private readonly repository: SessionEventStreamRepository) {}
 
-  getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionReplay {
-    const rows = this.repository.getEventsForReplay(limit);
-    const events = parseSandboxEvents(rows);
-    const cursor = rows.length > 0 ? cursorFromRow(rows[0]) : null;
+  getReplay(limit = DEFAULT_REPLAY_LIMIT): SessionTimeline {
+    const page = this.repository.getEventTimelinePage({
+      excludeTypes: HISTORY_EXCLUDED_TYPES,
+      limit,
+    });
 
     return {
-      events,
-      hasMore: rows.length >= limit,
-      cursor,
+      events: parseSessionTimelineEvents(page.events),
+      hasMore: page.hasMore,
+      cursor: page.nextCursor ? toEventStreamCursor(page.nextCursor) : null,
     };
   }
 
@@ -54,17 +61,16 @@ export class SessionEventStream {
         kind: "timeline",
         createdAt: input.cursor.timestamp,
         id: input.cursor.id,
+        sequence: input.cursor.sequence,
       },
       excludeTypes: HISTORY_EXCLUDED_TYPES,
       limit: clampHistoryLimit(input.limit),
     });
 
     return {
-      items: parseSandboxEvents(page.events),
+      items: parseSessionTimelineEvents(page.events),
       hasMore: page.hasMore,
-      cursor: page.nextCursor
-        ? { timestamp: page.nextCursor.createdAt, id: page.nextCursor.id }
-        : null,
+      cursor: page.nextCursor ? toEventStreamCursor(page.nextCursor) : null,
     };
   }
 
@@ -84,20 +90,29 @@ export class SessionEventStream {
   }
 }
 
-function parseSandboxEvents(rows: EventRow[]): SandboxEvent[] {
-  const events: SandboxEvent[] = [];
+function parseSessionTimelineEvents(rows: EventRow[]): SessionTimelineEvent[] {
+  const events: SessionTimelineEvent[] = [];
   for (const row of rows) {
     try {
-      events.push(JSON.parse(row.data) as SandboxEvent);
+      const event = sessionTimelineEventSchema.safeParse({
+        eventId: row.id,
+        timelineSequence: row.timeline_sequence,
+        event: JSON.parse(row.data),
+      });
+      if (event.success) events.push(event.data);
     } catch {
-      // Preserve existing replay/history behavior: malformed events are skipped.
+      // A malformed persisted event must not prevent the rest of the timeline from loading.
     }
   }
   return events;
 }
 
-function cursorFromRow(row: Pick<EventRow, "created_at" | "id">): EventStreamCursor {
-  return { timestamp: row.created_at, id: row.id };
+function toEventStreamCursor(cursor: EventTimelineCursor): EventStreamCursor {
+  return {
+    timestamp: cursor.createdAt,
+    id: cursor.id,
+    ...(cursor.sequence === undefined ? {} : { sequence: cursor.sequence }),
+  };
 }
 
 function toEventResponse(event: EventRow): EventResponse {

@@ -53,6 +53,9 @@ export interface SessionWebSocketManager {
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
 
+  /** Clear and close all active sandbox sockets without consulting persisted dispatch status. */
+  detachSandboxSocket(code: number, reason: string): void;
+
   /** Clear sandbox socket only if ws matches current reference. Returns true if it was the active socket. */
   clearSandboxSocketIfMatch(ws: WebSocket): boolean;
 
@@ -65,6 +68,10 @@ export interface SessionWebSocketManager {
 
   /** Persist ws-to-participant mapping for hibernation survival. */
   persistClientMapping(wsId: string, participantId: string, clientId: string): void;
+
+  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void;
+  isClientSynchronizing(ws: WebSocket): boolean;
+  isClientAuthenticated(ws: WebSocket): boolean;
 
   /** Check if a wsId has a persisted mapping (used by auth timeout). */
   hasPersistedMapping(wsId: string): boolean;
@@ -89,6 +96,7 @@ export interface SessionWebSocketManager {
 
 export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private clients = new Map<WebSocket, ClientInfo>();
+  private synchronizingClients = new Set<WebSocket>();
   private sandboxWs: WebSocket | null = null;
 
   constructor(
@@ -145,11 +153,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   getSandboxSocket(): WebSocket | null {
-    if (this.sandboxWs?.readyState === WebSocket.OPEN) {
-      return this.sandboxWs;
-    }
-
-    // Hibernation recovery: scan all WebSockets, validate sandbox identity
     const sandbox = this.repository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
@@ -159,6 +162,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     // hibernation. On wake, the zombie WS still appears OPEN — skip it.
     const terminalStatuses = ["stopped", "failed", "stale"];
     if (sandbox && terminalStatuses.includes(sandbox.status)) {
+      this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
       for (const ws of this.ctx.getWebSockets()) {
         const parsed = this.classify(ws);
@@ -168,6 +172,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       }
       return null;
     }
+
+    if (this.sandboxWs?.readyState === WebSocket.OPEN) {
+      return this.sandboxWs;
+    }
+
+    // Hibernation recovery: scan all WebSockets, validate sandbox identity
 
     for (const ws of this.ctx.getWebSockets()) {
       const parsed = this.classify(ws);
@@ -191,6 +201,16 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   clearSandboxSocket(): void {
     this.sandboxWs = null;
+  }
+
+  detachSandboxSocket(code: number, reason: string): void {
+    const sockets = new Set<WebSocket>();
+    if (this.sandboxWs) sockets.add(this.sandboxWs);
+    for (const ws of this.ctx.getWebSockets()) {
+      if (this.classify(ws).kind === "sandbox") sockets.add(ws);
+    }
+    this.sandboxWs = null;
+    for (const ws of sockets) this.close(ws, code, reason);
   }
 
   clearSandboxSocketIfMatch(ws: WebSocket): boolean {
@@ -238,6 +258,19 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       clientId,
       createdAt: Date.now(),
     });
+  }
+
+  setClientSynchronizing(ws: WebSocket, synchronizing: boolean): void {
+    if (synchronizing) this.synchronizingClients.add(ws);
+    else this.synchronizingClients.delete(ws);
+  }
+
+  isClientSynchronizing(ws: WebSocket): boolean {
+    return this.synchronizingClients.has(ws);
+  }
+
+  isClientAuthenticated(ws: WebSocket): boolean {
+    return this.isAuthenticated(ws, this.classify(ws));
   }
 
   hasPersistedMapping(wsId: string): boolean {
@@ -312,6 +345,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
     if (ws.readyState !== WebSocket.OPEN) return;
     if (this.clients.has(ws)) return;
+    if (this.synchronizingClients.has(ws)) return;
     if (this.hasPersistedMapping(wsId)) return;
 
     this.log.warn("ws.connect", {

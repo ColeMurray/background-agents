@@ -101,6 +101,11 @@ describe("SCM credentials router provider gate", () => {
     expect(new URL(request.url).pathname).toBe("/internal/tunnel-urls");
   });
 
+  it("treats provider-neutral SCM settings routes as SCM-agnostic", () => {
+    expect(isScmAgnosticRoute("GET", "/scm-settings")).toBe(true);
+    expect(isScmAgnosticRoute("GET", "/scm-settings/repos")).toBe(true);
+  });
+
   it("returns an explicit disabled signing state for GitLab sandboxes", async () => {
     const { env, fetch } = createEnv();
 
@@ -129,6 +134,41 @@ describe("SCM credentials router provider gate", () => {
     expect(response.status).toBe(401);
   });
 
+  it("rejects service authentication for parent-to-child prompts", async () => {
+    const { env } = createEnv();
+
+    const response = await handleRequest(
+      await signedServiceRequest("https://test.local/sessions/parent-1/children/child-1/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      env as never
+    );
+
+    expect(response.status).toBe(401);
+  });
+
+  it("allows GitLab parent sandboxes to reach the child prompt route", async () => {
+    const { env, fetch } = createEnv();
+
+    const response = await handleRequest(
+      new Request("https://test.local/sessions/parent-1/children/child-1/prompt", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sandbox-token",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      env as never
+    );
+
+    // The null DB lookup rejects the unknown child after sandbox auth and SCM classification.
+    expect(response.status).toBe(404);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(new URL(fetch.mock.calls[0][0].url).pathname).toBe("/internal/verify-sandbox-token");
+  });
+
   it("continues blocking unrelated GitLab session routes", async () => {
     const { env, fetch } = createEnv();
 
@@ -149,5 +189,13 @@ describe("SCM credentials router provider gate", () => {
 
   it("allows GitLab deployments to reach the SCM-independent read-state route", async () => {
     expect(isScmAgnosticRoute("PATCH", "/sessions/session-1/read-state")).toBe(true);
+  });
+
+  it("allows GitLab deployments to read the canonical session resource", () => {
+    expect(isScmAgnosticRoute("GET", "/sessions/session-1")).toBe(true);
+  });
+
+  it("allows GitLab deployments to read sandbox access", () => {
+    expect(isScmAgnosticRoute("GET", "/sessions/session-1/sandbox-access")).toBe(true);
   });
 });

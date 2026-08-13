@@ -166,6 +166,47 @@ describe("SessionDiffStore", () => {
     ]);
   });
 
+  it("keeps a valid bundle readable when the persisted failure metadata is malformed", () => {
+    const sql = new MemoryDiffSql();
+    sql.row = {
+      revision_id: "revision-1",
+      trigger_message_id: "message-1",
+      bundle_json: JSON.stringify(upload),
+      captured_at: 100,
+      last_error: 123,
+      error_at: "not-a-timestamp",
+      updated_at: "not-a-timestamp",
+    };
+    const store = new SessionDiffStore(sql);
+
+    expect(store.getPublicState(null)).toMatchObject({
+      current: { revisionId: "revision-1", capturedAt: 100 },
+      lastError: null,
+    });
+    expect(store.resolveFile("revision-1", "file-1")).toContain("diff --git");
+  });
+
+  it("keeps a recorded failure visible when the persisted bundle is malformed", () => {
+    const sql = new MemoryDiffSql();
+    sql.row = {
+      revision_id: 42,
+      trigger_message_id: "message-1",
+      bundle_json: "{not json",
+      captured_at: 100,
+      last_error: "collector timed out",
+      error_at: 300,
+      updated_at: 400,
+    };
+    const store = new SessionDiffStore(sql);
+
+    expect(store.getPublicState("diff unavailable")).toEqual({
+      version: 1,
+      current: null,
+      lastError: { message: "collector timed out", occurredAt: 300 },
+      unavailableReason: "diff unavailable",
+    });
+  });
+
   it("rejects an encoded bundle above the storage limit", () => {
     const store = new SessionDiffStore(new MemoryDiffSql());
     const files = Array.from({ length: 400 }, (_, index) => ({

@@ -2,17 +2,28 @@ import { applyIdentityEnforcement } from "../auth/identity-enforcement";
 import type {
   SessionParticipantProfilesResponse,
   SessionParticipantProfile,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
+import { z } from "zod";
 import { UserStore } from "../db/user-store";
 import { SessionInternalPaths, type SessionInternalPath } from "../session/contracts";
-import type { Env, ParticipantResponse } from "../types";
+import type { Env } from "../types";
 import { error, parseJsonBody, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
+
+const participantsResponseSchema = z.object({
+  participants: z.array(
+    z.object({
+      userId: z.string(),
+      canonicalUserId: z.string().nullable().optional(),
+    })
+  ),
+});
 
 type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
+  userOnly?: boolean;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -32,6 +43,9 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
     method: config.method,
     pattern: parsePattern(config.routePath),
     handler: async (request, _env, match, ctx) => {
+      if (config.userOnly && ctx.principal?.kind !== "user") {
+        return error("Human user authentication required", 403);
+      }
       const sessionId = getSessionId(match);
       if (sessionId instanceof Response) return sessionId;
 
@@ -85,14 +99,11 @@ async function handleParticipantProfiles(
   );
   if (!participantsResponse.ok) return participantsResponse;
 
-  let participants: ParticipantResponse[];
-  try {
-    const body = (await participantsResponse.json()) as { participants?: ParticipantResponse[] };
-    if (!Array.isArray(body.participants)) throw new Error("Missing participants");
-    participants = body.participants;
-  } catch {
-    return error("Invalid participant response", 502);
-  }
+  const parsed = participantsResponseSchema.safeParse(
+    await participantsResponse.json().catch(() => null)
+  );
+  if (!parsed.success) return error("Invalid participant response", 502);
+  const participants = parsed.data.participants;
 
   const users = await new UserStore(ctx.db).getUsersByIds(
     participants.map((participant) => participant.canonicalUserId ?? participant.userId)
@@ -148,6 +159,10 @@ async function handleCreatePR(
     return error("repoName must be a string");
   }
 
+  if (body.draft !== undefined && typeof body.draft !== "boolean") {
+    return error("draft must be a boolean");
+  }
+
   return ctx.sessionRuntime.fetch(sessionId, SessionInternalPaths.createPr, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -158,6 +173,7 @@ async function handleCreatePR(
       headBranch: body.headBranch,
       repoOwner: body.repoOwner,
       repoName: body.repoName,
+      draft: body.draft,
     }),
   });
 }
@@ -215,9 +231,16 @@ function lifecycleProxyRoute(
 export const sessionRuntimeProxyRoutes: Route[] = [
   simpleProxyRoute({
     method: "GET",
+    routePath: "/sessions/:id/sandbox-access",
+    internalPath: SessionInternalPaths.sandboxAccess,
+    userOnly: true,
+  }),
+  simpleProxyRoute({
+    method: "GET",
     routePath: "/sessions/:id",
-    internalPath: SessionInternalPaths.state,
+    internalPath: SessionInternalPaths.snapshot,
     notFoundMessage: "Session not found",
+    userOnly: true,
   }),
   simpleProxyRoute({
     method: "POST",

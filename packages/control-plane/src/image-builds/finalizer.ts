@@ -209,7 +209,7 @@ export class ImageBuildFinalizer {
       providerImageId,
       repositoryShas,
       build.runtime_version,
-      (build.build_duration_seconds ?? 0) * 1000,
+      build.build_duration_seconds ?? 0,
       leaseToken
     );
     if (ready.type === "not_accepting_completion") {

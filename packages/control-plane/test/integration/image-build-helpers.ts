@@ -6,7 +6,7 @@ import { env } from "cloudflare:test";
 import { EnvironmentStore } from "../../src/db/environments";
 import type { ImageBuildScope } from "../../src/image-builds/model";
 
-export const RUNTIME_VERSION = "v56-managed-provider-runtime";
+export const RUNTIME_VERSION = "v57-vnc-runtime";
 export const REPOSITORY_SHAS = [{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }];
 
 export function environmentScope(id: string): ImageBuildScope {
