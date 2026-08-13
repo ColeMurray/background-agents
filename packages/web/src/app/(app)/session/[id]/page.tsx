@@ -273,7 +273,7 @@ export default function SessionPage() {
           <Panel
             defaultSize={showTerminal ? "70%" : "100%"}
             minSize="30%"
-            style={{ minHeight: 0, overflow: "clip" }}
+            style={{ height: "100%", minHeight: 0, overflow: "clip" }}
           >
             <SessionTimeline
               events={events}
