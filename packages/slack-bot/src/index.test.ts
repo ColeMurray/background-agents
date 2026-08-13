@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { Env } from "./types";
 import type * as SlackModule from "@open-inspect/shared/slack";
 
@@ -176,6 +176,30 @@ function createDeferred<T>() {
 
 async function flushWaitUntil(ctx: ReturnType<typeof makeCtx>, callIndex = 0): Promise<void> {
   await ctx.waitUntil.mock.calls[callIndex]?.[0];
+}
+
+/**
+ * Whether a promise has settled, decided by draining the microtask queue rather
+ * than by waiting on the clock.
+ *
+ * Racing against a `setTimeout` would make the answer depend on how loaded the
+ * machine is: a background chain that beats the timer on a dev laptop can lose
+ * on a CI runner, which is how these assertions became flaky. A promise blocked
+ * on an unresolved deferred can never settle no matter how many microtask turns
+ * elapse, so draining them answers the question deterministically.
+ */
+async function hasSettled(promise: Promise<unknown>): Promise<boolean> {
+  let settled = false;
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+  return settled;
 }
 
 function makeSessionEnv(
@@ -409,6 +433,14 @@ describe("POST /events", () => {
     clearLocalCache();
     mockVerifySlackSignature.mockResolvedValue(true);
     mockGetUserInfo.mockResolvedValue({ ok: false, error: "user_not_found" });
+  });
+
+  // Restore the global fetch spy even when a test throws before its own cleanup
+  // line. Without this, a failure part-way through a test left the spy installed
+  // and its in-flight Slack calls landing inside the next test, so one timing
+  // flake surfaced as an unrelated failure in a different describe block.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("publishes App Home when the home tab is opened", async () => {
@@ -1600,7 +1632,7 @@ describe("POST /events", () => {
   it("does not wait for Starting status before creating a session", async () => {
     const statusDeferred = createDeferred<Response>();
     const order: string[] = [];
-    const slackFetch = mockSlackFetch(order, { statusResponse: statusDeferred.promise });
+    mockSlackFetch(order, { statusResponse: statusDeferred.promise });
     const env = makeSessionEnv(order);
     const ctx = makeCtx();
 
@@ -1618,23 +1650,22 @@ describe("POST /events", () => {
     );
 
     expect(response.status).toBe(200);
-    const backgroundPromise = ctx.waitUntil.mock.calls[0]?.[0] as Promise<void>;
-    const backgroundOutcome = await Promise.race([
-      backgroundPromise.then(() => "complete"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("blocked"), 25)),
-    ]);
 
-    expect(backgroundOutcome).toBe("complete");
+    // The status call is still blocked on an unresolved deferred. If session
+    // creation waited on it, this await could never return — so awaiting it
+    // directly proves the property, with vitest's own timeout as the failure
+    // mode rather than a hand-rolled stopwatch.
+    const backgroundPromise = ctx.waitUntil.mock.calls[0]?.[0] as Promise<void>;
+    await backgroundPromise;
+
     expect(order).toContain("session");
     expect(order).toContain("prompt");
     expect(ctx.waitUntil).toHaveBeenCalledTimes(4);
 
+    // ...and the status work genuinely has not finished, so the completion above
+    // was not simply the status call racing ahead.
     const statusPromise = ctx.waitUntil.mock.calls[1]?.[0] as Promise<void>;
-    const statusOutcome = await Promise.race([
-      statusPromise.then(() => "complete"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 25)),
-    ]);
-    expect(statusOutcome).toBe("pending");
+    expect(await hasSettled(statusPromise)).toBe(false);
 
     statusDeferred.resolve(
       new Response(JSON.stringify({ ok: false, error: "missing_scope" }), {
@@ -1642,9 +1673,7 @@ describe("POST /events", () => {
         headers: { "Content-Type": "application/json" },
       })
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    slackFetch.mockRestore();
+    await statusPromise;
   });
 });
 
