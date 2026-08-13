@@ -27,7 +27,7 @@ interface ToolCallItemProps {
 function ToolIcon({ name }: { name: string | null }) {
   if (!name) return null;
 
-  const iconClass = "w-3.5 h-3.5 shrink-0 text-secondary-foreground";
+  const iconClass = "mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground";
 
   switch (name) {
     case "file":
@@ -118,7 +118,7 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
         className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
+          className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />

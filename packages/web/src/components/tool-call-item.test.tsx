@@ -25,6 +25,9 @@ describe("ToolCallItem", () => {
     const button = screen.getByRole("button", { name: new RegExp(command) });
     expect(button).toHaveTextContent(command);
     expect(button.querySelector(".truncate")).toHaveTextContent(`Bash ${command}`);
+    expect(
+      [...button.querySelectorAll("svg")].every((icon) => icon.classList.contains("mt-[3px]"))
+    ).toBe(true);
   });
 
   it("keeps long TodoWrite arguments in a contained horizontal scroller", () => {
