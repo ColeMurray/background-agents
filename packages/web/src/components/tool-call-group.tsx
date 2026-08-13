@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/icons";
 
 function ToolIcon({ toolName }: { toolName: string }) {
-  const iconClass = "w-3.5 h-3.5 text-secondary-foreground";
+  const iconClass = "w-3.5 h-3.5 shrink-0 text-secondary-foreground";
 
   switch (toolName) {
     case "Read":
@@ -65,21 +65,27 @@ export const ToolCallGroup = memo(
         <button
           type="button"
           onClick={onToggleGroup}
-          className="w-full flex items-center gap-2 text-sm text-left hover:bg-muted px-2 py-1 -mx-2 transition-colors"
+          className="-mx-2 flex w-full min-w-0 items-start gap-2 px-2 py-1 text-left text-sm transition-colors hover:bg-muted"
         >
           <ChevronRightIcon
-            className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+            className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
               isExpanded ? "rotate-90" : ""
             }`}
           />
           <ToolIcon toolName={formatted.toolName} />
-          <span className="font-medium text-foreground">{formatted.toolName}</span>
-          <span className="text-muted-foreground">{formatted.summary}</span>
-          <span className="text-xs text-secondary-foreground ml-auto flex-shrink-0">{time}</span>
+          <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
+            <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
+              <span className="font-medium text-foreground">{formatted.toolName}</span>{" "}
+              <span className="text-muted-foreground">{formatted.summary}</span>
+            </span>
+            <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
+              {time}
+            </span>
+          </span>
         </button>
 
         {isExpanded && (
-          <div className="ml-4 mt-1 pl-2 border-l-2 border-border">
+          <div className="ml-2 mt-1 border-l-2 border-border pl-2 sm:ml-4">
             {events.map((event) => (
               <ToolCallItem
                 key={toolCallKey(event)}

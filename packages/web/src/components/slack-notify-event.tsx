@@ -103,26 +103,32 @@ export function SlackNotifyEvent({
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+          className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
         {denial ? (
-          <ErrorIcon className="w-3.5 h-3.5 text-destructive" />
+          <ErrorIcon className="w-3.5 h-3.5 shrink-0 text-destructive" />
         ) : (
-          <SlackIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+          <SlackIcon className="w-3.5 h-3.5 shrink-0 text-secondary-foreground" />
         )}
-        <span className="truncate">slack-notify {summaryLine}</span>
-        {showTime && (
-          <span className="text-xs text-secondary-foreground flex-shrink-0 ml-auto">{time}</span>
-        )}
+        <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
+          <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
+            slack-notify {summaryLine}
+          </span>
+          {showTime && (
+            <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
+              {time}
+            </span>
+          )}
+        </span>
       </button>
 
       {isExpanded && (
-        <div className="mt-2 ml-5 p-3 bg-card border border-border-muted text-xs overflow-hidden">
+        <div className="mt-2 ml-0 overflow-hidden border border-border-muted bg-card p-3 text-xs [overflow-wrap:anywhere] sm:ml-5">
           {success ? (
             <SlackNotifySuccessBody success={success} />
           ) : denial ? (

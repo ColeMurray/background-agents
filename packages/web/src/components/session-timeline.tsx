@@ -221,7 +221,7 @@ export function SessionTimeline({
     <div
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="h-full overflow-y-auto overflow-x-hidden p-4"
+      className="h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
       <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
         <div ref={topSentinelRef} className="h-1" />
@@ -282,16 +282,16 @@ function ThinkingIndicator() {
 function TimelineSkeleton() {
   return (
     <div className="space-y-3 py-2 animate-pulse">
-      <div className="bg-card p-4 space-y-2">
+      <div className="bg-card p-3 space-y-2 sm:p-4">
         <div className="h-3 w-24 bg-muted rounded" />
         <div className="h-3 w-full bg-muted rounded" />
         <div className="h-3 w-5/6 bg-muted rounded" />
       </div>
-      <div className="bg-accent-muted p-4 ml-8 space-y-2">
+      <div className="bg-accent-muted p-3 space-y-2 sm:ml-8 sm:p-4">
         <div className="h-3 w-20 bg-muted rounded" />
         <div className="h-3 w-4/5 bg-muted rounded" />
       </div>
-      <div className="bg-card p-4 space-y-2">
+      <div className="bg-card p-3 space-y-2 sm:p-4">
         <div className="h-3 w-32 bg-muted rounded" />
         <div className="h-3 w-3/4 bg-muted rounded" />
       </div>
@@ -353,10 +353,10 @@ function MessageFrame({
   children,
 }: MessageFrameProps) {
   return (
-    <div className={className}>
-      <div className="flex items-center justify-between mb-2">
+    <div className={`min-w-0 ${className}`}>
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
         {label}
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <CopyButton
             copied={copied}
             className={copyButtonClassName}
@@ -397,10 +397,16 @@ function StatusRow({
           : "text-muted-foreground";
 
   return (
-    <div className={`flex items-center gap-2 text-sm ${textClassName}`}>
-      <span className={`w-2 h-2 rounded-full ${dotClassName}`} />
-      {children}
-      <span className="text-xs text-secondary-foreground">{time}</span>
+    <div className={`flex min-w-0 items-start gap-2 text-sm ${textClassName}`}>
+      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotClassName}`} />
+      <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
+        <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
+          {children}
+        </span>
+        <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
+          {time}
+        </span>
+      </span>
     </div>
   );
 }
@@ -474,12 +480,14 @@ function UserMessageEvent({
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-accent-muted p-4 ml-8"
+      className="group bg-accent-muted p-3 sm:ml-8 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
       {event.content && (
-        <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+        <pre className="whitespace-pre-wrap text-sm text-foreground [overflow-wrap:anywhere]">
+          {event.content}
+        </pre>
       )}
       {attachments.length > 0 && (
         <UserMessageAttachments attachments={attachments} sessionId={sessionId} />
@@ -497,7 +505,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-card p-4"
+      className="group bg-card p-3 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
@@ -510,10 +518,16 @@ function ToolResultEvent({ event }: EventRendererProps) {
   if (event.type !== "tool_result" || !event.error) return null;
 
   return (
-    <div className="flex items-center gap-2 text-sm text-destructive py-1">
-      <ErrorIcon className="w-4 h-4" />
-      <span className="truncate">{event.error}</span>
-      <span className="text-xs text-secondary-foreground ml-auto">{formatEventTime(event)}</span>
+    <div className="flex min-w-0 items-start gap-2 py-1 text-sm text-destructive">
+      <ErrorIcon className="h-4 w-4 shrink-0" />
+      <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
+        <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
+          {event.error}
+        </span>
+        <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
+          {formatEventTime(event)}
+        </span>
+      </span>
     </div>
   );
 }
@@ -538,7 +552,7 @@ function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
   }
 
   return (
-    <div className="space-y-2 border border-border-muted bg-card p-4">
+    <div className="space-y-2 border border-border-muted bg-card p-3 sm:p-4">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
           {event.artifactType === "video" ? "Video" : "Screenshot"}

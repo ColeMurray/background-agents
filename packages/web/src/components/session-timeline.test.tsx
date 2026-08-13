@@ -257,6 +257,30 @@ describe("prompt queue status", () => {
 });
 
 describe("tool call groups", () => {
+  it("keeps complete long commands in collapsed tool rows", () => {
+    const command = `PYTHONPATH=src uv run pytest ${"tests/very_long_directory/".repeat(4)}test_file.py`;
+    render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          {
+            type: "tool_call",
+            sandboxId: "sandbox-1",
+            messageId: "message-call-1",
+            callId: "call-1",
+            tool: "Bash",
+            args: { command },
+            timestamp: 1,
+          },
+        ]}
+      />
+    );
+
+    const button = screen.getByRole("button", { name: new RegExp(command) });
+    expect(button).toHaveTextContent(command);
+    expect(button.querySelector(".truncate")).toBeNull();
+  });
+
   it("preserves expanded group and row state when history is prepended", async () => {
     const readEvents = [
       toolCall("call-1", "Read", "/workspace/one.ts"),
@@ -264,7 +288,7 @@ describe("tool call groups", () => {
     ];
     const { rerender } = render(<SessionTimeline {...baseTimelineProps} events={readEvents} />);
 
-    await userEvent.click(screen.getByRole("button", { name: /Read2 files/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Read 2 files/i }));
     await userEvent.click(screen.getByRole("button", { name: /Read one\.ts/i }));
     expect(screen.getByText("Arguments:")).toBeInTheDocument();
 
@@ -927,7 +951,7 @@ describe("task activity grouping", () => {
     };
     const view = render(<SessionTimeline {...props} events={initial} />);
 
-    await user.click(screen.getByRole("button", { name: /Bash2 commands/ }));
+    await user.click(screen.getByRole("button", { name: /Bash 2 commands/ }));
     expect(screen.getByText(/Bash first/)).toBeInTheDocument();
     view.rerender(
       <SessionTimeline
@@ -971,7 +995,7 @@ describe("task activity grouping", () => {
       />
     );
 
-    await user.click(screen.getByRole("button", { name: /Bash2 commands/ }));
+    await user.click(screen.getByRole("button", { name: /Bash 2 commands/ }));
     expect(screen.getByText(/Bash first/)).toBeInTheDocument();
     expect(screen.getByText(/Bash second/)).toBeInTheDocument();
     expect(consoleError.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(

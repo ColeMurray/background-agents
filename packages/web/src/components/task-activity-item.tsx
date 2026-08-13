@@ -40,7 +40,7 @@ function TaskDisclosure({ label, content }: { label: string; content: string }) 
         {label}
       </button>
       {isExpanded && (
-        <pre className="border-t border-border-muted px-3 py-2 overflow-x-auto max-h-64 text-xs text-foreground whitespace-pre-wrap break-words">
+        <pre className="max-h-64 whitespace-pre-wrap border-t border-border-muted px-3 py-2 text-xs text-foreground [overflow-wrap:anywhere]">
           {content}
         </pre>
       )}
@@ -70,25 +70,27 @@ export function TaskActivityItem({
         type="button"
         aria-expanded={isExpanded}
         onClick={() => setIsExpanded((expanded) => !expanded)}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+          className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
-        <BoxIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+        <BoxIcon className="w-3.5 h-3.5 shrink-0 text-secondary-foreground" />
         {isRunning && (
           <span
             aria-hidden="true"
             className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse flex-shrink-0"
           />
         )}
-        <span className="truncate">
-          {formatted.toolName} {formatted.summary}
-        </span>
-        <span className="text-xs text-secondary-foreground flex-shrink-0 ml-auto">
-          {formatSessionEventTime(event.timestamp)}
+        <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
+          <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
+            {formatted.toolName} {formatted.summary}
+          </span>
+          <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
+            {formatSessionEventTime(event.timestamp)}
+          </span>
         </span>
       </button>
       {isRunning && (
@@ -98,7 +100,7 @@ export function TaskActivityItem({
       )}
 
       {isExpanded && (
-        <div className="mt-2 ml-5 space-y-2">
+        <div className="mt-2 ml-0 space-y-2 sm:ml-5">
           {(agent || taskId) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-secondary-foreground">
               {agent && <span>Agent: {agent}</span>}
@@ -106,7 +108,7 @@ export function TaskActivityItem({
             </div>
           )}
           {hasActivity && (
-            <div className="border-l-2 border-border pl-3 py-1 space-y-1">
+            <div className="space-y-1 border-l-2 border-border py-1 pl-2 sm:pl-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
                 Task activity
               </div>

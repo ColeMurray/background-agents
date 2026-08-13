@@ -26,7 +26,7 @@ interface ToolCallItemProps {
 function ToolIcon({ name }: { name: string | null }) {
   if (!name) return null;
 
-  const iconClass = "w-3.5 h-3.5 text-secondary-foreground";
+  const iconClass = "w-3.5 h-3.5 shrink-0 text-secondary-foreground";
 
   switch (name) {
     case "file":
@@ -66,7 +66,7 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
       {hasNonPatchArgs && (
         <div className="mb-2">
           <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
-          <pre className="overflow-x-auto text-foreground whitespace-pre-wrap">
+          <pre className="max-w-full overflow-x-auto whitespace-pre text-foreground">
             {JSON.stringify(nonPatchArgs, null, 2)}
           </pre>
         </div>
@@ -74,7 +74,7 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
       {patchText && (
         <div className="mb-2">
           <div className="text-muted-foreground mb-1 font-medium">Patch:</div>
-          <pre className="overflow-x-auto max-h-64 text-foreground whitespace-pre-wrap">
+          <pre className="max-h-64 max-w-full overflow-x-auto whitespace-pre text-foreground">
             {patchText}
           </pre>
         </div>
@@ -82,7 +82,7 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
       {output && (
         <div>
           <div className="text-muted-foreground mb-1 font-medium">Output:</div>
-          <pre className="overflow-x-auto max-h-48 text-foreground whitespace-pre-wrap">
+          <pre className="max-h-48 max-w-full overflow-x-auto whitespace-pre text-foreground">
             {output}
           </pre>
         </div>
@@ -114,24 +114,28 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+          className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
         <ToolIcon name={formatted.icon} />
-        <span className="truncate">
-          {formatted.toolName} {formatted.summary}
+        <span className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-2">
+          <span className="block whitespace-normal [overflow-wrap:anywhere] sm:min-w-0 sm:flex-1">
+            {formatted.toolName} {formatted.summary}
+          </span>
+          {showTime && (
+            <span className="mt-0.5 block shrink-0 text-xs text-secondary-foreground sm:ml-auto sm:mt-0">
+              {time}
+            </span>
+          )}
         </span>
-        {showTime && (
-          <span className="text-xs text-secondary-foreground flex-shrink-0 ml-auto">{time}</span>
-        )}
       </button>
 
       {isExpanded && (
-        <div className="mt-2 ml-5">
+        <div className="mt-2 ml-0 sm:ml-5">
           <ToolCallDetails event={event} />
         </div>
       )}
