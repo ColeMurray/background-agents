@@ -713,6 +713,13 @@ describe("task activity grouping", () => {
       />
     );
 
+    const task = screen.getByRole("button", { name: /Task Review code/ });
+    expect(task).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Result" })).not.toBeInTheDocument();
+
+    await user.click(task);
+    expect(task).toHaveAttribute("aria-expanded", "true");
     expect(screen.queryByText("Arguments:")).not.toBeInTheDocument();
     expect(screen.queryByText("Output:")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Instructions" })).toBeInTheDocument();
@@ -745,6 +752,7 @@ describe("task activity grouping", () => {
       />
     );
 
+    await user.click(screen.getByRole("button", { name: /Task Investigate failure/ }));
     expect(screen.queryByText("Output:")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Result" }));
     expect(screen.getByText("Agent could not finish.")).toBeInTheDocument();
@@ -807,6 +815,14 @@ describe("task activity grouping", () => {
       />
     );
 
+    const task = screen.getByRole("button", { name: /Task Review code/ });
+    expect(task).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent: explore")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
+
+    await user.click(task);
+    expect(task).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Task activity")).toBeInTheDocument();
     expect(screen.getByText("Agent: explore")).toBeInTheDocument();
     expect(screen.getByText("Task ID: ses_resumed")).toBeInTheDocument();
@@ -855,6 +871,10 @@ describe("task activity grouping", () => {
     );
     expect(screen.getByRole("button", { name: "Result" })).toHaveAttribute("aria-expanded", "true");
 
+    expect(screen.getByRole("button", { name: /Task Review code/ })).toHaveAttribute(
+      "aria-expanded",
+      "true"
+    );
     await user.click(screen.getByRole("button", { name: /Task Review code/ }));
     expect(screen.queryByText("Task activity")).not.toBeInTheDocument();
   });
@@ -894,6 +914,11 @@ describe("task activity grouping", () => {
         onOpenMedia={() => {}}
       />
     );
+
+    const tasks = screen.getAllByRole("button", { name: /Task (Review code|Investigate failure)/ });
+    expect(tasks).toHaveLength(2);
+    await user.click(tasks[0]);
+    await user.click(tasks[1]);
 
     expect(screen.queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Agent:/)).not.toBeInTheDocument();

@@ -58,7 +58,7 @@ export function TaskActivityItem({
   hasActivity: boolean;
   children: ReactNode;
 }) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
   const formatted = formatToolCall(event);
   const prompt = stringArg(event, "prompt");
   const agent = stringArg(event, "subagent_type");
