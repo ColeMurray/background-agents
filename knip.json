@@ -1,0 +1,40 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": ["wrangler", "cloudflare", "postcss-load-config", "vitest"],
+  "ignoreBinaries": ["ruff", "ssh-keygen"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/cf-logs.ts", "scripts/merge-split-users.ts", "vitest.workspace.ts"],
+      "project": ["scripts/**/*.ts"],
+      "ignoreDependencies": ["database", "survivor", "loser"]
+    },
+    "packages/shared": {
+      "project": ["src/**/*.ts"],
+      "ignoreIssues": {
+        "src/types/repositories.ts": ["duplicates"]
+      }
+    },
+    "packages/control-plane": {
+      "entry": ["test/integration/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+    },
+    "packages/github-bot": {
+      "entry": ["test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/linear-bot": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/slack-bot": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/opencomputer-infra": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/web": {
+      "next": true,
+      "entry": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      "project": ["src/**/*.{ts,tsx,css}"]
+    }
+  }
+}
