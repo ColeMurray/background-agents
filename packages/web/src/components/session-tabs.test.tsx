@@ -205,6 +205,24 @@ describe("SessionTabs", () => {
     expect(screen.getAllByRole("tab")).toHaveLength(10);
   });
 
+  it("compresses crowded tabs inside a scrollbar-free inner scroller", async () => {
+    render(
+      <SessionTabsProvider>
+        <RegisterManySessions />
+        <SessionTabs />
+      </SessionTabsProvider>
+    );
+
+    const tabList = await screen.findByRole("tablist");
+    const tabContainer = screen.getByRole("tab", { name: "Open Bulk 11" }).parentElement;
+    const navigation = screen.getByRole("navigation", { name: "Open sessions" });
+
+    expect(navigation).toHaveClass("overflow-hidden");
+    expect(navigation).not.toHaveClass("overflow-x-auto");
+    expect(tabList).toHaveClass("session-tab-scroller", "min-w-0", "flex-1", "overflow-x-auto");
+    expect(tabContainer).toHaveClass("min-w-24", "max-w-52", "flex-1", "basis-52");
+  });
+
   it("closes an inactive tab without navigating", async () => {
     renderTabs();
 

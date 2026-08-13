@@ -445,16 +445,20 @@ function SessionTabStrip({
   return (
     <nav
       aria-label="Open sessions"
-      className="order-first flex h-10 flex-shrink-0 items-end overflow-x-auto border-b border-border bg-muted/40"
+      className="order-first flex h-10 flex-shrink-0 items-end overflow-hidden border-b border-border bg-muted/40"
     >
-      <div ref={tabListRef} role="tablist" className="flex h-full min-w-max items-end px-1 pt-1">
+      <div
+        ref={tabListRef}
+        role="tablist"
+        className="session-tab-scroller flex h-full min-w-0 flex-1 items-end overflow-x-auto px-1 pt-1"
+      >
         {tabs.map((tab, tabIndex) => {
           const isActive = tab.id === activeTabId;
           return (
             <div
               key={tab.id}
               data-session-tab={tab.id}
-              className={`group relative flex h-9 w-44 max-w-[45vw] items-center border-x border-t px-1 transition-colors first:rounded-tl-sm last:rounded-tr-sm md:w-52 ${
+              className={`group relative flex h-9 min-w-24 max-w-52 flex-1 basis-52 items-center border-x border-t px-1 transition-colors first:rounded-tl-sm last:rounded-tr-sm ${
                 isActive
                   ? "z-10 border-border bg-background text-foreground"
                   : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
