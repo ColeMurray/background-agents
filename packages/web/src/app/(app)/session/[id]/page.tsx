@@ -10,6 +10,7 @@ import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
 import { SessionDetailsOverlay } from "@/components/session-details-overlay";
 import { SessionPromptComposer } from "@/components/session-prompt-composer";
+import { QueuedPromptStack } from "@/components/queued-prompt-stack";
 import { SessionRightSidebar } from "@/components/session-right-sidebar";
 import {
   Group as PanelGroup,
@@ -52,6 +53,11 @@ import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import {
+  promptRequestSignature,
+  resolvePromptRequestIdentity,
+  type PromptRequestIdentity,
+} from "@/lib/prompt-request-id";
+import {
   classifySessionReadAttempt,
   markMessageRead,
   reconcileSessionReadState,
@@ -79,6 +85,7 @@ export default function SessionPage() {
     artifacts,
     currentParticipantId,
     isProcessing,
+    promptQueue,
     loadingHistory,
     sendPrompt,
     stopExecution,
@@ -112,17 +119,18 @@ export default function SessionPage() {
     sessionAttachments,
     inputRef,
     isSubmitting,
+    submitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
   } = usePromptInput(
     sessionId,
-    isProcessing,
     sendPrompt,
     sendTyping,
     selectedModel,
     reasoningEffort,
-    loadingEnabledModels
+    loadingEnabledModels,
+    sessionState?.status ?? "created"
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
@@ -259,41 +267,80 @@ export default function SessionPage() {
   }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-clip">
-      <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
-        <Panel
-          defaultSize={showTerminal ? "70%" : "100%"}
-          minSize="30%"
-          style={{ minHeight: 0, overflow: "clip" }}
-        >
-          <SessionTimeline
-            events={events}
-            sessionId={sessionId}
-            currentParticipantId={currentParticipantId}
-            participantProfiles={profiles}
-            isProcessing={isProcessing}
-            loadingHistory={loadingHistory}
-            showSkeleton={false}
-            onLoadOlder={loadOlderEvents}
-            onOpenMedia={setSelectedMediaArtifactId}
-            terminalMessageReadObservationEnabled={
-              !loadingHistory &&
-              !isDetailsOpen &&
-              selectedMediaArtifactId === null &&
-              resolvedDiff === null
-            }
-            onMarkMessageRead={attemptMarkVisibleMessageRead}
-          />
-        </Panel>
-        {showTerminal && (
-          <>
-            <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
-            <Panel defaultSize="30%" minSize="15%" maxSize="70%">
-              <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
-            </Panel>
-          </>
-        )}
-      </PanelGroup>
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-clip">
+      <div className="min-h-0 min-w-0 flex-1 overflow-clip">
+        <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
+          <Panel
+            defaultSize={showTerminal ? "70%" : "100%"}
+            minSize="30%"
+            style={{ minHeight: 0, overflow: "clip" }}
+          >
+            <SessionTimeline
+              events={events}
+              sessionId={sessionId}
+              currentParticipantId={currentParticipantId}
+              participantProfiles={profiles}
+              isProcessing={isProcessing}
+              promptQueue={promptQueue}
+              loadingHistory={loadingHistory}
+              showSkeleton={false}
+              onLoadOlder={loadOlderEvents}
+              onOpenMedia={setSelectedMediaArtifactId}
+              terminalMessageReadObservationEnabled={
+                !loadingHistory &&
+                !isDetailsOpen &&
+                selectedMediaArtifactId === null &&
+                resolvedDiff === null
+              }
+              onMarkMessageRead={attemptMarkVisibleMessageRead}
+            />
+          </Panel>
+          {showTerminal && (
+            <>
+              <PanelResizeHandle className="h-1.5 cursor-row-resize bg-border-muted transition-colors hover:bg-accent" />
+              <Panel defaultSize="30%" minSize="15%" maxSize="70%">
+                <TerminalPanel url={ttydUrl!} token={ttydToken!} onClose={closeTerminal} />
+              </Panel>
+            </>
+          )}
+        </PanelGroup>
+      </div>
+      <QueuedPromptStack promptQueue={promptQueue} />
+      <SessionPromptComposer
+        session={{
+          id: sessionId,
+          status: sessionState?.status ?? "created",
+          artifacts,
+          primaryRepo,
+          onArchive: handleArchive,
+          onUnarchive: handleUnarchive,
+        }}
+        prompt={{
+          value: prompt,
+          isProcessing: ready && isProcessing,
+          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
+          submitError,
+          inputRef,
+          onSubmit: handleSubmit,
+          onChange: handleInputChange,
+          onKeyDown: handleKeyDown,
+          onStopExecution: stopExecution,
+        }}
+        attachments={{
+          items: sessionAttachments.attachments,
+          error: sessionAttachments.attachmentError,
+          isUploading: sessionAttachments.isUploading,
+          onAdd: sessionAttachments.addFiles,
+          onRemove: sessionAttachments.removeAttachment,
+        }}
+        model={{
+          selectedModel,
+          reasoningEffort,
+          items: modelItems,
+          onModelChange: handleModelChange,
+          onReasoningEffortChange: setReasoningEffort,
+        }}
+      />
     </div>
   );
 
@@ -443,41 +490,6 @@ export default function SessionPage() {
           if (!open) {
             setSelectedMediaArtifactId(null);
           }
-        }}
-      />
-
-      <SessionPromptComposer
-        session={{
-          id: sessionId,
-          status: sessionState?.status ?? "created",
-          artifacts,
-          primaryRepo,
-          onArchive: handleArchive,
-          onUnarchive: handleUnarchive,
-        }}
-        prompt={{
-          value: prompt,
-          isProcessing: ready && isProcessing,
-          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
-          inputRef,
-          onSubmit: handleSubmit,
-          onChange: handleInputChange,
-          onKeyDown: handleKeyDown,
-          onStopExecution: stopExecution,
-        }}
-        attachments={{
-          items: sessionAttachments.attachments,
-          error: sessionAttachments.attachmentError,
-          isUploading: sessionAttachments.isUploading,
-          onAdd: sessionAttachments.addFiles,
-          onRemove: sessionAttachments.removeAttachment,
-        }}
-        model={{
-          selectedModel,
-          reasoningEffort,
-          items: modelItems,
-          onModelChange: handleModelChange,
-          onReasoningEffortChange: setReasoningEffort,
         }}
       />
     </div>
@@ -638,19 +650,24 @@ function useModelSelection(sessionState: SessionState) {
  */
 function usePromptInput(
   sessionId: string,
-  isProcessing: boolean,
   sendPrompt: ReturnType<typeof useSessionSocket>["sendPrompt"],
   sendTyping: ReturnType<typeof useSessionSocket>["sendTyping"],
   selectedModel: string,
   reasoningEffort: string | undefined,
-  loadingEnabledModels: boolean
+  loadingEnabledModels: boolean,
+  sessionStatus: NonNullable<SessionState>["status"]
 ) {
   const [prompt, setPrompt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
+  const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
+  const attachmentDraftSignature = sessionAttachments.attachments
+    .map((attachment) => attachment.id)
+    .join("\u0000");
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -660,6 +677,9 @@ function usePromptInput(
   }, []);
 
   useEffect(() => clearTypingTimeout, [clearTypingTimeout]);
+  useEffect(() => {
+    retryRequestRef.current = null;
+  }, [selectedModel, reasoningEffort, attachmentDraftSignature]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -667,7 +687,8 @@ function usePromptInput(
     if (
       submitInFlightRef.current ||
       (!prompt.trim() && !hasAttachments) ||
-      isProcessing ||
+      sessionStatus === "archived" ||
+      sessionStatus === "cancelled" ||
       loadingEnabledModels ||
       sessionAttachments.isUploading
     ) {
@@ -676,26 +697,49 @@ function usePromptInput(
 
     submitInFlightRef.current = true;
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
+      const content = prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE;
       let attachments: SessionAttachmentReference[] | undefined;
       if (hasAttachments) {
         try {
           attachments = await sessionAttachments.uploadAll(sessionId);
-        } catch {
+        } catch (error) {
+          setSubmitError(error instanceof Error ? error.message : "Failed to upload attachments");
           return;
         }
       }
 
       // Drop any queued typing indicator — the prompt supersedes it
       clearTypingTimeout();
-      const accepted = await sendPrompt(
-        prompt.trim() || DEFAULT_ATTACHMENT_ONLY_MESSAGE,
+      const signature = promptRequestSignature({
+        content,
+        model: selectedModel,
+        reasoningEffort,
+        attachmentIds: sessionAttachments.attachments.map((attachment) => attachment.id),
+      });
+      const requestIdentity = resolvePromptRequestIdentity(signature, retryRequestRef.current);
+      retryRequestRef.current = requestIdentity;
+      const result = await sendPrompt(
+        content,
         selectedModel,
         reasoningEffort,
-        attachments
+        attachments,
+        requestIdentity.clientRequestId
       );
-      if (!accepted) return;
+      if (!result.ok) {
+        setSubmitError(
+          result.message ??
+            (result.reason === "timeout"
+              ? "Confirmation timed out. Retry while this page is open to reuse the same request."
+              : result.reason === "disconnected"
+                ? "Disconnected before confirmation. Retry on this page after reconnecting."
+                : "The prompt could not be queued.")
+        );
+        return;
+      }
 
+      retryRequestRef.current = null;
       setPrompt("");
       sessionAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
@@ -717,6 +761,8 @@ function usePromptInput(
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setPrompt(e.target.value);
+    setSubmitError(null);
+    retryRequestRef.current = null;
 
     // Send typing indicator (debounced)
     clearTypingTimeout();
@@ -730,6 +776,7 @@ function usePromptInput(
     sessionAttachments,
     inputRef,
     isSubmitting,
+    submitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,

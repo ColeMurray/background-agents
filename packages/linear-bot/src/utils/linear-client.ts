@@ -44,6 +44,16 @@ const linearCommentCreateResponseSchema = z.object({
     .optional(),
 });
 
+const linearGraphQLErrorSchema = z.object({
+  message: z.string().optional(),
+});
+
+const linearGraphQLResponseSchema = z
+  .object({
+    errors: z.array(linearGraphQLErrorSchema).optional(),
+  })
+  .passthrough();
+
 // ─── OAuth Helpers ───────────────────────────────────────────────────────────
 
 export function buildOAuthAuthorizeUrl(env: Env): string {
@@ -151,10 +161,14 @@ export async function linearGraphQL(
     throw new Error(`Linear API error: ${res.status}`);
   }
 
-  const json = (await res.json()) as Record<string, unknown>;
+  const parsed = linearGraphQLResponseSchema.safeParse(await res.json());
+  if (!parsed.success) {
+    throw new Error("Linear GraphQL error: unexpected response shape");
+  }
+  const json = parsed.data;
 
   if (Array.isArray(json.errors) && json.errors.length > 0) {
-    const msg = (json.errors[0] as { message?: string }).message ?? "Unknown GraphQL error";
+    const msg = json.errors[0]?.message ?? "Unknown GraphQL error";
     throw new Error(`Linear GraphQL error: ${msg}`);
   }
 

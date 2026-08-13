@@ -5,6 +5,7 @@ import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import type { ToolCallEvent } from "@/lib/timeline-items";
 import { BoxIcon, ChevronRightIcon } from "@/components/ui/icons";
+import { TimelineRowContent } from "./timeline-row-content";
 
 function stringArg(event: ToolCallEvent, key: string): string | null {
   const value = event.args?.[key];
@@ -40,7 +41,7 @@ function TaskDisclosure({ label, content }: { label: string; content: string }) 
         {label}
       </button>
       {isExpanded && (
-        <pre className="border-t border-border-muted px-3 py-2 overflow-x-auto max-h-64 text-xs text-foreground whitespace-pre-wrap break-words">
+        <pre className="max-h-64 whitespace-pre-wrap border-t border-border-muted px-3 py-2 text-xs text-foreground [overflow-wrap:anywhere]">
           {content}
         </pre>
       )}
@@ -57,7 +58,7 @@ export function TaskActivityItem({
   hasActivity: boolean;
   children: ReactNode;
 }) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(false);
   const formatted = formatToolCall(event);
   const prompt = stringArg(event, "prompt");
   const agent = stringArg(event, "subagent_type");
@@ -70,26 +71,23 @@ export function TaskActivityItem({
         type="button"
         aria-expanded={isExpanded}
         onClick={() => setIsExpanded((expanded) => !expanded)}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+          className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
-        <BoxIcon className="w-3.5 h-3.5 text-secondary-foreground" />
+        <BoxIcon className="mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground" />
         {isRunning && (
           <span
             aria-hidden="true"
-            className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse flex-shrink-0"
+            className="mt-1.5 inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-accent"
           />
         )}
-        <span className="truncate">
+        <TimelineRowContent time={formatSessionEventTime(event.timestamp)}>
           {formatted.toolName} {formatted.summary}
-        </span>
-        <span className="text-xs text-secondary-foreground flex-shrink-0 ml-auto">
-          {formatSessionEventTime(event.timestamp)}
-        </span>
+        </TimelineRowContent>
       </button>
       {isRunning && (
         <span role="status" className="sr-only">
@@ -98,7 +96,7 @@ export function TaskActivityItem({
       )}
 
       {isExpanded && (
-        <div className="mt-2 ml-5 space-y-2">
+        <div className="mt-2 ml-0 space-y-2 sm:ml-5">
           {(agent || taskId) && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-secondary-foreground">
               {agent && <span>Agent: {agent}</span>}
@@ -106,7 +104,7 @@ export function TaskActivityItem({
             </div>
           )}
           {hasActivity && (
-            <div className="border-l-2 border-border pl-3 py-1 space-y-1">
+            <div className="space-y-1 border-l-2 border-border py-1 pl-2 sm:pl-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
                 Task activity
               </div>

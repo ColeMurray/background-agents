@@ -25,11 +25,6 @@ import {
 
 export type { ControlPlaneFetcher };
 
-/**
- * Tool names included in summary display.
- */
-export const SUMMARY_TOOL_NAMES = ["Edit", "Write", "Bash", "Grep", "Read"] as const;
-
 /** Server-side limit for the events API. */
 const EVENTS_PAGE_LIMIT = 200;
 

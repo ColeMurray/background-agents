@@ -10,7 +10,11 @@ import {
 } from "@open-inspect/shared/types/integrations";
 import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { IntegrationSettingsSkeleton } from "./integrations/integration-settings-skeleton";
-import { getScmRepoSettingsPath, SCM_REPO_SETTINGS_KEY } from "./scm-settings-path";
+import {
+  getScmRepoSettingsPath,
+  SCM_GLOBAL_SETTINGS_KEY,
+  SCM_REPO_SETTINGS_KEY,
+} from "./scm-settings-path";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,8 +36,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const GLOBAL_SETTINGS_KEY = "/api/scm-settings";
-const REPO_SETTINGS_KEY = SCM_REPO_SETTINGS_KEY;
 const DEFAULT_ALWAYS_USE_DRAFT_MODE = false;
 const DEFAULT_PULL_REQUEST_LABEL = "";
 
@@ -100,12 +102,12 @@ export function ScmSettingsPage() {
     data: globalData,
     error: globalError,
     isLoading: globalLoading,
-  } = useSWR<unknown>(GLOBAL_SETTINGS_KEY);
+  } = useSWR<unknown>(SCM_GLOBAL_SETTINGS_KEY);
   const {
     data: repoSettingsData,
     error: repoSettingsError,
     isLoading: repoSettingsLoading,
-  } = useSWR<unknown>(REPO_SETTINGS_KEY);
+  } = useSWR<unknown>(SCM_REPO_SETTINGS_KEY);
   const { data: reposData } = useSWR<ReposResponse>("/api/repos");
 
   if (globalLoading || repoSettingsLoading) {
@@ -181,10 +183,10 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
     setSaving(true);
 
     try {
-      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, { method: "DELETE" });
+      const res = await browserApiFetch(SCM_GLOBAL_SETTINGS_KEY, { method: "DELETE" });
 
       if (res.ok) {
-        await mutate(GLOBAL_SETTINGS_KEY);
+        await mutate(SCM_GLOBAL_SETTINGS_KEY);
         setAlwaysUseDraftMode(DEFAULT_ALWAYS_USE_DRAFT_MODE);
         setPullRequestLabel(DEFAULT_PULL_REQUEST_LABEL);
         setDirty(false);
@@ -211,14 +213,14 @@ function GlobalSettingsSection({ settings }: { settings: ScmGlobalConfig | null 
     const body: ScmGlobalConfig = { defaults };
 
     try {
-      const res = await browserApiFetch(GLOBAL_SETTINGS_KEY, {
+      const res = await browserApiFetch(SCM_GLOBAL_SETTINGS_KEY, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ settings: body }),
       });
 
       if (res.ok) {
-        await mutate(GLOBAL_SETTINGS_KEY);
+        await mutate(SCM_GLOBAL_SETTINGS_KEY);
         setPullRequestLabel(normalizedLabel);
         toast.success("Settings saved.");
         setDirty(false);
@@ -338,7 +340,7 @@ function RepoOverridesSection({
       });
 
       if (res.ok) {
-        mutate(REPO_SETTINGS_KEY);
+        mutate(SCM_REPO_SETTINGS_KEY);
         setAddingRepo("");
         toast.success("Override added.");
       } else {
@@ -440,7 +442,7 @@ function RepoOverrideRow({
       });
 
       if (res.ok) {
-        await mutate(REPO_SETTINGS_KEY);
+        await mutate(SCM_REPO_SETTINGS_KEY);
         setPullRequestLabel(normalizedLabel);
         setDirty(false);
         toast.success(`Override for ${entry.repo} saved.`);
@@ -465,7 +467,7 @@ function RepoOverrideRow({
       });
 
       if (res.ok) {
-        mutate(REPO_SETTINGS_KEY);
+        mutate(SCM_REPO_SETTINGS_KEY);
         toast.success(`Override for ${entry.repo} removed.`);
       } else {
         const data = await res.json();

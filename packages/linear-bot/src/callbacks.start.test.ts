@@ -72,6 +72,30 @@ describe("POST /start", () => {
     expect(transitionIssueToStarted).toHaveBeenCalledWith(client, "issue-1");
   });
 
+  it("verifies the original callback field order after schema validation", async () => {
+    const getLinearClient = vi.fn(async () => client);
+    const transitionIssueToStarted = vi.fn(async () => ({
+      outcome: "already_started" as const,
+      previousStateType: "started",
+    }));
+    const router = createStartCallbackRouter({
+      getLinearClient,
+      transitionIssueToStarted,
+      now: () => NOW,
+    });
+    const base = await signedPayload();
+    const context = {
+      ...base.context,
+      emitToolProgressActivities: true,
+      transitionIssueOnStart: true,
+    };
+
+    const response = await postStart(router, signedPayload({ context }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, outcome: "already_started" });
+  });
+
   it("rejects malformed JSON", async () => {
     const { kv } = createFakeKV();
 

@@ -73,50 +73,6 @@ export interface ClassificationResult {
 
 export type { SlackSessionTarget } from "../targets";
 
-/**
- * Slack event types.
- */
-export interface SlackEvent {
-  type: string;
-  event: {
-    type: string;
-    text?: string;
-    user?: string;
-    channel?: string;
-    ts?: string;
-    thread_ts?: string;
-    bot_id?: string;
-  };
-  event_id: string;
-  event_time: number;
-  team_id: string;
-}
-
-/**
- * Slack message event.
- */
-export interface SlackMessageEvent {
-  type: "message";
-  text: string;
-  user: string;
-  channel: string;
-  ts: string;
-  thread_ts?: string;
-  bot_id?: string;
-}
-
-/**
- * Slack app_mention event.
- */
-export interface SlackAppMentionEvent {
-  type: "app_mention";
-  text: string;
-  user: string;
-  channel: string;
-  ts: string;
-  thread_ts?: string;
-}
-
 export type { SlackInteractionPayload } from "../interaction-payload";
 
 import type { SlackCallbackContext } from "@open-inspect/shared/types/session-api";

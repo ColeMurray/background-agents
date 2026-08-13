@@ -11,6 +11,16 @@ export type TimelineItem =
   | FlatTimelineItem
   | { type: "task_group"; event: ToolCallEvent; activity: FlatTimelineItem[]; id: string };
 
+export type SessionTimelineItem =
+  | TimelineItem
+  | {
+      type: "work_group";
+      messageId: string;
+      durationSeconds: number;
+      activity: TimelineItem[];
+      id: string;
+    };
+
 export function toolCallKey(event: ToolCallEvent): string {
   return toolCallIdentityKey(event);
 }
@@ -144,4 +154,90 @@ export function buildTimelineItems(events: SandboxEvent[]): TimelineItem[] {
 
   flushFlatEvents();
   return items;
+}
+
+function isVisibleActivity(item: TimelineItem): boolean {
+  if (item.type !== "single") return true;
+
+  const event = item.event;
+  switch (event.type) {
+    case "token":
+      return Boolean(event.content);
+    case "tool_result":
+      return Boolean(event.error);
+    case "git_sync":
+    case "artifact":
+    case "error":
+    case "warning":
+    case "context_compacted":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * Collapses completed turn activity while leaving in-flight and partial-history
+ * events in their existing flat presentation.
+ */
+export function buildSessionTimelineItems(events: SandboxEvent[]): SessionTimelineItem[] {
+  const items = buildTimelineItems(events);
+  const result: SessionTimelineItem[] = [];
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (item.type !== "single" || item.event.type !== "user_message") {
+      result.push(item);
+      continue;
+    }
+    const userMessage = item.event;
+
+    const completionIndex = items.findIndex(
+      (candidate, candidateIndex) =>
+        candidateIndex > index &&
+        candidate.type === "single" &&
+        candidate.event.type === "execution_complete" &&
+        candidate.event.messageId === userMessage.messageId
+    );
+    if (completionIndex < 0) {
+      result.push(item);
+      continue;
+    }
+
+    let finalOutputIndex = -1;
+    for (let candidateIndex = index + 1; candidateIndex < completionIndex; candidateIndex += 1) {
+      const candidate = items[candidateIndex];
+      if (
+        candidate.type === "single" &&
+        candidate.event.type === "token" &&
+        candidate.event.messageId === userMessage.messageId
+      ) {
+        finalOutputIndex = candidateIndex;
+      }
+    }
+
+    const activityEndIndex = finalOutputIndex >= 0 ? finalOutputIndex : completionIndex;
+    const activity = items.slice(index + 1, activityEndIndex).filter(isVisibleActivity);
+    result.push(item);
+    const completion = items[completionIndex];
+    if (completion.type !== "single" || completion.event.type !== "execution_complete") continue;
+    result.push({
+      type: "work_group",
+      messageId: userMessage.messageId,
+      durationSeconds: Math.max(0, completion.event.timestamp - userMessage.timestamp),
+      activity,
+      id: `work:${userMessage.messageId}`,
+    });
+
+    for (
+      let candidateIndex = activityEndIndex;
+      candidateIndex <= completionIndex;
+      candidateIndex += 1
+    ) {
+      result.push(items[candidateIndex]);
+    }
+    index = completionIndex;
+  }
+
+  return result;
 }

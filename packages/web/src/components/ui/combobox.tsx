@@ -36,6 +36,14 @@ function defaultFilter<T>(option: ComboboxOption<T>, query: string): boolean {
 
 interface ComboboxProps<T = string> {
   id?: string;
+  /**
+   * Id of the `<label>` element for this field. Pass this whenever a `label[for]`
+   * points at `id`: the trigger is a plain `<button>`, so an associated label wins
+   * the accessible name outright and the collapsed control stops announcing its
+   * selection. With `labelId` set, the trigger is named by the label text plus the
+   * current value text instead.
+   */
+  labelId?: string;
   value: T;
   onChange: (value: T) => void;
   items: ComboboxOption<T>[] | ComboboxGroup<T>[];
@@ -53,6 +61,7 @@ interface ComboboxProps<T = string> {
 
 export function Combobox<T = string>({
   id,
+  labelId,
   value,
   onChange,
   items,
@@ -77,6 +86,7 @@ export function Combobox<T = string>({
   const instanceId = useId();
   const listboxId = `${instanceId}-listbox`;
   const optionIdPrefix = `${instanceId}-option`;
+  const valueId = `${instanceId}-value`;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -264,8 +274,13 @@ export function Combobox<T = string>({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}
+        aria-labelledby={labelId ? `${labelId} ${valueId}` : undefined}
       >
-        {children}
+        {/* `contents` keeps this wrapper out of the trigger's layout while giving the
+            rendered value an id that aria-labelledby can point at. */}
+        <span id={valueId} className="contents">
+          {children}
+        </span>
       </button>
 
       {open && (

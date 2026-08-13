@@ -12,6 +12,14 @@ import type { Env } from "../types";
 /** Maximum webhook payload size (64KB). */
 const MAX_PAYLOAD_SIZE = 64 * 1024;
 
+export function parseWebhookIdempotencyKey(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || Array.isArray(body) || !("idempotencyKey" in body)) {
+    return undefined;
+  }
+
+  return typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined;
+}
+
 async function handleAutomationWebhook(
   request: Request,
   env: Env,
@@ -64,10 +72,7 @@ async function handleAutomationWebhook(
     return error("Invalid JSON body", 400);
   }
 
-  const idempotencyKey =
-    body && typeof body === "object"
-      ? ((body as Record<string, unknown>).idempotencyKey as string | undefined)
-      : undefined;
+  const idempotencyKey = parseWebhookIdempotencyKey(body);
 
   // 6. Normalize and forward to SchedulerDO
   const event = normalizeWebhookEvent(automationId, body, idempotencyKey);

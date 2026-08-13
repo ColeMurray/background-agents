@@ -2102,7 +2102,7 @@ describe("POST /interactions", () => {
 
   it("prefers repo branch over global branch when creating a session", async () => {
     const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      return new Response(JSON.stringify({ ok: true, ts: "123.456" }), {
+      return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -2226,7 +2226,7 @@ describe("POST /interactions", () => {
 
   it("forwards display identity fields from getUserInfo to session creation", async () => {
     const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      return new Response(JSON.stringify({ ok: true, ts: "123.456" }), {
+      return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -2343,7 +2343,7 @@ describe("POST /interactions", () => {
 
   it("creates session even when getUserInfo throws", async () => {
     const slackFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-      return new Response(JSON.stringify({ ok: true, ts: "123.456" }), {
+      return new Response(JSON.stringify({ ok: true, channel: "C123", ts: "123.456" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });

@@ -222,8 +222,7 @@ export class SchedulerDO extends DurableObject<Env> {
 
   /**
    * Increment the automation's failure streak and auto-pause at the threshold.
-   * Callers gate this per-invocation via the failure_counted_at CAS; only the
-   * legacy rollback-window path (runs without an invocation) calls it directly.
+   * Callers gate this per-invocation via the failure_counted_at CAS.
    */
   private async trackAutomationFailure(
     store: AutomationStore,
@@ -755,17 +754,10 @@ export class SchedulerDO extends DurableObject<Env> {
     }
 
     // Failure accounting: strikes are per INVOCATION (CAS-deduped), so two
-    // stuck children of one fan-out cost one strike, not two. Runs without an
-    // invocation link (rollback-window writes by pre-invocation code) keep the
-    // legacy per-run bulk accounting until the backfill repairs them.
+    // stuck children of one fan-out cost one strike, not two.
     const affectedInvocations = new Map<string, string>(); // invocation id → automation id
-    const legacyCounts = new Map<string, number>();
     for (const run of recoveredRuns) {
-      if (run.invocation_id) {
-        affectedInvocations.set(run.invocation_id, run.automation_id);
-      } else {
-        legacyCounts.set(run.automation_id, (legacyCounts.get(run.automation_id) ?? 0) + 1);
-      }
+      affectedInvocations.set(run.invocation_id, run.automation_id);
     }
 
     for (const [invocationId, automationId] of affectedInvocations) {
@@ -778,39 +770,6 @@ export class SchedulerDO extends DurableObject<Env> {
           invocation_id: invocationId,
           error: e instanceof Error ? e.message : String(e),
         });
-      }
-    }
-
-    if (legacyCounts.size > 0) {
-      let newCounts: Map<string, number>;
-      try {
-        newCounts = await store.bulkIncrementFailures(legacyCounts);
-      } catch (e) {
-        this.log.error("Recovery sweep failed to track failures", {
-          event: "scheduler.recovery.bulk_track_error",
-          error: e instanceof Error ? e.message : String(e),
-        });
-        newCounts = new Map();
-      }
-
-      for (const [automationId, count] of newCounts) {
-        if (count < AUTO_PAUSE_THRESHOLD) continue;
-
-        try {
-          await store.autoPause(automationId);
-          this.log.warn("Automation auto-paused due to consecutive failures", {
-            event: "scheduler.auto_pause",
-            automation_id: automationId,
-            consecutive_failures: count,
-          });
-        } catch (e) {
-          this.log.error("Recovery sweep failed to auto-pause automation", {
-            event: "scheduler.recovery.auto_pause_error",
-            automation_id: automationId,
-            consecutive_failures: count,
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
       }
     }
 
@@ -1138,16 +1097,8 @@ export class SchedulerDO extends DurableObject<Env> {
     }
 
     // Invocation-level accounting: one CAS-guarded strike per invocation on
-    // first failure; streak reset once every sibling completed. Runs without
-    // an invocation link (rollback-window writes) keep the legacy per-run
-    // accounting until the backfill repairs them.
-    if (run.invocation_id) {
-      await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
-    } else if (body.success) {
-      await store.resetConsecutiveFailures(body.automationId);
-    } else {
-      await this.trackAutomationFailure(store, body.automationId);
-    }
+    // first failure; streak reset once every sibling completed.
+    await this.applyInvocationAccounting(store, body.automationId, run.invocation_id);
 
     if (body.success) {
       this.log.info("Run completed successfully", {
@@ -1170,7 +1121,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // thread and clear the `eyes` reaction when they finish. The scheduler owns
     // this fan-out (not the session callback path) because the message
     // coordinates live on the invocation. Best-effort.
-    const invocation = run.invocation_id ? await store.getInvocationById(run.invocation_id) : null;
+    const invocation = await store.getInvocationById(run.invocation_id);
     const slackMeta = parseSlackTriggerMetadata(invocation?.trigger_metadata ?? null);
     if (slackMeta) {
       const automation = await store.getById(body.automationId);

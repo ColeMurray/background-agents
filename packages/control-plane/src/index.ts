@@ -11,7 +11,9 @@ import { consumeImageBuildFinalizations } from "./image-builds/finalization-cons
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
 import { reapSupersededReviewSessions } from "./routes/github-reviews";
 import { createSessionRuntimeClient } from "./session/runtime-client";
-import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
+import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
+import { SessionIndexStore } from "./db/session-index";
+import type { SqlDatabase } from "./db/sql-database";
 
 const logger = createLogger("worker");
 
@@ -29,7 +31,10 @@ export default {
     // WebSocket upgrade for session
     const upgradeHeader = request.headers.get("Upgrade");
     if (upgradeHeader?.toLowerCase() === "websocket") {
-      return handleWebSocket(request, env, url);
+      const metrics = createRequestMetrics();
+      // eslint-disable-next-line no-restricted-syntax -- composition root: construct the request-scoped database adapter
+      const db = instrumentD1(env.DB, metrics);
+      return handleWebSocket(request, env, url, db, metrics);
     }
 
     // Regular API request — logged by the router with requestId and timing
@@ -88,7 +93,13 @@ export default {
 /**
  * Handle WebSocket connections.
  */
-async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Response> {
+async function handleWebSocket(
+  request: Request,
+  env: Env,
+  url: URL,
+  db: SqlDatabase,
+  metrics: RequestMetrics
+): Promise<Response> {
   // Extract session ID from path: /sessions/:id/ws
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/ws$/);
 
@@ -98,10 +109,21 @@ async function handleWebSocket(request: Request, env: Env, url: URL): Promise<Re
   }
 
   const sessionId = match[1];
+  if (!(await new SessionIndexStore(db).exists(sessionId))) {
+    logger.warn("WebSocket session not found", {
+      event: "ws.session_not_found",
+      http_path: url.pathname,
+      session_id: sessionId,
+      ...metrics.summarize(),
+    });
+    return new Response("Session not found", { status: 404 });
+  }
+
   logger.info("WebSocket upgrade", {
     event: "ws.connect",
     http_path: url.pathname,
     session_id: sessionId,
+    ...metrics.summarize(),
   });
 
   // Get Durable Object and forward WebSocket

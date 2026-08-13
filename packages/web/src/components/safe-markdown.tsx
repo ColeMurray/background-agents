@@ -63,7 +63,9 @@ interface SafeMarkdownProps {
 
 export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
   return (
-    <div className={`prose prose-sm dark:prose-invert max-w-none break-words ${className}`}>
+    <div
+      className={`prose prose-sm dark:prose-invert min-w-0 max-w-none break-words [overflow-wrap:anywhere] ${className}`}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
@@ -82,7 +84,10 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Code blocks with styling
           pre: ({ children, ...props }: ComponentPropsWithoutRef<"pre">) => (
-            <pre className="not-prose overflow-x-auto text-sm leading-relaxed rounded" {...props}>
+            <pre
+              className="not-prose max-w-full overflow-x-auto text-sm leading-relaxed rounded"
+              {...props}
+            >
               {children}
             </pre>
           ),
@@ -133,7 +138,7 @@ export function SafeMarkdown({ content, className = "" }: SafeMarkdownProps) {
           ),
           // Tables
           table: ({ children, ...props }: ComponentPropsWithoutRef<"table">) => (
-            <div className="overflow-x-auto">
+            <div className="max-w-full overflow-x-auto">
               <table className="min-w-full border-collapse text-sm" {...props}>
                 {children}
               </table>

@@ -77,8 +77,8 @@ The timeline grouping pass will:
 3. Associate child events only through `(messageId, taskCallId)`.
 4. Keep each Task at its own stable persisted position.
 5. Apply the existing consecutive same-tool grouping inside each Task.
-6. Render Task groups expanded initially, with a left guide and nested activity. Users can collapse
-   a Task to reduce noise or expand its existing arguments/output details.
+6. Render Task groups collapsed initially to reduce timeline noise. Users can expand a Task to see
+   its nested activity and existing arguments/output details.
 
 Legacy and malformed correlations degrade safely: an event without a matching Task remains in the
 normal top-level flow.

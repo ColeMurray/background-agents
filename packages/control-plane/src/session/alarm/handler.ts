@@ -6,7 +6,10 @@ import type { SessionRepository } from "../repository";
 
 export interface AlarmHandlerDeps {
   repository: Pick<SessionRepository, "getProcessingMessageWithStartedAt">;
-  messageQueue: Pick<SessionMessageQueue, "failStuckProcessingMessage">;
+  messageQueue: Pick<
+    SessionMessageQueue,
+    "failStuckProcessingMessage" | "recoverStopConfirmationTimeout"
+  >;
   lifecycleManager: Pick<SandboxLifecycleManager, "handleAlarm">;
   alarmScheduler: AlarmScheduler;
   executionTimeoutMs: number;
@@ -28,6 +31,7 @@ export interface AlarmHandler {
 export function createAlarmHandler(deps: AlarmHandlerDeps): AlarmHandler {
   return {
     async handle(): Promise<void> {
+      await deps.messageQueue.recoverStopConfirmationTimeout();
       // Execution timeout check: if a message has been in 'processing' longer than
       // the configured timeout, fail it. This is idempotent - if the message was
       // already failed (by onSandboxTerminating or a prior alarm),

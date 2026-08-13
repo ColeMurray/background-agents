@@ -245,6 +245,17 @@ describe("proxied control-plane paths", () => {
     });
   });
 
+  it("trigger preserves nested namespace owners as one encoded route segment", async () => {
+    await triggerBuild({} as NextRequest, {
+      params: Promise.resolve({ owner: "group/subgroup", name: "web" }),
+    });
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/image-builds/trigger/repo/group%2Fsubgroup/web",
+      { method: "POST" }
+    );
+  });
+
   it("toggle puts to the unified repo toggle route", async () => {
     await toggleBuild({ json: async () => ({ enabled: true }) } as NextRequest, params);
 
@@ -252,5 +263,19 @@ describe("proxied control-plane paths", () => {
       method: "PUT",
       body: JSON.stringify({ enabled: true }),
     });
+  });
+
+  it("toggle preserves nested namespace owners as one encoded route segment", async () => {
+    await toggleBuild({ json: async () => ({ enabled: false }) } as NextRequest, {
+      params: Promise.resolve({ owner: "group/subgroup", name: "web" }),
+    });
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith(
+      "/image-builds/toggle/repo/group%2Fsubgroup/web",
+      {
+        method: "PUT",
+        body: JSON.stringify({ enabled: false }),
+      }
+    );
   });
 });

@@ -64,7 +64,7 @@ function makeChild(automationId: string, overrides?: Partial<AutomationRunRow>):
   return {
     id: `run-${Math.random().toString(36).slice(2, 10)}`,
     automation_id: automationId,
-    invocation_id: null,
+    invocation_id: `inv-child-${Math.random().toString(36).slice(2, 10)}`,
     session_id: null,
     status: "starting",
     skip_reason: null,
@@ -82,41 +82,6 @@ function makeChild(automationId: string, overrides?: Partial<AutomationRunRow>):
   };
 }
 
-/** Insert a LEGACY-shaped run via raw SQL: only pre-0030 columns, so the new
- *  columns take their NULL defaults exactly as rows written by old code do. */
-async function seedLegacyRun(run: {
-  id: string;
-  automation_id: string;
-  session_id?: string | null;
-  status: string;
-  skip_reason?: string | null;
-  failure_reason?: string | null;
-  scheduled_at: number;
-  started_at?: number | null;
-  completed_at?: number | null;
-  created_at: number;
-}): Promise<void> {
-  await env.DB.prepare(
-    `INSERT INTO automation_runs
-     (id, automation_id, session_id, status, skip_reason, failure_reason,
-      scheduled_at, started_at, completed_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-    .bind(
-      run.id,
-      run.automation_id,
-      run.session_id ?? null,
-      run.status,
-      run.skip_reason ?? null,
-      run.failure_reason ?? null,
-      run.scheduled_at,
-      run.started_at ?? null,
-      run.completed_at ?? null,
-      run.created_at
-    )
-    .run();
-}
-
 async function countRows(table: string, where = "1=1"): Promise<number> {
   const row = await env.DB.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).first<{
     count: number;
@@ -126,32 +91,6 @@ async function countRows(table: string, where = "1=1"): Promise<number> {
 
 describe("automation invocations (D1 integration)", () => {
   beforeEach(cleanD1Tables);
-
-  // ─── 0030 invocation_id backfill ────────────────────────────────────────────
-
-  describe("0030 invocation_id backfill", () => {
-    it("links legacy runs (invocation_id IS NULL) to an invocation of themselves", async () => {
-      const store = new AutomationStore(env.DB);
-      await store.create(makeAutomation({ id: "auto-link" }));
-      await seedLegacyRun({
-        id: "run-legacy",
-        automation_id: "auto-link",
-        status: "completed",
-        scheduled_at: 1_000,
-        completed_at: 1_500,
-        created_at: 1_000,
-      });
-      expect(await countRows("automation_runs", "invocation_id IS NULL")).toBe(1);
-
-      // 0030's link step: every pre-invocation run adopts its own id.
-      await env.DB.prepare(
-        "UPDATE automation_runs SET invocation_id = id WHERE invocation_id IS NULL"
-      ).run();
-
-      expect(await countRows("automation_runs", "invocation_id IS NULL")).toBe(0);
-      expect(await countRows("automation_runs", "invocation_id = id")).toBe(1);
-    });
-  });
 
   // ─── Derived status ────────────────────────────────────────────────────────
 

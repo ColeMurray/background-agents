@@ -11,7 +11,7 @@ describe("spawnContextSchema", () => {
       reasoningEffort: null,
       baseBranch: null,
       sandboxTimeoutMs: 14_400_000,
-      owner: {
+      promptAuthor: {
         userId: "user-1",
         scmUserId: null,
         scmLogin: null,
@@ -37,7 +37,7 @@ describe("spawnContextSchema", () => {
       model: "anthropic/claude-sonnet-4-6",
       reasoningEffort: null,
       baseBranch: null,
-      owner: {
+      promptAuthor: {
         userId: "user-1",
         scmUserId: null,
         scmLogin: null,
@@ -63,7 +63,7 @@ describe("spawnContextSchema", () => {
         reasoningEffort: null,
         baseBranch: null,
         sandboxTimeoutMs,
-        owner: {
+        promptAuthor: {
           userId: "user-1",
           scmUserId: null,
           scmLogin: null,

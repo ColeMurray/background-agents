@@ -22,6 +22,7 @@ const snapshot = {
   },
   artifacts: [],
   timeline: { events: [], hasMore: false, cursor: null },
+  promptQueue: [],
 };
 
 describe("getSessionSnapshot", () => {

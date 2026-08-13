@@ -150,8 +150,8 @@ export interface SandboxBroadcaster {
 export interface WebSocketManager {
   /** Get the sandbox WebSocket (with hibernation recovery) */
   getSandboxWebSocket(): WebSocket | null;
-  /** Close the sandbox WebSocket */
-  closeSandboxWebSocket(code: number, reason: string): void;
+  /** Detach the active sandbox dispatch boundary and close its WebSocket. */
+  detachSandboxWebSocket(code: number, reason: string): void;
   /** Send a message to the sandbox */
   sendToSandbox(message: object): boolean;
   /** Get count of connected client WebSockets (excludes sandbox) */
@@ -266,6 +266,8 @@ export interface SlackAgentNotifyLookup {
 export interface LifecycleCallbacks {
   /** Called when the sandbox is being terminated (heartbeat stale, inactivity timeout). */
   onSandboxTerminating?: () => Promise<void>;
+  /** Called after the sandbox is terminal and cannot reconnect. */
+  onSandboxTerminated?: () => Promise<void>;
 }
 
 // ==================== Manager ====================
@@ -278,7 +280,13 @@ export interface LifecycleCallbacks {
 export interface SandboxLifecycle {
   spawnSandbox(): Promise<void>;
   updateLastActivity(timestamp: number): void;
+  terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void>;
 }
+
+export type UnresponsiveSandboxTrigger =
+  | "prompt_dispatch_send_failed"
+  | "stop_send_failed"
+  | "stop_confirmation_timeout";
 
 /**
  * Manages sandbox lifecycle operations.
@@ -1205,7 +1213,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         this.wsManager.sendToSandbox({ type: "shutdown" });
       }
 
-      this.wsManager.closeSandboxWebSocket(1000, "Heartbeat stale");
+      this.wsManager.detachSandboxWebSocket(1000, "Heartbeat stale");
+      await this.callbacks.onSandboxTerminated?.();
       return;
     }
 
@@ -1259,7 +1268,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
           }
         }
 
-        this.wsManager.closeSandboxWebSocket(1000, "Inactivity timeout");
+        this.wsManager.detachSandboxWebSocket(1000, "Inactivity timeout");
+        await this.callbacks.onSandboxTerminated?.();
 
         this.broadcaster.broadcast({
           type: "sandbox_warning",
@@ -1289,6 +1299,37 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
         await this.alarmScheduler.scheduleAlarm(now + inactivityDecision.nextCheckMs);
         return;
     }
+  }
+
+  async terminateUnresponsiveSandbox(trigger: UnresponsiveSandboxTrigger): Promise<void> {
+    const sandbox = this.storage.getSandbox();
+    if (!sandbox || isDeadSandboxStatus(sandbox.status)) {
+      await this.callbacks.onSandboxTerminated?.();
+      return;
+    }
+
+    const canStopProvider = this.canStopProviderSandbox();
+    if (!canStopProvider) this.wsManager.sendToSandbox({ type: "shutdown" });
+    this.storage.updateSandboxStatus("stale");
+    this.clearSandboxAccessState();
+    this.broadcaster.broadcast({ type: "sandbox_status", status: "stale" });
+    const closeReason = {
+      prompt_dispatch_send_failed: "Prompt dispatch send failed",
+      stop_send_failed: "Stop command send failed",
+      stop_confirmation_timeout: "Stop confirmation timed out",
+    }[trigger];
+    this.wsManager.detachSandboxWebSocket(1011, closeReason);
+    if (canStopProvider) {
+      try {
+        await this.stopProviderSandbox(trigger);
+      } catch (error) {
+        this.log.warn("Provider stop failed for unresponsive sandbox", {
+          trigger,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    await this.callbacks.onSandboxTerminated?.();
   }
 
   /**

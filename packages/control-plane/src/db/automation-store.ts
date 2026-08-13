@@ -44,8 +44,8 @@ export interface AutomationRow {
 export interface AutomationRunRow {
   id: string;
   automation_id: string;
-  /** Owning invocation. Nullable in DDL only; every row has one post-backfill. */
-  invocation_id: string | null;
+  /** Owning invocation. */
+  invocation_id: string;
   session_id: string | null;
   status: AutomationRunStatus;
   skip_reason: string | null;
@@ -171,7 +171,7 @@ export function toAutomationRun(row: EnrichedRunRow): AutomationRun {
   return {
     id: row.id,
     automationId: row.automation_id,
-    invocationId: row.invocation_id ?? null,
+    invocationId: row.invocation_id,
     sessionId: row.session_id,
     status: row.status,
     skipReason: row.skip_reason,
@@ -691,41 +691,6 @@ export class AutomationStore {
       .run();
   }
 
-  async bulkIncrementFailures(
-    automationIdCounts: Map<string, number>
-  ): Promise<Map<string, number>> {
-    if (automationIdCounts.size === 0) return new Map();
-
-    const now = Date.now();
-    const automationIds = [...automationIdCounts.keys()];
-
-    const statements = automationIds.map((automationId) =>
-      this.db
-        .prepare(
-          `UPDATE automations
-           SET consecutive_failures = consecutive_failures + ?, updated_at = ?
-           WHERE id = ? AND deleted_at IS NULL`
-        )
-        .bind(automationIdCounts.get(automationId)!, now, automationId)
-    );
-    await this.db.batch(statements);
-
-    const placeholders = automationIds.map(() => "?").join(", ");
-    const result = await this.db
-      .prepare(
-        `SELECT id, consecutive_failures FROM automations
-         WHERE id IN (${placeholders}) AND deleted_at IS NULL`
-      )
-      .bind(...automationIds)
-      .all<{ id: string; consecutive_failures: number }>();
-
-    const counts = new Map<string, number>();
-    for (const row of result.results ?? []) {
-      counts.set(row.id, row.consecutive_failures);
-    }
-    return counts;
-  }
-
   async getActiveRunForAutomation(automationId: string): Promise<AutomationRunRow | null> {
     return this.db
       .prepare(
@@ -1031,7 +996,7 @@ export class AutomationStore {
 
     const childrenByInvocation = new Map<string, AutomationRun[]>();
     for (const child of childResult.results ?? []) {
-      const invocationId = child.invocation_id!;
+      const invocationId = child.invocation_id;
       const bucket = childrenByInvocation.get(invocationId) ?? [];
       bucket.push(toAutomationRun(child));
       childrenByInvocation.set(invocationId, bucket);

@@ -77,11 +77,54 @@ describe("SessionAttachmentRepository", () => {
   });
 
   it("finds only unreferenced, unclaimed attachments", () => {
-    repository.getUnreferenced(["up-1", "up-2"]);
+    const query = `SELECT * FROM attachments
+       WHERE id IN (?, ?) AND message_id IS NULL AND cleanup_claimed_at IS NULL`;
+    mock.setRows(query, [
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/session-1/attachments/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    const rows = repository.getUnreferenced(["up-1", "up-2"]);
 
     expect(mock.calls[0].query).toContain("message_id IS NULL");
     expect(mock.calls[0].query).toContain("cleanup_claimed_at IS NULL");
     expect(mock.calls[0].params).toEqual(["up-1", "up-2"]);
+    expect(rows).toEqual([
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/session-1/attachments/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+  });
+
+  it("rejects malformed unreferenced attachment rows", () => {
+    const query = `SELECT * FROM attachments
+       WHERE id IN (?) AND message_id IS NULL AND cleanup_claimed_at IS NULL`;
+    mock.setRows(query, [
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: "100",
+        object_key: "sessions/session-1/attachments/up-1",
+        message_id: null,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    expect(repository.getUnreferenced(["up-1"])).toEqual([]);
   });
 
   it("claims every attachment for a message", () => {
@@ -121,6 +164,26 @@ describe("SessionAttachmentRepository", () => {
 
     expect(claimed[0].cleanup_claimed_at).toBe(200);
     expect(mock.calls[1].params).toEqual([200, "up-1"]);
+  });
+
+  it("rejects malformed stale attachment rows before claiming cleanup", () => {
+    const query = `SELECT * FROM attachments
+       WHERE message_id IS NULL AND created_at < ?
+         AND (cleanup_claimed_at IS NULL OR cleanup_claimed_at < ?)`;
+    mock.setRows(query, [
+      {
+        id: "up-1",
+        mime_type: "image/png",
+        size_bytes: 100,
+        object_key: "sessions/session-1/attachments/up-1",
+        message_id: undefined,
+        cleanup_claimed_at: null,
+        created_at: 1,
+      },
+    ]);
+
+    expect(repository.claimStale(100, 200, 150)).toEqual([]);
+    expect(mock.calls).toHaveLength(1);
   });
 
   it("acknowledges only the matching cleanup lease", () => {

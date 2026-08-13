@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionIndexStore } from "../db/session-index";
 import { resolveSandboxSettings } from "../session/integration-settings-resolution";
 import type { SessionRuntimeClient } from "../session/runtime-client";
+import type { ActivePromptAuthor } from "../session/active-prompt-author";
 import type { Env } from "../types";
 import { handleCancelChild, handlePromptChild } from "./session-children";
 import type { SessionRouteContext } from "./session-route";
@@ -17,13 +18,32 @@ function routeMatch(path: string, pattern: string): RegExpMatchArray {
   return match;
 }
 
-function routeContext(fetch: SessionRuntimeClient["fetch"]): SessionRouteContext {
+const defaultPromptAuthor: ActivePromptAuthor = {
+  userId: "user-1",
+  canonicalUserId: "canonical-1",
+  scmUserId: null,
+  scmLogin: null,
+  scmName: null,
+  scmEmail: null,
+};
+
+function routeContext(
+  fetch: SessionRuntimeClient["fetch"],
+  promptAuthor = defaultPromptAuthor
+): SessionRouteContext {
   return {
     db: {} as SessionRouteContext["db"],
     metrics: {} as SessionRouteContext["metrics"],
     request_id: "request-id",
     trace_id: "trace-id",
-    sessionRuntime: { fetch },
+    sessionRuntime: {
+      fetch: async (sessionId, path, init, search) => {
+        if (sessionId === "parent" && path === "/internal/active-prompt-author") {
+          return Response.json(promptAuthor);
+        }
+        return fetch(sessionId, path, init, search);
+      },
+    },
   };
 }
 
@@ -104,6 +124,52 @@ describe("handlePromptChild", () => {
     expect(response).toBe(childResponse);
     expect(resolveSandboxSettings).not.toHaveBeenCalled();
     expect(reserve).not.toHaveBeenCalled();
+  });
+
+  it("forwards the parent active prompt author to the child", async () => {
+    vi.spyOn(SessionIndexStore.prototype, "get").mockResolvedValue({
+      id: "child",
+      parentSessionId: "parent",
+      status: "active",
+    } as never);
+    const promptAuthor = {
+      userId: "slack:U2",
+      canonicalUserId: "canonical-2",
+      scmUserId: "222",
+      scmLogin: "second-user",
+      scmName: "Second User",
+      scmEmail: "second@example.com",
+    };
+    const fetch = vi.fn<SessionRuntimeClient["fetch"]>(async (sessionId, path, init) => {
+      expect(sessionId).toBe("child");
+      expect(path).toBe("/internal/parent-prompt");
+      const forwarded = JSON.parse(init?.body as string) as Record<string, unknown>;
+      expect(forwarded).toMatchObject({
+        author: {
+          userId: "slack:U2",
+          canonicalUserId: "canonical-2",
+          scmLogin: "second-user",
+        },
+      });
+      expect(forwarded.author).not.toHaveProperty("scmAccessTokenEncrypted");
+      return Response.json({ messageId: "message-1", status: "queued" });
+    });
+
+    const response = await handlePromptChild(
+      new Request("https://test.local/sessions/parent/children/child/prompt", {
+        method: "POST",
+        body: JSON.stringify({ content: "Continue" }),
+      }),
+      {} as Env,
+      routeMatch(
+        "/sessions/parent/children/child/prompt",
+        "/sessions/:id/children/:childId/prompt"
+      ),
+      routeContext(fetch, promptAuthor)
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it("rejects a terminal-child resume when the parent has no capacity", async () => {
