@@ -353,7 +353,11 @@ export class SessionIndexStore {
     }
 
     if (excludeAutomationLineage) {
-      conditions.push("automation_id IS NULL AND spawn_source != 'automation'");
+      // The "Mine" view excludes sessions no human initiated in the app.
+      // github-bot sessions are attributed to the webhook sender (the verified
+      // actor), but auto reviews and review-request handling are bot-initiated,
+      // so they are lineage-excluded alongside automation runs.
+      conditions.push("automation_id IS NULL AND spawn_source NOT IN ('automation', 'github-bot')");
     }
 
     // Repo filters match against the membership table so a session is found

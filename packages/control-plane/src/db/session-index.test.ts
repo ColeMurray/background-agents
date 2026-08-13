@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
 
@@ -12,7 +13,7 @@ type SessionRow = {
   base_branch: string | null;
   status: string;
   parent_session_id: string | null;
-  spawn_source: "user" | "agent" | "automation";
+  spawn_source: SpawnSource;
   spawn_depth: number;
   automation_id: string | null;
   automation_run_id: string | null;
@@ -388,7 +389,10 @@ class FakeD1Database {
 
       if (conditions.includes("automation_id IS NULL")) {
         rows = rows.filter(
-          (row) => row.automation_id === null && row.spawn_source !== "automation"
+          (row) =>
+            row.automation_id === null &&
+            row.spawn_source !== "automation" &&
+            row.spawn_source !== "github-bot"
         );
       }
 
@@ -664,6 +668,36 @@ describe("SessionIndexStore", () => {
 
       expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);
+    });
+
+    it("excludes github-bot sessions from lineage-filtered lists even when created by the user", async () => {
+      await store.create(
+        makeSession({ id: "web", spawnSource: "user", userId: "alice", updatedAt: 4000 })
+      );
+      await store.create(
+        makeSession({
+          id: "auto-review",
+          spawnSource: "github-bot",
+          userId: "alice",
+          updatedAt: 3000,
+        })
+      );
+      await store.create(
+        makeSession({ id: "slack", spawnSource: "slack-bot", userId: "alice", updatedAt: 2000 })
+      );
+
+      const filtered = await store.list({
+        excludeAutomationLineage: true,
+        createdByUserIds: ["alice"],
+      });
+      expect(filtered.sessions.map((session) => session.id)).toEqual(["web", "slack"]);
+
+      const unfiltered = await store.list({ createdByUserIds: ["alice"] });
+      expect(unfiltered.sessions.map((session) => session.id)).toEqual([
+        "web",
+        "auto-review",
+        "slack",
+      ]);
     });
 
     it("trims and lowercases repo filters", async () => {
