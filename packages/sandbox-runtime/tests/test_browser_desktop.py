@@ -1,4 +1,4 @@
-"""Focused tests for the optional VNC/noVNC runtime sidecar."""
+"""Focused tests for the optional browser desktop stack."""
 
 import asyncio
 import os
@@ -8,30 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sandbox_runtime.access_services import AccessServices
+from sandbox_runtime.browser_desktop import BrowserDesktop
 from sandbox_runtime.constants import NOVNC_PORT, VNC_DISPLAY, VNC_PORT
 from sandbox_runtime.entrypoint import build_supervisor
-from tests.runtime_helpers import make_access_services, make_supervisor
+from tests.runtime_helpers import make_browser_desktop, make_supervisor
 
 _ORIGINAL_ASYNCIO_SLEEP = asyncio.sleep
 
 
-def _make_access_services(vnc_password: str | None = None) -> AccessServices:
-    env = {
-        "SANDBOX_ID": "test-sandbox",
-        "CONTROL_PLANE_URL": "https://cp.example.com",
-        "SANDBOX_AUTH_TOKEN": "tok",
-        "REPO_OWNER": "acme",
-        "REPO_NAME": "app",
-    }
-    if vnc_password is not None:
-        env["VNC_PASSWORD"] = vnc_password
-    with patch.dict(
-        os.environ,
-        env,
-        clear=True,
-    ):
-        return make_access_services()
+def _make_browser_desktop(vnc_password: str | None = None) -> BrowserDesktop:
+    return make_browser_desktop(vnc_password)
 
 
 def _make_lifecycle_supervisor():
@@ -72,30 +58,30 @@ class TestStartVnc:
             supervisor = build_supervisor(asyncio.Event())
             assert os.environ["DISPLAY"] == VNC_DISPLAY
             assert "VNC_PASSWORD" not in os.environ
-            assert supervisor.access_services._vnc_password == "secret"
+            assert supervisor.browser_desktop._password == "secret"
             assert not hasattr(supervisor.config, "vnc_password")
 
     @pytest.mark.asyncio
     async def test_skips_entire_stack_without_password(self, tmp_path):
-        supervisor = _make_access_services()
+        supervisor = _make_browser_desktop()
         password_path = tmp_path / "vnc-password"
         password_path.write_text("stale")
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch("sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH", str(password_path)),
             patch(
-                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
+                "sandbox_runtime.browser_desktop.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
             ) as create_process,
         ):
-            await supervisor.start_vnc()
+            await supervisor.start()
 
         create_process.assert_not_called()
         assert not password_path.exists()
 
     @pytest.mark.asyncio
     async def test_starts_dependencies_in_order_with_internal_raw_vnc(self, tmp_path):
-        supervisor = _make_access_services("secret12")
+        supervisor = _make_browser_desktop("secret12")
         supervisor._forward_vnc_logs = AsyncMock()
         events: list[str] = []
         processes = [_process() for _ in range(4)]
@@ -124,17 +110,17 @@ class TestStartVnc:
                 clear=True,
             ),
             patch(
-                "sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH",
+                "sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH",
                 str(password_path),
             ),
             patch(
-                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
+                "sandbox_runtime.browser_desktop.asyncio.create_subprocess_exec",
                 side_effect=create_process,
             ) as create_process_mock,
             patch.object(supervisor, "_wait_for_path", side_effect=wait_for_path),
             patch.object(supervisor, "_wait_for_port", side_effect=wait_for_port),
         ):
-            await supervisor.start_vnc()
+            await supervisor.start()
 
         assert events == ["Xvfb", "x-ready", "fluxbox", "x11vnc", "port-5900-ready", "websockify"]
         xvfb_args = create_process_mock.call_args_list[0].args
@@ -169,25 +155,25 @@ class TestStartVnc:
 
     @pytest.mark.asyncio
     async def test_rejects_passwords_over_eight_bytes(self, tmp_path):
-        supervisor = _make_access_services("ninebytes")
+        supervisor = _make_browser_desktop("ninebytes")
         password_path = tmp_path / "vnc-password"
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch("sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH", str(password_path)),
             patch(
-                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
+                "sandbox_runtime.browser_desktop.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
             ) as create_process,
             pytest.raises(ValueError, match="must not exceed 8 bytes"),
         ):
-            await supervisor.start_vnc()
+            await supervisor.start()
 
         create_process.assert_not_called()
         assert not password_path.exists()
 
     @pytest.mark.asyncio
     async def test_replaces_symlink_without_writing_to_its_target(self, tmp_path):
-        supervisor = _make_access_services("secret12")
+        supervisor = _make_browser_desktop("secret12")
         password_path = tmp_path / "vnc-password"
         symlink_target = tmp_path / "attacker-target"
         symlink_target.write_text("unchanged")
@@ -195,16 +181,16 @@ class TestStartVnc:
 
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
-            patch.object(supervisor, "_clear_vnc_display_artifacts"),
+            patch("sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch.object(supervisor, "_clear_display_artifacts"),
             patch(
-                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
+                "sandbox_runtime.browser_desktop.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("stop after password write"),
             ),
             pytest.raises(RuntimeError, match="stop after password write"),
         ):
-            await supervisor.start_vnc()
+            await supervisor.start()
 
         assert symlink_target.read_text() == "unchanged"
         assert not password_path.is_symlink()
@@ -212,21 +198,21 @@ class TestStartVnc:
 
     @pytest.mark.asyncio
     async def test_uses_default_novnc_port(self, tmp_path):
-        supervisor = _make_access_services("pw")
+        supervisor = _make_browser_desktop("pw")
         supervisor._forward_vnc_logs = AsyncMock()
         password_path = tmp_path / "vnc-password"
         with (
             patch.dict(os.environ, {}, clear=True),
-            patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch("sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH", str(password_path)),
             patch.object(supervisor, "_wait_for_path", new_callable=AsyncMock, return_value=True),
             patch.object(supervisor, "_wait_for_port", new_callable=AsyncMock, return_value=True),
             patch(
-                "sandbox_runtime.access_services.asyncio.create_subprocess_exec",
+                "sandbox_runtime.browser_desktop.asyncio.create_subprocess_exec",
                 new_callable=AsyncMock,
                 side_effect=[_process() for _ in range(4)],
             ) as create_process,
         ):
-            await supervisor.start_vnc()
+            await supervisor.start()
 
         assert f"0.0.0.0:{NOVNC_PORT}" in create_process.call_args_list[3].args
 
@@ -237,126 +223,122 @@ class TestVncLifecycle:
         supervisor = _make_lifecycle_supervisor()
         events: list[str] = []
 
-        async def start_vnc():
+        async def start_desktop():
             events.append("vnc")
 
         async def repository_boot(_boot_mode, _expected_tunnel_ports):
             events.append("repository")
             raise RuntimeError("stop after ordering assertion")
 
-        supervisor.access_services.start_vnc = AsyncMock(side_effect=start_vnc)
-        supervisor.repository_bootstrapper.bootstrap = AsyncMock(side_effect=repository_boot)
-        supervisor._start_vnc_with_retries = AsyncMock()
+        supervisor.browser_desktop.start = AsyncMock(side_effect=start_desktop)
+        supervisor.repository_boot.boot = AsyncMock(side_effect=repository_boot)
+        supervisor._start_desktop_with_retries = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
         with patch.dict(os.environ, {}, clear=True):
             await supervisor.run()
 
         assert events == ["vnc", "repository"]
-        supervisor._start_vnc_with_retries.assert_not_awaited()
+        supervisor._start_desktop_with_retries.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_initial_vnc_failure_does_not_retry_or_block_repository_boot(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.access_services.start_vnc = AsyncMock(side_effect=RuntimeError("not ready"))
-        supervisor.access_services.stop_vnc = AsyncMock()
-        supervisor.repository_bootstrapper.bootstrap = AsyncMock(
-            side_effect=RuntimeError("stop after boot")
-        )
-        supervisor._start_vnc_with_retries = AsyncMock()
+        supervisor.browser_desktop.start = AsyncMock(side_effect=RuntimeError("not ready"))
+        supervisor.browser_desktop.stop = AsyncMock()
+        supervisor.repository_boot.boot = AsyncMock(side_effect=RuntimeError("stop after boot"))
+        supervisor._start_desktop_with_retries = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
         with patch.dict(os.environ, {}, clear=True):
             await supervisor.run()
 
-        supervisor.access_services.start_vnc.assert_awaited_once()
-        supervisor.access_services.stop_vnc.assert_awaited()
-        supervisor.repository_bootstrapper.bootstrap.assert_awaited_once()
-        supervisor._start_vnc_with_retries.assert_not_awaited()
+        supervisor.browser_desktop.start.assert_awaited_once()
+        supervisor.browser_desktop.stop.assert_awaited()
+        supervisor.repository_boot.boot.assert_awaited_once()
+        supervisor._start_desktop_with_retries.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_initial_start_retries_after_a_transient_failure(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.access_services.start_vnc = AsyncMock(
-            side_effect=[RuntimeError("not ready"), None]
-        )
-        supervisor.access_services.stop_vnc = AsyncMock()
+        supervisor.browser_desktop.start = AsyncMock(side_effect=[RuntimeError("not ready"), None])
+        supervisor.browser_desktop.stop = AsyncMock()
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
-            assert await supervisor._start_vnc_with_retries()
+            assert await supervisor._start_desktop_with_retries()
 
-        assert supervisor.access_services.start_vnc.await_count == 2
-        supervisor.access_services.stop_vnc.assert_awaited_once()
+        assert supervisor.browser_desktop.start.await_count == 2
+        supervisor.browser_desktop.stop.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_component_crash_restarts_stack_non_fatally(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.core_services._opencode_process = _process()
-        supervisor.core_services._bridge_process = _process()
-        supervisor.access_services._x11vnc_process = _process(returncode=1)
-        supervisor.access_services.stop_vnc = AsyncMock()
+        supervisor.opencode_server._opencode_process = _process()
+        supervisor.agent_bridge._process = _process()
+        supervisor.browser_desktop._x11vnc_process = _process(returncode=1)
+        supervisor.browser_desktop.stop = AsyncMock()
 
         async def restart():
             supervisor.shutdown_event.set()
 
-        supervisor.access_services.start_vnc = AsyncMock(side_effect=restart)
+        supervisor.browser_desktop.start = AsyncMock(side_effect=restart)
         supervisor._report_fatal_error = AsyncMock()
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", side_effect=_yielding_sleep):
             await supervisor.monitor_processes()
 
-        supervisor.access_services.stop_vnc.assert_awaited_once()
-        supervisor.access_services.start_vnc.assert_awaited_once()
+        supervisor.browser_desktop.stop.assert_awaited_once()
+        supervisor.browser_desktop.start.assert_awaited_once()
         supervisor._report_fatal_error.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_component_crash_stops_after_restart_budget(self):
         supervisor = _make_lifecycle_supervisor()
         supervisor.MAX_RESTARTS = 0
-        supervisor.core_services._opencode_process = _process()
-        supervisor.core_services._bridge_process = _process()
-        supervisor.access_services._x11vnc_process = _process(returncode=1)
+        supervisor.opencode_server._opencode_process = _process()
+        supervisor.agent_bridge._process = _process()
+        supervisor.browser_desktop._x11vnc_process = _process(returncode=1)
 
         async def stop():
-            supervisor.access_services._x11vnc_process = None
+            supervisor.browser_desktop._x11vnc_process = None
             supervisor.shutdown_event.set()
 
-        supervisor.access_services.stop_vnc = AsyncMock(side_effect=stop)
-        supervisor._start_vnc_with_retries = AsyncMock()
+        supervisor.browser_desktop.stop = AsyncMock(side_effect=stop)
+        supervisor._start_desktop_with_retries = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", side_effect=_yielding_sleep):
             await supervisor.monitor_processes()
 
-        supervisor._start_vnc_with_retries.assert_not_awaited()
+        supervisor._start_desktop_with_retries.assert_not_awaited()
         supervisor._report_fatal_error.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_retries_after_a_restart_attempt_fails(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.core_services._opencode_process = _process()
-        supervisor.core_services._bridge_process = _process()
-        supervisor.access_services._x11vnc_process = _process(returncode=1)
-        supervisor.access_services.stop_vnc = AsyncMock()
+        supervisor.opencode_server._opencode_process = _process()
+        supervisor.agent_bridge._process = _process()
+        supervisor.browser_desktop._x11vnc_process = _process(returncode=1)
+        supervisor.browser_desktop.stop = AsyncMock()
 
         async def restart():
-            if supervisor.access_services.start_vnc.await_count == 1:
+            if supervisor.browser_desktop.start.await_count == 1:
                 raise RuntimeError("not ready")
             supervisor.shutdown_event.set()
 
-        supervisor.access_services.start_vnc = AsyncMock(side_effect=restart)
+        supervisor.browser_desktop.start = AsyncMock(side_effect=restart)
         supervisor._report_fatal_error = AsyncMock()
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", side_effect=_yielding_sleep):
             await supervisor.monitor_processes()
 
-        assert supervisor.access_services.start_vnc.await_count == 2
-        assert supervisor.access_services.stop_vnc.await_count == 2
+        assert supervisor.browser_desktop.start.await_count == 2
+        assert supervisor.browser_desktop.stop.await_count == 2
         supervisor._report_fatal_error.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cleanup_continues_when_a_process_exits_before_terminate(self, tmp_path):
-        supervisor = _make_access_services()
+        supervisor = _make_browser_desktop()
         password_path = tmp_path / "vnc-password"
         password_path.write_text("secret")
         supervisor._novnc_process = _process()
@@ -365,17 +347,17 @@ class TestVncLifecycle:
         supervisor._x11vnc_process = x11vnc_process
 
         with (
-            patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
-            patch.object(supervisor, "_clear_vnc_display_artifacts"),
+            patch("sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch.object(supervisor, "_clear_display_artifacts"),
         ):
-            await supervisor._stop_vnc()
+            await supervisor.stop()
 
         x11vnc_process.terminate.assert_called_once()
         assert not password_path.exists()
 
     @pytest.mark.asyncio
     async def test_cleanup_is_reverse_order_and_removes_password(self, tmp_path):
-        supervisor = _make_access_services()
+        supervisor = _make_browser_desktop()
         order: list[str] = []
 
         def tracked_process(name):
@@ -391,10 +373,10 @@ class TestVncLifecycle:
         password_path.write_text("secret")
 
         with (
-            patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
-            patch.object(supervisor, "_clear_vnc_display_artifacts") as clear_artifacts,
+            patch("sandbox_runtime.browser_desktop.VNC_PASSWORD_FILE_PATH", str(password_path)),
+            patch.object(supervisor, "_clear_display_artifacts") as clear_artifacts,
         ):
-            await supervisor._stop_vnc()
+            await supervisor.stop()
 
         assert order == ["novnc", "x11vnc", "fluxbox", "xvfb"]
         assert not password_path.exists()
@@ -404,33 +386,8 @@ class TestVncLifecycle:
         assert supervisor._novnc_process is None
         clear_artifacts.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_generic_stop_reaps_process_after_kill(self):
-        supervisor = _make_access_services()
-        process = _process()
-        process.wait = AsyncMock(side_effect=[TimeoutError, None])
-        supervisor._code_server_process = process
-
-        await supervisor.stop()
-
-        process.kill.assert_called_once()
-        assert process.wait.await_count == 2
-
-    @pytest.mark.asyncio
-    async def test_generic_stop_continues_after_terminate_race(self):
-        supervisor = _make_access_services()
-        process = _process()
-        process.terminate.side_effect = ProcessLookupError
-        supervisor._code_server_process = process
-        supervisor._stop_vnc = AsyncMock()
-
-        await supervisor.stop()
-
-        process.wait.assert_awaited_once()
-        supervisor._stop_vnc.assert_awaited_once()
-
     def test_clears_snapshot_restored_display_lock_and_socket(self, tmp_path):
-        supervisor = _make_access_services()
+        supervisor = _make_browser_desktop()
         x11_dir = tmp_path / ".X11-unix"
         x11_dir.mkdir()
         lock_path = tmp_path / ".X1-lock"
@@ -447,8 +404,8 @@ class TestVncLifecycle:
                 return socket_path
             return real_path(value)
 
-        with patch("sandbox_runtime.access_services.Path", side_effect=remap_path):
-            supervisor._clear_vnc_display_artifacts()
+        with patch("sandbox_runtime.browser_desktop.Path", side_effect=remap_path):
+            supervisor._clear_display_artifacts()
 
         assert not lock_path.exists()
         assert not socket_path.exists()

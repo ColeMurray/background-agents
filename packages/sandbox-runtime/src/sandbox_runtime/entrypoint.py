@@ -8,14 +8,21 @@ import asyncio
 import os
 import signal
 
-from .access_services import AccessServices
+from .agent_bridge_process import AgentBridgeProcess
+from .boot_warnings import BootWarningSink
+from .browser_desktop import BrowserDesktop
+from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
-from .core_services import CoreAgentServices
 from .log_config import configure_logging, get_logger
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
-from .repository_boot import RepositoryBootstrapper
+from .opencode_server import OpenCodeServer
+from .repository_boot import RepositoryBoot
+from .repository_hooks import RepositoryHooks
+from .repository_sync import RepositorySynchronizer
 from .runtime_config import RuntimeConfig
 from .supervisor import SandboxSupervisor
+from .tunnel_environment import TunnelEnvironment
+from .web_terminal import WebTerminal
 
 configure_logging()
 
@@ -32,25 +39,33 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         sandbox_id=config.sandbox_id,
         session_id=str(config.session_config.get("session_id", "")),
     )
-    repository_bootstrapper = RepositoryBootstrapper(
-        config.repository_config(), shutdown_event, log
+    warnings = BootWarningSink(log)
+    repository_boot = RepositoryBoot(
+        config.repository_config(),
+        log,
+        warnings,
+        TunnelEnvironment(config.sandbox_id, log),
+        RepositoryHooks(log),
+        RepositorySynchronizer(config.vcs_host, log),
     )
-    core_services = CoreAgentServices(
-        config.core_services_config(),
+    opencode_server = OpenCodeServer(
+        config.opencode_config(),
         shutdown_event,
         log,
-        repository_bootstrapper.record_boot_warning,
+        warnings.record,
     )
-    access_services = AccessServices(
-        shutdown_event,
-        log,
-        vnc_password=vnc_password,
-    )
+    agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
+    code_server = CodeServer(log)
+    web_terminal = WebTerminal(log)
+    browser_desktop = BrowserDesktop(log, password=vnc_password)
     return SandboxSupervisor(
         config,
-        repository_bootstrapper,
-        core_services,
-        access_services,
+        repository_boot,
+        opencode_server,
+        agent_bridge,
+        code_server,
+        web_terminal,
+        browser_desktop,
         shutdown_event,
         log,
     )

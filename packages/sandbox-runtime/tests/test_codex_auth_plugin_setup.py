@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sandbox_runtime.core_services import CoreAgentServices
-from tests.runtime_helpers import make_core_services
+from sandbox_runtime.opencode_server import OpenCodeServer
+from tests.runtime_helpers import make_opencode_server
 
 
-def _make_core_services() -> CoreAgentServices:
+def _make_opencode_server() -> OpenCodeServer:
     """Create a SandboxSupervisor with default test config."""
     with patch.dict(
         "os.environ",
@@ -20,7 +20,7 @@ def _make_core_services() -> CoreAgentServices:
             "REPO_NAME": "app",
         },
     ):
-        return make_core_services()
+        return make_opencode_server()
 
 
 def _auth_file(tmp_path: Path) -> Path:
@@ -59,7 +59,7 @@ class TestCodexAuthPluginSetup:
 
     def test_auth_json_uses_sentinel_token(self, tmp_path):
         """auth.json should contain the sentinel, not the real refresh token."""
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict(
@@ -79,7 +79,7 @@ class TestCodexAuthPluginSetup:
 
     def test_auth_json_does_not_include_account_id(self, tmp_path):
         """The broker returns account IDs with access tokens when needed."""
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict(
@@ -98,9 +98,8 @@ class TestCodexAuthPluginSetup:
         assert data["openai"]["refresh"] == "managed-by-control-plane"
         assert "accountId" not in data["openai"]
 
-    async def test_start_opencode_copies_js_plugin(self, tmp_path):
-        """start_opencode() should deploy the precompiled JS plugin into .opencode/plugins."""
-        sup = _make_core_services()
+    async def test_start_copies_js_plugin(self, tmp_path):
+        sup = _make_opencode_server()
         sup.workspace_path = tmp_path / "workspace"
         sup.workspace_path.mkdir()
         (sup.workspace_path / ".git").mkdir()
@@ -117,15 +116,15 @@ class TestCodexAuthPluginSetup:
 
         with (
             patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=True),
-            patch("sandbox_runtime.core_services.Path") as mock_path,
-            patch("sandbox_runtime.core_services.shutil.copy") as mock_copy,
-            patch("sandbox_runtime.core_services.install_runtime_git_excludes") as mock_excludes,
+            patch("sandbox_runtime.opencode_server.Path") as mock_path,
+            patch("sandbox_runtime.opencode_server.shutil.copy") as mock_copy,
+            patch("sandbox_runtime.opencode_server.install_runtime_git_excludes") as mock_excludes,
             patch(
-                "sandbox_runtime.core_services.asyncio.create_subprocess_exec",
+                "sandbox_runtime.opencode_server.asyncio.create_subprocess_exec",
                 AsyncMock(return_value=fake_proc),
             ),
             patch(
-                "sandbox_runtime.core_services.asyncio.create_task",
+                "sandbox_runtime.opencode_server.asyncio.create_task",
                 side_effect=lambda coro: coro.close(),
             ),
         ):
@@ -140,7 +139,7 @@ class TestCodexAuthPluginSetup:
             sup._install_bin_scripts = MagicMock()
             sup._wait_for_health = AsyncMock()
 
-            await sup.start_opencode((), sup.workspace_path)
+            await sup.start((), sup.workspace_path)
 
         mock_copy.assert_called_once_with(
             plugin_source,

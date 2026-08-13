@@ -27,8 +27,8 @@ def _fake_process(returncode: int | None) -> MagicMock:
 class TestBridgeGracefulShutdown:
     async def test_bridge_exit_0_sets_shutdown_event(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._bridge_process = _fake_process(returncode=0)
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
+        supervisor.agent_bridge._process = _fake_process(returncode=0)
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
 
         await supervisor.monitor_processes()
 
@@ -36,80 +36,91 @@ class TestBridgeGracefulShutdown:
 
     async def test_bridge_exit_0_does_not_restart(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._bridge_process = _fake_process(returncode=0)
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
-        supervisor.core_services.start_bridge = AsyncMock()
+        supervisor.agent_bridge._process = _fake_process(returncode=0)
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
+        supervisor.agent_bridge.start = AsyncMock()
 
         await supervisor.monitor_processes()
 
-        supervisor.core_services.start_bridge.assert_not_called()
+        supervisor.agent_bridge.start.assert_not_called()
+
+    async def test_stop_tolerates_process_exiting_before_terminate(self):
+        supervisor = _make_supervisor()
+        process = _fake_process(returncode=None)
+        process.terminate.side_effect = ProcessLookupError
+        process.wait = AsyncMock(return_value=0)
+        supervisor.agent_bridge._process = process
+
+        await supervisor.agent_bridge.stop()
+
+        process.wait.assert_awaited_once()
 
 
 class TestBridgeCrashRestart:
     async def test_bridge_crash_restarts_with_backoff(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
         supervisor._report_fatal_error = AsyncMock()
         running_process = _fake_process(returncode=None)
 
         def restart_side_effect():
-            supervisor.core_services._bridge_process = running_process
+            supervisor.agent_bridge._process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.core_services._bridge_process = _fake_process(returncode=1)
-        supervisor.core_services.start_bridge = AsyncMock(side_effect=restart_side_effect)
+        supervisor.agent_bridge._process = _fake_process(returncode=1)
+        supervisor.agent_bridge.start = AsyncMock(side_effect=restart_side_effect)
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
             await supervisor.monitor_processes()
 
-        supervisor.core_services.start_bridge.assert_called_once()
+        supervisor.agent_bridge.start.assert_called_once()
         supervisor._report_fatal_error.assert_not_called()
 
     async def test_bridge_crash_exceeds_max_restarts(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
-        supervisor.core_services._bridge_process = _fake_process(returncode=1)
-        supervisor.core_services.start_bridge = AsyncMock()
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
+        supervisor.agent_bridge._process = _fake_process(returncode=1)
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
             await supervisor.monitor_processes()
 
         assert supervisor.shutdown_event.is_set()
-        assert supervisor.core_services.start_bridge.call_count == supervisor.MAX_RESTARTS
+        assert supervisor.agent_bridge.start.call_count == supervisor.MAX_RESTARTS
         supervisor._report_fatal_error.assert_called_once()
         assert "Bridge crashed" in supervisor._report_fatal_error.call_args[0][0]
 
     async def test_bridge_killed_by_signal_restarts(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
         running_process = _fake_process(returncode=None)
 
         def restart_side_effect():
-            supervisor.core_services._bridge_process = running_process
+            supervisor.agent_bridge._process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.core_services._bridge_process = _fake_process(returncode=-15)
-        supervisor.core_services.start_bridge = AsyncMock(side_effect=restart_side_effect)
+        supervisor.agent_bridge._process = _fake_process(returncode=-15)
+        supervisor.agent_bridge.start = AsyncMock(side_effect=restart_side_effect)
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
             await supervisor.monitor_processes()
 
-        supervisor.core_services.start_bridge.assert_called_once()
+        supervisor.agent_bridge.start.assert_called_once()
 
 
 class TestBridgeBackoffTiming:
     async def test_first_restart_uses_base_delay(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
         running_process = _fake_process(returncode=None)
 
         def restart_side_effect():
-            supervisor.core_services._bridge_process = running_process
+            supervisor.agent_bridge._process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.core_services._bridge_process = _fake_process(returncode=1)
-        supervisor.core_services.start_bridge = AsyncMock(side_effect=restart_side_effect)
+        supervisor.agent_bridge._process = _fake_process(returncode=1)
+        supervisor.agent_bridge.start = AsyncMock(side_effect=restart_side_effect)
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock) as sleep:
             await supervisor.monitor_processes()
@@ -118,9 +129,9 @@ class TestBridgeBackoffTiming:
 
     async def test_backoff_is_capped_at_max(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._opencode_process = _fake_process(returncode=None)
-        supervisor.core_services._bridge_process = _fake_process(returncode=1)
-        supervisor.core_services.start_bridge = AsyncMock()
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=None)
+        supervisor.agent_bridge._process = _fake_process(returncode=1)
+        supervisor.agent_bridge.start = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
         sleep_delays = []
 
@@ -136,14 +147,14 @@ class TestBridgeBackoffTiming:
 class TestOpenCodeCrashRestart:
     async def test_opencode_crash_exceeds_max_restarts(self):
         supervisor = _make_supervisor()
-        supervisor.core_services._opencode_process = _fake_process(returncode=1)
-        supervisor.core_services.start_opencode = AsyncMock()
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=1)
+        supervisor.opencode_server.start = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
             await supervisor.monitor_processes()
 
-        assert supervisor.core_services.start_opencode.call_count == supervisor.MAX_RESTARTS
+        assert supervisor.opencode_server.start.call_count == supervisor.MAX_RESTARTS
         supervisor._report_fatal_error.assert_called_once()
         assert "OpenCode crashed" in supervisor._report_fatal_error.call_args.args[0]
 

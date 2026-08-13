@@ -4,11 +4,11 @@ import json
 import os
 from unittest.mock import patch
 
-from sandbox_runtime.core_services import CoreAgentServices
-from tests.runtime_helpers import make_core_services
+from sandbox_runtime.opencode_server import OpenCodeServer
+from tests.runtime_helpers import make_opencode_server
 
 
-def _make_core_services() -> CoreAgentServices:
+def _make_opencode_server() -> OpenCodeServer:
     """Create a SandboxSupervisor with default test config."""
     with patch.dict(
         "os.environ",
@@ -20,7 +20,7 @@ def _make_core_services() -> CoreAgentServices:
             "REPO_NAME": "app",
         },
     ):
-        return make_core_services()
+        return make_opencode_server()
 
 
 def _auth_file(tmp_path):
@@ -32,7 +32,7 @@ class TestOpenaiOauthSetup:
     """Cases for _setup_openai_oauth()."""
 
     def test_writes_auth_json_when_refresh_token_present(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=True),
@@ -51,7 +51,7 @@ class TestOpenaiOauthSetup:
         }
 
     def test_does_not_require_account_id_in_sandbox_env(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict(
@@ -70,7 +70,7 @@ class TestOpenaiOauthSetup:
         assert "accountId" not in data["openai"]
 
     def test_skips_when_no_refresh_token(self, tmp_path, monkeypatch):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         # Explicitly remove the key so it is absent regardless of test ordering
         monkeypatch.delenv("OPENAI_OAUTH_MANAGED", raising=False)
@@ -82,7 +82,7 @@ class TestOpenaiOauthSetup:
         assert not _auth_file(tmp_path).exists()
 
     def test_sets_secure_permissions(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
@@ -94,7 +94,7 @@ class TestOpenaiOauthSetup:
         assert mode == 0o600
 
     def test_does_not_crash_on_write_failure(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
@@ -104,7 +104,7 @@ class TestOpenaiOauthSetup:
             sup._setup_managed_oauth()
 
     def test_no_temp_file_left_on_write_failure(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
         original_open = os.open
 
         def fail_on_tmp(path, *args, **kwargs):
@@ -124,7 +124,7 @@ class TestOpenaiOauthSetup:
         assert not tmp_file.exists()
 
     def test_restricts_existing_temp_file_before_write(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
         auth_dir = tmp_path / ".local" / "share" / "opencode"
         auth_dir.mkdir(parents=True)
         tmp_file = auth_dir / ".auth.json.tmp"
@@ -140,7 +140,7 @@ class TestOpenaiOauthSetup:
         assert _auth_file(tmp_path).stat().st_mode & 0o777 == 0o600
 
     def test_removes_temp_file_when_replace_fails(self, tmp_path):
-        sup = _make_core_services()
+        sup = _make_opencode_server()
 
         with (
             patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),

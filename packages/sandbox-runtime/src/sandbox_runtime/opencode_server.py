@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import filecmp
 import json
 import os
@@ -15,6 +16,7 @@ import httpx
 from .constants import (
     BIN_INSTALL_DIR_ENV_VAR,
     DEFAULT_BIN_INSTALL_DIR,
+    OPENCODE_PORT,
 )
 from .git_excludes import install_runtime_git_excludes
 from .process_output import iter_process_lines
@@ -23,22 +25,21 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from .repo_config import RepoEntry
-    from .runtime_config import CoreServicesConfig
+    from .runtime_config import OpenCodeConfig
 
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
 AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
 
-class CoreAgentServices:
-    OPENCODE_PORT = 4096
+class OpenCodeServer:
     HEALTH_CHECK_TIMEOUT = 30.0
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
     _NPM_PKG_RE = re.compile(r"^(@[\w.-]+/)?[\w][\w.-]*(@[\w.-]+)?$")
 
     def __init__(
         self,
-        config: CoreServicesConfig,
+        config: OpenCodeConfig,
         shutdown_event: asyncio.Event,
         log: Any,
         record_boot_warning: Callable[..., None],
@@ -46,17 +47,12 @@ class CoreAgentServices:
         self.shutdown_event = shutdown_event
         self.log = log
         self.record_boot_warning = record_boot_warning
-        self.sandbox_id = config.sandbox_id
-        self.control_plane_url = config.control_plane_url
-        self.sandbox_token = config.sandbox_token
         self.has_repository = config.has_repository
         self.workspace_path = config.workspace_path
-        self.session_id = config.session_id
         self.provider = config.provider
         self.model = config.model
         self.mcp_servers = config.mcp_servers
         self._opencode_process: asyncio.subprocess.Process | None = None
-        self._bridge_process: asyncio.subprocess.Process | None = None
 
     def _assemble_workspace_opencode(self, repositories: Sequence[RepoEntry]) -> None:
         """Merge member repos' .opencode/ into the workspace root (multi-repo only).
@@ -485,7 +481,7 @@ class CoreAgentServices:
                 config[name] = entry
         return config
 
-    async def start_opencode(self, repositories: tuple[RepoEntry, ...], workdir: Path) -> None:
+    async def start(self, repositories: tuple[RepoEntry, ...], workdir: Path) -> None:
         """Start OpenCode server with configuration."""
         self._setup_managed_oauth()
         self.log.info("opencode.start")
@@ -547,7 +543,7 @@ class CoreAgentServices:
             "opencode",
             "serve",
             "--port",
-            str(self.OPENCODE_PORT),
+            str(OPENCODE_PORT),
             "--hostname",
             "0.0.0.0",
             "--print-logs",  # Print logs to stdout for debugging
@@ -577,7 +573,7 @@ class CoreAgentServices:
 
     async def _wait_for_health(self) -> None:
         """Poll health endpoint until server is ready."""
-        health_url = f"http://localhost:{self.OPENCODE_PORT}/global/health"
+        health_url = f"http://localhost:{OPENCODE_PORT}/global/health"
         start_time = time.time()
 
         async with httpx.AsyncClient() as client:
@@ -602,100 +598,21 @@ class CoreAgentServices:
 
         raise RuntimeError("OpenCode server failed to become healthy")
 
-    async def start_bridge(self) -> None:
-        """Start the agent bridge process."""
-        self.log.info("bridge.start")
-
-        if not self.control_plane_url:
-            self.log.info("bridge.skip", reason="no_control_plane_url")
-            return
-
-        # Get session_id from config (required for WebSocket connection)
-        if not self.session_id:
-            self.log.info("bridge.skip", reason="no_session_id")
-            return
-
-        # Run bridge as a module (works with relative imports)
-        self._bridge_process = await asyncio.create_subprocess_exec(
-            "python",
-            "-m",
-            "sandbox_runtime.bridge",
-            "--sandbox-id",
-            self.sandbox_id,
-            "--session-id",
-            self.session_id,
-            "--control-plane",
-            self.control_plane_url,
-            "--token",
-            self.sandbox_token,
-            "--opencode-port",
-            str(self.OPENCODE_PORT),
-            env=os.environ,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            limit=_LOG_FORWARD_STREAM_LIMIT_BYTES,
-        )
-
-        # Start log forwarder for bridge
-        asyncio.create_task(self._forward_bridge_logs())
-        self.log.info("bridge.started")
-
-        # Check if bridge exited immediately during startup
-        await asyncio.sleep(0.5)
-        if self._bridge_process.returncode is not None:
-            exit_code = self._bridge_process.returncode
-            # Bridge exited immediately - read any error output
-            stdout, _ = await self._bridge_process.communicate()
-            if exit_code == 0:
-                self.log.warn("bridge.early_exit", exit_code=exit_code)
-            else:
-                self.log.error(
-                    "bridge.startup_crash",
-                    exit_code=exit_code,
-                    output=stdout.decode(errors="replace") if stdout else "",
-                )
-
-    async def _forward_bridge_logs(self) -> None:
-        """Forward bridge stdout to supervisor stdout."""
-        if not self._bridge_process or not self._bridge_process.stdout:
-            return
-        # Bridge already prefixes its output with [bridge], so forward verbatim.
-        async for line in iter_process_lines(
-            self._bridge_process.stdout,
-            on_error=lambda error: self.log.warn("bridge.log_forward_error", exc=error),
-        ):
-            print(line)
-
-    async def stop_bridge(self) -> None:
-        if self._bridge_process and self._bridge_process.returncode is None:
-            self._bridge_process.terminate()
-            try:
-                await asyncio.wait_for(self._bridge_process.wait(), timeout=5.0)
-            except TimeoutError:
-                self._bridge_process.kill()
-                await self._bridge_process.wait()
-
-    async def stop_opencode(self) -> None:
+    async def stop(self) -> None:
         if self._opencode_process and self._opencode_process.returncode is None:
-            self._opencode_process.terminate()
+            with contextlib.suppress(ProcessLookupError):
+                self._opencode_process.terminate()
             try:
                 await asyncio.wait_for(self._opencode_process.wait(), timeout=10.0)
             except TimeoutError:
-                self._opencode_process.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    self._opencode_process.kill()
                 await self._opencode_process.wait()
 
-    def opencode_exit_code(self) -> int | None:
+    def exit_code(self) -> int | None:
         """Return OpenCode's exit code, or None while absent/running."""
         return self._opencode_process.returncode if self._opencode_process else None
 
-    def bridge_exit_code(self) -> int | None:
-        """Return the bridge's exit code, or None while absent/running."""
-        return self._bridge_process.returncode if self._bridge_process else None
-
-    def opencode_started(self) -> bool:
+    def started(self) -> bool:
         """Return whether an OpenCode process has been created."""
         return self._opencode_process is not None
-
-    def bridge_started(self) -> bool:
-        """Return whether a bridge process has been created."""
-        return self._bridge_process is not None

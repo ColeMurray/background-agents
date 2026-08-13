@@ -1,14 +1,15 @@
-"""Tests for RepositoryBootstrapper.run_setup_script() and its integration in run()."""
+"""Tests for RepositoryBoot.run_setup_script() and its integration in run()."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sandbox_runtime.repository_boot import RepositoryBootstrapper
-from tests.runtime_helpers import make_repository_bootstrapper
+from sandbox_runtime.repository_boot import RepositoryBoot
+from sandbox_runtime.runtime_config import BootMode
+from tests.runtime_helpers import make_repository_boot
 
 
-def _make_bootstrapper(tmp_path) -> RepositoryBootstrapper:
-    """Create a RepositoryBootstrapper with repo_path pointing at tmp_path."""
+def _make_repository_boot(tmp_path) -> RepositoryBoot:
+    """Create a RepositoryBoot with repo_path pointing at tmp_path."""
     with patch.dict(
         "os.environ",
         {
@@ -20,7 +21,7 @@ def _make_bootstrapper(tmp_path) -> RepositoryBootstrapper:
         },
         clear=True,
     ):
-        sup = make_repository_bootstrapper()
+        sup = make_repository_boot()
     sup.workspace_path = tmp_path
     sup.repo_path = tmp_path / "app"
     sup.repositories = sup._parse_repositories()
@@ -56,12 +57,12 @@ class TestSetupScriptSkip:
     """Cases where the setup script is not run."""
 
     async def test_skip_when_no_setup_script(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         # repo_path exists but no .openinspect/setup.sh
         sup.repo_path.mkdir(parents=True, exist_ok=True)
 
         with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is True
         mock_exec.assert_not_called()
@@ -76,14 +77,14 @@ class TestSetupScriptSuccess:
     """Cases where the setup script runs successfully."""
 
     async def test_bash_called_with_correct_args(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         script = _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ) as mock_exec:
-            await sup.run_setup_script(sup.repositories[0])
+            await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         mock_exec.assert_called_once()
         call_args = mock_exec.call_args
@@ -92,7 +93,7 @@ class TestSetupScriptSuccess:
         assert call_args[1]["cwd"] == sup.repo_path
 
     async def test_inherits_environment(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"")
 
@@ -102,7 +103,7 @@ class TestSetupScriptSuccess:
                 "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
             ) as mock_exec,
         ):
-            await sup.run_setup_script(sup.repositories[0])
+            await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         env_arg = mock_exec.call_args[1]["env"]
         assert "MY_VAR" in env_arg
@@ -118,19 +119,19 @@ class TestSetupScriptFailure:
     """Cases where the setup script fails."""
 
     async def test_nonzero_exit_returns_false(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
         fake_proc = _fake_process(returncode=1, stdout=b"error: something broke\n")
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
 
     async def test_exception_returns_false(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
 
         with patch(
@@ -138,24 +139,23 @@ class TestSetupScriptFailure:
             new_callable=AsyncMock,
             side_effect=OSError("exec failed"),
         ):
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
 
     async def test_build_failure_log_omits_hook_output(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
-        sup.boot_mode = "build"
-        sup.log = MagicMock()
+        sup = _make_repository_boot(tmp_path)
+        sup.hooks.log = MagicMock()
         _create_setup_script(sup.repo_path, content="#!/bin/bash\nexit 1\n")
         fake_proc = _fake_process(returncode=1, stdout=b"secret from repository hook\n")
 
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.BUILD)
 
         assert result is False
-        failure = sup.log.error.call_args
+        failure = sup.hooks.log.error.call_args
         assert failure.args == ("setup.failed",)
         assert failure.kwargs["exit_code"] == 1
         assert "output_tail" not in failure.kwargs
@@ -170,7 +170,7 @@ class TestSetupScriptTimeout:
     """Timeout handling for the setup script."""
 
     async def test_timeout_kills_process(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
@@ -180,16 +180,15 @@ class TestSetupScriptTimeout:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is False
         fake_proc.kill.assert_called_once()
         fake_proc.wait.assert_awaited_once()
 
     async def test_build_timeout_log_omits_hook_output(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
-        sup.boot_mode = "build"
-        sup.log = MagicMock()
+        sup = _make_repository_boot(tmp_path)
+        sup.hooks.log = MagicMock()
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=None)
         fake_proc.communicate = AsyncMock(side_effect=TimeoutError)
@@ -199,15 +198,15 @@ class TestSetupScriptTimeout:
         with patch(
             "asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc
         ):
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.BUILD)
 
         assert result is False
-        timeout = sup.log.error.call_args
+        timeout = sup.hooks.log.error.call_args
         assert timeout.args == ("setup.timeout",)
         assert "output_tail" not in timeout.kwargs
 
     async def test_default_timeout_300(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
         captured_timeout = {}
@@ -226,12 +225,12 @@ class TestSetupScriptTimeout:
             import os
 
             os.environ.pop("SETUP_TIMEOUT_SECONDS", None)
-            await sup.run_setup_script(sup.repositories[0])
+            await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert captured_timeout["value"] == 300
 
     async def test_custom_timeout_from_env(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
         captured_timeout = {}
@@ -247,12 +246,12 @@ class TestSetupScriptTimeout:
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
-            await sup.run_setup_script(sup.repositories[0])
+            await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert captured_timeout["value"] == 60
 
     async def test_invalid_timeout_env_uses_default(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
         _create_setup_script(sup.repo_path)
         fake_proc = _fake_process(returncode=0, stdout=b"ok\n")
         captured_timeout = {}
@@ -268,7 +267,7 @@ class TestSetupScriptTimeout:
             patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=fake_proc),
             patch("asyncio.wait_for", side_effect=capturing_wait_for),
         ):
-            result = await sup.run_setup_script(sup.repositories[0])
+            result = await sup.hooks.run_setup(sup.repositories[0], BootMode.FRESH)
 
         assert result is True
         assert captured_timeout["value"] == 300
@@ -283,17 +282,20 @@ class TestSetupInRepositoryBoot:
     """Verify run_setup_script is called at the right point in run()."""
 
     async def test_run_skips_setup_on_snapshot_restore(self, tmp_path):
-        sup = _make_bootstrapper(tmp_path)
+        sup = _make_repository_boot(tmp_path)
 
-        sup.boot_mode = "snapshot_restore"
         sup._write_repo_manifest = MagicMock()
         sup._write_workspace_manifest = MagicMock()
-        sup._ensure_credential_helper_configured = AsyncMock()
-        sup.sync_repositories = AsyncMock(return_value=[])
-        sup.run_setup_script = AsyncMock(return_value=True)
-        sup.run_start_script = AsyncMock(return_value=True)
+        sup.synchronizer.ensure_credentials_configured = AsyncMock()
+        from sandbox_runtime.repository_sync import RepositorySyncResult
 
-        await sup._run_repository_boot([])
+        sup.synchronizer.sync = AsyncMock(
+            return_value=RepositorySyncResult(tuple(sup.repositories), ())
+        )
+        sup.hooks.run_setup = AsyncMock(return_value=True)
+        sup.hooks.run_start = AsyncMock(return_value=True)
 
-        sup.run_setup_script.assert_not_called()
-        sup.run_start_script.assert_called_once()
+        await sup.boot(BootMode.SNAPSHOT_RESTORE, [])
+
+        sup.hooks.run_setup.assert_not_called()
+        sup.hooks.run_start.assert_called_once_with(sup.repositories[0], BootMode.SNAPSHOT_RESTORE)

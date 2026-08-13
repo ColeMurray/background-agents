@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tests.runtime_helpers import make_core_services
+from tests.runtime_helpers import make_opencode_server
 
 
 def _make_supervisor(session_config: dict | None = None):
@@ -18,7 +18,7 @@ def _make_supervisor(session_config: dict | None = None):
         "SESSION_CONFIG": json.dumps(session_config or {}),
     }
     with patch.dict(os.environ, env_vars, clear=False):
-        return make_core_services()
+        return make_opencode_server()
 
 
 # ─── _resolve_mcp_servers ────────────────────────────────────────────────────

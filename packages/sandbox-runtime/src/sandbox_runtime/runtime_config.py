@@ -55,16 +55,20 @@ class RepositoryConfig:
 
 
 @dataclass(frozen=True)
-class CoreServicesConfig:
-    sandbox_id: str
-    control_plane_url: str
-    sandbox_token: str
-    session_id: str
+class OpenCodeConfig:
     provider: str
     model: str
     mcp_servers: tuple[Mapping[str, Any], ...]
     has_repository: bool
     workspace_path: Path
+
+
+@dataclass(frozen=True)
+class BridgeProcessConfig:
+    sandbox_id: str
+    control_plane_url: str
+    sandbox_token: str
+    session_id: str
 
 
 @dataclass(frozen=True)
@@ -133,21 +137,25 @@ class RuntimeConfig:
             repo_path=self.repo_path,
         )
 
-    def core_services_config(self) -> CoreServicesConfig:
+    def opencode_config(self) -> OpenCodeConfig:
         raw_mcp_servers = self.session_config.get("mcp_servers")
         mcp_servers = (
             tuple(item for item in raw_mcp_servers if isinstance(item, Mapping))
             if isinstance(raw_mcp_servers, tuple)
             else ()
         )
-        return CoreServicesConfig(
-            sandbox_id=self.sandbox_id,
-            control_plane_url=self.control_plane_url,
-            sandbox_token=self.sandbox_token,
-            session_id=str(self.session_config.get("session_id") or ""),
+        return OpenCodeConfig(
             provider=str(self.session_config.get("provider") or "anthropic"),
             model=str(self.session_config.get("model") or "claude-sonnet-4-6"),
             mcp_servers=mcp_servers,
             has_repository=self.has_repository,
             workspace_path=self.workspace_path,
+        )
+
+    def bridge_process_config(self) -> BridgeProcessConfig:
+        return BridgeProcessConfig(
+            sandbox_id=self.sandbox_id,
+            control_plane_url=self.control_plane_url,
+            sandbox_token=self.sandbox_token,
+            session_id=str(self.session_config.get("session_id") or ""),
         )

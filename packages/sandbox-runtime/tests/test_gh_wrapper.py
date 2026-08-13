@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from sandbox_runtime import repository_boot as entrypoint
-from sandbox_runtime.repository_boot import GH_WRAPPER_BODY, RepositoryBootstrapper
+from sandbox_runtime import repository_sync
+from sandbox_runtime.repository_sync import GH_WRAPPER_BODY, RepositorySynchronizer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -116,11 +116,11 @@ def test_runtime_installs_canonical_wrapper(
     real_gh.touch()
     real_gh.chmod(0o755)
     wrapper = tmp_path / "gh"
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_REAL_PATH", str(real_gh))
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_INSTALL_PATH", wrapper)
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
-    supervisor = object.__new__(RepositoryBootstrapper)
-    supervisor._install_gh_wrapper()
+    synchronizer = object.__new__(RepositorySynchronizer)
+    synchronizer._install_gh_wrapper()
 
     assert wrapper.read_text() == GH_WRAPPER_BODY
     assert os.access(wrapper, os.X_OK)
@@ -133,9 +133,9 @@ def test_runtime_fails_when_wrapper_cannot_be_installed(
     real_gh.touch()
     real_gh.chmod(0o755)
     wrapper = tmp_path / "missing" / "gh"
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_REAL_PATH", str(real_gh))
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_INSTALL_PATH", wrapper)
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
     with pytest.raises(RuntimeError, match="Cannot install authenticated gh wrapper"):
-        supervisor = object.__new__(RepositoryBootstrapper)
-        supervisor._install_gh_wrapper()
+        synchronizer = object.__new__(RepositorySynchronizer)
+        synchronizer._install_gh_wrapper()
