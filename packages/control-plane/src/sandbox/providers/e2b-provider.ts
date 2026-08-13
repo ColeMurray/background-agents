@@ -69,7 +69,7 @@ export const DEFAULT_E2B_AUTO_PAUSE = true;
  * sync with the toolchain pinned in e2b.Dockerfile (OPENCODE_VERSION) and the
  * matching Vercel/OpenComputer constants.
  */
-export const E2B_SANDBOX_VERSION = "v54-opencode-1-17-18";
+export const E2B_SANDBOX_VERSION = "v57-vnc-opencode-1-18-11";
 
 /**
  * TTL for the brief cold-boot between the sanitizing pause and createSnapshot
@@ -77,18 +77,6 @@ export const E2B_SANDBOX_VERSION = "v54-opencode-1-17-18";
  * sandbox is killed immediately afterwards.
  */
 const SNAPSHOT_CONNECT_TIMEOUT_SECONDS = 300;
-
-const REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
-  "OI_REPO_IMAGE_BUILD_ID",
-  "OI_REPO_IMAGE_CALLBACK_URL",
-  "OI_REPO_IMAGE_CALLBACK_TOKEN",
-  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
-] as const;
-const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
-  "OI_REPO_IMAGE_CALLBACK_SECRET",
-] as const;
 
 export interface E2BProviderConfig {
   scmProvider: SourceControlProviderName;

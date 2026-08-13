@@ -76,12 +76,16 @@ RUN printf '%s\n' '#!/bin/sh' 'exec python3 -m sandbox_runtime.credentials.git_c
 # Build-time env only. E2B does NOT propagate Docker ENV to the runtime process,
 # so the start command (build-template.py) re-exports PYTHONPATH / NODE_PATH;
 # control-plane-injected vars (CONTROL_PLANE_URL, etc.) arrive via E2B envVars.
+# SANDBOX_VERSION must parse as v<N> (>= MIN_COMPATIBLE_RUNTIME_VERSION) so
+# prebuilt images built from this template clear the spawn-time floor. Keep it in
+# sync with E2B_SANDBOX_VERSION in control-plane e2b-provider.ts and the pinned
+# OPENCODE_VERSION above.
 ENV HOME=/root \
     NODE_ENV=development \
     PATH=/usr/local/bin:/usr/bin:/bin \
     PYTHONPATH=/app \
     NODE_PATH=/usr/lib/node_modules \
-    SANDBOX_VERSION=e2b-v3-vnc
+    SANDBOX_VERSION=v57-vnc-opencode-1-18-11
 
 # NOTE: file staging (sandbox_runtime, oi-launch.py), WORKDIR, and the start/ready
 # commands are applied by build-template.py via the E2B Template SDK
