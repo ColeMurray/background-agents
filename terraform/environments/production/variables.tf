@@ -320,6 +320,11 @@ variable "anthropic_api_key" {
     )
     error_message = "anthropic_api_key must be non-blank when Slack uses Anthropic classification."
   }
+
+  validation {
+    condition     = var.sandbox_provider != "opencomputer" || trimspace(var.anthropic_api_key) != ""
+    error_message = "anthropic_api_key must be non-blank when sandbox_provider = 'opencomputer'."
+  }
 }
 
 # =============================================================================

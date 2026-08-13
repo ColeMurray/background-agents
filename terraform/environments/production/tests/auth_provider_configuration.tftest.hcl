@@ -206,7 +206,7 @@ run "slack_classification_anthropic" {
   assert {
     condition = (
       var.slack_classification_model == "anthropic/claude-haiku-4-5" &&
-      module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"] == "anthropic/claude-haiku-4-5" &&
+      nonsensitive(module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"]) == "anthropic/claude-haiku-4-5" &&
       contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
       length(module.control_plane_worker.vpc_network_binding_network_ids) == 0
     )
@@ -228,6 +228,19 @@ run "slack_classification_anthropic_missing_key" {
   expect_failures = [var.anthropic_api_key]
 }
 
+run "opencomputer_without_anthropic_key" {
+  command = plan
+
+  variables {
+    sandbox_provider     = "opencomputer"
+    opencomputer_api_url = "https://api.opencomputer.test"
+    opencomputer_api_key = "test-opencomputer-key"
+    anthropic_api_key    = "  "
+  }
+
+  expect_failures = [var.anthropic_api_key]
+}
+
 run "slack_classification_openai" {
   command = plan
 
@@ -242,7 +255,7 @@ run "slack_classification_openai" {
 
   assert {
     condition = (
-      module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"] == "openai/gpt-5.6-luna" &&
+      nonsensitive(module.slack_bot_worker[0].plain_text_binding_values["CLASSIFICATION_MODEL"]) == "openai/gpt-5.6-luna" &&
       !contains(module.slack_bot_worker[0].secret_binding_names, "ANTHROPIC_API_KEY") &&
       module.control_plane_worker.vpc_network_binding_network_ids["EGRESS"] == "cf1:network"
     )

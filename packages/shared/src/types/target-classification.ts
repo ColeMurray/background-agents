@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { extractProviderAndModel } from "../models";
 
 export const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 export const TARGET_CLASSIFICATIONS_PATH = "/internal/target-classifications";
@@ -32,6 +33,12 @@ Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
 
 export const ANTHROPIC_CLASSIFICATION_MODEL_ID = "anthropic/claude-haiku-4-5";
 export const OPENAI_CLASSIFICATION_MODEL_ID = "openai/gpt-5.6-luna";
+export const ANTHROPIC_CLASSIFICATION_PROVIDER_MODEL = extractProviderAndModel(
+  ANTHROPIC_CLASSIFICATION_MODEL_ID
+).model;
+export const OPENAI_CLASSIFICATION_PROVIDER_MODEL = extractProviderAndModel(
+  OPENAI_CLASSIFICATION_MODEL_ID
+).model;
 
 export const classificationModelSchema = z.enum([
   ANTHROPIC_CLASSIFICATION_MODEL_ID,

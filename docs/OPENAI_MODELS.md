@@ -49,8 +49,7 @@ required tokens.
 ### Step 2: Add Secrets to Your Deployment
 
 1. Go to your Open-Inspect web app's **Settings** page.
-2. For normal sessions, credentials may be stored as global, repository, or environment secrets; the
-   selected session target determines which scope is read.
+2. Sessions receive global and target secrets; target values override matching global values.
 3. For Slack target classification, the target is not known yet. Add the refresh token to the
    **global** scope — repository and environment tokens cannot be used for this pre-target call.
 4. Add the following secrets:
@@ -78,8 +77,7 @@ sandbox needs to make an OpenAI API call, it requests a short-lived access token
 plane, which handles token refresh and rotation automatically. Only the temporary access token is
 present inside the sandbox.
 
-Credentials can be scoped globally, per repository, or per environment, so different targets can use
-different OpenAI accounts.
+Global and target credentials are combined, with target values taking precedence.
 
 ### Slack target-classification rollout
 

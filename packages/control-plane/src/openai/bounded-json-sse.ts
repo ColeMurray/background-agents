@@ -36,7 +36,7 @@ export async function* decodeBoundedJsonSse(
   signal: AbortSignal,
   limits: BoundedJsonSseLimits
 ): AsyncGenerator<unknown> {
-  if (!response.body) throw new InvalidBoundedJsonSseError();
+  if (!response.body) throw new InvalidBoundedJsonSseError("SSE response has no body");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -52,7 +52,9 @@ export async function* decodeBoundedJsonSse(
       const { done, value } = await waitForAbort(reader.read(), signal);
       if (done) return;
       totalBytes += value.byteLength;
-      if (totalBytes > limits.maxTotalBytes) throw new InvalidBoundedJsonSseError();
+      if (totalBytes > limits.maxTotalBytes) {
+        throw new InvalidBoundedJsonSseError("SSE stream exceeded the total byte limit");
+      }
       lineBuffer += decoder.decode(value, { stream: true });
 
       let newlineIndex = lineBuffer.indexOf("\n");
@@ -64,12 +66,14 @@ export async function* decodeBoundedJsonSse(
         if (line === "") {
           if (eventData) {
             eventCount += 1;
-            if (eventCount > limits.maxEvents) throw new InvalidBoundedJsonSseError();
+            if (eventCount > limits.maxEvents) {
+              throw new InvalidBoundedJsonSseError("SSE stream exceeded the event limit");
+            }
             let event: unknown;
             try {
               event = JSON.parse(eventData);
             } catch {
-              throw new InvalidBoundedJsonSseError();
+              throw new InvalidBoundedJsonSseError("SSE event contains invalid JSON");
             }
             yield event;
             eventData = "";
@@ -79,7 +83,9 @@ export async function* decodeBoundedJsonSse(
           const data = line.slice(5).replace(/^ /, "");
           eventDataBytes += (eventData ? 1 : 0) + encoder.encode(data).byteLength;
           eventData += eventData ? `\n${data}` : data;
-          if (eventDataBytes > limits.maxEventBytes) throw new InvalidBoundedJsonSseError();
+          if (eventDataBytes > limits.maxEventBytes) {
+            throw new InvalidBoundedJsonSseError("SSE event exceeded the byte limit");
+          }
         }
         newlineIndex = lineBuffer.indexOf("\n");
       }
@@ -87,13 +93,13 @@ export async function* decodeBoundedJsonSse(
         lineBuffer.length > limits.maxEventBytes ||
         encoder.encode(lineBuffer).byteLength > limits.maxEventBytes
       ) {
-        throw new InvalidBoundedJsonSseError();
+        throw new InvalidBoundedJsonSseError("SSE line exceeded the byte limit");
       }
     }
   } catch (error) {
     if (error instanceof BoundedJsonSseAbortError || signal.aborted) throw error;
     if (error instanceof InvalidBoundedJsonSseError) throw error;
-    throw new InvalidBoundedJsonSseError();
+    throw new InvalidBoundedJsonSseError("SSE stream read failed");
   } finally {
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();

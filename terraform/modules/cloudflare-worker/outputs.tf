@@ -36,6 +36,7 @@ output "plain_text_binding_names" {
 output "plain_text_binding_values" {
   description = "Configured plain-text binding values keyed by binding name."
   value       = { for binding in var.plain_text_bindings : binding.name => binding.value }
+  sensitive   = true
 }
 
 output "vpc_network_binding_network_ids" {

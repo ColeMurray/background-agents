@@ -13,6 +13,7 @@ import {
   TARGET_CLASSIFICATIONS_URL,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
+  ANTHROPIC_CLASSIFICATION_PROVIDER_MODEL,
   targetClassificationRequestSchema,
   targetClassificationResponseSchema,
   classificationModelSchema,
@@ -30,10 +31,10 @@ import { escapeMrkdwnText } from "@open-inspect/shared/slack";
 import { targetId, targetLabel, targetValue, type SlackSessionTarget } from "../targets";
 import { createLogger } from "../logger";
 import { signedControlPlaneFetch } from "../internal-auth";
+import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 const log = createLogger("classifier");
 const DEFAULT_CLASSIFICATION_MODEL: ClassificationModel = ANTHROPIC_CLASSIFICATION_MODEL_ID;
-const ANTHROPIC_API_MODEL = "claude-haiku-4-5";
 const CLASSIFY_TARGET_INPUT_SCHEMA: Anthropic.Messages.Tool.InputSchema = {
   ...targetClassificationJsonSchema,
 };
@@ -175,7 +176,7 @@ export class RepoClassifier {
     request: TargetClassificationRequest
   ): Promise<TargetClassificationDecision> {
     const response = await this.getAnthropicClient().messages.create({
-      model: ANTHROPIC_API_MODEL,
+      model: ANTHROPIC_CLASSIFICATION_PROVIDER_MODEL,
       max_tokens: 500,
       temperature: 0,
       system: TARGET_CLASSIFIER_SYSTEM_PROMPT,
@@ -209,7 +210,10 @@ export class RepoClassifier {
         body,
         traceId,
       },
-      { headers: { Accept: "application/json" } }
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(OUTBOUND_REQUEST_TIMEOUT_MS),
+      }
     );
 
     if (!response.ok) {

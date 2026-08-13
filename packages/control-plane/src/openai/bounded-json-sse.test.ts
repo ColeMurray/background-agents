@@ -89,21 +89,21 @@ describe("bounded JSON SSE decoder", () => {
   it("rejects an event after the event-count limit", async () => {
     const response = responseFromText('data: {"value":1}\n\ndata: {"value":2}\n\n');
 
-    await expect(collectEvents(response, { maxEvents: 1 })).rejects.toBeInstanceOf(
-      InvalidBoundedJsonSseError
+    await expect(collectEvents(response, { maxEvents: 1 })).rejects.toEqual(
+      new InvalidBoundedJsonSseError("SSE stream exceeded the event limit")
     );
   });
 
   it("rejects malformed JSON", async () => {
-    await expect(collectEvents(responseFromText("data: not-json\n\n"))).rejects.toBeInstanceOf(
-      InvalidBoundedJsonSseError
+    await expect(collectEvents(responseFromText("data: not-json\n\n"))).rejects.toEqual(
+      new InvalidBoundedJsonSseError("SSE event contains invalid JSON")
     );
   });
 
   it("rejects a response over the total byte limit", async () => {
     await expect(
       collectEvents(responseFromText('data: {"value":1}\n\n'), { maxTotalBytes: 4 })
-    ).rejects.toBeInstanceOf(InvalidBoundedJsonSseError);
+    ).rejects.toEqual(new InvalidBoundedJsonSseError("SSE stream exceeded the total byte limit"));
   });
 
   it("rejects event data over the per-event byte limit", async () => {
@@ -111,7 +111,7 @@ describe("bounded JSON SSE decoder", () => {
       collectEvents(responseFromText('data: {"value":"too large"}\n\n'), {
         maxEventBytes: 8,
       })
-    ).rejects.toBeInstanceOf(InvalidBoundedJsonSseError);
+    ).rejects.toEqual(new InvalidBoundedJsonSseError("SSE event exceeded the byte limit"));
   });
 
   it("rejects an unterminated line over the per-event byte limit", async () => {
@@ -119,12 +119,12 @@ describe("bounded JSON SSE decoder", () => {
       collectEvents(responseFromText("data: an-unterminated-line"), {
         maxEventBytes: 8,
       })
-    ).rejects.toBeInstanceOf(InvalidBoundedJsonSseError);
+    ).rejects.toEqual(new InvalidBoundedJsonSseError("SSE line exceeded the byte limit"));
   });
 
   it("rejects a response without a body", async () => {
-    await expect(collectEvents(new Response(null))).rejects.toBeInstanceOf(
-      InvalidBoundedJsonSseError
+    await expect(collectEvents(new Response(null))).rejects.toEqual(
+      new InvalidBoundedJsonSseError("SSE response has no body")
     );
   });
 
@@ -159,7 +159,9 @@ describe("bounded JSON SSE decoder", () => {
       })
     );
 
-    await expect(collectEvents(response)).rejects.toEqual(new InvalidBoundedJsonSseError());
+    await expect(collectEvents(response)).rejects.toEqual(
+      new InvalidBoundedJsonSseError("SSE stream read failed")
+    );
   });
 
   it("cancels an open response when its consumer stops after one event", async () => {

@@ -3,10 +3,12 @@ import {
   CLASSIFIER_MESSAGE_MAX_CHARS,
   CLASSIFIER_PROMPT_MAX_CHARS,
   ANTHROPIC_CLASSIFICATION_MODEL_ID,
+  ANTHROPIC_CLASSIFICATION_PROVIDER_MODEL,
   targetClassificationRequestSchema,
   targetClassificationResponseSchema,
   classificationModelSchema,
   OPENAI_CLASSIFICATION_MODEL_ID,
+  OPENAI_CLASSIFICATION_PROVIDER_MODEL,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
@@ -22,6 +24,11 @@ describe("target classification contracts", () => {
       OPENAI_CLASSIFICATION_MODEL_ID
     );
     expect(classificationModelSchema.safeParse("openai/gpt-5.6-sol").success).toBe(false);
+  });
+
+  it("derives provider request models from the canonical classification IDs", () => {
+    expect(ANTHROPIC_CLASSIFICATION_PROVIDER_MODEL).toBe("claude-haiku-4-5");
+    expect(OPENAI_CLASSIFICATION_PROVIDER_MODEL).toBe("gpt-5.6-luna");
   });
 
   it("validates a strict provider-neutral decision", () => {

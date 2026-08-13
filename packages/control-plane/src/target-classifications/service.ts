@@ -1,6 +1,7 @@
 import {
   buildTargetClassificationPrompt,
   CLASSIFY_TARGET_TOOL_NAME,
+  OPENAI_CLASSIFICATION_PROVIDER_MODEL,
   TARGET_CLASSIFIER_SYSTEM_PROMPT,
   targetClassificationDecisionSchema,
   targetClassificationJsonSchema,
@@ -19,7 +20,6 @@ import { InvalidOpenAICodexResponseError, OpenAICodexUpstreamError } from "../op
 import { requestOpenAICodexFunction } from "../openai/codex-responses";
 
 const logger = createLogger("target-classifications");
-const OPENAI_MODEL = "gpt-5.6-luna";
 
 export class OpenAIOAuthNotConfiguredError extends Error {}
 export class OpenAIOAuthUnavailableError extends Error {}
@@ -56,7 +56,7 @@ export async function createTargetClassification(
         accountId: token.accountId,
         requestId: context.requestId,
         traceId: context.traceId,
-        model: OPENAI_MODEL,
+        model: OPENAI_CLASSIFICATION_PROVIDER_MODEL,
         systemPrompt: TARGET_CLASSIFIER_SYSTEM_PROMPT,
         prompt: buildTargetClassificationPrompt(request),
         tool: {

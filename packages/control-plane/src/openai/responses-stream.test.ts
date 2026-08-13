@@ -166,8 +166,8 @@ describe("OpenAI Responses stream reducer", () => {
       new ReadableStream({
         pull(streamController) {
           streamController.enqueue(event);
+          controller.abort();
           streamController.close();
-          queueMicrotask(() => controller.abort());
         },
       })
     );

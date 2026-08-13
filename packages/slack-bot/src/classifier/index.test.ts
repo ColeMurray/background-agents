@@ -7,6 +7,7 @@ import {
 import type { Environment } from "@open-inspect/shared/types/environments";
 import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Env } from "../types";
+import { OUTBOUND_REQUEST_TIMEOUT_MS } from "../request-options";
 
 const {
   mockMessagesCreate,
@@ -908,7 +909,21 @@ describe("RepoClassifier", () => {
         ]),
       });
       expect(JSON.parse(request.body)).not.toHaveProperty("prompt");
-      expect(init).toEqual({ headers: { Accept: "application/json" } });
+      expect(init).toMatchObject({ headers: { Accept: "application/json" } });
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("bounds OpenAI classification requests with the outbound timeout", async () => {
+      const timeoutSignal = new AbortController().signal;
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutSignal);
+      mockSignedControlPlaneFetch.mockResolvedValue(Response.json(openAiDecision));
+
+      const classifier = new RepoClassifier(OPENAI_ENV);
+      await classifier.classify("web app issue");
+
+      expect(timeoutSpy).toHaveBeenCalledWith(OUTBOUND_REQUEST_TIMEOUT_MS);
+      expect(mockSignedControlPlaneFetch.mock.calls[0]?.[2]?.signal).toBe(timeoutSignal);
+      timeoutSpy.mockRestore();
     });
 
     it("rejects a non-canonical bare OpenAI model", async () => {
