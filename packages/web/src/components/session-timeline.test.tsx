@@ -256,6 +256,108 @@ describe("prompt queue status", () => {
   });
 });
 
+describe("completed turn activity", () => {
+  const completedTurnEvents: SandboxEvent[] = [
+    { ...event(), content: "Update the dependency", timestamp: 100 },
+    {
+      type: "token",
+      messageId: "message-1",
+      content: "I will inspect the current dependency before updating it.",
+      sandboxId: "sandbox-1",
+      timestamp: 101,
+    },
+    {
+      type: "context_compacted",
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp: 102,
+    },
+    {
+      type: "tool_call",
+      tool: "Read",
+      args: { filePath: "/workspace/package.json" },
+      callId: "call-1",
+      messageId: "message-1",
+      sandboxId: "sandbox-1",
+      timestamp: 110,
+    },
+    {
+      type: "token",
+      messageId: "message-1",
+      content: "The dependency is updated.",
+      sandboxId: "sandbox-1",
+      timestamp: 188,
+    },
+    {
+      type: "execution_complete",
+      messageId: "message-1",
+      success: true,
+      sandboxId: "sandbox-1",
+      timestamp: 189,
+    },
+  ];
+
+  it("collapses completed activity behind the worked duration", async () => {
+    render(<SessionTimeline {...baseTimelineProps} events={completedTurnEvents} />);
+
+    const disclosure = screen.getByRole("button", { name: "Worked for 1m 29s" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("The dependency is updated.")).toBeInTheDocument();
+    expect(screen.getByText("Execution complete")).toBeInTheDocument();
+    expect(
+      screen.queryByText("I will inspect the current dependency before updating it.")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Read package\.json/i })).not.toBeInTheDocument();
+
+    await userEvent.click(disclosure);
+
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getByText("I will inspect the current dependency before updating it.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Read package\.json/i })).toBeInTheDocument();
+    expect(screen.getByText("Context compacted")).toBeInTheDocument();
+  });
+
+  it("leaves activity visible until the turn completes", () => {
+    render(<SessionTimeline {...baseTimelineProps} events={completedTurnEvents.slice(0, -2)} />);
+
+    expect(screen.queryByRole("button", { name: /Worked for/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("I will inspect the current dependency before updating it.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Read package\.json/i })).toBeInTheDocument();
+  });
+
+  it("shows a duration for completed turns without tool activity", () => {
+    render(
+      <SessionTimeline
+        {...baseTimelineProps}
+        events={[
+          { ...event(), timestamp: 10 },
+          {
+            type: "token",
+            messageId: "message-1",
+            content: "Finished.",
+            sandboxId: "sandbox-1",
+            timestamp: 14,
+          },
+          {
+            type: "execution_complete",
+            messageId: "message-1",
+            success: true,
+            sandboxId: "sandbox-1",
+            timestamp: 15,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Worked for 5s" })).toBeInTheDocument();
+    expect(screen.getByText("Finished.")).toBeInTheDocument();
+  });
+});
+
 describe("tool call groups", () => {
   it("preserves expanded group and row state when history is prepended", async () => {
     const readEvents = [

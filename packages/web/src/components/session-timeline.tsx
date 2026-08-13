@@ -12,14 +12,16 @@ import {
 } from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
+import { SessionWorkGroup } from "@/components/session-work-group";
 import { TaskActivityItem } from "@/components/task-activity-item";
 import { TimelineRowContent } from "@/components/timeline-row-content";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import {
-  buildTimelineItems,
+  buildSessionTimelineItems,
   toolCallKey,
   type FlatTimelineItem,
+  type TimelineItem,
   type ToolCallEvent,
 } from "@/lib/timeline-items";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -57,7 +59,7 @@ export function SessionTimeline({
   terminalMessageReadObservationEnabled?: boolean;
   onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
-  const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
+  const timelineItems = useMemo(() => buildSessionTimelineItems(events), [events]);
   const pendingMessageIds = useMemo(
     () =>
       new Set(
@@ -67,6 +69,7 @@ export function SessionTimeline({
   );
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
+  const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
   const latestTerminalMessageId = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
@@ -177,6 +180,15 @@ export function SessionTimeline({
     });
   }, []);
 
+  const toggleWorkGroup = useCallback((messageId: string) => {
+    setExpandedWorkGroups((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
   const renderFlatItem = (item: FlatTimelineItem): ReactNode => {
     if (item.type === "tool_group") {
       return (
@@ -209,13 +221,27 @@ export function SessionTimeline({
     );
   };
 
-  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
+  const renderBaseTimelineItem = (item: TimelineItem): ReactNode =>
     item.type === "task_group" ? (
       <TaskActivityItem key={item.id} event={item.event} hasActivity={item.activity.length > 0}>
         {item.activity.map(renderFlatItem)}
       </TaskActivityItem>
     ) : (
       renderFlatItem(item)
+    );
+
+  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
+    item.type === "work_group" ? (
+      <SessionWorkGroup
+        key={item.id}
+        durationSeconds={item.durationSeconds}
+        isExpanded={expandedWorkGroups.has(item.messageId)}
+        onToggle={() => toggleWorkGroup(item.messageId)}
+      >
+        {item.activity.map(renderBaseTimelineItem)}
+      </SessionWorkGroup>
+    ) : (
+      renderBaseTimelineItem(item)
     );
 
   return (
@@ -256,6 +282,7 @@ export function SessionTimeline({
             }
             if (
               latestTerminalMessageGroupRange &&
+              onMarkMessageRead &&
               index > latestTerminalMessageGroupRange.start &&
               index <= latestTerminalMessageGroupRange.end
             ) {
