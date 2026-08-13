@@ -267,7 +267,7 @@ export default function SessionPage() {
   }, [focusDetailsTrigger, isBelowLg]);
 
   const sessionWorkspace = (
-    <div className="flex h-full min-h-0 flex-1 flex-col overflow-clip">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-clip">
       <div className="min-h-0 min-w-0 flex-1 overflow-clip">
         <PanelGroup orientation="vertical" id="session-terminal" style={{ overflow: "clip" }}>
           <Panel
