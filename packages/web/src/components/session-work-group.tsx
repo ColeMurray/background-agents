@@ -34,7 +34,7 @@ export function SessionWorkGroup({
         type="button"
         aria-expanded={isExpanded}
         onClick={onToggle}
-        className="flex w-full items-center gap-2 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground sm:text-base"
+        className="flex w-full items-center gap-2 py-2 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <span>{label}</span>
         <ChevronRightIcon
