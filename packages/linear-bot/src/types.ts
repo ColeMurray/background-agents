@@ -20,6 +20,7 @@ export interface Env {
   CONTROL_PLANE_URL: string;
   WEB_APP_URL: string;
   DEFAULT_MODEL: string;
+  CLASSIFICATION_MODEL?: string;
   APP_NAME?: string;
 
   // OAuth app credentials
@@ -32,7 +33,7 @@ export interface Env {
   // Secrets
   LINEAR_WEBHOOK_SECRET: string;
   LINEAR_API_KEY?: string; // kept for backward compat / fallback
-  ANTHROPIC_API_KEY: string;
+  OPENAI_API_KEY: string;
   SERVICE_AUTH_SECRET?: string; // Per-service sig1 signing secret; also verifies CP callbacks
   LOG_LEVEL?: string;
 }

@@ -136,7 +136,7 @@ describe("isValidToolCallPayload", () => {
       issueIdentifier: "ENG-1",
       issueUrl: "https://linear.app/issue/ENG-1",
       repoFullName: "org/repo",
-      model: "claude-sonnet-4-5",
+      model: "openai/gpt-5.4",
     },
   };
 

@@ -6,6 +6,11 @@ locals {
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
   use_e2b_backend          = var.sandbox_provider == "e2b"
 
+  # Model backing the Slack/Linear bots' target classifiers. Deliberately a
+  # small, fast OpenAI model: classification is one short structured call per
+  # message, and it must not depend on the coding agent's provider.
+  classification_model = "gpt-5.4-mini"
+
   # A complete OAuth credential pair is the deployment's provider enablement
   # declaration. Runtime validation mirrors these plan-time invariants.
   github_oauth_enabled = trimspace(var.github_client_id) != "" && trimspace(var.github_client_secret) != ""

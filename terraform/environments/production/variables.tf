@@ -297,6 +297,26 @@ variable "anthropic_api_key" {
   sensitive   = true
 }
 
+variable "openai_api_key" {
+  description = "OpenAI API key backing the Slack and Linear bot message classifiers. Required whenever either bot is enabled."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  # GitHub Actions renders an unset secret as an empty string, so a missing
+  # OPENAI_API_KEY would otherwise plan and apply cleanly and leave the
+  # classifiers 401ing on every message — a silent degradation to the target
+  # picker. Fail closed here instead, while still letting a deployment that
+  # runs neither bot omit the key entirely.
+  validation {
+    condition = (
+      (var.enable_slack_bot == false && var.enable_linear_bot == false) ||
+      length(trimspace(var.openai_api_key)) > 0
+    )
+    error_message = "When enable_slack_bot or enable_linear_bot is true, openai_api_key must be non-empty: the Slack and Linear message classifiers authenticate to OpenAI with it."
+  }
+}
+
 # =============================================================================
 # Security Secrets
 # =============================================================================

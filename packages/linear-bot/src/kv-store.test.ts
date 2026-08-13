@@ -62,7 +62,7 @@ describe("getUserPreferences", () => {
   });
 
   it("returns parsed preferences", async () => {
-    const prefs = { userId: "user-1", model: "claude-opus-4-5", updatedAt: 123 };
+    const prefs = { userId: "user-1", model: "openai/gpt-5.4", updatedAt: 123 };
     const { kv } = createFakeKV({ "user_prefs:user-1": JSON.stringify(prefs) });
     expect(await getUserPreferences(makeLinearBotEnv(kv), "user-1")).toEqual(prefs);
   });
@@ -87,7 +87,7 @@ describe("lookupIssueSession", () => {
       issueIdentifier: "ENG-1",
       repoOwner: "org",
       repoName: "repo",
-      model: "claude-sonnet-4-5",
+      model: "openai/gpt-5.4",
       createdAt: 123,
     };
     const { kv } = createFakeKV({ "issue:issue-1": JSON.stringify(session) });
@@ -116,7 +116,7 @@ describe("storeIssueSession", () => {
     issueIdentifier: "ENG-1",
     repoOwner: "org",
     repoName: "repo",
-    model: "claude-sonnet-4-5",
+    model: "openai/gpt-5.4",
     createdAt: 123,
   };
 

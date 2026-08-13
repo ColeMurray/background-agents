@@ -12,11 +12,11 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     DEPLOYMENT_NAME: "test",
     CONTROL_PLANE_URL: "https://control-plane.test",
     WEB_APP_URL: "https://app.test",
-    DEFAULT_MODEL: "anthropic/claude-haiku-4-5",
-    CLASSIFICATION_MODEL: "anthropic/claude-haiku-4-5",
+    DEFAULT_MODEL: "openai/gpt-5.4",
+    CLASSIFICATION_MODEL: "openai/gpt-5.4",
     SLACK_BOT_TOKEN: "xoxb-test",
     SLACK_SIGNING_SECRET: "signing-secret",
-    ANTHROPIC_API_KEY: "test-key",
+    OPENAI_API_KEY: "test-key",
     SERVICE_AUTH_SECRET: "callback-secret",
     LOG_LEVEL: "error",
     ...overrides,
@@ -69,7 +69,7 @@ async function makeToolCallPayload(
       channel: "C123",
       threadTs: "111.222",
       repoFullName: "acme/app",
-      model: "anthropic/claude-haiku-4-5",
+      model: "openai/gpt-5.4",
     },
     ...overrides,
   };
@@ -328,7 +328,7 @@ describe("POST /callbacks/complete", () => {
         channel: "C123",
         threadTs: "111.222",
         repoFullName: "acme/app",
-        model: "anthropic/claude-haiku-4-5",
+        model: "openai/gpt-5.4",
       },
       ...overrides,
     };
@@ -366,7 +366,7 @@ describe("POST /callbacks/complete", () => {
           channel: "C123",
           threadTs: "111.222",
           repoFullName: "acme/app",
-          model: "anthropic/claude-haiku-4-5",
+          model: "openai/gpt-5.4",
           extraNested: "preserve-me-too",
         },
       })
@@ -413,7 +413,7 @@ describe("POST /callbacks/complete", () => {
           channel: "C123",
           threadTs: "111.222",
           repoFullName: "acme/app",
-          model: "anthropic/claude-haiku-4-5",
+          model: "openai/gpt-5.4",
           automationId: "automation-1",
         },
       })
@@ -461,7 +461,7 @@ describe("POST /callbacks/automation-complete", () => {
       messageId: "msg-9",
       success: true,
       repoFullName: "acme/app",
-      model: "anthropic/claude-haiku-4-5",
+      model: "openai/gpt-5.4",
       ...overrides,
     };
   }

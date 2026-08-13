@@ -31,15 +31,6 @@ export function resolveStaticTarget(
 }
 
 const MODEL_LABEL_MAP: Record<string, string> = {
-  haiku: "anthropic/claude-haiku-4-5",
-  sonnet: "anthropic/claude-sonnet-4-5",
-  opus: "anthropic/claude-opus-4-5",
-  "opus-4-6": "anthropic/claude-opus-4-6",
-  "opus-4-7": "anthropic/claude-opus-4-7",
-  "opus-4-8": "anthropic/claude-opus-4-8",
-  "opus-5": "anthropic/claude-opus-5",
-  fable: "anthropic/claude-fable-5",
-  "fable-5": "anthropic/claude-fable-5",
   "gpt-5.4": "openai/gpt-5.4",
   "gpt-5.5": "openai/gpt-5.5",
   "gpt-5.6-sol": "openai/gpt-5.6-sol",
@@ -49,7 +40,7 @@ const MODEL_LABEL_MAP: Record<string, string> = {
 };
 
 /**
- * Extract model override from issue labels (e.g., "model:opus" → "anthropic/claude-opus-4-5").
+ * Extract model override from issue labels (e.g., "model:gpt-5.4" → "openai/gpt-5.4").
  */
 export function extractModelFromLabels(labels: Array<{ name: string }>): string | null {
   for (const label of labels) {

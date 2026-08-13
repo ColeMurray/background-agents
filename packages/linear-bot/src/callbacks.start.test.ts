@@ -24,7 +24,7 @@ async function signedPayload(overrides: Record<string, unknown> = {}) {
       issueId: "issue-1",
       issueIdentifier: "ENG-1",
       issueUrl: "https://linear.app/acme/issue/ENG-1",
-      model: "anthropic/claude-haiku-4-5",
+      model: "openai/gpt-5.4",
       organizationId: "org-1",
       appUserId: "app-user-1",
       transitionIssueOnStart: true,

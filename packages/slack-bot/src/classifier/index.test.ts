@@ -4,30 +4,20 @@ import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import type { Env } from "../types";
 
 const {
-  mockMessagesCreate,
+  mockFetch,
   mockGetAvailableRepos,
   mockBuildRepoDescriptions,
   mockGetRoutingRules,
   mockGetAvailableEnvironments,
 } = vi.hoisted(() => ({
-  mockMessagesCreate: vi.fn(),
+  mockFetch: vi.fn(),
   mockGetAvailableRepos: vi.fn(),
   mockBuildRepoDescriptions: vi.fn(),
   mockGetRoutingRules: vi.fn(),
   mockGetAvailableEnvironments: vi.fn(),
 }));
 
-vi.mock("@anthropic-ai/sdk", () => ({
-  // vitest 4 only treats `function`/`class` implementations as constructable;
-  // an arrow function here throws "is not a constructor" on `new Anthropic()`.
-  default: vi.fn().mockImplementation(function () {
-    return {
-      messages: {
-        create: mockMessagesCreate,
-      },
-    };
-  }),
-}));
+vi.stubGlobal("fetch", mockFetch);
 
 vi.mock("./repos", () => ({
   getAvailableRepos: mockGetAvailableRepos,
@@ -43,7 +33,7 @@ vi.mock("./environments", async (importOriginal) => ({
   getEnvironmentById: vi.fn(),
 }));
 
-import { RepoClassifier } from "./index";
+import { CLASSIFICATION_REQUEST_TIMEOUT_MS, RepoClassifier } from "./index";
 
 const TEST_REPOS: RepoConfig[] = [
   {
@@ -86,8 +76,8 @@ const TEST_ENVIRONMENT: Environment = {
 };
 
 const TEST_ENV = {
-  ANTHROPIC_API_KEY: "test-api-key",
-  CLASSIFICATION_MODEL: "claude-haiku-4-5",
+  OPENAI_API_KEY: "test-api-key",
+  CLASSIFICATION_MODEL: "gpt-5.4-mini",
 } as Env;
 
 /** The classified repo's fullName, or undefined for null/environment targets. */
@@ -95,6 +85,45 @@ function classifiedRepoFullName(result: {
   target: { kind: string; repo?: { fullName: string } } | null;
 }): string | undefined {
   return result.target?.kind === "repository" ? result.target.repo?.fullName : undefined;
+}
+
+/** A successful OpenAI chat-completions response carrying structured JSON content. */
+function openAIResponse(input: Record<string, unknown>) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      choices: [{ message: { content: JSON.stringify(input) } }],
+    }),
+  } as Response;
+}
+
+interface SentOpenAIRequestBody {
+  model: string;
+  temperature: number;
+  max_completion_tokens: number;
+  messages: Array<{ role: string; content: string }>;
+  response_format: {
+    type: string;
+    json_schema: {
+      name: string;
+      strict: boolean;
+      schema: {
+        type: string;
+        additionalProperties: boolean;
+        required: string[];
+        properties: Record<string, { type?: unknown; enum?: unknown; items: { type?: unknown } }>;
+      };
+    };
+  };
+}
+
+/** The parsed JSON body of the most recent request sent to `fetch`. */
+function sentRequestBody(): SentOpenAIRequestBody {
+  // Test-only reflection of the request we ourselves serialized above; not
+  // externally-controlled input, so an unchecked cast is the right tool.
+  const call = mockFetch.mock.calls[0] as [string, { body: string }];
+  return JSON.parse(call[1].body) as SentOpenAIRequestBody;
 }
 
 describe("RepoClassifier", () => {
@@ -106,22 +135,15 @@ describe("RepoClassifier", () => {
     mockBuildRepoDescriptions.mockResolvedValue("- acme/prod\n- acme/web");
   });
 
-  it("uses tool output when provider returns valid structured classification", async () => {
-    mockMessagesCreate.mockResolvedValue({
-      content: [
-        {
-          type: "tool_use",
-          id: "toolu_1",
-          name: "classify_target",
-          input: {
-            targetId: "acme/prod",
-            confidence: "high",
-            reasoning: "The message explicitly mentions prod.",
-            alternatives: [],
-          },
-        },
-      ],
-    });
+  it("uses model output when provider returns valid structured classification", async () => {
+    mockFetch.mockResolvedValue(
+      openAIResponse({
+        targetId: "acme/prod",
+        confidence: "high",
+        reasoning: "The message explicitly mentions prod.",
+        alternatives: [],
+      })
+    );
 
     const classifier = new RepoClassifier(TEST_ENV);
     const result = await classifier.classify("please fix prod slack alerts", undefined, "trace-1");
@@ -129,34 +151,101 @@ describe("RepoClassifier", () => {
     expect(classifiedRepoFullName(result)).toBe("acme/prod");
     expect(result.confidence).toBe("high");
     expect(result.needsClarification).toBe(false);
-    expect(mockMessagesCreate).toHaveBeenCalledWith(
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/chat/completions",
       expect.objectContaining({
-        temperature: 0,
-        tool_choice: expect.objectContaining({
-          type: "tool",
-          name: "classify_target",
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer test-api-key",
+          "Content-Type": "application/json",
         }),
-        tools: [expect.objectContaining({ name: "classify_target" })],
       })
     );
   });
 
-  it("asks for clarification when tool payload is invalid", async () => {
-    mockMessagesCreate.mockResolvedValue({
-      content: [
-        {
-          type: "tool_use",
-          id: "toolu_2",
-          name: "classify_target",
-          input: {
-            targetId: "acme/prod",
-            confidence: "certain",
-            reasoning: "Totally sure",
-            alternatives: [],
-          },
-        },
-      ],
-    });
+  it("sends the verified OpenAI structured-output request contract", async () => {
+    mockFetch.mockResolvedValue(
+      openAIResponse({
+        targetId: "acme/prod",
+        confidence: "high",
+        reasoning: "The message explicitly mentions prod.",
+        alternatives: [],
+      })
+    );
+
+    const classifier = new RepoClassifier(TEST_ENV);
+    await classifier.classify("please fix prod slack alerts");
+
+    const body = sentRequestBody();
+    expect(body.model).toBe("gpt-5.4-mini");
+    expect(body.temperature).toBe(0);
+    expect(body.max_completion_tokens).toBe(2000);
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body.response_format.json_schema.strict).toBe(true);
+    expect(body.response_format.json_schema.name).toBe("classify_target");
+
+    // Strict mode rejects a schema that omits additionalProperties:false or
+    // leaves any property out of `required`, and the nullable targetId is what
+    // lets the model say "unclear" instead of inventing a target. Assert the
+    // shape, not just the strict flag, so a schema regression can't stay green.
+    const schema = body.response_format.json_schema.schema;
+    expect(schema.type).toBe("object");
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.required).toEqual(
+      expect.arrayContaining(["targetId", "confidence", "reasoning", "alternatives"])
+    );
+    expect(schema.required).toHaveLength(4);
+    expect(schema.properties.targetId.type).toEqual(["string", "null"]);
+    expect(schema.properties.confidence.enum).toEqual(["high", "medium", "low"]);
+    expect(schema.properties.alternatives.type).toBe("array");
+    expect(schema.properties.alternatives.items.type).toBe("string");
+  });
+
+  it("degrades to the clarification picker when OpenAI returns a non-2xx response", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => "internal server error",
+    } as Response);
+
+    const classifier = new RepoClassifier(TEST_ENV);
+    const result = await classifier.classify("please fix prod slack alerts");
+
+    expect(result.target).toBeNull();
+    expect(result.confidence).toBe("low");
+    expect(result.needsClarification).toBe(true);
+    expect(result.reasoning).toContain("structured model output");
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+
+  it("bounds the classification request and degrades when it times out", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    mockFetch.mockRejectedValue(
+      Object.assign(new Error("The operation was aborted"), { name: "TimeoutError" })
+    );
+
+    const classifier = new RepoClassifier(TEST_ENV);
+    const result = await classifier.classify("please fix prod slack alerts");
+
+    // A stalled or queued provider request must not hold the Slack thread open;
+    // the picker is the cheap, correct outcome.
+    expect(result.needsClarification).toBe(true);
+    expect(result.target).toBeNull();
+    expect(timeoutSpy).toHaveBeenCalledWith(CLASSIFICATION_REQUEST_TIMEOUT_MS);
+    const init = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    // Identity, not just shape: some other signal would leave the fetch unbounded.
+    expect(init?.signal).toBe(timeoutSpy.mock.results[0]?.value);
+  });
+
+  it("asks for clarification when structured output is invalid", async () => {
+    mockFetch.mockResolvedValue(
+      openAIResponse({
+        targetId: "acme/prod",
+        confidence: "certain",
+        reasoning: "Totally sure",
+        alternatives: [],
+      })
+    );
 
     const classifier = new RepoClassifier(TEST_ENV);
     const result = await classifier.classify("please update prod deployment config");
@@ -168,15 +257,12 @@ describe("RepoClassifier", () => {
     expect(result.alternatives).toBeUndefined();
   });
 
-  it("asks for clarification when tool output is missing", async () => {
-    mockMessagesCreate.mockResolvedValue({
-      content: [
-        {
-          type: "text",
-          text: '{"targetId":"acme/web","confidence":"high","reasoning":"Mentions frontend and UI.","alternatives":[]}',
-        },
-      ],
-    });
+  it("asks for clarification when response content is missing", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: "" } }] }),
+    } as Response);
 
     const classifier = new RepoClassifier(TEST_ENV);
     const result = await classifier.classify("frontend UI issue in web app");
@@ -199,7 +285,7 @@ describe("RepoClassifier", () => {
       expect(result.confidence).toBe("high");
       expect(result.needsClarification).toBe(false);
       expect(result.reasoning).toContain("routing rule");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("asks for clarification when rules point at multiple distinct repos", async () => {
@@ -216,7 +302,7 @@ describe("RepoClassifier", () => {
       expect(
         result.alternatives?.map((t) => (t.kind === "repository" ? t.repo.fullName : "")).sort()
       ).toEqual(["acme/prod", "acme/web"]);
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("routes once when multiple keywords map to the same repo", async () => {
@@ -230,57 +316,43 @@ describe("RepoClassifier", () => {
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
       expect(result.needsClarification).toBe(false);
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("skips a rule whose target is not accessible and falls through to the LLM", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/ghost" }]);
-      mockMessagesCreate.mockResolvedValue({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_x",
-            name: "classify_target",
-            input: {
-              targetId: "acme/web",
-              confidence: "high",
-              reasoning: "Mentions frontend.",
-              alternatives: [],
-            },
-          },
-        ],
-      });
+      mockFetch.mockResolvedValue(
+        openAIResponse({
+          targetId: "acme/web",
+          confidence: "high",
+          reasoning: "Mentions frontend.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("frontend issue");
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
-      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
 
     it("falls through to the LLM when no rule keyword is present", async () => {
       mockGetRoutingRules.mockResolvedValue([{ keyword: "frontend", target: "acme/web" }]);
-      mockMessagesCreate.mockResolvedValue({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_y",
-            name: "classify_target",
-            input: {
-              targetId: "acme/prod",
-              confidence: "high",
-              reasoning: "Mentions prod.",
-              alternatives: [],
-            },
-          },
-        ],
-      });
+      mockFetch.mockResolvedValue(
+        openAIResponse({
+          targetId: "acme/prod",
+          confidence: "high",
+          reasoning: "Mentions prod.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("update the deployment config");
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
-      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
 
     it("takes precedence over a channel association", async () => {
@@ -295,7 +367,7 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("frontend tweak", { channelId: "C123" });
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("routes to an environment when an environment-targeted keyword matches", async () => {
@@ -311,7 +383,7 @@ describe("RepoClassifier", () => {
       expect(result.confidence).toBe("high");
       expect(result.needsClarification).toBe(false);
       expect(result.reasoning).toContain("full-stack");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("escapes the environment name in the mrkdwn reasoning", async () => {
@@ -351,7 +423,7 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("fullstack login flow");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("asks for clarification when rules resolve to a repo and an environment", async () => {
@@ -370,7 +442,7 @@ describe("RepoClassifier", () => {
         { kind: "repository", repo: TEST_REPOS[1] },
         { kind: "environment", environment: TEST_ENVIRONMENT },
       ]);
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("skips a rule whose environment no longer exists and falls through to the LLM", async () => {
@@ -378,27 +450,20 @@ describe("RepoClassifier", () => {
         { keyword: "fullstack", target: "env_deleted", targetType: "environment" },
       ]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
-      mockMessagesCreate.mockResolvedValue({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_z",
-            name: "classify_target",
-            input: {
-              targetId: "acme/web",
-              confidence: "high",
-              reasoning: "Mentions the web app.",
-              alternatives: [],
-            },
-          },
-        ],
-      });
+      mockFetch.mockResolvedValue(
+        openAIResponse({
+          targetId: "acme/web",
+          confidence: "high",
+          reasoning: "Mentions the web app.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("fullstack web app issue");
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
-      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
   });
 
@@ -415,7 +480,7 @@ describe("RepoClassifier", () => {
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
       expect(result.confidence).toBe("high");
       expect(result.reasoning).toContain("associated with repository acme/prod");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("routes to the environment associated with the channel", async () => {
@@ -428,7 +493,7 @@ describe("RepoClassifier", () => {
       expect(result.target).toEqual({ kind: "environment", environment });
       expect(result.confidence).toBe("high");
       expect(result.reasoning).toContain("associated with environment full-stack");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("escapes the environment name in the mrkdwn reasoning", async () => {
@@ -453,7 +518,7 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("anything", { channelId: "C123" });
 
       expect(result.target).toEqual({ kind: "environment", environment });
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("asks for clarification when the channel maps to a repo and an environment", async () => {
@@ -471,7 +536,7 @@ describe("RepoClassifier", () => {
         { kind: "environment", environment },
         { kind: "repository", repo: associatedRepo },
       ]);
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("falls through to the LLM when several repositories share the channel", async () => {
@@ -480,45 +545,28 @@ describe("RepoClassifier", () => {
       mockGetAvailableRepos.mockResolvedValue(
         TEST_REPOS.map((repo) => ({ ...repo, channelAssociations: ["C123"] }))
       );
-      mockMessagesCreate.mockResolvedValue({
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_c",
-            name: "classify_target",
-            input: {
-              targetId: "acme/web",
-              confidence: "high",
-              reasoning: "Mentions the web app.",
-              alternatives: [],
-            },
-          },
-        ],
-      });
+      mockFetch.mockResolvedValue(
+        openAIResponse({
+          targetId: "acme/web",
+          confidence: "high",
+          reasoning: "Mentions the web app.",
+          alternatives: [],
+        })
+      );
 
       const classifier = new RepoClassifier(TEST_ENV);
       const result = await classifier.classify("web app issue", { channelId: "C123" });
 
       expect(classifiedRepoFullName(result)).toBe("acme/web");
-      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
   });
 
   describe("LLM environment candidates", () => {
-    function llmResponse(input: Record<string, unknown>) {
-      return {
-        content: [{ type: "tool_use", id: "toolu_llm", name: "classify_target", input }],
-      };
-    }
-
-    function sentPrompt(): string {
-      return mockMessagesCreate.mock.calls[0][0].messages[0].content as string;
-    }
-
     it("offers environments to the LLM and resolves a returned environment id", async () => {
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "env_abc123",
           confidence: "high",
           reasoning: "Spans both repositories of the full-stack environment.",
@@ -531,14 +579,15 @@ describe("RepoClassifier", () => {
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
       expect(result.needsClarification).toBe(false);
-      expect(sentPrompt()).toContain("## Available Environments");
-      expect(sentPrompt()).toContain("env_abc123");
-      expect(sentPrompt()).toContain("full-stack");
+      const prompt = sentRequestBody().messages[0].content;
+      expect(prompt).toContain("## Available Environments");
+      expect(prompt).toContain("env_abc123");
+      expect(prompt).toContain("full-stack");
     });
 
     it("omits the environments prompt section when none exist", async () => {
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "acme/web",
           confidence: "high",
           reasoning: "Mentions the web app.",
@@ -549,13 +598,14 @@ describe("RepoClassifier", () => {
       const classifier = new RepoClassifier(TEST_ENV);
       await classifier.classify("web app issue");
 
-      expect(sentPrompt()).not.toContain("## Available Environments");
+      const prompt = sentRequestBody().messages[0].content;
+      expect(prompt).not.toContain("## Available Environments");
     });
 
     it("resolves an environment echoed by name instead of id", async () => {
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "Full-Stack",
           confidence: "high",
           reasoning: "Names the environment.",
@@ -572,8 +622,8 @@ describe("RepoClassifier", () => {
     it("suppresses the single-repo shortcut when environments exist", async () => {
       mockGetAvailableRepos.mockResolvedValue([TEST_REPOS[0]]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "env_abc123",
           confidence: "high",
           reasoning: "Spans several repositories.",
@@ -585,7 +635,7 @@ describe("RepoClassifier", () => {
       const result = await classifier.classify("touch everything");
 
       expect(result.target).toEqual({ kind: "environment", environment: TEST_ENVIRONMENT });
-      expect(mockMessagesCreate).toHaveBeenCalledOnce();
+      expect(mockFetch).toHaveBeenCalledOnce();
     });
 
     it("keeps the single-repo shortcut when no environments exist", async () => {
@@ -596,13 +646,13 @@ describe("RepoClassifier", () => {
 
       expect(classifiedRepoFullName(result)).toBe("acme/prod");
       expect(result.reasoning).toBe("Only one repository is available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("resolves mixed alternatives, deduplicated and excluding the match", async () => {
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "acme/prod",
           confidence: "medium",
           reasoning: "Probably prod, could be broader.",
@@ -625,8 +675,8 @@ describe("RepoClassifier", () => {
       // A degraded repo fetch (fail-open []) must not strand intact environments.
       mockGetAvailableRepos.mockResolvedValue([]);
       mockGetAvailableEnvironments.mockResolvedValue([TEST_ENVIRONMENT]);
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "env_abc123",
           confidence: "high",
           reasoning: "Names the environment.",
@@ -648,12 +698,12 @@ describe("RepoClassifier", () => {
 
       expect(result.target).toBeNull();
       expect(result.reasoning).toBe("No repositories or environments are currently available.");
-      expect(mockMessagesCreate).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("escapes the LLM reasoning for mrkdwn rendering", async () => {
-      mockMessagesCreate.mockResolvedValue(
-        llmResponse({
+      mockFetch.mockResolvedValue(
+        openAIResponse({
           targetId: "acme/web",
           confidence: "high",
           reasoning: "Mentions <!channel> & the web app.",

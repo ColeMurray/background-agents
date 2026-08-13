@@ -110,10 +110,10 @@ describe("startSessionAndSendPrompt", () => {
     vi.clearAllMocks();
     vi.mocked(getAvailableModels).mockResolvedValue([
       { label: "GPT 5.4", value: "openai/gpt-5.4" },
-      { label: "Claude Sonnet", value: "anthropic/claude-sonnet-4-6" },
+      { label: "GPT 5.5", value: "openai/gpt-5.5" },
     ]);
     vi.mocked(getSlackSettings).mockResolvedValue({
-      defaultModel: "anthropic/claude-sonnet-4-6",
+      defaultModel: "openai/gpt-5.5",
     });
     vi.mocked(getResolvedUserPreferences).mockResolvedValue({
       model: "openai/gpt-5.4",
@@ -153,8 +153,8 @@ describe("startSessionAndSendPrompt", () => {
     ).resolves.toEqual({ sessionId: "session-1" });
 
     expect(getResolvedUserPreferences).toHaveBeenCalledWith(env, "U123", {
-      defaultModel: "anthropic/claude-sonnet-4-6",
-      enabledModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      defaultModel: "openai/gpt-5.5",
+      enabledModels: ["openai/gpt-5.4", "openai/gpt-5.5"],
     });
     expect(getUserRepoBranchPreference).toHaveBeenCalledWith(env, "U123", "acme/app");
     expect(createSession).toHaveBeenCalledWith(env, {
@@ -208,7 +208,7 @@ describe("startSessionAndSendPrompt", () => {
   it("appends configured session instructions to the first prompt", async () => {
     const env = makeEnv();
     vi.mocked(getSlackSettings).mockResolvedValue({
-      defaultModel: "anthropic/claude-sonnet-4-6",
+      defaultModel: "openai/gpt-5.5",
       sessionInstructions: "Always run tests before pushing changes.",
     });
 

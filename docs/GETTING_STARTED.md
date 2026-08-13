@@ -563,6 +563,7 @@ linear_webhook_secret  = ""          # From Step 4b (required if enabled)
 
 # API Keys
 anthropic_api_key = "sk-ant-..."
+openai_api_key    = "sk-proj-..."  # Required when the Slack or Linear bot is enabled
 
 # Security Secrets (from Step 5)
 token_encryption_key          = "your-generated-value"
@@ -970,6 +971,7 @@ Go to your fork's Settings → Secrets and variables → Actions, and add:
 | `LINEAR_CLIENT_SECRET`           | Linear OAuth application client secret (required if Linear enabled)                         |
 | `LINEAR_WEBHOOK_SECRET`          | Linear webhook signing secret (required if Linear enabled)                                  |
 | `ANTHROPIC_API_KEY`              | Anthropic API key                                                                           |
+| `OPENAI_API_KEY`                 | OpenAI API key for the Slack/Linear classifiers (required if either bot enabled)            |
 | `DEEPSEEK_API_KEY`               | DeepSeek API key (optional, required only for DeepSeek models)                              |
 | `TOKEN_ENCRYPTION_KEY`           | Generated encryption key (OAuth tokens)                                                     |
 | `REPO_SECRETS_ENCRYPTION_KEY`    | Generated encryption key (repo secrets)                                                     |

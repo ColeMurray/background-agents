@@ -69,8 +69,8 @@ module "slack_bot_worker" {
     { name = "WEB_APP_URL", value = local.web_app_url },
     { name = "DEPLOYMENT_NAME", value = var.deployment_name },
     { name = "APP_NAME", value = var.app_name },
-    { name = "DEFAULT_MODEL", value = "claude-haiku-4-5" },
-    { name = "CLASSIFICATION_MODEL", value = "claude-haiku-4-5" },
+    { name = "DEFAULT_MODEL", value = "openai/gpt-5.6-sol" },
+    { name = "CLASSIFICATION_MODEL", value = local.classification_model },
     # Kill switch for Slack channel-message triggers; the bot only ingests/
     # forwards channel messages when this is exactly "true" (dark by default).
     { name = "SLACK_TRIGGERS_ENABLED", value = var.slack_triggers_enabled ? "true" : "false" },
@@ -79,7 +79,7 @@ module "slack_bot_worker" {
   secrets = [
     { name = "SLACK_BOT_TOKEN", value = var.slack_bot_token },
     { name = "SLACK_SIGNING_SECRET", value = var.slack_signing_secret },
-    { name = "ANTHROPIC_API_KEY", value = var.anthropic_api_key },
+    { name = "OPENAI_API_KEY", value = var.openai_api_key },
     { name = "SERVICE_AUTH_SECRET", value = random_password.service_auth_secret_slack_bot.result },
   ]
 

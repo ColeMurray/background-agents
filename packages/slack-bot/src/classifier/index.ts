@@ -6,7 +6,6 @@
  * channel information.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import type { Env, ThreadContext, ClassificationResult } from "../types";
 import { buildRepoDescriptions } from "./repos";
 import { buildEnvironmentDescriptions } from "./environments";
@@ -21,37 +20,31 @@ const log = createLogger("classifier");
 const CLASSIFY_TARGET_TOOL_NAME = "classify_target";
 const CONFIDENCE_LEVELS: ClassificationResult["confidence"][] = ["high", "medium", "low"];
 
-const CLASSIFY_TARGET_TOOL: Anthropic.Messages.Tool = {
-  name: CLASSIFY_TARGET_TOOL_NAME,
-  description:
-    "Classify which repository or environment a Slack message refers to. " +
-    "Use targetId as null when uncertain.",
-  input_schema: {
-    type: "object",
-    properties: {
-      targetId: {
-        type: ["string", "null"],
-        description:
-          'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
-      },
-      confidence: {
-        type: "string",
-        enum: CONFIDENCE_LEVELS,
-      },
-      reasoning: {
-        type: "string",
-        description: "Brief explanation of classification decision.",
-      },
-      alternatives: {
-        type: "array",
-        items: { type: "string" },
-        description:
-          "Alternative repository fullNames / environment ids when confidence is not high.",
-      },
+const CLASSIFY_TARGET_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    targetId: {
+      type: ["string", "null"],
+      description:
+        'A repository "owner/name" or an environment id ("env_…") if confident enough to choose one, otherwise null.',
     },
-    required: ["targetId", "confidence", "reasoning", "alternatives"],
-    additionalProperties: false,
+    confidence: {
+      type: "string",
+      enum: CONFIDENCE_LEVELS,
+    },
+    reasoning: {
+      type: "string",
+      description: "Brief explanation of classification decision.",
+    },
+    alternatives: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Alternative repository fullNames / environment ids when confidence is not high.",
+    },
   },
+  required: ["targetId", "confidence", "reasoning", "alternatives"],
+  additionalProperties: false,
 };
 
 /**
@@ -116,7 +109,7 @@ Consider:
 
 ## Response Format
 
-Return your decision by calling the ${CLASSIFY_TARGET_TOOL_NAME} tool with:
+Respond with a JSON object containing:
 - targetId: a repository "owner/name", an environment id ("env_…"), or null if unclear
 - confidence: "high" | "medium" | "low"
 - reasoning: brief explanation
@@ -178,31 +171,97 @@ function normalizeModelResponse(raw: unknown): LLMResponse {
   };
 }
 
-function extractStructuredResponse(response: Anthropic.Messages.Message): LLMResponse {
-  const toolUseBlock = response.content.find(
-    (block): block is Anthropic.Messages.ToolUseBlock =>
-      block.type === "tool_use" && block.name === CLASSIFY_TARGET_TOOL_NAME
-  );
+const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
 
-  if (!toolUseBlock) {
-    throw new Error("No structured tool_use classification in LLM response");
+/**
+ * Deadline for one classification call. A Slack user is waiting on this, and
+ * the failure path (asking them to pick a target) is cheap — so bound the wait
+ * well above the ~1.5s a healthy call takes rather than letting a stalled or
+ * queued provider request hold the thread until the platform kills it.
+ */
+export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 15_000;
+
+interface OpenAIChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      refusal?: string | null;
+    };
+  }>;
+}
+
+/**
+ * Call the OpenAI Chat Completions API with strict JSON-schema structured
+ * output and normalize the parsed response. Throws on any non-2xx status,
+ * a model refusal, missing content, or unparsable JSON — the caller in
+ * {@link RepoClassifier.classify} catches all of these and degrades to the
+ * clarification picker.
+ */
+async function callOpenAI(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  schema: { name: string; schema: Record<string, unknown> }
+): Promise<LLMResponse> {
+  const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0,
+      max_completion_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: schema.name,
+          strict: true,
+          schema: schema.schema,
+        },
+      },
+    }),
+    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const body = (await response.text()).slice(0, 500);
+    throw new Error(`OpenAI classification request failed with status ${response.status}: ${body}`);
   }
 
-  return normalizeModelResponse(toolUseBlock.input);
+  // No schema-validation library in this package; every field below is
+  // read through an optional-chain guard before use.
+  const data = (await response.json()) as OpenAIChatCompletionResponse;
+  const message = data.choices?.[0]?.message;
+
+  if (message?.refusal) {
+    throw new Error(`OpenAI refused the classification request: ${message.refusal}`);
+  }
+
+  if (!message?.content) {
+    throw new Error("OpenAI classification response contained no content");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(message.content);
+  } catch {
+    throw new Error("Failed to parse OpenAI classification response as JSON");
+  }
+
+  return normalizeModelResponse(parsed);
 }
 
 /**
  * Repository classifier class.
  */
 export class RepoClassifier {
-  private client: Anthropic;
   private env: Env;
 
   constructor(env: Env) {
     this.env = env;
-    this.client = new Anthropic({
-      apiKey: env.ANTHROPIC_API_KEY,
-    });
   }
 
   /**
@@ -353,25 +412,12 @@ export class RepoClassifier {
     try {
       const prompt = buildClassificationPrompt(message, catalog, context);
 
-      const response = await this.client.messages.create({
-        model: this.env.CLASSIFICATION_MODEL || "claude-haiku-4-5",
-        max_tokens: 500,
-        temperature: 0,
-        tools: [CLASSIFY_TARGET_TOOL],
-        tool_choice: {
-          type: "tool",
-          name: CLASSIFY_TARGET_TOOL_NAME,
-          disable_parallel_tool_use: true,
-        },
-        messages: [
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
-
-      const llmResult = extractStructuredResponse(response);
+      const llmResult = await callOpenAI(
+        this.env.OPENAI_API_KEY,
+        this.env.CLASSIFICATION_MODEL || "gpt-5.4-mini",
+        prompt,
+        { name: CLASSIFY_TARGET_TOOL_NAME, schema: CLASSIFY_TARGET_SCHEMA }
+      );
 
       const matchedTarget = llmResult.targetId ? matchTargetId(llmResult.targetId, catalog) : null;
 

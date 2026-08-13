@@ -1,6 +1,6 @@
 /**
  * Repository classifier for the Linear bot.
- * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
+ * Uses raw OpenAI API (no SDK) to classify which repo an issue belongs to.
  */
 
 import type {
@@ -25,12 +25,15 @@ export const classifyToolInputSchema = z.object({
 
 export type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
 
-export const anthropicMessagesResponseSchema = z.object({
-  content: z.array(
+const DEFAULT_CLASSIFICATION_MODEL = "gpt-5.4-mini";
+
+export const openaiChatCompletionResponseSchema = z.object({
+  choices: z.array(
     z.object({
-      type: z.string(),
-      name: z.string().optional(),
-      input: z.unknown().optional(),
+      message: z.object({
+        content: z.string(),
+        refusal: z.string().nullable().optional(),
+      }),
     })
   ),
 });
@@ -85,29 +88,42 @@ Consider:
 5. Project name associations
 6. Label associations
 
-Return your decision by calling the ${CLASSIFY_REPO_TOOL_NAME} tool.`;
+Respond with a JSON object matching the provided response schema: repoId (the repository "owner/name", or null if unclear), confidence ("high" | "medium" | "low"), reasoning (brief explanation), and alternatives (other possible repository ids when confidence is not high).`;
 }
 
 /**
- * Call Anthropic API directly (no SDK — Workers can't use CJS imports).
+ * Deadline for one classification call. The failure path (asking the user to
+ * name the repository) is cheap, so bound the wait well above the ~1.5s a
+ * healthy call takes rather than letting a stalled or queued provider request
+ * hold the webhook until the platform kills it.
  */
-async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyToolInput> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+export const CLASSIFICATION_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * Call OpenAI API directly (no SDK — Workers can't use CJS imports).
+ */
+async function callOpenAI(
+  apiKey: string,
+  prompt: string,
+  model: string
+): Promise<ClassifyToolInput> {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
+      Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5",
-      max_tokens: 500,
+      model,
       temperature: 0,
-      tools: [
-        {
+      max_completion_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+      response_format: {
+        type: "json_schema",
+        json_schema: {
           name: CLASSIFY_REPO_TOOL_NAME,
-          description: "Classify which repository an issue belongs to.",
-          input_schema: {
+          strict: true,
+          schema: {
             type: "object" as const,
             properties: {
               repoId: {
@@ -129,30 +145,36 @@ async function callAnthropic(apiKey: string, prompt: string): Promise<ClassifyTo
               },
             },
             required: ["repoId", "confidence", "reasoning", "alternatives"],
+            additionalProperties: false,
           },
         },
-      ],
-      tool_choice: { type: "tool", name: CLASSIFY_REPO_TOOL_NAME },
-      messages: [{ role: "user", content: prompt }],
+      },
     }),
+    signal: AbortSignal.timeout(CLASSIFICATION_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Anthropic API error ${response.status}: ${errText}`);
+    const errText = (await response.text()).slice(0, 500);
+    throw new Error(`OpenAI API error ${response.status}: ${errText}`);
   }
 
-  const data = anthropicMessagesResponseSchema.safeParse(await response.json());
-  if (!data.success) throw new Error("Malformed Anthropic response");
+  const data = openaiChatCompletionResponseSchema.safeParse(await response.json());
+  if (!data.success) throw new Error("Malformed OpenAI response");
 
-  const toolBlock = data.data.content.find(
-    (b) => b.type === "tool_use" && b.name === CLASSIFY_REPO_TOOL_NAME
-  );
+  const message = data.data.choices[0]?.message;
+  if (!message) throw new Error("No choices in OpenAI response");
+  if (message.refusal) throw new Error(`OpenAI refused to classify: ${message.refusal}`);
+  if (!message.content) throw new Error("Empty content in OpenAI response");
 
-  if (!toolBlock) throw new Error("No tool_use block in Anthropic response");
+  let parsedContent: unknown;
+  try {
+    parsedContent = JSON.parse(message.content);
+  } catch {
+    throw new Error("Malformed JSON in OpenAI response content");
+  }
 
-  const input = classifyToolInputSchema.safeParse(toolBlock.input);
-  if (!input.success) throw new Error("Malformed Anthropic tool input");
+  const input = classifyToolInputSchema.safeParse(parsedContent);
+  if (!input.success) throw new Error("Malformed OpenAI classification content");
 
   return input.data;
 }
@@ -204,7 +226,8 @@ export async function classifyRepo(
       traceId
     );
 
-    const result = await callAnthropic(env.ANTHROPIC_API_KEY, prompt);
+    const model = env.CLASSIFICATION_MODEL ?? DEFAULT_CLASSIFICATION_MODEL;
+    const result = await callOpenAI(env.OPENAI_API_KEY, prompt, model);
 
     let matchedRepo: RepoConfig | null = null;
     if (result.repoId) {

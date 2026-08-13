@@ -8,7 +8,7 @@ const BASE_CONTEXT: SlackCallbackContext = {
   channel: "C123",
   threadTs: "1234567890.123456",
   repoFullName: "octocat/hello-world",
-  model: "anthropic/claude-haiku-4-5",
+  model: "openai/gpt-5.4",
 };
 
 const BASE_RESPONSE: AgentResponse = {

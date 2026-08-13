@@ -164,13 +164,13 @@ describe("control plane client request payloads", () => {
 
     await createSession(makeEnv(fetch), {
       target: environmentTarget,
-      model: "anthropic/claude-sonnet-4-6",
+      model: "openai/gpt-5.5",
       branch: "ignored-for-environments",
     });
 
     expect(parseRequestBody(fetch)).toEqual({
       environmentId: "env-1",
-      model: "anthropic/claude-sonnet-4-6",
+      model: "openai/gpt-5.5",
     });
   });
 
