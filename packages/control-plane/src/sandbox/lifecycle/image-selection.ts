@@ -67,7 +67,7 @@ export interface SelectedImageBuild {
   runtimeVersion: string;
 }
 
-export type ImageBuildMissReason =
+type ImageBuildMissReason =
   | "no_ready_image"
   | "missing_artifact"
   | "runtime_below_floor"

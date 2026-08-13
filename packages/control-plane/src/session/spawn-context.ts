@@ -12,7 +12,7 @@ const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
  * repository requires spawnContext.repositories, a named fast-follow (design
  * §13.13), not a v1 promise.
  */
-export const promptAuthorSchema = z.object({
+const promptAuthorSchema = z.object({
   userId: z.string(),
   canonicalUserId: z.string().nullable().optional(),
   scmUserId: z.string().nullable(),

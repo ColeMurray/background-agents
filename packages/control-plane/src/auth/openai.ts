@@ -8,7 +8,7 @@ const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 
-export const openAITokenResponseSchema = z.object({
+const openAITokenResponseSchema = z.object({
   id_token: z.string(),
   access_token: z.string(),
   refresh_token: z.string(),

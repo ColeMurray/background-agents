@@ -64,7 +64,7 @@ const DEFAULT_SANDBOX_DOMAIN = "e2b.app";
  * Path the per-session env file is written to. The template launcher
  * (packages/e2b-infra/oi-launch.py) polls this exact path — keep them in sync.
  */
-export const SESSION_ENV_PATH = "/tmp/oi-session.env";
+const SESSION_ENV_PATH = "/tmp/oi-session.env";
 
 export interface E2BCreateSandboxParams {
   templateID: string;

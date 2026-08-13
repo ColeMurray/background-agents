@@ -43,24 +43,20 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export const staticRepoConfigSchema = z.object({
+const staticRepoConfigSchema = z.object({
   owner: z.string(),
   name: z.string(),
   label: z.string().optional(),
 });
 
-export type StaticRepoConfig = z.infer<typeof staticRepoConfigSchema>;
-
 /**
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export const staticEnvironmentConfigSchema = z.object({
+const staticEnvironmentConfigSchema = z.object({
   environmentId: z.string(),
   label: z.string().optional(),
 });
-
-export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSchema>;
 
 /**
  * A mapping entry: a repository or a saved environment. Targets unify instead
@@ -73,10 +69,7 @@ export type StaticEnvironmentConfig = z.infer<typeof staticEnvironmentConfigSche
  * that entry pointed at the same target — validating stored config may reject
  * an entry, but it must never quietly re-point a working one somewhere else.
  */
-export const staticTargetConfigSchema = z.union([
-  staticEnvironmentConfigSchema,
-  staticRepoConfigSchema,
-]);
+const staticTargetConfigSchema = z.union([staticEnvironmentConfigSchema, staticRepoConfigSchema]);
 
 export type StaticTargetConfig = z.infer<typeof staticTargetConfigSchema>;
 
@@ -164,7 +157,7 @@ const linearCommentSchema = z.object({
   user: z.object({ name: z.string() }).nullable().optional(),
 });
 
-export const linearIssueDetailsSchema = z
+const linearIssueDetailsSchema = z
   .object({
     id: z.string(),
     identifier: z.string(),

@@ -29,7 +29,7 @@ export interface PullRequestRefreshRepository {
 }
 
 /** A per-artifact problem from a refresh pass; the caller decides logging. */
-export interface PullRequestRefreshFailure {
+interface PullRequestRefreshFailure {
   artifactId: string;
   reason: "not_refreshable" | "provider_read_failed" | "record_write_failed";
   prNumber?: number;

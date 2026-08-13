@@ -95,7 +95,7 @@ export interface DerivedIdentity {
  * `applyIdentityEnforcement` gate; the type says so, sparing call sites a
  * null check the gate already performed.
  */
-export type EnforcedIdentity<R extends IdentityRoute> = R extends RequiresUserRoute
+type EnforcedIdentity<R extends IdentityRoute> = R extends RequiresUserRoute
   ? DerivedIdentity & { participantUserId: string }
   : DerivedIdentity;
 

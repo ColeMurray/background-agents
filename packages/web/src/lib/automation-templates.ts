@@ -23,7 +23,7 @@ export type TemplateCategory =
  * required so every template is complete by construction — making these
  * invariants compile-time rather than test-only.
  */
-export type AutomationTemplatePrefill = Omit<
+type AutomationTemplatePrefill = Omit<
   Partial<AutomationFormValues>,
   "repositories" | "scheduleTz"
 > & {

@@ -4,7 +4,7 @@ import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
-export const SESSIONS_API_PATH = "/api/sessions";
+const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = "me";
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",

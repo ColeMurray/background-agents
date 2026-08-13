@@ -68,7 +68,7 @@ interface UseSessionSocketReturn {
   loadOlderEvents: () => void;
 }
 
-export type QueuePromptResult =
+type QueuePromptResult =
   | { ok: true; clientRequestId: string; messageId: string; position: number | null }
   | {
       ok: false;

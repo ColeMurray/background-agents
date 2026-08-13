@@ -29,7 +29,7 @@ import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
 /** GitLab API base URL. */
-export const GITLAB_API_BASE = "https://gitlab.com/api/v4";
+const GITLAB_API_BASE = "https://gitlab.com/api/v4";
 
 /** Default per_page for paginated GitLab API requests (GitLab API maximum). */
 const PER_PAGE = 100;

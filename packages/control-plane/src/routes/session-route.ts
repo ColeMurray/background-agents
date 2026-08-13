@@ -14,7 +14,7 @@ export type SessionRouteHandler = (
   ctx: SessionRouteContext
 ) => Promise<Response>;
 
-export function withSessionRuntime(handler: SessionRouteHandler): Route["handler"] {
+function withSessionRuntime(handler: SessionRouteHandler): Route["handler"] {
   return (request, env, match, ctx) =>
     handler(request, env, match, {
       ...ctx,

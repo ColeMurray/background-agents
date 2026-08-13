@@ -2,7 +2,6 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
@@ -121,36 +120,6 @@ export interface ClientInfo {
   clientId: string;
   ws: WebSocket;
   lastFetchHistoryAt?: number;
-}
-
-export interface SessionResponse {
-  id: string;
-  title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
-  branchName: string | null;
-  baseSha: string | null;
-  currentSha: string | null;
-  opencodeSessionId: string | null;
-  status: SessionStatus;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ListSessionsResponse {
-  sessions: SessionResponse[];
-  total: number;
-  hasMore: boolean;
-}
-
-// GitHub OAuth types
-export interface GitHubUser {
-  id: number;
-  login: string;
-  name: string | null;
-  email: string | null;
-  avatar_url: string;
 }
 
 export const githubTokenResponseSchema = z.object({
