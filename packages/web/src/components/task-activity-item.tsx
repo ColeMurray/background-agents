@@ -74,15 +74,15 @@ export function TaskActivityItem({
         className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
+          className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
-        <BoxIcon className="w-3.5 h-3.5 shrink-0 text-secondary-foreground" />
+        <BoxIcon className="mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground" />
         {isRunning && (
           <span
             aria-hidden="true"
-            className="inline-block w-2 h-2 bg-accent rounded-full animate-pulse flex-shrink-0"
+            className="mt-1.5 inline-block h-2 w-2 flex-shrink-0 animate-pulse rounded-full bg-accent"
           />
         )}
         <TimelineRowContent time={formatSessionEventTime(event.timestamp)}>
