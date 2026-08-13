@@ -1,4 +1,4 @@
-"""Tests for RepositoryBoot.run_setup_script() and its integration in run()."""
+"""Tests for RepositoryHooks.run_setup() and its integration in RepositoryBoot.boot()."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -279,7 +279,7 @@ class TestSetupScriptTimeout:
 
 
 class TestSetupInRepositoryBoot:
-    """Verify run_setup_script is called at the right point in run()."""
+    """Verify setup hooks run at the right point in repository boot."""
 
     async def test_run_skips_setup_on_snapshot_restore(self, tmp_path):
         sup = _make_repository_boot(tmp_path)

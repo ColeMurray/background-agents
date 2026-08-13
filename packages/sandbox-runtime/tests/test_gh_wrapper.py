@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import subprocess
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -119,7 +120,7 @@ def test_runtime_installs_canonical_wrapper(
     monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
     monkeypatch.setattr(repository_sync, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
-    synchronizer = object.__new__(RepositorySynchronizer)
+    synchronizer = RepositorySynchronizer("github.com", MagicMock())
     synchronizer._install_gh_wrapper()
 
     assert wrapper.read_text() == GH_WRAPPER_BODY
@@ -136,6 +137,6 @@ def test_runtime_fails_when_wrapper_cannot_be_installed(
     monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
     monkeypatch.setattr(repository_sync, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
+    synchronizer = RepositorySynchronizer("github.com", MagicMock())
     with pytest.raises(RuntimeError, match="Cannot install authenticated gh wrapper"):
-        synchronizer = object.__new__(RepositorySynchronizer)
         synchronizer._install_gh_wrapper()

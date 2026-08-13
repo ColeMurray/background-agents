@@ -181,7 +181,10 @@ class BrowserDesktop:
                 except TimeoutError:
                     with contextlib.suppress(ProcessLookupError):
                         process.kill()
-                    await process.wait()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=_READINESS_TIMEOUT_SECONDS)
+                    except TimeoutError:
+                        self.log.warn(f"{name}.stop_timeout")
             setattr(self, f"_{name}_process", None)
         Path(VNC_PASSWORD_FILE_PATH).unlink(missing_ok=True)
         self._clear_display_artifacts()

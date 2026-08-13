@@ -84,7 +84,10 @@ class AgentBridgeProcess:
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
                     self._process.kill()
-                await self._process.wait()
+                try:
+                    await asyncio.wait_for(self._process.wait(), timeout=5.0)
+                except TimeoutError:
+                    self.log.warn("bridge.stop_timeout")
 
     def exit_code(self) -> int | None:
         return self._process.returncode if self._process else None

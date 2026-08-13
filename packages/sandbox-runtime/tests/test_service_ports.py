@@ -20,6 +20,8 @@ class TestPortFromEnv:
     def test_falls_back_on_invalid_values(self):
         with patch.dict("os.environ", {"X_TEST_PORT": "99999"}, clear=True):
             assert port_from_env("X_TEST_PORT", 1234) == 1234
+        with patch.dict("os.environ", {"X_TEST_PORT": "not-a-port"}, clear=True):
+            assert port_from_env("X_TEST_PORT", 1234) == 1234
 
 
 class TestCodeServerPort:

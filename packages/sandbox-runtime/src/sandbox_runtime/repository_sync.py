@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import re
-import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .diff_baseline import resolve_session_diff_baselines
+from .process_output import communicate_owned_subprocess, terminate_owned_subprocess
 from .runtime_config import BootMode
 
 if TYPE_CHECKING:
@@ -40,24 +39,12 @@ class RepositorySynchronizer:
         return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", stderr.decode(errors="replace"))
 
     async def _terminate_owned_subprocess(self, process: asyncio.subprocess.Process) -> None:
-        if process.returncode is None:
-            process_id = getattr(process, "pid", None)
-            if isinstance(process_id, int):
-                with contextlib.suppress(ProcessLookupError):
-                    os.killpg(process_id, signal.SIGKILL)
-            else:
-                process.kill()
-        await asyncio.shield(process.wait())
+        await terminate_owned_subprocess(process, kill_process_group=os.killpg)
 
     async def _communicate_owned_subprocess(
         self, process: asyncio.subprocess.Process
     ) -> tuple[bytes, bytes]:
-        try:
-            stdout, stderr = await process.communicate()
-            return stdout or b"", stderr or b""
-        except asyncio.CancelledError:
-            await self._terminate_owned_subprocess(process)
-            raise
+        return await communicate_owned_subprocess(process, kill_process_group=os.killpg)
 
     async def _clone_repo(self, repo: RepoEntry) -> bool:
         self.log.info("git.clone_start", repo_owner=repo.owner, repo_name=repo.name)

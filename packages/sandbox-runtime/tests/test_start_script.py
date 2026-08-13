@@ -1,4 +1,4 @@
-"""Tests for RepositoryBoot.run_start_script() and strict startup integration."""
+"""Tests for RepositoryHooks.run_start() and strict repository boot integration."""
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch

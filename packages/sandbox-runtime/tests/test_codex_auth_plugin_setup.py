@@ -1,4 +1,4 @@
-"""Tests for codex auth proxy plugin deployment in SandboxSupervisor."""
+"""Tests for codex auth proxy plugin deployment in OpenCodeServer."""
 
 import json
 from pathlib import Path
@@ -9,7 +9,7 @@ from tests.runtime_helpers import make_opencode_server
 
 
 def _make_opencode_server() -> OpenCodeServer:
-    """Create a SandboxSupervisor with default test config."""
+    """Create an OpenCodeServer with default test config."""
     with patch.dict(
         "os.environ",
         {

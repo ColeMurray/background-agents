@@ -64,7 +64,10 @@ class CodeServer:
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
                     process.kill()
-                await process.wait()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=_STOP_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    self.log.warn("code_server.stop_timeout")
         self._process = None
 
     def exit_code(self) -> int | None:

@@ -82,7 +82,6 @@ class TestStartVnc:
     @pytest.mark.asyncio
     async def test_starts_dependencies_in_order_with_internal_raw_vnc(self, tmp_path):
         supervisor = _make_browser_desktop("secret12")
-        supervisor._forward_vnc_logs = AsyncMock()
         events: list[str] = []
         processes = [_process() for _ in range(4)]
         process_index = 0
@@ -199,7 +198,6 @@ class TestStartVnc:
     @pytest.mark.asyncio
     async def test_uses_default_novnc_port(self, tmp_path):
         supervisor = _make_browser_desktop("pw")
-        supervisor._forward_vnc_logs = AsyncMock()
         password_path = tmp_path / "vnc-password"
         with (
             patch.dict(os.environ, {}, clear=True),

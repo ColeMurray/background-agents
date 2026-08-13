@@ -10,7 +10,7 @@ from tests.runtime_helpers import make_opencode_server
 
 
 def _make_supervisor(session_config: dict | None = None):
-    """Create a SandboxSupervisor with MCP-relevant session config."""
+    """Create an OpenCodeServer with MCP-relevant session config."""
     env_vars = {
         "SANDBOX_ID": "test-sandbox",
         "REPO_OWNER": "acme",

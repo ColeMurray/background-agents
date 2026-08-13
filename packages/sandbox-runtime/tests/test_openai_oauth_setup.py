@@ -1,4 +1,4 @@
-"""Tests for SandboxSupervisor._setup_openai_oauth()."""
+"""Tests for OpenCodeServer._setup_openai_oauth()."""
 
 import json
 import os
@@ -9,7 +9,7 @@ from tests.runtime_helpers import make_opencode_server
 
 
 def _make_opencode_server() -> OpenCodeServer:
-    """Create a SandboxSupervisor with default test config."""
+    """Create an OpenCodeServer with default test config."""
     with patch.dict(
         "os.environ",
         {

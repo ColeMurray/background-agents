@@ -607,7 +607,10 @@ class OpenCodeServer:
             except TimeoutError:
                 with contextlib.suppress(ProcessLookupError):
                     self._opencode_process.kill()
-                await self._opencode_process.wait()
+                try:
+                    await asyncio.wait_for(self._opencode_process.wait(), timeout=10.0)
+                except TimeoutError:
+                    self.log.warn("opencode.stop_timeout")
 
     def exit_code(self) -> int | None:
         """Return OpenCode's exit code, or None while absent/running."""

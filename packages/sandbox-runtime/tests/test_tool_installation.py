@@ -1,4 +1,4 @@
-"""Tests for _install_tools() and _install_bin_scripts() in SandboxSupervisor."""
+"""Tests for OpenCodeServer._install_tools() and _install_bin_scripts()."""
 
 import json
 from contextlib import contextmanager
@@ -10,7 +10,7 @@ from tests.runtime_helpers import make_opencode_server
 
 
 def _make_opencode_server() -> OpenCodeServer:
-    """Create a SandboxSupervisor with default test config."""
+    """Create an OpenCodeServer with default test config."""
     with patch.dict(
         "os.environ",
         {

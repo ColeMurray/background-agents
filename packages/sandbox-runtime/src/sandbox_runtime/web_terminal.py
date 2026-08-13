@@ -97,7 +97,10 @@ class WebTerminal:
                 except TimeoutError:
                     with contextlib.suppress(ProcessLookupError):
                         process.kill()
-                    await process.wait()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=_READINESS_TIMEOUT_SECONDS)
+                    except TimeoutError:
+                        self.log.warn("web_terminal.stop_timeout")
         self._proxy_process = None
         self._ttyd_process = None
 
