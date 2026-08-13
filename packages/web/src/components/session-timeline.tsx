@@ -248,7 +248,11 @@ export function SessionTimeline({
     <div
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
+      // `relative` makes this scroller the containing block for
+      // absolutely-positioned descendants (e.g. sr-only live-status spans in
+      // task rows). Without it they anchor to the document, escape every
+      // ancestor overflow clip, and grow the page itself.
+      className="relative h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
       <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
         <div ref={topSentinelRef} className="h-1" />
