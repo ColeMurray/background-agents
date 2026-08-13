@@ -60,9 +60,9 @@ required tokens.
    | `OPENAI_OAUTH_REFRESH_TOKEN` | The `refresh` token from Step 1 (global for Slack classification)  |
    | `OPENAI_OAUTH_ACCOUNT_ID`    | Optional ChatGPT account ID; the managed transport can populate it |
 
-Open-Inspect uses the managed ChatGPT OAuth transport; it does not use an `OPENAI_API_KEY` for these
-flows. The refresh token remains in the control plane and is never placed in the Slack Worker or a
-sandbox.
+Open-Inspect uses the existing managed ChatGPT OAuth transport; it does not use an `OPENAI_API_KEY`
+for these flows. The refresh token remains in the control plane, which brokers short-lived access to
+the model.
 
 ### Step 3: Select an OpenAI Model
 
@@ -84,21 +84,16 @@ different OpenAI accounts.
 ### Slack target-classification rollout
 
 Slack classification is deployment-wide because it runs before a repository or environment is known.
-Terraform keeps Anthropic as the default with
-`slack_classification_model = "anthropic/claude-haiku-4-5"`. To switch to `"openai/gpt-5.6-luna"`:
+Roll it out in three stages:
 
-1. Confirm the Cloudflare account is eligible for the Workers VPC beta and has at least one active
-   Cloudflare Tunnel, Cloudflare Mesh node, or Cloudflare WAN on-ramp. The account used by Terraform
-   needs the Connectivity Directory Bind role (or Admin) to bind a Worker to `cf1:network`.
+1. Deploy the classification support. Terraform keeps Anthropic as the default with
+   `slack_classification_model = "anthropic/claude-haiku-4-5"`, so existing deployments are
+   unchanged.
 2. Configure `OPENAI_OAUTH_REFRESH_TOKEN` in **global** secrets using the steps above. Do not put
    the pre-target credential only on a repository or environment, and do not add an
    `OPENAI_API_KEY`.
-3. Set `slack_classification_model = "openai/gpt-5.6-luna"` and run `terraform apply`. Terraform
-   attaches the control-plane `EGRESS` VPC Network binding; the Slack Worker receives no OpenAI
-   secret.
-
-Workers VPC is beta and available on all Workers plans while in beta; features and APIs may change.
-If the account prerequisite is not ready, keep the Anthropic default.
+3. Switch the deployment to `slack_classification_model = "openai/gpt-5.6-luna"` and run
+   `terraform apply`. Verify a Slack request that resolves to a repository or environment.
 
 ---
 
@@ -117,11 +112,9 @@ refresh token may have expired — repeat Step 1 to obtain fresh credentials.
 
 ### Slack classification cannot reach OpenAI
 
-Verify that `OPENAI_OAUTH_REFRESH_TOKEN` is present in **global** secrets and that the Cloudflare
-account has an active Tunnel, Mesh node, or WAN on-ramp plus Connectivity Directory Bind/Admin
-access. Slack classification runs before the target repository or environment is known, so
-repository and environment secrets are unavailable. This flow uses managed ChatGPT OAuth and never
-`OPENAI_API_KEY`.
+Verify that `OPENAI_OAUTH_REFRESH_TOKEN` is present in **global** secrets. Slack classification runs
+before the target repository or environment is known, so repository and environment secrets are not
+available. This flow uses managed ChatGPT OAuth and never `OPENAI_API_KEY`.
 
 ### "Token refresh failed" errors
 
