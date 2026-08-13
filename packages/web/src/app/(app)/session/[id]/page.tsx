@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
@@ -52,6 +51,8 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+import { useSessionTabs } from "@/components/session-tabs";
+import { formatRepoLabel } from "@/lib/repo-label";
 import {
   promptRequestSignature,
   resolvePromptRequestIdentity,
@@ -72,6 +73,7 @@ const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
 export default function SessionPage() {
   const initialSnapshot = useSessionSnapshot();
   const sessionId = initialSnapshot.session.id;
+  const { registerSession, closeSession, updateSessionTitle } = useSessionTabs();
   const {
     connected,
     connecting,
@@ -105,7 +107,42 @@ export default function SessionPage() {
     title: initialSnapshot.session.title,
   };
 
+  const tabTitle =
+    sessionState?.title ??
+    fallbackSessionInfo.title ??
+    (sessionState || fallbackSessionInfo.repoOwner || fallbackSessionInfo.repoName
+      ? formatRepoLabel(
+          sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner,
+          sessionState?.repoName ?? fallbackSessionInfo.repoName
+        )
+      : "Loading session...");
+  const tabRepoOwner = sessionState?.repoOwner ?? fallbackSessionInfo.repoOwner;
+  const tabRepoName = sessionState?.repoName ?? fallbackSessionInfo.repoName;
+  const tabIsLoading = !sessionState && !fallbackSessionInfo.title && !tabRepoOwner && !tabRepoName;
+
+  useEffect(() => {
+    registerSession({
+      id: sessionId,
+      title: tabTitle,
+      repoOwner: tabRepoOwner,
+      repoName: tabRepoName,
+      isLoading: tabIsLoading,
+    });
+  }, [registerSession, sessionId, tabIsLoading, tabRepoName, tabRepoOwner, tabTitle]);
+
   const { handleArchive, handleUnarchive, renameSession } = useSessionListActions(sessionId);
+  const handleArchiveAndCloseTab = useCallback(async () => {
+    const didArchive = await handleArchive();
+    if (didArchive) closeSession(sessionId);
+  }, [closeSession, handleArchive, sessionId]);
+  const handleRenameSession = useCallback(
+    async (title: string) => {
+      const didRename = await renameSession(title);
+      if (didRename) updateSessionTitle(sessionId, title);
+      return didRename;
+    },
+    [renameSession, sessionId, updateSessionTitle]
+  );
   const {
     selectedModel,
     reasoningEffort,
@@ -312,7 +349,7 @@ export default function SessionPage() {
           status: sessionState?.status ?? "created",
           artifacts,
           primaryRepo,
-          onArchive: handleArchive,
+          onArchive: handleArchiveAndCloseTab,
           onUnarchive: handleUnarchive,
         }}
         prompt={{
@@ -361,10 +398,10 @@ export default function SessionPage() {
           sessionStatus: sessionState?.status ?? "created",
           artifacts,
           primaryRepo,
-          onArchive: handleArchive,
+          onArchive: handleArchiveAndCloseTab,
           onUnarchive: handleUnarchive,
         }}
-        renameSession={renameSession}
+        renameSession={handleRenameSession}
       />
 
       {/* Connection error banner */}
@@ -501,8 +538,6 @@ export default function SessionPage() {
  * the SWR session-list caches in sync.
  */
 function useSessionListActions(sessionId: string) {
-  const router = useRouter();
-
   const { trigger: triggerRename } = useSWRMutation(
     `/api/sessions/${sessionId}/title`,
     (url: BrowserApiPath, { arg }: { arg: { title: string } }) =>
@@ -529,9 +564,9 @@ function useSessionListActions(sessionId: string) {
             : current,
         { revalidate: false, populateCache: true }
       );
-      router.push("/");
     }
-  }, [router, sessionId]);
+    return didArchive;
+  }, [sessionId]);
 
   const renameSession = useCallback(
     async (title: string) => {

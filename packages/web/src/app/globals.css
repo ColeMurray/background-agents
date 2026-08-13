@@ -234,3 +234,13 @@ body {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+/* Session tabs retain native wheel/touch scrolling without consuming bar height. */
+.session-tab-scroller {
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.session-tab-scroller::-webkit-scrollbar {
+  display: none;
+}

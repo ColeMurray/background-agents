@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import useSWR, { mutate } from "swr";
@@ -31,9 +30,8 @@ export type SessionItem = Session;
 
 type SessionCreatorFilter = "all" | "mine";
 
-export function useSidebarSessions(currentSessionId: string | null) {
+export function useSidebarSessions() {
   const { data: authSession } = useAuthSession();
-  const router = useRouter();
   const [sessionCreatorFilter, setSessionCreatorFilterState] =
     useState<SessionCreatorFilter | null>(null);
   const [extraPageRequest, setExtraPageRequest] = useState({
@@ -245,12 +243,8 @@ export function useSidebarSessions(currentSessionId: string | null) {
             : current,
         { revalidate: false, populateCache: true }
       );
-
-      if (currentSessionId === sessionId) {
-        router.push("/");
-      }
     },
-    [currentSessionId, mutateExtraPages, mutateFirstPage, router]
+    [mutateExtraPages, mutateFirstPage]
   );
 
   const handleSessionRenamed = useCallback(

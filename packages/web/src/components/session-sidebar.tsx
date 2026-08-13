@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
+import { useSessionTabs } from "@/components/session-tabs";
 
 export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
@@ -73,6 +74,7 @@ export function SessionSidebar({
   const { data: authSession } = useAuthSession();
   const pathname = usePathname();
   const isMobile = useIsMobile();
+  const { closeSession, navigate, updateSessionTitle } = useSessionTabs();
 
   const currentSessionId = pathname?.startsWith("/session/") ? pathname.split("/")[2] : null;
 
@@ -91,7 +93,22 @@ export function SessionSidebar({
     handleSessionArchived,
     handleSessionRenamed,
     handleMarkLatestMessageRead,
-  } = useSidebarSessions(currentSessionId);
+  } = useSidebarSessions();
+
+  const handleArchivedSession = useCallback(
+    async (sessionId: string) => {
+      await handleSessionArchived(sessionId);
+      closeSession(sessionId);
+    },
+    [closeSession, handleSessionArchived]
+  );
+  const handleRenamedSession = useCallback(
+    (sessionId: string, title: string) => {
+      handleSessionRenamed(sessionId, title);
+      updateSessionTitle(sessionId, title);
+    },
+    [handleSessionRenamed, updateSessionTitle]
+  );
 
   // Environment provenance for the cards, resolved once for the whole list.
   // Names are looked up so a deleted environment (or one still loading)
@@ -114,9 +131,32 @@ export function SessionSidebar({
       onSessionSelect?.();
     }
   }, [isMobile, onSessionSelect]);
+  const handleSidebarLinkClick = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+      const anchor = (event.target as Element).closest<HTMLAnchorElement>("a[href]");
+      const href = anchor?.getAttribute("href");
+      if (!href?.startsWith("/")) return;
+      event.preventDefault();
+      navigate(href);
+    },
+    [navigate]
+  );
 
   return (
-    <aside className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background">
+    <aside
+      className="w-72 h-dvh flex flex-col border-r border-border-muted bg-background"
+      onClick={handleSidebarLinkClick}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border-muted">
         <div className="flex min-w-0 items-center gap-2">
@@ -230,9 +270,9 @@ export function SessionSidebar({
                 childrenMap={childrenMap}
                 currentSessionId={currentSessionId}
                 isMobile={isMobile}
-                onArchive={handleSessionArchived}
+                onArchive={handleArchivedSession}
                 onSessionSelect={onSessionSelect}
-                onSessionRenamed={handleSessionRenamed}
+                onSessionRenamed={handleRenamedSession}
                 onMarkLatestMessageRead={handleMarkLatestMessageRead}
               />
             ))}
@@ -257,9 +297,9 @@ export function SessionSidebar({
                     childrenMap={childrenMap}
                     currentSessionId={currentSessionId}
                     isMobile={isMobile}
-                    onArchive={handleSessionArchived}
+                    onArchive={handleArchivedSession}
                     onSessionSelect={onSessionSelect}
-                    onSessionRenamed={handleSessionRenamed}
+                    onSessionRenamed={handleRenamedSession}
                     onMarkLatestMessageRead={handleMarkLatestMessageRead}
                   />
                 ))}

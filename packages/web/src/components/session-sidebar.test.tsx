@@ -19,8 +19,11 @@ const { mockUseIsMobile } = vi.hoisted(() => ({
   mockUseIsMobile: vi.fn(() => false),
 }));
 
-const { mockPush } = vi.hoisted(() => ({
+const { mockPush, mockCloseSession, mockNavigate, mockUpdateSessionTitle } = vi.hoisted(() => ({
   mockPush: vi.fn(),
+  mockCloseSession: vi.fn(),
+  mockNavigate: vi.fn(),
+  mockUpdateSessionTitle: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -41,15 +44,31 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("next/link", () => ({
-  default: ({ children, href, ...props }: React.ComponentProps<"a">) => (
-    <a href={typeof href === "string" ? href : "#"} {...props}>
-      {children}
-    </a>
-  ),
+  default: ({ children, href, ...props }: React.ComponentProps<"a"> & { href: unknown }) => {
+    const resolvedHref =
+      typeof href === "string"
+        ? href
+        : `${(href as unknown as { pathname: string }).pathname}?${new URLSearchParams(
+            (href as unknown as { query: Record<string, string> }).query
+          )}`;
+    return (
+      <a href={resolvedHref} {...props}>
+        {children}
+      </a>
+    );
+  },
 }));
 
 vi.mock("@/hooks/use-media-query", () => ({
   useIsMobile: mockUseIsMobile,
+}));
+
+vi.mock("@/components/session-tabs", () => ({
+  useSessionTabs: () => ({
+    closeSession: mockCloseSession,
+    navigate: mockNavigate,
+    updateSessionTitle: mockUpdateSessionTitle,
+  }),
 }));
 
 const { mockUseEnvironments } = vi.hoisted(() => ({
@@ -68,6 +87,9 @@ afterEach(() => {
   vi.useRealTimers();
   mockUseIsMobile.mockReturnValue(false);
   mockPush.mockReset();
+  mockCloseSession.mockReset();
+  mockNavigate.mockReset();
+  mockUpdateSessionTitle.mockReset();
   mockUseEnvironments.mockReturnValue({ environments: [], loading: false });
 });
 
@@ -690,7 +712,6 @@ describe("SessionSidebar", () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(allNextPageKey);
     });
-
     fireEvent.click(screen.getByText("Mine"));
     expect(await screen.findByText("Mine only")).toBeInTheDocument();
 
@@ -729,6 +750,9 @@ describe("SessionSidebar", () => {
 
     expect(screen.queryByText("Rename")).not.toBeInTheDocument();
     expect(onSessionSelect).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith(
+      "/session/session-1?repoOwner=open-inspect&repoName=background-agents&title=Session+1"
+    );
   });
 
   it("closes the sidebar on mobile when using non-session navigation links", () => {
@@ -752,6 +776,11 @@ describe("SessionSidebar", () => {
     fireEvent.click(screen.getByRole("link", { name: /analytics/i }));
 
     expect(onSessionSelect).toHaveBeenCalledTimes(3);
+    expect(mockNavigate.mock.calls.map(([href]) => href)).toEqual([
+      "/settings",
+      "/automations",
+      "/analytics",
+    ]);
   });
 
   it("opens rename actions on mobile long press", async () => {
@@ -823,6 +852,7 @@ describe("SessionSidebar", () => {
         credentials: "same-origin",
       });
     });
+    expect(mockCloseSession).toHaveBeenCalledWith("session-1");
   });
 
   it("keeps the session in the sidebar when archiving fails", async () => {
@@ -870,5 +900,6 @@ describe("SessionSidebar", () => {
     });
 
     expect(screen.getByRole("link", { name: /session 1/i })).toBeInTheDocument();
+    expect(mockCloseSession).not.toHaveBeenCalled();
   });
 });

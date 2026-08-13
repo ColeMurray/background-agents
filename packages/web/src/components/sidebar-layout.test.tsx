@@ -32,6 +32,10 @@ vi.mock("@/hooks/use-sidebar", () => ({
   useSidebar: () => mocks.sidebar,
 }));
 
+vi.mock("@/hooks/use-session-target-picker", () => ({
+  useSessionTargetPicker: () => ({}),
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
@@ -63,6 +67,17 @@ describe("CollapsedSidebarControls", () => {
     fireEvent.click(buttons![2]);
     expect(push).toHaveBeenCalledWith("/");
   });
+
+  it("exposes routed content as the controlled tab panel", () => {
+    vi.mocked(useRouter).mockReturnValue({ push: vi.fn() } as never);
+
+    render(<SidebarLayout>Session content</SidebarLayout>);
+
+    const tab = screen.getByRole("tab", { name: "Open New session" });
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("id", "session-tab-panel");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", tab.id);
+    expect(tab).toHaveAttribute("aria-controls", "session-tab-panel");
+  });
 });
 
 describe("mobile sidebar drag", () => {
@@ -77,7 +92,7 @@ describe("mobile sidebar drag", () => {
       width: 288,
     } as DOMRect);
     const gestureBoundary = screen.getByTestId("mobile-sidebar-gesture-boundary");
-    expect(gestureBoundary).toHaveClass("touch-pan-y");
+    expect(gestureBoundary).toHaveClass("touch-manipulation");
     fireEvent.pointerDown(gestureBoundary, {
       pointerId: 1,
       pointerType: "touch",
