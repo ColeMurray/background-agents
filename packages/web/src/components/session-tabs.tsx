@@ -20,7 +20,8 @@ import {
   type SessionTargetSelection,
 } from "@/hooks/use-session-target-picker";
 
-const MAX_SESSION_TABS = 10;
+export const MAX_SESSION_TABS = 15;
+export const MIN_SESSION_TAB_WIDTH_PX = 72;
 const NEW_SESSION_TAB_ID = "__new-session__";
 
 export function getSessionTabElementId(sessionId: string): string {
@@ -458,13 +459,13 @@ function SessionTabStrip({
             <div
               key={tab.id}
               data-session-tab={tab.id}
-              className={`group relative flex h-9 min-w-24 max-w-52 flex-1 basis-52 items-center border-x border-t px-1 transition-colors first:rounded-tl-sm last:rounded-tr-sm ${
+              style={{ minWidth: MIN_SESSION_TAB_WIDTH_PX }}
+              className={`group relative flex h-9 max-w-52 flex-1 basis-52 items-center border-x border-t px-1 transition-colors first:rounded-tl-sm last:rounded-tr-sm ${
                 isActive
-                  ? "z-10 border-border bg-background text-foreground"
+                  ? "z-10 border-border bg-background text-foreground shadow-sm after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-background"
                   : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
-              {isActive && <span className="absolute inset-x-0 top-0 h-0.5 bg-accent" />}
               <button
                 type="button"
                 id={getSessionTabElementId(tab.id)}
@@ -475,11 +476,13 @@ function SessionTabStrip({
                 tabIndex={isActive ? 0 : -1}
                 onClick={() => !isActive && onNavigate(tab.href)}
                 onKeyDown={(event) => handleTabKeyDown(event, tabIndex)}
-                className="flex min-w-0 flex-1 items-center gap-2 px-2 text-left text-xs font-medium"
+                className={`flex min-w-0 flex-1 items-center px-2 pl-5 pr-7 text-left text-xs ${
+                  isActive ? "font-semibold" : "font-medium"
+                }`}
               >
                 <span
                   aria-hidden="true"
-                  className={`h-2 w-2 flex-shrink-0 rounded-full ${
+                  className={`absolute left-2 h-2 w-2 rounded-full ${
                     isActive ? "bg-accent" : "border border-muted-foreground/60"
                   }`}
                 />
@@ -489,7 +492,7 @@ function SessionTabStrip({
                 type="button"
                 aria-label={`Close ${tab.title}`}
                 onClick={() => onClose(tab.id)}
-                className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-sm transition hover:bg-muted ${
+                className={`absolute right-1 flex h-6 w-6 items-center justify-center rounded-sm transition hover:bg-muted ${
                   isActive
                     ? "text-muted-foreground"
                     : "md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"

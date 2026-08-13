@@ -6,6 +6,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  MAX_SESSION_TABS,
+  MIN_SESSION_TAB_WIDTH_PX,
   SessionTabs,
   SessionTabsProvider,
   type SessionTabInput,
@@ -33,6 +35,11 @@ const sessions: SessionTabInput[] = [
   { id: "second", title: "Improve dashboard", repoOwner: "open", repoName: "inspect" },
 ];
 
+const MACBOOK_14_VIEWPORT_WIDTH_PX = 1512;
+const OPEN_SIDEBAR_WIDTH_PX = 288;
+const NEW_SESSION_ACTION_WIDTH_PX = 40;
+const TAB_STRIP_HORIZONTAL_PADDING_PX = 8;
+
 function RegisterSessions() {
   const { registerSession } = useSessionTabs();
 
@@ -47,7 +54,7 @@ function RegisterManySessions() {
   const { registerSession } = useSessionTabs();
 
   useEffect(() => {
-    for (let index = 1; index <= 11; index += 1) {
+    for (let index = 1; index <= 16; index += 1) {
       registerSession({ id: `bulk-${index}`, title: `Bulk ${index}` });
     }
   }, [registerSession]);
@@ -201,8 +208,8 @@ describe("SessionTabs", () => {
 
     expect(await screen.findByRole("tab", { name: "Open Bulk 1" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Open Bulk 2" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Open Bulk 11" })).toBeInTheDocument();
-    expect(screen.getAllByRole("tab")).toHaveLength(10);
+    expect(screen.getByRole("tab", { name: "Open Bulk 16" })).toBeInTheDocument();
+    expect(screen.getAllByRole("tab")).toHaveLength(15);
   });
 
   it("compresses crowded tabs inside a scrollbar-free inner scroller", async () => {
@@ -214,13 +221,48 @@ describe("SessionTabs", () => {
     );
 
     const tabList = await screen.findByRole("tablist");
-    const tabContainer = screen.getByRole("tab", { name: "Open Bulk 11" }).parentElement;
+    const tabContainer = screen.getByRole("tab", { name: "Open Bulk 16" }).parentElement;
     const navigation = screen.getByRole("navigation", { name: "Open sessions" });
 
     expect(navigation).toHaveClass("overflow-hidden");
     expect(navigation).not.toHaveClass("overflow-x-auto");
     expect(tabList).toHaveClass("session-tab-scroller", "min-w-0", "flex-1", "overflow-x-auto");
-    expect(tabContainer).toHaveClass("min-w-24", "max-w-52", "flex-1", "basis-52");
+    expect(tabContainer).toHaveClass("max-w-52", "flex-1", "basis-52");
+    expect(tabContainer).toHaveStyle({ minWidth: "72px" });
+    expect(screen.getByRole("button", { name: "Close Bulk 16" })).toHaveClass(
+      "absolute",
+      "right-1"
+    );
+  });
+
+  it("distinguishes the active tab without an accent-colored top line", async () => {
+    renderTabs();
+
+    const activeTab = await screen.findByRole("tab", { name: "Open Fix authentication" });
+    const activeContainer = activeTab.parentElement;
+
+    expect(activeContainer).toHaveClass(
+      "bg-background",
+      "border-border",
+      "shadow-sm",
+      "after:bg-background"
+    );
+    expect(activeTab).toHaveClass("font-semibold");
+    expect(activeContainer?.querySelector(".bg-accent:not(.rounded-full)")).toBeNull();
+  });
+
+  it("fits the tab limit at minimum width on a 14-inch MacBook viewport", () => {
+    const availableTabWidth =
+      MACBOOK_14_VIEWPORT_WIDTH_PX -
+      OPEN_SIDEBAR_WIDTH_PX -
+      NEW_SESSION_ACTION_WIDTH_PX -
+      TAB_STRIP_HORIZONTAL_PADDING_PX;
+
+    expect(MAX_SESSION_TABS * MIN_SESSION_TAB_WIDTH_PX).toBeLessThanOrEqual(availableTabWidth);
+    expect((MAX_SESSION_TABS + 1) * MIN_SESSION_TAB_WIDTH_PX).toBeLessThanOrEqual(
+      availableTabWidth
+    );
+    expect((MAX_SESSION_TABS + 2) * MIN_SESSION_TAB_WIDTH_PX).toBeGreaterThan(availableTabWidth);
   });
 
   it("closes an inactive tab without navigating", async () => {
