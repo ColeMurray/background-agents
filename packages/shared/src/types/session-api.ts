@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
+import { MAX_WEB_PROMPT_CHARS, promptContentSchema } from "./prompts";
 import {
   messageSourceSchema,
   sessionStatusSchema,
@@ -20,7 +21,7 @@ export interface UserPreferences {
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
-export const MAX_CHILD_FOLLOW_UP_PROMPT_CHARS = 64_000;
+export const MAX_CHILD_FOLLOW_UP_PROMPT_CHARS = MAX_WEB_PROMPT_CHARS;
 
 export const slackCallbackContextSchema = z.object({
   source: z.literal("slack"),
@@ -97,14 +98,24 @@ export const callbackContextSchema = z.union([
 
 export type CallbackContext = z.infer<typeof callbackContextSchema>;
 
-export const sendPromptRequestSchema = z.object({
-  content: z.string().min(1),
-  source: messageSourceSchema.optional(),
-  model: z.string().optional(),
-  reasoningEffort: z.string().optional(),
-  attachments: z.unknown().optional(),
-  callbackContext: z.unknown().optional(),
-});
+export const sendPromptRequestSchema = z
+  .object({
+    content: promptContentSchema,
+    source: messageSourceSchema.optional(),
+    model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
+    attachments: z.unknown().optional(),
+    callbackContext: z.unknown().optional(),
+  })
+  .refine(
+    (prompt) =>
+      prompt.content.trim().length > 0 ||
+      (Array.isArray(prompt.attachments) && prompt.attachments.length > 0),
+    {
+      message: "Prompt content must not be blank without attachments",
+      path: ["content"],
+    }
+  );
 
 export type SendPromptRequest = z.infer<typeof sendPromptRequestSchema>;
 

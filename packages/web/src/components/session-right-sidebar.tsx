@@ -284,7 +284,7 @@ export function SessionRightSidebar({
   onOpenDiff,
 }: SessionRightSidebarProps) {
   return (
-    <aside className="w-80 border-l border-border-muted overflow-y-auto hidden lg:block">
+    <aside className="hidden w-80 shrink-0 overflow-y-auto border-l border-border-muted lg:block">
       <SessionRightSidebarContent
         sessionId={sessionId}
         sessionState={sessionState}

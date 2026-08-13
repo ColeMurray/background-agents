@@ -1,13 +1,18 @@
 import { childFollowUpPromptRequestSchema } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
-import type { SessionStatus } from "@open-inspect/shared/types/sessions";
+import { sessionStatusSchema } from "@open-inspect/shared/types/sessions";
 import { parsePersistedSandboxSettings } from "../../../sandbox/settings";
 import type { SessionMessenger } from "../../messenger";
-import { isPromptableSessionStatus, SessionNotPromptableError } from "../../message-queue";
+import {
+  isPromptableSessionStatus,
+  PromptQueueFullError,
+  SessionNotPromptableError,
+} from "../../message-queue";
 import type { SessionRepository } from "../../repository";
 import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
-import type { ArtifactRow, SandboxRow, SessionRow } from "../../types";
+import { activePromptAuthorSchema, type ActivePromptAuthor } from "../../active-prompt-author";
+import type { ArtifactRow, ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import {
   RECENT_EVENT_FETCH_LIMIT,
   buildChildSessionDetail,
@@ -26,6 +31,8 @@ export interface ChildSessionsHandlerDeps {
     | "getLatestTerminalMessage"
     | "getEventTimelinePage"
     | "getPendingOrProcessingCount"
+    | "getProcessingMessageAuthor"
+    | "getParticipantById"
   >;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
@@ -39,6 +46,7 @@ export interface ChildSessionsHandlerDeps {
 
 export interface ChildSessionsHandler {
   getSpawnContext: () => Response;
+  getActivePromptAuthor: () => Response;
   getChildSummary: (url?: URL) => Response;
   parentPrompt: (request: Request) => Promise<Response>;
   childSessionUpdate: (request: Request) => Promise<Response>;
@@ -46,10 +54,40 @@ export interface ChildSessionsHandler {
 
 const parentPromptRequestSchema = childFollowUpPromptRequestSchema.extend({
   parentSessionId: z.string().min(1),
+  author: activePromptAuthorSchema,
 });
 
-export const MAX_PENDING_CHILD_PROMPTS = 10;
+const childSessionUpdateBodySchema = z.object({
+  childSessionId: z.string().min(1),
+  status: sessionStatusSchema,
+  title: z.string().nullable().optional(),
+});
 
+function resolvePromptAuthorParticipant(
+  repository: ChildSessionsHandlerDeps["repository"]
+): ParticipantRow | Response {
+  const processingMessage = repository.getProcessingMessageAuthor();
+  if (!processingMessage) {
+    return Response.json(
+      { error: "No active prompt found. Child operations must be triggered by an active prompt." },
+      { status: 400 }
+    );
+  }
+  const participant = repository.getParticipantById(processingMessage.author_id);
+  if (!participant) return Response.json({ error: "Prompt author not found" }, { status: 401 });
+  return participant;
+}
+
+function toActivePromptAuthor(participant: ParticipantRow): ActivePromptAuthor {
+  return {
+    userId: participant.user_id,
+    ...(participant.canonical_user_id ? { canonicalUserId: participant.canonical_user_id } : {}),
+    scmUserId: participant.scm_user_id,
+    scmLogin: participant.scm_login,
+    scmName: participant.scm_name,
+    scmEmail: participant.scm_email,
+  };
+}
 export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): ChildSessionsHandler {
   return {
     getSpawnContext(): Response {
@@ -58,11 +96,8 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      const participants = deps.repository.listParticipants();
-      const owner = participants.find((participant) => participant.role === "owner");
-      if (!owner) {
-        return Response.json({ error: "No owner participant found" }, { status: 404 });
-      }
+      const promptAuthor = resolvePromptAuthorParticipant(deps.repository);
+      if (promptAuthor instanceof Response) return promptAuthor;
       let sandboxTimeoutMs: number | undefined;
       try {
         sandboxTimeoutMs = parsePersistedSandboxSettings(session.sandbox_settings).sandboxTimeoutMs;
@@ -77,20 +112,28 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         reasoningEffort: session.reasoning_effort ?? null,
         baseBranch: session.base_branch,
         sandboxTimeoutMs,
-        owner: {
-          userId: owner.user_id,
-          ...(owner.canonical_user_id ? { canonicalUserId: owner.canonical_user_id } : {}),
-          scmUserId: owner.scm_user_id,
-          scmLogin: owner.scm_login,
-          scmName: owner.scm_name,
-          scmEmail: owner.scm_email,
-          scmAccessTokenEncrypted: owner.scm_access_token_encrypted,
-          scmRefreshTokenEncrypted: owner.scm_refresh_token_encrypted,
-          scmTokenExpiresAt: owner.scm_token_expires_at,
+        promptAuthor: {
+          userId: promptAuthor.user_id,
+          ...(promptAuthor.canonical_user_id
+            ? { canonicalUserId: promptAuthor.canonical_user_id }
+            : {}),
+          scmUserId: promptAuthor.scm_user_id,
+          scmLogin: promptAuthor.scm_login,
+          scmName: promptAuthor.scm_name,
+          scmEmail: promptAuthor.scm_email,
+          scmAccessTokenEncrypted: promptAuthor.scm_access_token_encrypted,
+          scmRefreshTokenEncrypted: promptAuthor.scm_refresh_token_encrypted,
+          scmTokenExpiresAt: promptAuthor.scm_token_expires_at,
         },
       };
 
       return Response.json(context);
+    },
+
+    getActivePromptAuthor(): Response {
+      if (!deps.getSession()) return Response.json({ error: "Session not found" }, { status: 404 });
+      const author = resolvePromptAuthorParticipant(deps.repository);
+      return author instanceof Response ? author : Response.json(toActivePromptAuthor(author));
     },
 
     getChildSummary(url?: URL): Response {
@@ -175,42 +218,49 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
           { status: 409 }
         );
       }
-      if (deps.repository.getPendingOrProcessingCount() >= MAX_PENDING_CHILD_PROMPTS) {
-        return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
-      }
-
-      const owner = deps.repository
-        .listParticipants()
-        .find((participant) => participant.role === "owner");
-      if (!owner) {
-        return Response.json({ error: "No owner participant found" }, { status: 500 });
-      }
-
       try {
         return Response.json(
           await deps.messageService.enqueuePrompt({
             content: parsed.data.content,
-            authorId: owner.user_id,
-            canonicalUserId: owner.canonical_user_id ?? undefined,
+            authorId: parsed.data.author.userId,
+            canonicalUserId: parsed.data.author.canonicalUserId ?? undefined,
             source: "agent",
+            scmEnrichment: {
+              userId: parsed.data.author.scmUserId,
+              login: parsed.data.author.scmLogin,
+              name: parsed.data.author.scmName,
+              email: parsed.data.author.scmEmail,
+              accessTokenEncrypted: null,
+              refreshTokenEncrypted: null,
+              tokenExpiresAt: null,
+            },
           })
         );
       } catch (error) {
-        if (!(error instanceof SessionNotPromptableError)) throw error;
-        return Response.json({ error: error.message }, { status: 409 });
+        if (error instanceof SessionNotPromptableError) {
+          return Response.json({ error: error.message }, { status: 409 });
+        }
+        if (error instanceof PromptQueueFullError) {
+          return Response.json({ error: "Child prompt queue is full" }, { status: 429 });
+        }
+        throw error;
       }
     },
 
     async childSessionUpdate(request: Request): Promise<Response> {
-      const body = (await request.json()) as {
-        childSessionId: string;
-        status: SessionStatus;
-        title: string | null;
-      };
-
-      if (!body.childSessionId || !body.status) {
+      let rawBody: unknown;
+      try {
+        rawBody = await request.json();
+      } catch {
         return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
       }
+      const result = childSessionUpdateBodySchema.safeParse(rawBody);
+
+      if (!result.success) {
+        return Response.json({ error: "childSessionId and status are required" }, { status: 400 });
+      }
+
+      const body = result.data;
 
       deps.messenger.broadcast({
         type: "child_session_update",

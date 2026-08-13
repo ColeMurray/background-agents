@@ -1,10 +1,10 @@
 import "server-only";
 
+import { controlPlaneUserFetch } from "./control-plane";
 import {
   sessionSnapshotSchema,
   type SessionSnapshot,
 } from "@open-inspect/shared/types/server-messages";
-import { controlPlaneUserFetch } from "./control-plane";
 
 export class SessionSnapshotError extends Error {
   constructor(readonly status: number) {

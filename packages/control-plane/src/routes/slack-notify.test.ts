@@ -544,7 +544,7 @@ describe("handleSlackNotify", () => {
       settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
     });
     mockSlackResponse({ body: { ok: true, channel: "C01ABC", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
 
     await callHandler({ channel: "C01ABC", text: "hi" });
 
@@ -561,7 +561,7 @@ describe("handleSlackNotify", () => {
       settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
     });
     mockSlackResponse({ body: { ok: true, channel: "C123", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
 
     await callHandler({ channel: "#ops", text: "hi" });
 

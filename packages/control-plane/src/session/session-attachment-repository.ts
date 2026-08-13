@@ -1,4 +1,4 @@
-import type { SessionAttachmentRow } from "./types";
+import { sessionAttachmentRowSchema, type SessionAttachmentRow } from "./types";
 import type { SqlStorage } from "./sql-storage";
 
 export interface CreateSessionAttachmentData {
@@ -7,6 +7,13 @@ export interface CreateSessionAttachmentData {
   sizeBytes: number;
   objectKey: string;
   createdAt: number;
+}
+
+function parseSessionAttachmentRows(rows: unknown[]): SessionAttachmentRow[] {
+  return rows.flatMap((row) => {
+    const result = sessionAttachmentRowSchema.safeParse(row);
+    return result.success ? [result.data] : [];
+  });
 }
 
 export class AttachmentClaimConflictError extends Error {}
@@ -44,7 +51,7 @@ export class SessionAttachmentRepository {
        WHERE id IN (${placeholders}) AND message_id IS NULL AND cleanup_claimed_at IS NULL`,
       ...attachmentIds
     );
-    return result.toArray() as unknown as SessionAttachmentRow[];
+    return parseSessionAttachmentRows(result.toArray());
   }
 
   claimForMessage(messageId: string, attachmentIds: string[]): void {
@@ -75,7 +82,7 @@ export class SessionAttachmentRepository {
       cutoff,
       claimExpiredBefore
     );
-    const stale = result.toArray() as unknown as SessionAttachmentRow[];
+    const stale = parseSessionAttachmentRows(result.toArray());
     if (stale.length === 0) return [];
     const placeholders = stale.map(() => "?").join(", ");
     this.sql.exec(

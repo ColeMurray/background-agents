@@ -59,7 +59,7 @@ class FakeWebSocket {
     this.onopen?.(new Event("open"));
   }
 
-  receive(message: ServerMessage) {
+  receive(message: unknown) {
     this.onmessage?.({
       data: JSON.stringify(message),
     } as MessageEvent);
@@ -98,6 +98,7 @@ function createSubscribedMessage(artifacts: SessionArtifact[] = []): SubscribedM
       cursor: null,
     },
     spawnError: null,
+    promptQueue: [],
   };
 }
 
@@ -107,6 +108,7 @@ function createSnapshot(): SessionSnapshot {
     artifacts: [],
     timeline: { events: [], hasMore: false, cursor: null },
     spawnError: null,
+    promptQueue: [],
   };
 }
 
@@ -150,7 +152,7 @@ describe("useSessionSocket", () => {
       socket.receive(createSubscribedMessage());
     });
 
-    let acknowledgement!: Promise<boolean>;
+    let acknowledgement!: ReturnType<typeof result.current.sendPrompt>;
     act(() => {
       acknowledgement = result.current.sendPrompt("Review this", "model-1", "high");
     });
@@ -158,6 +160,7 @@ describe("useSessionSocket", () => {
     await waitFor(() => {
       expect(socket.sentMessages).toContainEqual({
         type: "prompt",
+        clientRequestId: "client-id",
         content: "Review this",
         model: "model-1",
         reasoningEffort: "high",
@@ -172,9 +175,107 @@ describe("useSessionSocket", () => {
     expect(settled).toBe(false);
 
     act(() => {
-      socket.receive({ type: "prompt_queued", messageId: "message-1", position: 1 });
+      socket.receive({
+        type: "prompt_queued",
+        clientRequestId: "client-id",
+        messageId: "message-1",
+        position: 1,
+      } as ServerMessage);
     });
-    await expect(acknowledgement).resolves.toBe(true);
+    await expect(acknowledgement).resolves.toEqual({
+      ok: true,
+      clientRequestId: "client-id",
+      messageId: "message-1",
+      position: 1,
+    });
+  });
+
+  it("sends correlated prompts without feature negotiation", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    void result.current.sendPrompt("Correlate this");
+    await waitFor(() => {
+      expect(socket.sentMessages).toContainEqual({
+        type: "prompt",
+        clientRequestId: "client-id",
+        content: "Correlate this",
+      });
+    });
+  });
+
+  it("ignores unrelated acknowledgements and errors while a correlated prompt is pending", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    const acknowledgement = result.current.sendPrompt("Review this");
+    act(() => {
+      socket.receive({ type: "error", code: "other", message: "Unrelated failure" });
+      socket.receive({
+        type: "prompt_queued",
+        clientRequestId: "another-client-id",
+        messageId: "message-other",
+        position: 1,
+      } as ServerMessage);
+    });
+    let settled = false;
+    void acknowledgement.then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "PROMPT_QUEUE_FULL",
+        message: "The prompt queue is full",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+    await expect(acknowledgement).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "The prompt queue is full",
+    });
+  });
+
+  it("immediately rejects a correlated invalid prompt with the server message", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.open();
+      socket.receive(createSubscribedMessage());
+    });
+
+    const acknowledgement = result.current.sendPrompt("x".repeat(65_537));
+    await waitFor(() => expect(socket.sentMessages).toHaveLength(2));
+
+    act(() => {
+      socket.receive({
+        type: "error",
+        code: "INVALID_PROMPT",
+        message: "Prompt exceeds the server limit",
+        clientRequestId: "client-id",
+      } as ServerMessage);
+    });
+
+    await expect(acknowledgement).resolves.toEqual({
+      ok: false,
+      reason: "rejected",
+      message: "Prompt exceeds the server limit",
+    });
   });
 
   it("waits for subscription and reports when a prompt cannot be sent", async () => {
@@ -184,7 +285,10 @@ describe("useSessionSocket", () => {
       expect(FakeWebSocket.instances).toHaveLength(1);
     });
 
-    await expect(result.current.sendPrompt("Too early")).resolves.toBe(false);
+    await expect(result.current.sendPrompt("Too early")).resolves.toEqual({
+      ok: false,
+      reason: "disconnected",
+    });
 
     const socket = FakeWebSocket.instances[0];
     act(() => {
@@ -196,16 +300,84 @@ describe("useSessionSocket", () => {
       socket.receive(createSubscribedMessage());
     });
     await waitFor(() => {
-      expect(socket.sentMessages).toContainEqual({
-        type: "prompt",
-        content: "Wait for subscription",
-      });
+      expect(socket.sentMessages).toContainEqual(
+        expect.objectContaining({
+          type: "prompt",
+          content: "Wait for subscription",
+        })
+      );
     });
 
     act(() => {
       socket.close();
     });
-    await expect(acknowledgement).resolves.toBe(false);
+    await expect(acknowledgement).resolves.toEqual({ ok: false, reason: "disconnected" });
+  });
+
+  it("reuses the caller's request identity when retrying after a reconnect", async () => {
+    const { result } = renderHook(() => useSessionSocket("session-1", createSnapshot()));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const firstSocket = FakeWebSocket.instances[0];
+    act(() => {
+      firstSocket.open();
+      firstSocket.receive(createSubscribedMessage());
+    });
+
+    const firstAttempt = result.current.sendPrompt(
+      "Review this",
+      "model-1",
+      "high",
+      [{ name: "shot.png", attachmentId: "attachment-1" }],
+      "stable-request-id"
+    );
+    await waitFor(() => expect(firstSocket.sentMessages).toHaveLength(2));
+    act(() => firstSocket.close());
+    await expect(firstAttempt).resolves.toEqual({ ok: false, reason: "disconnected" });
+
+    act(() => result.current.reconnect());
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const retrySocket = FakeWebSocket.instances[1];
+    act(() => {
+      retrySocket.open();
+      retrySocket.receive(createSubscribedMessage());
+    });
+    const retry = result.current.sendPrompt(
+      "Review this",
+      "model-1",
+      "high",
+      [{ name: "shot.png", attachmentId: "attachment-1" }],
+      "stable-request-id"
+    );
+
+    await waitFor(() => {
+      const prompts = [...firstSocket.sentMessages, ...retrySocket.sentMessages].filter(
+        (message) => message.type === "prompt"
+      );
+      expect(prompts).toHaveLength(2);
+      expect(prompts.map((message) => message.clientRequestId)).toEqual([
+        "stable-request-id",
+        "stable-request-id",
+      ]);
+      expect(prompts.map((message) => message.attachments)).toEqual([
+        [{ name: "shot.png", attachmentId: "attachment-1" }],
+        [{ name: "shot.png", attachmentId: "attachment-1" }],
+      ]);
+    });
+
+    act(() => {
+      retrySocket.receive({
+        type: "prompt_queued",
+        clientRequestId: "stable-request-id",
+        messageId: "message-1",
+        position: 1,
+      } as ServerMessage);
+    });
+    await expect(retry).resolves.toEqual({
+      ok: true,
+      clientRequestId: "stable-request-id",
+      messageId: "message-1",
+      position: 1,
+    });
   });
 
   it("hydrates artifacts from the subscribed payload", async () => {

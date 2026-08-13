@@ -35,13 +35,7 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     pauseSandbox: vi.fn(async () => {}),
-    connectSandbox: vi.fn(
-      async (): Promise<E2BSandboxDetail> => ({
-        sandboxID: "e2b-id",
-        templateID: "tmpl",
-        state: "running",
-      })
-    ),
+    connectSandbox: vi.fn(async (): Promise<void> => {}),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
     getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),

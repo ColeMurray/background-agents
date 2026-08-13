@@ -2,12 +2,7 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type {
-  MessageSource,
-  MessageStatus,
-  ParticipantRole,
-  SessionStatus,
-} from "@open-inspect/shared/types/sessions";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
@@ -147,27 +142,6 @@ export interface ListSessionsResponse {
   sessions: SessionResponse[];
   total: number;
   hasMore: boolean;
-}
-
-export interface MessageResponse {
-  id: string;
-  authorId: string;
-  content: string;
-  source: MessageSource;
-  status: MessageStatus;
-  createdAt: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
-
-export interface ParticipantResponse {
-  id: string;
-  userId: string;
-  canonicalUserId?: string | null;
-  scmLogin: string | null;
-  scmName: string | null;
-  role: ParticipantRole;
-  joinedAt: number;
 }
 
 // GitHub OAuth types
