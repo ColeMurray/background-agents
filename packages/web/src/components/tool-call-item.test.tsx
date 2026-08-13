@@ -26,4 +26,78 @@ describe("ToolCallItem", () => {
     expect(button).toHaveTextContent(command);
     expect(button.querySelector(".truncate")).toBeNull();
   });
+
+  it("wraps complete long Grep arguments and output", () => {
+    const pattern = `needle-${"x".repeat(160)}`;
+    const path = `/workspace/${"deep-directory/".repeat(12)}source.ts`;
+    const output = `${path}:42:${"matching-source-text".repeat(12)}`;
+    const args = { pattern, path };
+    const event: Extract<SandboxEvent, { type: "tool_call" }> = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-call-2",
+      callId: "call-2",
+      tool: "Grep",
+      args,
+      output,
+      timestamp: 1,
+    };
+
+    render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
+
+    const argumentsPre = screen.getByText("Arguments:").nextElementSibling;
+    const outputPre = screen.getByText("Output:").nextElementSibling;
+    expect(argumentsPre).toHaveTextContent(pattern);
+    expect(argumentsPre?.textContent).toBe(JSON.stringify(args, null, 2));
+    expect(argumentsPre).toHaveClass("whitespace-pre-wrap", "[overflow-wrap:anywhere]");
+    expect(argumentsPre).not.toHaveClass("overflow-x-auto", "whitespace-pre");
+    expect(outputPre?.textContent).toBe(output);
+    expect(outputPre).toHaveClass(
+      "overflow-y-auto",
+      "whitespace-pre-wrap",
+      "[overflow-wrap:anywhere]"
+    );
+    expect(outputPre).not.toHaveClass("overflow-x-auto", "whitespace-pre");
+  });
+
+  it("keeps Apply Patch content preformatted and horizontally scrollable", () => {
+    const patchText = `*** Begin Patch\n*** Update File: source.ts\n-${"old".repeat(80)}\n+${"new".repeat(80)}\n*** End Patch`;
+    const event: Extract<SandboxEvent, { type: "tool_call" }> = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-call-3",
+      callId: "call-3",
+      tool: "apply_patch",
+      args: { patchText },
+      timestamp: 1,
+    };
+
+    render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
+
+    const patchPre = screen.getByText("Patch:").nextElementSibling;
+    expect(patchPre?.textContent).toBe(patchText);
+    expect(patchPre).toHaveClass("overflow-x-auto", "whitespace-pre");
+    expect(patchPre).not.toHaveClass("whitespace-pre-wrap", "[overflow-wrap:anywhere]");
+  });
+
+  it("keeps Bash output preformatted and horizontally scrollable", () => {
+    const output = `COLUMN_A    COLUMN_B    ${"wide-terminal-value".repeat(20)}`;
+    const event: Extract<SandboxEvent, { type: "tool_call" }> = {
+      type: "tool_call",
+      sandboxId: "sandbox-1",
+      messageId: "message-call-4",
+      callId: "call-4",
+      tool: "Bash",
+      args: { command: "print-table" },
+      output,
+      timestamp: 1,
+    };
+
+    render(<ToolCallItem event={event} isExpanded onToggle={() => {}} />);
+
+    const outputPre = screen.getByText("Output:").nextElementSibling;
+    expect(outputPre?.textContent).toBe(output);
+    expect(outputPre).toHaveClass("overflow-x-auto", "whitespace-pre");
+    expect(outputPre).not.toHaveClass("whitespace-pre-wrap", "[overflow-wrap:anywhere]");
+  });
 });

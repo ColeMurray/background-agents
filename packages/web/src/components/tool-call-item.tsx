@@ -24,6 +24,12 @@ interface ToolCallItemProps {
   showTime?: boolean;
 }
 
+const WRAPPING_OUTPUT_TOOLS = new Set(["grep", "glob", "read", "search", "webfetch", "websearch"]);
+
+function shouldWrapOutput(tool: string | undefined): boolean {
+  return WRAPPING_OUTPUT_TOOLS.has(tool?.toLowerCase() ?? "");
+}
+
 function ToolIcon({ name }: { name: string | null }) {
   if (!name) return null;
 
@@ -54,6 +60,7 @@ function ToolIcon({ name }: { name: string | null }) {
 function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
   const formatted = formatToolCall(event);
   const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
+  const wrapsOutput = shouldWrapOutput(event.tool);
   const { args, output } = formatted.getDetails();
   const patchText = isApplyPatch && typeof args?.patchText === "string" ? args.patchText : null;
   const nonPatchArgs =
@@ -67,7 +74,7 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
       {hasNonPatchArgs && (
         <div className="mb-2">
           <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
-          <pre className="max-w-full overflow-x-auto whitespace-pre text-foreground">
+          <pre className="max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">
             {JSON.stringify(nonPatchArgs, null, 2)}
           </pre>
         </div>
@@ -83,7 +90,13 @@ function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
       {output && (
         <div>
           <div className="text-muted-foreground mb-1 font-medium">Output:</div>
-          <pre className="max-h-48 max-w-full overflow-x-auto whitespace-pre text-foreground">
+          <pre
+            className={`max-h-48 max-w-full text-foreground ${
+              wrapsOutput
+                ? "overflow-y-auto whitespace-pre-wrap [overflow-wrap:anywhere]"
+                : "overflow-x-auto whitespace-pre"
+            }`}
+          >
             {output}
           </pre>
         </div>
