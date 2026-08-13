@@ -28,12 +28,12 @@ def _fake_process(returncode: int | None) -> MagicMock:
 class TestCodeServerMonitorRestart:
     async def test_code_server_crash_does_not_set_shutdown(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(None)
-        supervisor.core_services.bridge_process = _fake_process(None)
-        supervisor.access_services.code_server_process = _fake_process(1)
+        supervisor.core_services._opencode_process = _fake_process(None)
+        supervisor.core_services._bridge_process = _fake_process(None)
+        supervisor.access_services._code_server_process = _fake_process(1)
 
-        def restart_side_effect():
-            supervisor.access_services.code_server_process = _fake_process(None)
+        def restart_side_effect(*_args):
+            supervisor.access_services._code_server_process = _fake_process(None)
             supervisor.shutdown_event.set()
 
         supervisor.access_services.start_code_server = AsyncMock(side_effect=restart_side_effect)
@@ -47,9 +47,9 @@ class TestCodeServerMonitorRestart:
 
     async def test_code_server_restart_exception_is_caught(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(None)
-        supervisor.core_services.bridge_process = _fake_process(None)
-        supervisor.access_services.code_server_process = _fake_process(1)
+        supervisor.core_services._opencode_process = _fake_process(None)
+        supervisor.core_services._bridge_process = _fake_process(None)
+        supervisor.access_services._code_server_process = _fake_process(1)
         supervisor.access_services.start_code_server = AsyncMock(
             side_effect=RuntimeError("code-server binary not found")
         )
@@ -65,13 +65,13 @@ class TestCodeServerMonitorRestart:
             await supervisor.monitor_processes()
 
         supervisor.access_services.start_code_server.assert_awaited_once()
-        assert supervisor.access_services.code_server_process is None
+        assert supervisor.access_services._code_server_process is None
 
     async def test_code_server_max_restarts_gives_up(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(None)
-        supervisor.core_services.bridge_process = _fake_process(None)
-        supervisor.access_services.code_server_process = _fake_process(1)
+        supervisor.core_services._opencode_process = _fake_process(None)
+        supervisor.core_services._bridge_process = _fake_process(None)
+        supervisor.access_services._code_server_process = _fake_process(1)
         supervisor.access_services.start_code_server = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
         sleep_count = 0
@@ -86,7 +86,7 @@ class TestCodeServerMonitorRestart:
             await supervisor.monitor_processes()
 
         assert supervisor.access_services.start_code_server.call_count == supervisor.MAX_RESTARTS
-        assert supervisor.access_services.code_server_process is None
+        assert supervisor.access_services._code_server_process is None
         supervisor._report_fatal_error.assert_not_called()
 
 
@@ -100,12 +100,12 @@ class TestCodeServerMonitorRestart:
 class TestTerminalMonitorRestart:
     async def test_crash_restarts_nonfatally(self, process_attribute, starter_attribute):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(None)
-        supervisor.core_services.bridge_process = _fake_process(None)
-        setattr(supervisor.access_services, process_attribute, _fake_process(1))
+        supervisor.core_services._opencode_process = _fake_process(None)
+        supervisor.core_services._bridge_process = _fake_process(None)
+        setattr(supervisor.access_services, f"_{process_attribute}", _fake_process(1))
 
-        def restart_side_effect():
-            setattr(supervisor.access_services, process_attribute, _fake_process(None))
+        def restart_side_effect(*_args):
+            setattr(supervisor.access_services, f"_{process_attribute}", _fake_process(None))
             supervisor.shutdown_event.set()
 
         starter = AsyncMock(side_effect=restart_side_effect)
@@ -120,9 +120,9 @@ class TestTerminalMonitorRestart:
 
     async def test_restart_exception_clears_process(self, process_attribute, starter_attribute):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(None)
-        supervisor.core_services.bridge_process = _fake_process(None)
-        setattr(supervisor.access_services, process_attribute, _fake_process(1))
+        supervisor.core_services._opencode_process = _fake_process(None)
+        supervisor.core_services._bridge_process = _fake_process(None)
+        setattr(supervisor.access_services, f"_{process_attribute}", _fake_process(1))
         starter = AsyncMock(side_effect=RuntimeError("unavailable"))
         setattr(supervisor.access_services, starter_attribute, starter)
         iteration = 0
@@ -137,15 +137,15 @@ class TestTerminalMonitorRestart:
             await supervisor.monitor_processes()
 
         starter.assert_awaited_once()
-        assert getattr(supervisor.access_services, process_attribute) is None
+        assert getattr(supervisor.access_services, f"_{process_attribute}") is None
 
     async def test_max_restarts_abandons_process_nonfatally(
         self, process_attribute, starter_attribute
     ):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(None)
-        supervisor.core_services.bridge_process = _fake_process(None)
-        setattr(supervisor.access_services, process_attribute, _fake_process(1))
+        supervisor.core_services._opencode_process = _fake_process(None)
+        supervisor.core_services._bridge_process = _fake_process(None)
+        setattr(supervisor.access_services, f"_{process_attribute}", _fake_process(1))
         starter = AsyncMock()
         setattr(supervisor.access_services, starter_attribute, starter)
         supervisor._report_fatal_error = AsyncMock()
@@ -161,5 +161,5 @@ class TestTerminalMonitorRestart:
             await supervisor.monitor_processes()
 
         assert starter.await_count == supervisor.MAX_RESTARTS
-        assert getattr(supervisor.access_services, process_attribute) is None
+        assert getattr(supervisor.access_services, f"_{process_attribute}") is None
         supervisor._report_fatal_error.assert_not_awaited()

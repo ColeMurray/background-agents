@@ -32,15 +32,16 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         sandbox_id=config.sandbox_id,
         session_id=str(config.session_config.get("session_id", "")),
     )
-    repository_bootstrapper = RepositoryBootstrapper(config, shutdown_event, log)
+    repository_bootstrapper = RepositoryBootstrapper(
+        config.repository_config(), shutdown_event, log
+    )
     core_services = CoreAgentServices(
-        config,
+        config.core_services_config(),
         shutdown_event,
         log,
         repository_bootstrapper.record_boot_warning,
     )
     access_services = AccessServices(
-        config,
         shutdown_event,
         log,
         vnc_password=vnc_password,

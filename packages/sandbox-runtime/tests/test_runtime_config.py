@@ -1,4 +1,5 @@
 import json
+from types import MappingProxyType
 
 import pytest
 
@@ -43,3 +44,20 @@ def test_runtime_config_parses_frozen_values_without_environment_patching(tmp_pa
 def test_runtime_config_rejects_non_object_session_config():
     with pytest.raises(ValueError, match="JSON object"):
         RuntimeConfig.from_env({"SESSION_CONFIG": "[]"})
+
+
+def test_session_config_is_recursively_immutable():
+    config = RuntimeConfig.from_env(
+        {
+            "SESSION_CONFIG": json.dumps(
+                {"repositories": [{"repo_owner": "acme", "repo_name": "app"}]}
+            )
+        }
+    )
+
+    assert isinstance(config.session_config, MappingProxyType)
+    repositories = config.session_config["repositories"]
+    assert isinstance(repositories, tuple)
+    assert isinstance(repositories[0], MappingProxyType)
+    with pytest.raises(TypeError):
+        repositories[0]["repo_name"] = "changed"

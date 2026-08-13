@@ -166,7 +166,14 @@ async def test_modal_entrypoint_runs_supervisor_with_memory_only_callback_token(
     async def finish_build(supervisor, _expected_tunnel_ports):
         observed_supervisor["value"] = supervisor
         observed_hook_env.update(supervisor.repository_bootstrapper._hook_env())
-        return BootstrapResult(True, [], True, None, (), Path("/workspace"))
+        return BootstrapResult(
+            git_sync_success=True,
+            repository_shas=[],
+            setup_success=True,
+            start_success=None,
+            repositories=(),
+            workdir=Path("/workspace"),
+        )
 
     monkeypatch.setattr(entrypoint.SandboxSupervisor, "_run_image_build_execution", finish_build)
 

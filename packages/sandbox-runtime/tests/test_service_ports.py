@@ -1,5 +1,6 @@
 """Tests for configurable code-server / ttyd ports in the sandbox runtime."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -60,7 +61,7 @@ class TestStartCodeServerPort:
                 return_value=proc,
             ) as mock_exec,
         ):
-            await sup.start_code_server()
+            await sup.start_code_server(Path("/workspace"))
 
         assert "0.0.0.0:9999" in mock_exec.call_args[0]
 
@@ -78,7 +79,7 @@ class TestStartCodeServerPort:
                 return_value=proc,
             ) as mock_exec,
         ):
-            await sup.start_code_server()
+            await sup.start_code_server(Path("/workspace"))
 
         assert f"0.0.0.0:{CODE_SERVER_PORT}" in mock_exec.call_args[0]
 
@@ -98,7 +99,7 @@ class TestStartTtydPort:
                 return_value=proc,
             ) as mock_exec,
         ):
-            await sup.start_ttyd()
+            await sup.start_ttyd(Path("/workspace"))
 
         assert str(TTYD_PORT) in mock_exec.call_args[0]
 
@@ -121,7 +122,7 @@ class TestStartTtydPort:
                 return_value=proc,
             ) as mock_exec,
         ):
-            await sup.start_ttyd()
+            await sup.start_ttyd(Path("/workspace"))
 
         assert str(TTYD_PORT) in mock_exec.call_args[0]
         assert "9999" not in mock_exec.call_args[0]

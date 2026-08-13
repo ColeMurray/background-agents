@@ -122,3 +122,31 @@ class TestOpenaiOauthSetup:
         auth_dir = tmp_path / ".local" / "share" / "opencode"
         tmp_file = auth_dir / ".auth.json.tmp"
         assert not tmp_file.exists()
+
+    def test_restricts_existing_temp_file_before_write(self, tmp_path):
+        sup = _make_core_services()
+        auth_dir = tmp_path / ".local" / "share" / "opencode"
+        auth_dir.mkdir(parents=True)
+        tmp_file = auth_dir / ".auth.json.tmp"
+        tmp_file.write_text("old")
+        tmp_file.chmod(0o644)
+
+        with (
+            patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            sup._setup_managed_oauth()
+
+        assert _auth_file(tmp_path).stat().st_mode & 0o777 == 0o600
+
+    def test_removes_temp_file_when_replace_fails(self, tmp_path):
+        sup = _make_core_services()
+
+        with (
+            patch.dict("os.environ", {"OPENAI_OAUTH_MANAGED": "1"}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch("pathlib.Path.replace", side_effect=OSError("replace failed")),
+        ):
+            sup._setup_managed_oauth()
+
+        assert not (_auth_file(tmp_path).parent / ".auth.json.tmp").exists()

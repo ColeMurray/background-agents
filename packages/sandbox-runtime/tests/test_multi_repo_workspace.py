@@ -13,7 +13,7 @@ import pytest
 
 from sandbox_runtime.core_services import CoreAgentServices
 from sandbox_runtime.repository_boot import RepositoryBootstrapper
-from tests.runtime_helpers import make_repository_bootstrapper
+from tests.runtime_helpers import make_repository_bootstrapper, make_runtime_config
 
 MULTI_SESSION_CONFIG = json.dumps(
     {
@@ -56,13 +56,24 @@ def _mock_repository_boot(sup: RepositoryBootstrapper) -> None:
 
 def _make_core_services(tmp_path, session_config: str = MULTI_SESSION_CONFIG) -> CoreAgentServices:
     repository = _make_bootstrapper(tmp_path, session_config)
+    config = make_runtime_config(
+        {
+            "SANDBOX_ID": "test-sandbox",
+            "CONTROL_PLANE_URL": "https://cp.example.com",
+            "SANDBOX_AUTH_TOKEN": "tok",
+            "REPO_OWNER": "acme",
+            "REPO_NAME": "frontend",
+            "SESSION_CONFIG": session_config,
+        },
+        workspace_path=tmp_path,
+    )
     core = CoreAgentServices(
-        repository.config,
+        config.core_services_config(),
         repository.shutdown_event,
         repository.log,
         repository.record_boot_warning,
     )
-    core.configure_workspace(tuple(repository.repositories), repository._opencode_workdir())
+    core._test_repositories = tuple(repository.repositories)
     return core
 
 
@@ -370,7 +381,7 @@ class TestOpencodeAssembly:
             "sandbox_runtime.repository_boot.BOOT_WARNINGS_FILE_PATH",
             str(tmp_path / "warnings.jsonl"),
         ):
-            sup._assemble_workspace_opencode()
+            sup._assemble_workspace_opencode(sup._test_repositories)
 
         merged = tmp_path / ".opencode"
         assert (merged / "command" / "deploy.md").read_text() == "from-backend"
@@ -393,7 +404,7 @@ class TestOpencodeAssembly:
         src.mkdir(parents=True)
         (src / "deploy.md").write_text("current")
 
-        sup._assemble_workspace_opencode()
+        sup._assemble_workspace_opencode(sup._test_repositories)
 
         assert not stale.exists()
         assert not stale_manifest.exists()
@@ -411,7 +422,7 @@ class TestOpencodeAssembly:
         stale.parent.mkdir(parents=True)
         stale.write_text("stale")
 
-        sup._assemble_workspace_opencode()
+        sup._assemble_workspace_opencode(sup._test_repositories)
 
         assert (staged / "index.js").read_text() == "plugin"
         assert not stale.exists()
@@ -422,7 +433,7 @@ class TestOpencodeAssembly:
         nm.mkdir(parents=True)
         (nm / "index.js").write_text("x")
 
-        sup._assemble_workspace_opencode()
+        sup._assemble_workspace_opencode(sup._test_repositories)
 
         assert not (tmp_path / ".opencode" / "node_modules").exists()
 
@@ -433,7 +444,7 @@ class TestOpencodeAssembly:
         src.mkdir(parents=True)
         (src / "a.md").write_text("a")
 
-        sup._assemble_workspace_opencode()
+        sup._assemble_workspace_opencode(sup._test_repositories)
 
         assert not (tmp_path / ".opencode").exists()
 

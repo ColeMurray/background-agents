@@ -20,7 +20,7 @@ from .constants import (
 )
 from .diff_baseline import resolve_session_diff_baselines
 from .repo_config import RepoConfigError, RepoEntry, dump_repo_manifest, parse_repositories
-from .runtime_config import BootMode, RuntimeConfig
+from .runtime_config import BootMode, RepositoryConfig
 
 GH_WRAPPER_REAL_PATH = "/usr/bin/gh"
 GH_WRAPPER_INSTALL_PATH = Path("/usr/local/bin/gh")
@@ -46,7 +46,7 @@ class RepositoryBootstrapper:
     TUNNEL_WAIT_POLL_INTERVAL_SECONDS = 0.2
     CLONE_DEPTH_COMMITS = 100
 
-    def __init__(self, config: RuntimeConfig, shutdown_event: asyncio.Event, log: Any) -> None:
+    def __init__(self, config: RepositoryConfig, shutdown_event: asyncio.Event, log: Any) -> None:
         self.config = config
         self.shutdown_event = shutdown_event
         self.log = log
@@ -54,7 +54,6 @@ class RepositoryBootstrapper:
         self.repo_owner = config.repo_owner
         self.repo_name = config.repo_name
         self.vcs_host = config.vcs_host
-        self.session_config = config.session_config
         self.has_repository = config.has_repository
         self.workspace_path = config.workspace_path
         self.repo_path = config.repo_path
@@ -66,7 +65,7 @@ class RepositoryBootstrapper:
 
     @property
     def base_branch(self) -> str:
-        return self.config.base_branch
+        return self.config.branch
 
     def _parse_repositories(self) -> list[RepoEntry]:
         """Build the ordered repository list, deferring config errors to run().
@@ -79,7 +78,7 @@ class RepositoryBootstrapper:
         self.repo_config_error = None
         try:
             return parse_repositories(
-                self.session_config,
+                {"repositories": self.config.repositories, "base_sha": self.config.base_sha},
                 workspace_path=self.workspace_path,
                 scalar_owner=self.repo_owner,
                 scalar_name=self.repo_name,
@@ -97,13 +96,14 @@ class RepositoryBootstrapper:
         """
         return f"https://{self.vcs_host}/{repo.owner}/{repo.name}.git"
 
-    def _redact_git_stderr(self, stderr_text: str) -> str:
+    def _redact_git_stderr(self, stderr: bytes) -> str:
         """Redact credential-bearing URLs from git stderr.
 
         The credential helper means our own remotes are token-free, but git
         may surface upstream URLs (e.g. from submodules or HTTP redirects)
         that still embed credentials.
         """
+        stderr_text = stderr.decode(errors="replace")
         return re.sub(r"(https?://)([^/\s@]+)@", r"\1***@", stderr_text)
 
     async def _terminate_owned_subprocess(self, process: asyncio.subprocess.Process) -> None:
@@ -166,7 +166,7 @@ class RepositoryBootstrapper:
                 "git.clone_error",
                 repo_owner=repo.owner,
                 repo_name=repo.name,
-                stderr=self._redact_git_stderr(stderr.decode()),
+                stderr=self._redact_git_stderr(stderr),
                 exit_code=result.returncode,
             )
             return False
@@ -297,7 +297,7 @@ class RepositoryBootstrapper:
             self.log.error(
                 "git.set_url_failed",
                 exit_code=proc.returncode,
-                stderr=self._redact_git_stderr(stderr.decode()),
+                stderr=self._redact_git_stderr(stderr),
             )
             return False
         return True
@@ -322,7 +322,7 @@ class RepositoryBootstrapper:
         if result.returncode != 0:
             self.log.error(
                 "git.fetch_error",
-                stderr=self._redact_git_stderr(stderr.decode()),
+                stderr=self._redact_git_stderr(stderr),
                 exit_code=result.returncode,
             )
             return False
@@ -345,7 +345,7 @@ class RepositoryBootstrapper:
         if result.returncode != 0:
             self.log.warn(
                 "git.checkout_error",
-                stderr=self._redact_git_stderr(stderr.decode()),
+                stderr=self._redact_git_stderr(stderr),
                 exit_code=result.returncode,
                 target_branch=branch,
             )
@@ -369,8 +369,8 @@ class RepositoryBootstrapper:
             )
             return False
 
+        preserve_checkout = self.boot_mode == "snapshot_restore"
         try:
-            preserve_checkout = self.boot_mode == "snapshot_restore"
             if preserve_checkout:
                 if not await self._ensure_plain_origin(repo):
                     return False
@@ -523,7 +523,7 @@ class RepositoryBootstrapper:
             lines.append(f"| `./{repo.name}/` | {repo.owner}/{repo.name} | `{repo.branch}` |")
         lines.append("")
 
-        working_branch = str(self.session_config.get("working_branch_name") or "").strip()
+        working_branch = self.config.working_branch_name.strip()
         if working_branch:
             lines.append(f"All work happens on the branch `{working_branch}` in every repository.")
             lines.append("")
@@ -769,10 +769,10 @@ class RepositoryBootstrapper:
 
         path = Path(TUNNEL_ENV_FILE_PATH)
         expected_prefixes = [f"TUNNEL_{p}=" for p in expected_ports]
-        start_time = time.time()
+        start_time = time.monotonic()
         deadline = start_time + timeout_seconds
 
-        while time.time() < deadline:
+        while time.monotonic() < deadline:
             if path.exists():
                 try:
                     lines = path.read_text().splitlines()
@@ -781,7 +781,7 @@ class RepositoryBootstrapper:
                             "tunnel.env_file_ready",
                             path=str(path),
                             ports=expected_ports,
-                            wait_ms=int((time.time() - start_time) * 1000),
+                            wait_ms=int((time.monotonic() - start_time) * 1000),
                         )
                         return True
                 except Exception as e:

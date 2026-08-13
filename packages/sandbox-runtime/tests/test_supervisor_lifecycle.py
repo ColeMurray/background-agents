@@ -16,7 +16,14 @@ def _supervisor(tmp_path, events):
         {"SANDBOX_ID": "sandbox-1", "REPO_OWNER": "acme", "REPO_NAME": "repo"},
         workspace_path=tmp_path,
     )
-    result = BootstrapResult(True, [], True, True, (), Path(tmp_path))
+    result = BootstrapResult(
+        git_sync_success=True,
+        repository_shas=[],
+        setup_success=True,
+        start_success=True,
+        repositories=(),
+        workdir=Path(tmp_path),
+    )
     repository = MagicMock()
     repository.expected_tunnel_ports.return_value = []
 
@@ -25,9 +32,11 @@ def _supervisor(tmp_path, events):
         return result
 
     repository.bootstrap = AsyncMock(side_effect=bootstrap)
-    core = MagicMock(opencode_process=_process(), bridge_process=_process())
+    core = MagicMock()
+    core.opencode_exit_code.return_value = None
+    core.bridge_exit_code.return_value = None
 
-    async def start_opencode():
+    async def start_opencode(_repositories, _workdir):
         events.append("opencode")
 
     async def start_bridge():
@@ -37,22 +46,19 @@ def _supervisor(tmp_path, events):
     core.start_bridge = AsyncMock(side_effect=start_bridge)
     core.stop_bridge = AsyncMock()
     core.stop_opencode = AsyncMock()
-    access = MagicMock(
-        code_server_process=None,
-        ttyd_process=None,
-        ttyd_proxy_process=None,
-        xvfb_process=None,
-        fluxbox_process=None,
-        x11vnc_process=None,
-        novnc_process=None,
-    )
+    access = MagicMock()
+    access.ttyd_started.return_value = False
+    access.code_server_exit_code.return_value = None
+    access.ttyd_exit_code.return_value = None
+    access.ttyd_proxy_exit_code.return_value = None
+    access.crashed_vnc.return_value = None
 
     async def start_vnc():
         events.append("vnc")
 
     access.start_vnc = AsyncMock(side_effect=start_vnc)
-    access.start_code_server = AsyncMock(side_effect=lambda: events.append("code_server"))
-    access.start_ttyd = AsyncMock(side_effect=lambda: events.append("ttyd"))
+    access.start_code_server = AsyncMock(side_effect=lambda _workdir: events.append("code_server"))
+    access.start_ttyd = AsyncMock(side_effect=lambda _workdir: events.append("ttyd"))
     access.stop_vnc = AsyncMock()
     access.stop = AsyncMock()
     supervisor = SandboxSupervisor(
@@ -74,18 +80,18 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
     assert events == ["vnc", "repository:fresh", "code_server", "ttyd", "opencode", "bridge"]
 
 
-async def test_regular_boot_configures_services_with_bootstrap_workspace(tmp_path, monkeypatch):
+async def test_regular_boot_passes_bootstrap_workspace_to_services(tmp_path, monkeypatch):
     supervisor, repository, core, access = _supervisor(tmp_path, [])
     repositories = (MagicMock(),)
     workdir = tmp_path / "repo"
     repository.bootstrap.side_effect = None
     repository.bootstrap.return_value = BootstrapResult(
-        True,
-        [],
-        True,
-        True,
-        repositories,
-        workdir,
+        git_sync_success=True,
+        repository_shas=[],
+        setup_success=True,
+        start_success=True,
+        repositories=repositories,
+        workdir=workdir,
     )
     monkeypatch.delenv("IMAGE_BUILD_MODE", raising=False)
     monkeypatch.delenv("RESTORED_FROM_SNAPSHOT", raising=False)
@@ -93,8 +99,9 @@ async def test_regular_boot_configures_services_with_bootstrap_workspace(tmp_pat
 
     await supervisor.run()
 
-    core.configure_workspace.assert_called_once_with(repositories, workdir)
-    access.configure_workdir.assert_called_once_with(workdir)
+    core.start_opencode.assert_awaited_once_with(repositories, workdir)
+    access.start_code_server.assert_awaited_once_with(workdir)
+    access.start_ttyd.assert_awaited_once_with(workdir)
 
 
 async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
@@ -120,7 +127,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
 
 async def test_graceful_bridge_exit_requests_shutdown(tmp_path):
     supervisor, _repository, core, _access = _supervisor(tmp_path, [])
-    core.bridge_process = _process(0)
+    core.bridge_exit_code.return_value = 0
 
     await SandboxSupervisor.monitor_processes(supervisor)
 
@@ -130,7 +137,7 @@ async def test_graceful_bridge_exit_requests_shutdown(tmp_path):
 
 async def test_bridge_restart_exhaustion_is_fatal(tmp_path, monkeypatch):
     supervisor, _repository, core, _access = _supervisor(tmp_path, [])
-    core.bridge_process = _process(1)
+    core.bridge_exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
 
     async def no_delay(_seconds):
@@ -146,11 +153,11 @@ async def test_bridge_restart_exhaustion_is_fatal(tmp_path, monkeypatch):
 
 async def test_optional_service_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch):
     supervisor, _repository, _core, access = _supervisor(tmp_path, [])
-    access.code_server_process = _process(1)
+    access.code_server_exit_code.return_value = 1
     supervisor._report_fatal_error = AsyncMock()
 
     async def no_delay(_seconds):
-        if access.code_server_process is None:
+        if access.abandon_code_server.called:
             supervisor.shutdown_event.set()
 
     monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", no_delay)

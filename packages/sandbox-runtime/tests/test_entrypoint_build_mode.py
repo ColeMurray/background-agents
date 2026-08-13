@@ -9,6 +9,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
+from sandbox_runtime.supervisor import ImageBuildExecutionCancelled
+
 
 @pytest.fixture(autouse=True)
 def isolate_optional_runtime_services(monkeypatch):
@@ -113,16 +115,15 @@ class TestImageBuildMode:
         supervisor.monitor_processes.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_completed_operation_wins_when_shutdown_is_also_ready(self, build_env):
+    async def test_preset_shutdown_does_not_create_operation(self, build_env):
         supervisor = _make_supervisor(build_env)
         supervisor.shutdown_event.set()
+        operation_factory = MagicMock()
 
-        async def completed_operation():
-            return "completed"
+        with pytest.raises(ImageBuildExecutionCancelled):
+            await supervisor._run_until_shutdown(operation_factory)
 
-        result = await supervisor._run_until_shutdown(completed_operation())
-
-        assert result == "completed"
+        operation_factory.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_resolves_diff_baseline_after_sync_before_setup(self, build_env):
@@ -1356,13 +1357,20 @@ class TestPerformGitSync:
         supervisor = _make_supervisor(base_env)
 
         stderr_text = (
-            "fatal: redirected to https://other-user:other-secret@example.com/acme/my-repo.git"
+            b"fatal: redirected to https://other-user:other-secret@example.com/acme/my-repo.git"
         )
 
         redacted_stderr = supervisor.repository_bootstrapper._redact_git_stderr(stderr_text)  # type: ignore[attr-defined]
 
         assert "other-secret" not in redacted_stderr
         assert "https://***@example.com/acme/my-repo.git" in redacted_stderr
+
+    def test_redact_git_stderr_replaces_malformed_bytes(self, base_env):
+        supervisor = _make_supervisor(base_env)
+
+        redacted_stderr = supervisor.repository_bootstrapper._redact_git_stderr(b"fatal: \xff")
+
+        assert redacted_stderr == "fatal: �"
 
 
 class TestBaseBranchProperty:

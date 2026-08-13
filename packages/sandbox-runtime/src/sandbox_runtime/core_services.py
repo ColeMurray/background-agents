@@ -17,15 +17,15 @@ from .constants import (
     DEFAULT_BIN_INSTALL_DIR,
 )
 from .git_excludes import install_runtime_git_excludes
+from .process_output import iter_process_lines
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable, Mapping, Sequence
 
     from .repo_config import RepoEntry
-    from .runtime_config import RuntimeConfig
+    from .runtime_config import CoreServicesConfig
 
 _LOG_FORWARD_STREAM_LIMIT_BYTES = 1024 * 1024
-_TRUNCATED_LINE_NOTICE = "[log line too large to forward; truncated]"
 AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
@@ -38,37 +38,27 @@ class CoreAgentServices:
 
     def __init__(
         self,
-        config: RuntimeConfig,
+        config: CoreServicesConfig,
         shutdown_event: asyncio.Event,
         log: Any,
         record_boot_warning: Callable[..., None],
     ) -> None:
-        self.config = config
         self.shutdown_event = shutdown_event
         self.log = log
         self.record_boot_warning = record_boot_warning
         self.sandbox_id = config.sandbox_id
         self.control_plane_url = config.control_plane_url
         self.sandbox_token = config.sandbox_token
-        self.session_config = config.session_config
         self.has_repository = config.has_repository
         self.workspace_path = config.workspace_path
-        self.repo_path = config.repo_path
-        self.repositories: list[RepoEntry] = []
-        self.is_multi_repo = False
-        self.workdir = config.workspace_path
-        self.opencode_process: asyncio.subprocess.Process | None = None
-        self.bridge_process: asyncio.subprocess.Process | None = None
+        self.session_id = config.session_id
+        self.provider = config.provider
+        self.model = config.model
+        self.mcp_servers = config.mcp_servers
+        self._opencode_process: asyncio.subprocess.Process | None = None
+        self._bridge_process: asyncio.subprocess.Process | None = None
 
-    def configure_workspace(self, repositories: tuple[RepoEntry, ...], workdir: Path) -> None:
-        self.repositories = list(repositories)
-        self.is_multi_repo = len(repositories) > 1
-        self.workdir = workdir
-
-    def _opencode_workdir(self) -> Path:
-        return self.workdir
-
-    def _assemble_workspace_opencode(self) -> None:
+    def _assemble_workspace_opencode(self, repositories: Sequence[RepoEntry]) -> None:
         """Merge member repos' .opencode/ into the workspace root (multi-repo only).
 
         OpenCode discovers config relative to its cwd — /workspace for
@@ -77,7 +67,7 @@ class CoreAgentServices:
         warning naming both members; the system tools installed afterwards
         still override on filename collision (same as single-repo today).
         """
-        if not self.is_multi_repo:
+        if len(repositories) <= 1:
             return
 
         dest_root = self.workspace_path / ".opencode"
@@ -98,7 +88,7 @@ class CoreAgentServices:
                 else:
                     child.unlink(missing_ok=True)
         provenance: dict[str, RepoEntry] = {}
-        for repo in self.repositories:
+        for repo in repositories:
             src_root = repo.path / ".opencode"
             if not src_root.is_dir():
                 continue
@@ -127,7 +117,7 @@ class CoreAgentServices:
             self.log.info(
                 "opencode.workspace_assembled",
                 file_count=len(provenance),
-                repo_count=len(self.repositories),
+                repo_count=len(repositories),
             )
 
     def _install_tools(self, workdir: Path) -> set[str]:
@@ -259,13 +249,15 @@ class CoreAgentServices:
             duration_ms=round((time.monotonic() - seeded_at) * 1000),
         )
 
-    def _prepare_opencode_filesystem(self, workdir: Path) -> set[str]:
+    def _prepare_opencode_filesystem(
+        self, workdir: Path, repositories: Sequence[RepoEntry]
+    ) -> set[str]:
         """Stage OpenCode's filesystem assets (tools, deps, skills, bin) before launch.
 
         The global seed is best-effort (degrades to a slower reify); the rest fail fast.
         """
         installed: set[str] = set()
-        self._assemble_workspace_opencode()
+        self._assemble_workspace_opencode(repositories)
         installed.update(self._install_tools(workdir))
         try:
             self._seed_global_opencode_deps()
@@ -384,49 +376,25 @@ class CoreAgentServices:
             # atomically rename so the target is never world-readable.
             fd = os.open(str(tmp_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
             try:
+                os.fchmod(fd, 0o600)
                 os.write(fd, json.dumps(entries).encode())
-            finally:
                 os.close(fd)
-            tmp_file.replace(auth_file)
+                fd = -1
+                tmp_file.replace(auth_file)
+            finally:
+                if fd >= 0:
+                    os.close(fd)
+                tmp_file.unlink(missing_ok=True)
 
             self.log.info("managed_oauth.setup", providers=list(entries))
         except Exception as e:
             self.log.warn("managed_oauth.setup_error", exc=e)
 
-    async def _iter_process_lines(
-        self, stream: asyncio.StreamReader, *, error_event: str
-    ) -> AsyncIterator[str]:
-        """Yield decoded stdout lines from a child process, resiliently.
-
-        ``async for line in stream`` reads through ``StreamReader.readline``,
-        which raises (rather than returns) once a single line is larger than the
-        stream buffer and then ends iteration for good, silently dropping every
-        later line; an undecodable byte ends it just as permanently. This keeps
-        going instead — an oversized line becomes a truncation notice and bad
-        bytes are replaced — so forwarding survives for the life of the process.
-        """
-        while True:
-            try:
-                raw = await stream.readline()
-            except ValueError:
-                # Line exceeded the buffer limit. readline() has already dropped
-                # the offending bytes, so flag the gap and keep forwarding.
-                yield _TRUNCATED_LINE_NOTICE
-                continue
-            except Exception as e:
-                # An unexpected reader failure (e.g. a closed transport) is
-                # terminal for this stream — log once and stop.
-                self.log.warn(error_event, exc=e)
-                return
-            if not raw:
-                return  # EOF: the process closed its stdout.
-            yield raw.decode("utf-8", errors="replace").rstrip()
-
-    def _resolve_mcp_servers(self) -> list[dict[str, Any]]:
+    def _resolve_mcp_servers(self) -> list[Mapping[str, Any]]:
         """Resolve MCP servers from session config."""
-        return self.session_config.get("mcp_servers") or []
+        return list(self.mcp_servers)
 
-    async def _install_mcp_packages(self, servers: list[dict[str, Any]]) -> None:
+    async def _install_mcp_packages(self, servers: list[Mapping[str, Any]]) -> None:
         """Pre-install npm packages for local MCP servers that use npx."""
         packages: list[str] = []
         for server in servers:
@@ -494,7 +462,7 @@ class CoreAgentServices:
         except Exception as e:
             self.log.warn("mcp.packages_install_error", packages=packages, exc=str(e))
 
-    def _build_mcp_config(self, servers: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    def _build_mcp_config(self, servers: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
         """Convert MCP server list to OpenCode mcp config format."""
         config: dict[str, dict[str, Any]] = {}
         for server in servers:
@@ -505,7 +473,7 @@ class CoreAgentServices:
                 entry: dict[str, Any] = {"type": "remote", "url": server.get("url", "")}
                 auth_headers = server.get("headers") or server.get("env") or {}
                 if auth_headers:
-                    entry["headers"] = auth_headers
+                    entry["headers"] = dict(auth_headers)
                 config[name] = entry
             else:
                 entry = {
@@ -513,20 +481,18 @@ class CoreAgentServices:
                     "command": server.get("command", []),
                 }
                 if server.get("env"):
-                    entry["environment"] = server["env"]
+                    entry["environment"] = dict(server["env"])
                 config[name] = entry
         return config
 
-    async def start_opencode(self) -> None:
+    async def start_opencode(self, repositories: tuple[RepoEntry, ...], workdir: Path) -> None:
         """Start OpenCode server with configuration."""
         self._setup_managed_oauth()
         self.log.info("opencode.start")
 
         # Build OpenCode config from session settings
-        provider = self.session_config.get("provider", "anthropic")
-        model = self.session_config.get("model", "claude-sonnet-4-6")
         opencode_config: dict[str, Any] = {
-            "model": f"{provider}/{model}",
+            "model": f"{self.provider}/{self.model}",
             "permission": {"*": {"*": "allow"}},
         }
 
@@ -541,9 +507,7 @@ class CoreAgentServices:
 
         # Working directory: the repo for single-repo sessions, /workspace
         # for multi-repo (every member visible) and repo-less sessions.
-        workdir = self._opencode_workdir()
-
-        installed_runtime_paths = self._prepare_opencode_filesystem(workdir)
+        installed_runtime_paths = self._prepare_opencode_filesystem(workdir, repositories)
 
         # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
@@ -579,7 +543,7 @@ class CoreAgentServices:
         }
 
         # Start OpenCode server in the repo directory
-        self.opencode_process = await asyncio.create_subprocess_exec(
+        self._opencode_process = await asyncio.create_subprocess_exec(
             "opencode",
             "serve",
             "--port",
@@ -603,11 +567,11 @@ class CoreAgentServices:
 
     async def _forward_opencode_logs(self) -> None:
         """Forward OpenCode stdout to supervisor stdout."""
-        if not self.opencode_process or not self.opencode_process.stdout:
+        if not self._opencode_process or not self._opencode_process.stdout:
             return
-        async for line in self._iter_process_lines(
-            self.opencode_process.stdout,
-            error_event="opencode.log_forward_error",
+        async for line in iter_process_lines(
+            self._opencode_process.stdout,
+            on_error=lambda error: self.log.warn("opencode.log_forward_error", exc=error),
         ):
             print(f"[opencode] {line}")
 
@@ -620,6 +584,10 @@ class CoreAgentServices:
             while time.time() - start_time < self.HEALTH_CHECK_TIMEOUT:
                 if self.shutdown_event.is_set():
                     raise RuntimeError("Shutdown requested during startup")
+                if self._opencode_process and self._opencode_process.returncode is not None:
+                    raise RuntimeError(
+                        f"OpenCode server exited with status {self._opencode_process.returncode}"
+                    )
 
                 try:
                     resp = await client.get(health_url, timeout=2.0)
@@ -643,20 +611,19 @@ class CoreAgentServices:
             return
 
         # Get session_id from config (required for WebSocket connection)
-        session_id = self.session_config.get("session_id", "")
-        if not session_id:
+        if not self.session_id:
             self.log.info("bridge.skip", reason="no_session_id")
             return
 
         # Run bridge as a module (works with relative imports)
-        self.bridge_process = await asyncio.create_subprocess_exec(
+        self._bridge_process = await asyncio.create_subprocess_exec(
             "python",
             "-m",
             "sandbox_runtime.bridge",
             "--sandbox-id",
             self.sandbox_id,
             "--session-id",
-            session_id,
+            self.session_id,
             "--control-plane",
             self.control_plane_url,
             "--token",
@@ -675,42 +642,60 @@ class CoreAgentServices:
 
         # Check if bridge exited immediately during startup
         await asyncio.sleep(0.5)
-        if self.bridge_process.returncode is not None:
-            exit_code = self.bridge_process.returncode
+        if self._bridge_process.returncode is not None:
+            exit_code = self._bridge_process.returncode
             # Bridge exited immediately - read any error output
-            stdout, _ = await self.bridge_process.communicate()
+            stdout, _ = await self._bridge_process.communicate()
             if exit_code == 0:
                 self.log.warn("bridge.early_exit", exit_code=exit_code)
             else:
                 self.log.error(
                     "bridge.startup_crash",
                     exit_code=exit_code,
-                    output=stdout.decode() if stdout else "",
+                    output=stdout.decode(errors="replace") if stdout else "",
                 )
 
     async def _forward_bridge_logs(self) -> None:
         """Forward bridge stdout to supervisor stdout."""
-        if not self.bridge_process or not self.bridge_process.stdout:
+        if not self._bridge_process or not self._bridge_process.stdout:
             return
         # Bridge already prefixes its output with [bridge], so forward verbatim.
-        async for line in self._iter_process_lines(
-            self.bridge_process.stdout,
-            error_event="bridge.log_forward_error",
+        async for line in iter_process_lines(
+            self._bridge_process.stdout,
+            on_error=lambda error: self.log.warn("bridge.log_forward_error", exc=error),
         ):
             print(line)
 
     async def stop_bridge(self) -> None:
-        if self.bridge_process and self.bridge_process.returncode is None:
-            self.bridge_process.terminate()
+        if self._bridge_process and self._bridge_process.returncode is None:
+            self._bridge_process.terminate()
             try:
-                await asyncio.wait_for(self.bridge_process.wait(), timeout=5.0)
+                await asyncio.wait_for(self._bridge_process.wait(), timeout=5.0)
             except TimeoutError:
-                self.bridge_process.kill()
+                self._bridge_process.kill()
+                await self._bridge_process.wait()
 
     async def stop_opencode(self) -> None:
-        if self.opencode_process and self.opencode_process.returncode is None:
-            self.opencode_process.terminate()
+        if self._opencode_process and self._opencode_process.returncode is None:
+            self._opencode_process.terminate()
             try:
-                await asyncio.wait_for(self.opencode_process.wait(), timeout=10.0)
+                await asyncio.wait_for(self._opencode_process.wait(), timeout=10.0)
             except TimeoutError:
-                self.opencode_process.kill()
+                self._opencode_process.kill()
+                await self._opencode_process.wait()
+
+    def opencode_exit_code(self) -> int | None:
+        """Return OpenCode's exit code, or None while absent/running."""
+        return self._opencode_process.returncode if self._opencode_process else None
+
+    def bridge_exit_code(self) -> int | None:
+        """Return the bridge's exit code, or None while absent/running."""
+        return self._bridge_process.returncode if self._bridge_process else None
+
+    def opencode_started(self) -> bool:
+        """Return whether an OpenCode process has been created."""
+        return self._opencode_process is not None
+
+    def bridge_started(self) -> bool:
+        """Return whether a bridge process has been created."""
+        return self._bridge_process is not None

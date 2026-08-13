@@ -20,6 +20,7 @@ def _make_bootstrapper(tmp_path) -> RepositoryBootstrapper:
             "REPO_OWNER": "acme",
             "REPO_NAME": "app",
         },
+        clear=True,
     ):
         sup = make_repository_bootstrapper()
     sup.workspace_path = tmp_path

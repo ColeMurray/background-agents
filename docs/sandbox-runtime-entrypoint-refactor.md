@@ -3,7 +3,7 @@
 ## Scope
 
 `packages/sandbox-runtime/src/sandbox_runtime/entrypoint.py` is the sandbox process entry point and
-currently contains 2,523 lines. This document inventories its existing responsibilities, evaluates
+previously contained 2,523 lines. This document inventories its existing responsibilities, evaluates
 separation options, and defines the implementation and test plan for reducing it to composition root
 and lifecycle orchestration code.
 

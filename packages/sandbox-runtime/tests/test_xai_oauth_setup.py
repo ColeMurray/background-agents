@@ -123,7 +123,6 @@ async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
     supervisor.workspace_path.mkdir()
     (supervisor.workspace_path / ".git").mkdir()
     supervisor.repo_path = supervisor.workspace_path / "app"
-    supervisor.workdir = supervisor.workspace_path
     plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "xai-auth-plugin.js"
     plugin_source.parent.mkdir(parents=True)
     plugin_source.write_text("export const XaiAuthProxy = async () => ({});")
@@ -155,7 +154,7 @@ async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
         supervisor._install_bin_scripts = MagicMock()
         supervisor._wait_for_health = AsyncMock()
 
-        await supervisor.start_opencode()
+        await supervisor.start_opencode((), supervisor.workspace_path)
 
     mock_copy.assert_called_once_with(
         plugin_source,

@@ -27,8 +27,8 @@ def _fake_process(returncode: int | None) -> MagicMock:
 class TestBridgeGracefulShutdown:
     async def test_bridge_exit_0_sets_shutdown_event(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.bridge_process = _fake_process(returncode=0)
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._bridge_process = _fake_process(returncode=0)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
 
         await supervisor.monitor_processes()
 
@@ -36,8 +36,8 @@ class TestBridgeGracefulShutdown:
 
     async def test_bridge_exit_0_does_not_restart(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.bridge_process = _fake_process(returncode=0)
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._bridge_process = _fake_process(returncode=0)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
         supervisor.core_services.start_bridge = AsyncMock()
 
         await supervisor.monitor_processes()
@@ -48,15 +48,15 @@ class TestBridgeGracefulShutdown:
 class TestBridgeCrashRestart:
     async def test_bridge_crash_restarts_with_backoff(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
         supervisor._report_fatal_error = AsyncMock()
         running_process = _fake_process(returncode=None)
 
         def restart_side_effect():
-            supervisor.core_services.bridge_process = running_process
+            supervisor.core_services._bridge_process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.core_services.bridge_process = _fake_process(returncode=1)
+        supervisor.core_services._bridge_process = _fake_process(returncode=1)
         supervisor.core_services.start_bridge = AsyncMock(side_effect=restart_side_effect)
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
@@ -67,8 +67,8 @@ class TestBridgeCrashRestart:
 
     async def test_bridge_crash_exceeds_max_restarts(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
-        supervisor.core_services.bridge_process = _fake_process(returncode=1)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._bridge_process = _fake_process(returncode=1)
         supervisor.core_services.start_bridge = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 
@@ -82,14 +82,14 @@ class TestBridgeCrashRestart:
 
     async def test_bridge_killed_by_signal_restarts(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
         running_process = _fake_process(returncode=None)
 
         def restart_side_effect():
-            supervisor.core_services.bridge_process = running_process
+            supervisor.core_services._bridge_process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.core_services.bridge_process = _fake_process(returncode=-15)
+        supervisor.core_services._bridge_process = _fake_process(returncode=-15)
         supervisor.core_services.start_bridge = AsyncMock(side_effect=restart_side_effect)
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock):
@@ -101,14 +101,14 @@ class TestBridgeCrashRestart:
 class TestBridgeBackoffTiming:
     async def test_first_restart_uses_base_delay(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
         running_process = _fake_process(returncode=None)
 
         def restart_side_effect():
-            supervisor.core_services.bridge_process = running_process
+            supervisor.core_services._bridge_process = running_process
             supervisor.shutdown_event.set()
 
-        supervisor.core_services.bridge_process = _fake_process(returncode=1)
+        supervisor.core_services._bridge_process = _fake_process(returncode=1)
         supervisor.core_services.start_bridge = AsyncMock(side_effect=restart_side_effect)
 
         with patch("sandbox_runtime.supervisor.asyncio.sleep", new_callable=AsyncMock) as sleep:
@@ -118,8 +118,8 @@ class TestBridgeBackoffTiming:
 
     async def test_backoff_is_capped_at_max(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(returncode=None)
-        supervisor.core_services.bridge_process = _fake_process(returncode=1)
+        supervisor.core_services._opencode_process = _fake_process(returncode=None)
+        supervisor.core_services._bridge_process = _fake_process(returncode=1)
         supervisor.core_services.start_bridge = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
         sleep_delays = []
@@ -136,7 +136,7 @@ class TestBridgeBackoffTiming:
 class TestOpenCodeCrashRestart:
     async def test_opencode_crash_exceeds_max_restarts(self):
         supervisor = _make_supervisor()
-        supervisor.core_services.opencode_process = _fake_process(returncode=1)
+        supervisor.core_services._opencode_process = _fake_process(returncode=1)
         supervisor.core_services.start_opencode = AsyncMock()
         supervisor._report_fatal_error = AsyncMock()
 

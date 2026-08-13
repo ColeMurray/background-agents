@@ -291,9 +291,9 @@ class TestVncLifecycle:
     @pytest.mark.asyncio
     async def test_component_crash_restarts_stack_non_fatally(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.core_services.opencode_process = _process()
-        supervisor.core_services.bridge_process = _process()
-        supervisor.access_services.x11vnc_process = _process(returncode=1)
+        supervisor.core_services._opencode_process = _process()
+        supervisor.core_services._bridge_process = _process()
+        supervisor.access_services._x11vnc_process = _process(returncode=1)
         supervisor.access_services.stop_vnc = AsyncMock()
 
         async def restart():
@@ -313,12 +313,12 @@ class TestVncLifecycle:
     async def test_component_crash_stops_after_restart_budget(self):
         supervisor = _make_lifecycle_supervisor()
         supervisor.MAX_RESTARTS = 0
-        supervisor.core_services.opencode_process = _process()
-        supervisor.core_services.bridge_process = _process()
-        supervisor.access_services.x11vnc_process = _process(returncode=1)
+        supervisor.core_services._opencode_process = _process()
+        supervisor.core_services._bridge_process = _process()
+        supervisor.access_services._x11vnc_process = _process(returncode=1)
 
         async def stop():
-            supervisor.access_services.x11vnc_process = None
+            supervisor.access_services._x11vnc_process = None
             supervisor.shutdown_event.set()
 
         supervisor.access_services.stop_vnc = AsyncMock(side_effect=stop)
@@ -334,9 +334,9 @@ class TestVncLifecycle:
     @pytest.mark.asyncio
     async def test_retries_after_a_restart_attempt_fails(self):
         supervisor = _make_lifecycle_supervisor()
-        supervisor.core_services.opencode_process = _process()
-        supervisor.core_services.bridge_process = _process()
-        supervisor.access_services.x11vnc_process = _process(returncode=1)
+        supervisor.core_services._opencode_process = _process()
+        supervisor.core_services._bridge_process = _process()
+        supervisor.access_services._x11vnc_process = _process(returncode=1)
         supervisor.access_services.stop_vnc = AsyncMock()
 
         async def restart():
@@ -359,10 +359,10 @@ class TestVncLifecycle:
         supervisor = _make_access_services()
         password_path = tmp_path / "vnc-password"
         password_path.write_text("secret")
-        supervisor.novnc_process = _process()
-        supervisor.novnc_process.terminate.side_effect = ProcessLookupError
+        supervisor._novnc_process = _process()
+        supervisor._novnc_process.terminate.side_effect = ProcessLookupError
         x11vnc_process = _process()
-        supervisor.x11vnc_process = x11vnc_process
+        supervisor._x11vnc_process = x11vnc_process
 
         with (
             patch("sandbox_runtime.access_services.VNC_PASSWORD_FILE_PATH", str(password_path)),
@@ -383,10 +383,10 @@ class TestVncLifecycle:
             process.terminate.side_effect = lambda: order.append(name)
             return process
 
-        supervisor.xvfb_process = tracked_process("xvfb")
-        supervisor.fluxbox_process = tracked_process("fluxbox")
-        supervisor.x11vnc_process = tracked_process("x11vnc")
-        supervisor.novnc_process = tracked_process("novnc")
+        supervisor._xvfb_process = tracked_process("xvfb")
+        supervisor._fluxbox_process = tracked_process("fluxbox")
+        supervisor._x11vnc_process = tracked_process("x11vnc")
+        supervisor._novnc_process = tracked_process("novnc")
         password_path = tmp_path / "vnc-password"
         password_path.write_text("secret")
 
@@ -398,11 +398,36 @@ class TestVncLifecycle:
 
         assert order == ["novnc", "x11vnc", "fluxbox", "xvfb"]
         assert not password_path.exists()
-        assert supervisor.xvfb_process is None
-        assert supervisor.fluxbox_process is None
-        assert supervisor.x11vnc_process is None
-        assert supervisor.novnc_process is None
+        assert supervisor._xvfb_process is None
+        assert supervisor._fluxbox_process is None
+        assert supervisor._x11vnc_process is None
+        assert supervisor._novnc_process is None
         clear_artifacts.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_generic_stop_reaps_process_after_kill(self):
+        supervisor = _make_access_services()
+        process = _process()
+        process.wait = AsyncMock(side_effect=[TimeoutError, None])
+        supervisor._code_server_process = process
+
+        await supervisor.stop()
+
+        process.kill.assert_called_once()
+        assert process.wait.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_generic_stop_continues_after_terminate_race(self):
+        supervisor = _make_access_services()
+        process = _process()
+        process.terminate.side_effect = ProcessLookupError
+        supervisor._code_server_process = process
+        supervisor._stop_vnc = AsyncMock()
+
+        await supervisor.stop()
+
+        process.wait.assert_awaited_once()
+        supervisor._stop_vnc.assert_awaited_once()
 
     def test_clears_snapshot_restored_display_lock_and_socket(self, tmp_path):
         supervisor = _make_access_services()

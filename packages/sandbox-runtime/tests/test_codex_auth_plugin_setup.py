@@ -105,7 +105,6 @@ class TestCodexAuthPluginSetup:
         sup.workspace_path.mkdir()
         (sup.workspace_path / ".git").mkdir()
         sup.repo_path = sup.workspace_path / "app"
-        sup.workdir = sup.workspace_path
 
         plugin_source = tmp_path / "app" / "sandbox_runtime" / "plugins" / "codex-auth-plugin.js"
         plugin_source.parent.mkdir(parents=True)
@@ -141,7 +140,7 @@ class TestCodexAuthPluginSetup:
             sup._install_bin_scripts = MagicMock()
             sup._wait_for_health = AsyncMock()
 
-            await sup.start_opencode()
+            await sup.start_opencode((), sup.workspace_path)
 
         mock_copy.assert_called_once_with(
             plugin_source,

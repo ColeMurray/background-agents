@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any
 
 
 class BootMode(StrEnum):
@@ -29,6 +28,45 @@ class BootMode(StrEnum):
         return cls.FRESH
 
 
+def _freeze_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze_json(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class RepositoryConfig:
+    sandbox_id: str
+    repo_owner: str
+    repo_name: str
+    vcs_host: str
+    repositories: tuple[Mapping[str, Any], ...]
+    base_sha: str
+    branch: str
+    working_branch_name: str
+    workspace_path: Path
+    repo_path: Path
+
+    @property
+    def has_repository(self) -> bool:
+        return bool(self.repo_owner and self.repo_name)
+
+
+@dataclass(frozen=True)
+class CoreServicesConfig:
+    sandbox_id: str
+    control_plane_url: str
+    sandbox_token: str
+    session_id: str
+    provider: str
+    model: str
+    mcp_servers: tuple[Mapping[str, Any], ...]
+    has_repository: bool
+    workspace_path: Path
+
+
 @dataclass(frozen=True)
 class RuntimeConfig:
     sandbox_id: str
@@ -37,7 +75,7 @@ class RuntimeConfig:
     repo_owner: str
     repo_name: str
     vcs_host: str
-    session_config: dict[str, Any]
+    session_config: Mapping[str, Any]
     workspace_path: Path
     repo_path: Path
 
@@ -50,9 +88,10 @@ class RuntimeConfig:
     ) -> RuntimeConfig:
         repo_owner = environment.get("REPO_OWNER", "")
         repo_name = environment.get("REPO_NAME", "")
-        session_config = json.loads(environment.get("SESSION_CONFIG", "{}"))
-        if not isinstance(session_config, dict):
+        parsed_session_config = json.loads(environment.get("SESSION_CONFIG", "{}"))
+        if not isinstance(parsed_session_config, dict):
             raise ValueError("SESSION_CONFIG must contain a JSON object")
+        session_config = _freeze_json(parsed_session_config)
         repo_path = workspace_path / repo_name if repo_owner and repo_name else workspace_path
         return cls(
             sandbox_id=environment.get("SANDBOX_ID", "unknown"),
@@ -73,3 +112,42 @@ class RuntimeConfig:
     @property
     def base_branch(self) -> str:
         return str(self.session_config.get("branch") or "main")
+
+    def repository_config(self) -> RepositoryConfig:
+        raw_repositories = self.session_config.get("repositories")
+        repositories = (
+            tuple(item for item in raw_repositories if isinstance(item, Mapping))
+            if isinstance(raw_repositories, tuple)
+            else ()
+        )
+        return RepositoryConfig(
+            sandbox_id=self.sandbox_id,
+            repo_owner=self.repo_owner,
+            repo_name=self.repo_name,
+            vcs_host=self.vcs_host,
+            repositories=repositories,
+            base_sha=str(self.session_config.get("base_sha") or ""),
+            branch=self.base_branch,
+            working_branch_name=str(self.session_config.get("working_branch_name") or ""),
+            workspace_path=self.workspace_path,
+            repo_path=self.repo_path,
+        )
+
+    def core_services_config(self) -> CoreServicesConfig:
+        raw_mcp_servers = self.session_config.get("mcp_servers")
+        mcp_servers = (
+            tuple(item for item in raw_mcp_servers if isinstance(item, Mapping))
+            if isinstance(raw_mcp_servers, tuple)
+            else ()
+        )
+        return CoreServicesConfig(
+            sandbox_id=self.sandbox_id,
+            control_plane_url=self.control_plane_url,
+            sandbox_token=self.sandbox_token,
+            session_id=str(self.session_config.get("session_id") or ""),
+            provider=str(self.session_config.get("provider") or "anthropic"),
+            model=str(self.session_config.get("model") or "claude-sonnet-4-6"),
+            mcp_servers=mcp_servers,
+            has_repository=self.has_repository,
+            workspace_path=self.workspace_path,
+        )

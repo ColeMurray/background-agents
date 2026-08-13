@@ -16,7 +16,7 @@ from .runtime_config import BootMode, RuntimeConfig
 
 if TYPE_CHECKING:
     import signal
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Callable
 
     from .access_services import AccessServices
     from .core_services import CoreAgentServices
@@ -53,6 +53,7 @@ class SandboxSupervisor:
         self.log = log
         self.boot_mode = BootMode.FRESH
         self._vnc_restart_task: asyncio.Task[bool] | None = None
+        self._bootstrap_result: BootstrapResult | None = None
 
     async def _report_fatal_error(self, message: str) -> None:
         self.log.error("supervisor.fatal", error_message=message)
@@ -95,12 +96,12 @@ class SandboxSupervisor:
         vnc_restarts = 0
 
         while not self.shutdown_event.is_set():
-            opencode = self.core_services.opencode_process
-            if opencode and opencode.returncode is not None:
+            opencode_exit_code = self.core_services.opencode_exit_code()
+            if opencode_exit_code is not None:
                 opencode_restarts += 1
                 self.log.error(
                     "opencode.crash",
-                    exit_code=opencode.returncode,
+                    exit_code=opencode_exit_code,
                     restart_count=opencode_restarts,
                 )
                 if opencode_restarts > self.MAX_RESTARTS:
@@ -120,18 +121,23 @@ class SandboxSupervisor:
                     restart_count=opencode_restarts,
                 )
                 await asyncio.sleep(delay)
-                await self.core_services.start_opencode()
+                if self._bootstrap_result is None:
+                    raise RuntimeError("OpenCode restart requested before repository bootstrap")
+                await self.core_services.start_opencode(
+                    self._bootstrap_result.repositories,
+                    self._bootstrap_result.workdir,
+                )
 
-            bridge = self.core_services.bridge_process
-            if bridge and bridge.returncode is not None:
-                if bridge.returncode == 0:
-                    self.log.info("bridge.graceful_exit", exit_code=bridge.returncode)
+            bridge_exit_code = self.core_services.bridge_exit_code()
+            if bridge_exit_code is not None:
+                if bridge_exit_code == 0:
+                    self.log.info("bridge.graceful_exit", exit_code=bridge_exit_code)
                     self.shutdown_event.set()
                     break
                 bridge_restarts += 1
                 self.log.error(
                     "bridge.crash",
-                    exit_code=bridge.returncode,
+                    exit_code=bridge_exit_code,
                     restart_count=bridge_restarts,
                 )
                 if bridge_restarts > self.MAX_RESTARTS:
@@ -153,12 +159,12 @@ class SandboxSupervisor:
                 await asyncio.sleep(delay)
                 await self.core_services.start_bridge()
 
-            code_server = self.access_services.code_server_process
-            if code_server and code_server.returncode is not None:
+            code_server_exit_code = self.access_services.code_server_exit_code()
+            if code_server_exit_code is not None:
                 code_server_restarts += 1
                 self.log.warn(
                     "code_server.crash",
-                    exit_code=code_server.returncode,
+                    exit_code=code_server_exit_code,
                     restart_count=code_server_restarts,
                 )
                 if code_server_restarts <= self.MAX_RESTARTS:
@@ -166,35 +172,39 @@ class SandboxSupervisor:
                         min(self.BACKOFF_BASE**code_server_restarts, self.BACKOFF_MAX)
                     )
                     try:
-                        await self.access_services.start_code_server()
+                        if self._bootstrap_result is None:
+                            raise RuntimeError("code-server restart requested before bootstrap")
+                        await self.access_services.start_code_server(self._bootstrap_result.workdir)
                     except Exception as error:
                         self.log.warn("code_server.restart_failed", exc=error)
-                        self.access_services.code_server_process = None
+                        self.access_services.abandon_code_server()
                 else:
                     self.log.warn("code_server.max_restarts", restart_count=code_server_restarts)
-                    self.access_services.code_server_process = None
+                    self.access_services.abandon_code_server()
 
-            ttyd = self.access_services.ttyd_process
-            if ttyd and ttyd.returncode is not None:
+            ttyd_exit_code = self.access_services.ttyd_exit_code()
+            if ttyd_exit_code is not None:
                 ttyd_restarts += 1
-                self.log.warn("ttyd.crash", exit_code=ttyd.returncode, restart_count=ttyd_restarts)
+                self.log.warn("ttyd.crash", exit_code=ttyd_exit_code, restart_count=ttyd_restarts)
                 if ttyd_restarts <= self.MAX_RESTARTS:
                     await asyncio.sleep(min(self.BACKOFF_BASE**ttyd_restarts, self.BACKOFF_MAX))
                     try:
-                        await self.access_services.start_ttyd()
+                        if self._bootstrap_result is None:
+                            raise RuntimeError("ttyd restart requested before bootstrap")
+                        await self.access_services.start_ttyd(self._bootstrap_result.workdir)
                     except Exception as error:
                         self.log.warn("ttyd.restart_failed", exc=error)
-                        self.access_services.ttyd_process = None
+                        self.access_services.abandon_ttyd()
                 else:
                     self.log.warn("ttyd.max_restarts", restart_count=ttyd_restarts)
-                    self.access_services.ttyd_process = None
+                    self.access_services.abandon_ttyd()
 
-            ttyd_proxy = self.access_services.ttyd_proxy_process
-            if ttyd_proxy and ttyd_proxy.returncode is not None:
+            ttyd_proxy_exit_code = self.access_services.ttyd_proxy_exit_code()
+            if ttyd_proxy_exit_code is not None:
                 ttyd_proxy_restarts += 1
                 self.log.warn(
                     "ttyd_proxy.crash",
-                    exit_code=ttyd_proxy.returncode,
+                    exit_code=ttyd_proxy_exit_code,
                     restart_count=ttyd_proxy_restarts,
                 )
                 if ttyd_proxy_restarts <= self.MAX_RESTARTS:
@@ -205,31 +215,19 @@ class SandboxSupervisor:
                         await self.access_services.start_ttyd_proxy()
                     except Exception as error:
                         self.log.warn("ttyd_proxy.restart_failed", exc=error)
-                        self.access_services.ttyd_proxy_process = None
+                        self.access_services.abandon_ttyd_proxy()
                 else:
                     self.log.warn("ttyd_proxy.max_restarts", restart_count=ttyd_proxy_restarts)
-                    self.access_services.ttyd_proxy_process = None
+                    self.access_services.abandon_ttyd_proxy()
 
-            crashed_vnc = next(
-                (
-                    (name, process)
-                    for name, process in (
-                        ("xvfb", self.access_services.xvfb_process),
-                        ("fluxbox", self.access_services.fluxbox_process),
-                        ("x11vnc", self.access_services.x11vnc_process),
-                        ("novnc", self.access_services.novnc_process),
-                    )
-                    if process and process.returncode is not None
-                ),
-                None,
-            )
+            crashed_vnc = self.access_services.crashed_vnc()
             if crashed_vnc and (self._vnc_restart_task is None or self._vnc_restart_task.done()):
-                component, process = crashed_vnc
+                component, exit_code = crashed_vnc
                 vnc_restarts += 1
                 self.log.warn(
                     "vnc.crash",
                     component=component,
-                    exit_code=process.returncode,
+                    exit_code=exit_code,
                     restart_count=vnc_restarts,
                 )
                 await self.access_services.stop_vnc()
@@ -256,8 +254,12 @@ class SandboxSupervisor:
             )
         return timeout_seconds
 
-    async def _run_until_shutdown(self, operation: Awaitable[_ResultT]) -> _ResultT:
-        operation_task = asyncio.ensure_future(operation)
+    async def _run_until_shutdown(
+        self, operation_factory: Callable[[], Awaitable[_ResultT]]
+    ) -> _ResultT:
+        if self.shutdown_event.is_set():
+            raise ImageBuildExecutionCancelled
+        operation_task = asyncio.ensure_future(operation_factory())
         shutdown_task = asyncio.create_task(self.shutdown_event.wait())
         tasks = {operation_task, shutdown_task}
         try:
@@ -276,7 +278,9 @@ class SandboxSupervisor:
         try:
             async with asyncio.timeout(timeout_seconds):
                 return await self._run_until_shutdown(
-                    self.repository_bootstrapper.bootstrap(BootMode.BUILD, expected_tunnel_ports)
+                    lambda: self.repository_bootstrapper.bootstrap(
+                        BootMode.BUILD, expected_tunnel_ports
+                    )
                 )
         except TimeoutError as error:
             raise RuntimeError(
@@ -327,7 +331,7 @@ class SandboxSupervisor:
                 )
                 if repo_image_callback:
                     reported = await self._run_until_shutdown(
-                        repo_image_callback.report_success(
+                        lambda: repo_image_callback.report_success(
                             build_duration_seconds=time.time() - startup_start,
                             repository_shas=boot_result.repository_shas,
                             runtime_version=runtime_version,
@@ -347,25 +351,24 @@ class SandboxSupervisor:
             boot_result = await self.repository_bootstrapper.bootstrap(
                 self.boot_mode, expected_tunnel_ports
             )
-            self.core_services.configure_workspace(boot_result.repositories, boot_result.workdir)
-            self.access_services.configure_workdir(boot_result.workdir)
+            self._bootstrap_result = boot_result
 
             for sidecar_name, starter in (
                 ("code_server", self.access_services.start_code_server),
                 ("ttyd", self.access_services.start_ttyd),
             ):
                 try:
-                    await starter()
+                    await starter(boot_result.workdir)
                 except Exception as error:
                     self.log.warn(f"{sidecar_name}.start_failed", exc=error)
-            if self.access_services.ttyd_process is not None:
+            if self.access_services.ttyd_started():
                 if await self.access_services.wait_for_ttyd():
                     try:
                         await self.access_services.start_ttyd_proxy()
                     except Exception as error:
                         self.log.warn("ttyd_proxy.start_failed", exc=error)
 
-            await self.core_services.start_opencode()
+            await self.core_services.start_opencode(boot_result.repositories, boot_result.workdir)
             opencode_ready = True
             await self.core_services.start_bridge()
             self.log.info(
@@ -393,7 +396,10 @@ class SandboxSupervisor:
                 return True
             if self.boot_mode is BootMode.BUILD and repo_image_callback:
                 try:
-                    await self._run_until_shutdown(repo_image_callback.report_failure(str(error)))
+                    error_message = str(error)
+                    await self._run_until_shutdown(
+                        lambda: repo_image_callback.report_failure(error_message)
+                    )
                 except ImageBuildExecutionCancelled:
                     self.log.info("image_build.cancelled", reason="shutdown_requested")
                     return True
