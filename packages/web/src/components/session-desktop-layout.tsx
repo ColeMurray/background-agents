@@ -39,7 +39,7 @@ export function SessionDesktopLayout({
           id="session-main"
           defaultSize={changes ? "45%" : "100%"}
           minSize="25%"
-          style={{ height: "100%", minWidth: 0, minHeight: 0, overflow: "clip" }}
+          style={{ minWidth: 0, minHeight: 0, overflow: "clip" }}
         >
           {workspace}
         </Panel>

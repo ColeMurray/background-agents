@@ -104,7 +104,7 @@ export function TaskActivityItem({
             </div>
           )}
           {hasActivity && (
-            <div className="space-y-1 border-l-2 border-border py-1 pl-2 sm:pl-3">
+            <div className="max-h-96 min-w-0 max-w-full space-y-1 overflow-y-auto overflow-x-hidden overscroll-contain border-l-2 border-border py-1 pl-2 sm:pl-3">
               <div className="text-[11px] font-medium uppercase tracking-wide text-secondary-foreground mb-1">
                 Task activity
               </div>

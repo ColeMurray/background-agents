@@ -58,7 +58,6 @@ describe("SessionDesktopLayout", () => {
 
     expect(screen.getByTestId(SESSION_CHANGES_LAYOUT_ID)).toHaveStyle({ overflow: "clip" });
     expect(screen.getByTestId("session-main").firstElementChild).toHaveStyle({
-      height: "100%",
       minWidth: "0",
       minHeight: "0",
       overflow: "clip",
