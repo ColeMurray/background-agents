@@ -8,7 +8,7 @@ import { ToolCallItem } from "./tool-call-item";
 afterEach(cleanup);
 
 describe("ToolCallItem", () => {
-  it("keeps complete long commands in collapsed rows", () => {
+  it("ellipsizes long collapsed summaries while retaining complete text", () => {
     const command = `PYTHONPATH=src uv run pytest ${"tests/very_long_directory/".repeat(4)}test_file.py`;
     const event: Extract<SandboxEvent, { type: "tool_call" }> = {
       type: "tool_call",
@@ -24,7 +24,7 @@ describe("ToolCallItem", () => {
 
     const button = screen.getByRole("button", { name: new RegExp(command) });
     expect(button).toHaveTextContent(command);
-    expect(button.querySelector(".truncate")).toBeNull();
+    expect(button.querySelector(".truncate")).toHaveTextContent(`Bash ${command}`);
   });
 
   it("keeps long TodoWrite arguments in a contained horizontal scroller", () => {

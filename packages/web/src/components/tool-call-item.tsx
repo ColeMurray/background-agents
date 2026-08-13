@@ -124,7 +124,9 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
         />
         <ToolIcon name={formatted.icon} />
         <TimelineRowContent time={showTime ? time : undefined}>
-          {formatted.toolName} {formatted.summary}
+          <span className="block truncate">
+            {formatted.toolName} {formatted.summary}
+          </span>
         </TimelineRowContent>
       </button>
 
