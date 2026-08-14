@@ -50,6 +50,7 @@ describe("SessionHeader", () => {
     expect(hideButton).toHaveClass("hidden", "lg:block");
     expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
     expect(hideButton).toHaveAttribute("aria-expanded", "true");
+    expect(hideButton.querySelector('line[x1="15"][x2="15"]')).toBeInTheDocument();
     fireEvent.click(hideButton);
     expect(onToggleDesktopDetails).toHaveBeenCalledOnce();
 

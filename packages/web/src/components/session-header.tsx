@@ -6,7 +6,7 @@ import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
-import { SidebarIcon } from "@/components/ui/icons";
+import { RightSidebarIcon } from "@/components/ui/icons";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
@@ -166,7 +166,7 @@ export function SessionHeader({
             aria-controls="session-details-sidebar"
             aria-expanded={isDesktopDetailsOpen}
           >
-            <SidebarIcon className="h-4 w-4" />
+            <RightSidebarIcon className="h-4 w-4" />
           </button>
           <button
             ref={detailsButtonRef}
