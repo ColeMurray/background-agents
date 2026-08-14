@@ -50,6 +50,7 @@ import {
 } from "@/components/session-desktop-layout";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
+import { usePersistedBoolean } from "@/hooks/use-persisted-boolean";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import {
@@ -68,6 +69,7 @@ import { useSessionSnapshot } from "./session-snapshot-provider";
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
 
 const TERMINAL_VISIBLE_STORAGE_KEY = "terminal-visible";
+const DESKTOP_DETAILS_OPEN_STORAGE_KEY = "session-details-open";
 
 export default function SessionPage() {
   const initialSnapshot = useSessionSnapshot();
@@ -142,31 +144,20 @@ export default function SessionPage() {
   const isPhone = useMediaQuery("(max-width: 767px)");
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [isDesktopDetailsOpen, setIsDesktopDetailsOpen] = useState(true);
+  const { value: isDesktopDetailsOpen, toggle: toggleDesktopDetails } = usePersistedBoolean(
+    DESKTOP_DETAILS_OPEN_STORAGE_KEY,
+    true
+  );
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Terminal panel state. Starts closed so the server and the client render the
   // same markup, then adopts the stored preference after hydration.
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  useEffect(() => {
-    try {
-      setTerminalOpen(localStorage.getItem(TERMINAL_VISIBLE_STORAGE_KEY) === "true");
-    } catch {
-      // Storage is optional; the terminal stays closed when it is unavailable.
-    }
-  }, []);
-  const applyTerminalOpen = useCallback((next: boolean) => {
-    setTerminalOpen(next);
-    try {
-      localStorage.setItem(TERMINAL_VISIBLE_STORAGE_KEY, String(next));
-    } catch {
-      // Continue with the in-memory preference when storage is unavailable.
-    }
-  }, []);
-  const toggleTerminal = useCallback(() => {
-    applyTerminalOpen(!terminalOpen);
-  }, [applyTerminalOpen, terminalOpen]);
+  const {
+    value: terminalOpen,
+    setValue: applyTerminalOpen,
+    toggle: toggleTerminal,
+  } = usePersistedBoolean(TERMINAL_VISIBLE_STORAGE_KEY, false);
   const closeTerminal = useCallback(() => {
     applyTerminalOpen(false);
   }, [applyTerminalOpen]);
@@ -176,9 +167,6 @@ export default function SessionPage() {
 
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => !prev);
-  }, []);
-  const toggleDesktopDetails = useCallback(() => {
-    setIsDesktopDetailsOpen((prev) => !prev);
   }, []);
   const openMobileDetails = useCallback(() => {
     setIsDetailsOpen(true);
