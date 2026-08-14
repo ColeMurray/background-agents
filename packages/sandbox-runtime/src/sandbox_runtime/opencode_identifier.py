@@ -60,6 +60,11 @@ class OpenCodeIdentifier:
 
         return f"{prefix_str}_{timestamp_hex}{random_suffix}"
 
+    @staticmethod
+    def is_after(candidate: str, boundary: str) -> bool:
+        """Return whether an ascending ID was created after another ID."""
+        return candidate > boundary
+
     @classmethod
     def _random_base62(cls, length: int) -> str:
         """Generate random base62 string."""

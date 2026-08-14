@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
-import type { Env } from "../types";
 import type { SessionRow } from "./types";
+import {
+  OpenAITokenBroker,
+  OpenAITokenNotConfiguredError,
+  OpenAITokenStorageError,
+  OpenAITokenUnauthorizedError,
+  OpenAITokenUpstreamError,
+} from "../auth/openai-token-broker";
 import { OpenAITokenRefreshService } from "./openai-token-refresh-service";
 import { OpenAITokenRefreshError } from "../auth/openai";
 
@@ -18,7 +24,29 @@ const mockState = vi.hoisted(() => ({
   }>,
   globalWrites: [] as Array<Record<string, string>>,
   environmentWrites: [] as Array<{ environmentId: string; secrets: Record<string, string> }>,
+  repoWriteImpl: vi.fn(),
+  globalWriteImpl: vi.fn(),
+  repoReadImpl: vi.fn(),
+  globalReadImpl: vi.fn(),
 }));
+
+const TEST_DB: D1Database = {
+  prepare(_query: string): D1PreparedStatement {
+    throw new Error("Unexpected D1 prepare call");
+  },
+  async batch<T = unknown>(_statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+    return [];
+  },
+  async exec(_query: string): Promise<D1ExecResult> {
+    throw new Error("Unexpected D1 exec call");
+  },
+  withSession(): D1DatabaseSession {
+    throw new Error("Unexpected D1 session call");
+  },
+  async dump(): Promise<ArrayBuffer> {
+    return new ArrayBuffer(0);
+  },
+};
 
 vi.mock("../auth/openai", () => {
   class MockOpenAITokenRefreshError extends Error {
@@ -41,6 +69,7 @@ vi.mock("../auth/openai", () => {
 vi.mock("../db/repo-secrets", () => ({
   RepoSecretsStore: class {
     async getDecryptedSecrets(repoId: number): Promise<Record<string, string>> {
+      await mockState.repoReadImpl(repoId);
       return mockState.repoSecrets.get(repoId) ?? {};
     }
 
@@ -50,6 +79,7 @@ vi.mock("../db/repo-secrets", () => ({
       name: string,
       secrets: Record<string, string>
     ): Promise<void> {
+      await mockState.repoWriteImpl(repoId, owner, name, secrets);
       mockState.repoWrites.push({ repoId, owner, name, secrets });
       const existing = mockState.repoSecrets.get(repoId) ?? {};
       mockState.repoSecrets.set(repoId, { ...existing, ...secrets });
@@ -60,10 +90,12 @@ vi.mock("../db/repo-secrets", () => ({
 vi.mock("../db/global-secrets", () => ({
   GlobalSecretsStore: class {
     async getDecryptedSecrets(): Promise<Record<string, string>> {
+      await mockState.globalReadImpl();
       return mockState.globalSecrets;
     }
 
     async setSecrets(secrets: Record<string, string>): Promise<void> {
+      await mockState.globalWriteImpl(secrets);
       mockState.globalWrites.push(secrets);
       mockState.globalSecrets = { ...mockState.globalSecrets, ...secrets };
     }
@@ -104,6 +136,7 @@ function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
     spawn_source: "user" as const,
     spawn_depth: 0,
     code_server_enabled: 0,
+    vnc_enabled: 0,
     total_cost: 0,
     sandbox_settings: null,
     environment_id: null,
@@ -132,6 +165,14 @@ describe("OpenAITokenRefreshService", () => {
     mockState.globalWrites = [];
     mockState.environmentWrites = [];
     mockState.refreshImpl.mockReset();
+    mockState.repoWriteImpl.mockReset();
+    mockState.repoWriteImpl.mockResolvedValue(undefined);
+    mockState.globalWriteImpl.mockReset();
+    mockState.globalWriteImpl.mockResolvedValue(undefined);
+    mockState.repoReadImpl.mockReset();
+    mockState.repoReadImpl.mockResolvedValue(undefined);
+    mockState.globalReadImpl.mockReset();
+    mockState.globalReadImpl.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -148,7 +189,7 @@ describe("OpenAITokenRefreshService", () => {
     });
 
     const service = new OpenAITokenRefreshService(
-      {} as Env["DB"],
+      TEST_DB,
       "enc-key",
       async () => repoId,
       createLogger()
@@ -157,7 +198,6 @@ describe("OpenAITokenRefreshService", () => {
     const result = await service.refresh(createSession());
 
     expect(result).toEqual({
-      ok: true,
       accessToken: "cached-access",
       expiresIn: expect.any(Number),
       accountId: "acct_cached",
@@ -165,21 +205,374 @@ describe("OpenAITokenRefreshService", () => {
     expect(mockState.refreshImpl).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when refresh token is missing in repo and global secrets", async () => {
+  it("returns a cached global access token without consulting session scopes", async () => {
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh",
+      OPENAI_OAUTH_ACCESS_TOKEN: "global-cached-access",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 15 * 60 * 1000),
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_global",
+    };
+    mockState.repoSecrets.set(123, {
+      OPENAI_OAUTH_REFRESH_TOKEN: "repo-refresh",
+      OPENAI_OAUTH_ACCESS_TOKEN: "repo-access",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 15 * 60 * 1000),
+    });
+
+    const result = await new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+
+    expect(result).toEqual({
+      accessToken: "global-cached-access",
+      expiresIn: expect.any(Number),
+      accountId: "acct_global",
+    });
+    expect(mockState.refreshImpl).not.toHaveBeenCalled();
+  });
+
+  it("refreshes and rotates global credentials", async () => {
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-old",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+      account_id: "acct_global",
+    });
+
+    const result = await new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+
+    expect(result).toEqual({
+      accessToken: "global-access-new",
+      expiresIn: 1800,
+      accountId: "acct_global",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledWith("global-refresh-old");
+    expect(mockState.globalWrites).toHaveLength(1);
+    expect(mockState.globalWrites[0]).toMatchObject({
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-new",
+      OPENAI_OAUTH_ACCESS_TOKEN: "global-access-new",
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_global",
+    });
+  });
+
+  it("preserves the stored account id when refresh omits it", async () => {
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-old",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_stored",
+    };
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+    });
+
+    const result = await new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+
+    expect(result).toMatchObject({
+      accessToken: "global-access-new",
+      accountId: "acct_stored",
+    });
+    expect(mockState.globalWrites[0]).toMatchObject({
+      OPENAI_OAUTH_ACCOUNT_ID: "acct_stored",
+    });
+  });
+
+  it("retries a transient global persistence failure and returns success after saving", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-old",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+    });
+    mockState.globalWriteImpl
+      .mockRejectedValueOnce(new Error("D1 temporarily unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    const promise = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(promise).resolves.toMatchObject({ accessToken: "global-access-new" });
+    expect(mockState.globalWriteImpl).toHaveBeenCalledTimes(2);
+    expect(mockState.globalWrites).toHaveLength(1);
+  });
+
+  it("throws an actionable error when rotated global credentials cannot be persisted", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-old",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+    });
+    mockState.globalWriteImpl.mockRejectedValue(new Error("D1 write failed"));
+
+    const promise = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const errorPromise = promise.catch((caught: unknown) => caught);
+    await vi.runAllTimersAsync();
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(OpenAITokenStorageError);
+    expect(error).toHaveProperty(
+      "message",
+      "OpenAI tokens rotated but could not be saved; reconnect OpenAI OAuth"
+    );
+    expect(mockState.globalWriteImpl).toHaveBeenCalledTimes(3);
+    expect(mockState.globalWrites).toHaveLength(0);
+  });
+
+  it("uses a concurrently rotated global access token after refresh gets 401", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    mockState.refreshImpl.mockImplementationOnce(async () => {
+      mockState.globalSecrets = {
+        OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated",
+        OPENAI_OAUTH_ACCESS_TOKEN: "global-access-concurrent",
+        OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 60 * 60 * 1000),
+      };
+      throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+    });
+
+    const promise = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(promise).resolves.toMatchObject({
+      accessToken: "global-access-concurrent",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces concurrent refreshes for the same scope and refresh token", async () => {
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    let resolveRefresh!: (tokens: {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+    }) => void;
+    mockState.refreshImpl.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRefresh = resolve;
+      })
+    );
+    const firstBroker = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger());
+    const secondBroker = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger());
+
+    const first = firstBroker.refreshGlobal();
+    const second = secondBroker.refreshGlobal();
+    await vi.waitFor(() => expect(mockState.refreshImpl).toHaveBeenCalledOnce());
+    resolveRefresh({
+      access_token: "global-access-new",
+      refresh_token: "global-refresh-new",
+      expires_in: 1800,
+    });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      {
+        accessToken: "global-access-new",
+        expiresIn: 1800,
+        accountId: undefined,
+      },
+      {
+        accessToken: "global-access-new",
+        expiresIn: 1800,
+        accountId: undefined,
+      },
+    ]);
+    expect(mockState.refreshImpl).toHaveBeenCalledOnce();
+    expect(mockState.globalWrites).toHaveLength(1);
+  });
+
+  it("waits for a slow concurrent rotation from another isolate", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = {
+      OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    };
+    mockState.refreshImpl.mockImplementationOnce(async () => {
+      setTimeout(() => {
+        mockState.globalSecrets = {
+          OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated",
+          OPENAI_OAUTH_ACCESS_TOKEN: "global-access-concurrent",
+          OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: String(Date.now() + 60 * 60 * 1000),
+        };
+      }, 750);
+      throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+    });
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toMatchObject({
+      accessToken: "global-access-concurrent",
+    });
+    expect(mockState.refreshImpl).toHaveBeenCalledOnce();
+  });
+
+  it("throws an unauthorized error when a concurrently rotated token is also rejected", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale" };
+    mockState.refreshImpl
+      .mockImplementationOnce(async () => {
+        mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated" };
+        throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockRejectedValueOnce(new OpenAITokenRefreshError("unauthorized", 401, "unauthorized"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const rejection = expect(result).rejects.toThrow(OpenAITokenUnauthorizedError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(mockState.refreshImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws an upstream error when retrying a concurrently rotated token fails", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale" };
+    mockState.refreshImpl
+      .mockImplementationOnce(async () => {
+        mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated" };
+        throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockRejectedValueOnce(new Error("upstream connection failed"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const rejection = expect(result).rejects.toThrow(OpenAITokenUpstreamError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(mockState.refreshImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a persistence error when retrying a concurrently rotated token", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-stale" };
+    mockState.refreshImpl
+      .mockImplementationOnce(async () => {
+        mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh-rotated" };
+        throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockResolvedValueOnce({
+        access_token: "global-access-new",
+        refresh_token: "global-refresh-new",
+        expires_in: 1800,
+      });
+    mockState.globalWriteImpl.mockRejectedValue(new Error("D1 write failed"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const rejection = expect(result).rejects.toThrow(OpenAITokenStorageError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(mockState.refreshImpl).toHaveBeenCalledTimes(2);
+    expect(mockState.globalWriteImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws a not-configured error when refresh token is missing", async () => {
     const service = new OpenAITokenRefreshService(
-      {} as Env["DB"],
+      TEST_DB,
       "enc-key",
       async () => 123,
       createLogger()
     );
 
-    const result = await service.refresh(createSession());
+    await expect(service.refresh(createSession())).rejects.toThrow(OpenAITokenNotConfiguredError);
+  });
 
-    expect(result).toEqual({
-      ok: false,
-      status: 404,
-      error: "OPENAI_OAUTH_REFRESH_TOKEN not configured",
-    });
+  it("throws a secrets-read error when scoped secrets cannot be read", async () => {
+    mockState.globalReadImpl.mockRejectedValue(new Error("D1 read failed"));
+
+    await expect(
+      new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal()
+    ).rejects.toThrow(OpenAITokenStorageError);
+  });
+
+  it("throws an upstream error when token refresh fails unexpectedly", async () => {
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "global-refresh" };
+    mockState.refreshImpl.mockRejectedValue(new Error("upstream connection failed"));
+
+    await expect(
+      new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal()
+    ).rejects.toThrow(OpenAITokenUpstreamError);
+  });
+
+  it("retries with a refresh token written by a concurrent rotation", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "stale-refresh" };
+    mockState.refreshImpl
+      .mockImplementationOnce(async () => {
+        mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "rotated-refresh" };
+        throw new OpenAITokenRefreshError("unauthorized", 401, "unauthorized");
+      })
+      .mockResolvedValueOnce({ access_token: "fresh-access", expires_in: 1800 });
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toMatchObject({ accessToken: "fresh-access" });
+    expect(mockState.refreshImpl).toHaveBeenNthCalledWith(2, "rotated-refresh");
+  });
+
+  it("continues polling after a transient post-401 secret reread failure", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "stale-refresh" };
+    mockState.refreshImpl.mockRejectedValue(
+      new OpenAITokenRefreshError("unauthorized", 401, "unauthorized")
+    );
+    mockState.globalReadImpl
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("D1 reread failed"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const rejection = expect(result).rejects.toThrow(OpenAITokenUnauthorizedError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+  });
+
+  it("throws a storage error when post-401 secret rereads keep failing", async () => {
+    vi.useFakeTimers();
+    mockState.globalSecrets = { OPENAI_OAUTH_REFRESH_TOKEN: "stale-refresh" };
+    mockState.refreshImpl.mockRejectedValue(
+      new OpenAITokenRefreshError("unauthorized", 401, "unauthorized")
+    );
+    mockState.globalReadImpl
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValue(new Error("D1 reread failed"));
+
+    const result = new OpenAITokenBroker(TEST_DB, "enc-key", createLogger()).refreshGlobal();
+    const rejection = expect(result).rejects.toThrow(OpenAITokenStorageError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(mockState.globalReadImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("throws a secrets-read error when repository scope resolution fails", async () => {
+    const service = new OpenAITokenRefreshService(
+      TEST_DB,
+      "enc-key",
+      async () => {
+        throw new Error("repository lookup failed");
+      },
+      createLogger()
+    );
+
+    await expect(service.refresh(createSession())).rejects.toThrow(OpenAITokenStorageError);
   });
 
   it("refreshes token and persists rotated credentials to repo secrets", async () => {
@@ -196,7 +589,7 @@ describe("OpenAITokenRefreshService", () => {
     });
 
     const service = new OpenAITokenRefreshService(
-      {} as Env["DB"],
+      TEST_DB,
       "enc-key",
       async () => repoId,
       createLogger()
@@ -205,7 +598,6 @@ describe("OpenAITokenRefreshService", () => {
     const result = await service.refresh(createSession());
 
     expect(result).toEqual({
-      ok: true,
       accessToken: "access-new",
       expiresIn: 1800,
       accountId: "acct_new",
@@ -217,6 +609,40 @@ describe("OpenAITokenRefreshService", () => {
     expect(mockState.repoWrites[0].name).toBe("web");
     expect(mockState.repoWrites[0].secrets.OPENAI_OAUTH_REFRESH_TOKEN).toBe("refresh-new");
     expect(mockState.repoWrites[0].secrets.OPENAI_OAUTH_ACCESS_TOKEN).toBe("access-new");
+  });
+
+  it("throws an actionable error when rotated session credentials cannot be persisted", async () => {
+    vi.useFakeTimers();
+    const repoId = 123;
+    mockState.repoSecrets.set(repoId, {
+      OPENAI_OAUTH_REFRESH_TOKEN: "refresh-old",
+      OPENAI_OAUTH_ACCESS_TOKEN_EXPIRES_AT: "0",
+    });
+    mockState.refreshImpl.mockResolvedValue({
+      access_token: "access-new",
+      refresh_token: "refresh-new",
+      expires_in: 1800,
+    });
+    mockState.repoWriteImpl.mockRejectedValue(new Error("storage unavailable"));
+
+    const service = new OpenAITokenRefreshService(
+      TEST_DB,
+      "enc-key",
+      async () => repoId,
+      createLogger()
+    );
+    const promise = service.refresh(createSession());
+    const errorPromise = promise.catch((caught: unknown) => caught);
+    await vi.runAllTimersAsync();
+
+    const error = await errorPromise;
+    expect(error).toBeInstanceOf(OpenAITokenStorageError);
+    expect(error).toHaveProperty(
+      "message",
+      "OpenAI tokens rotated but could not be saved; reconnect OpenAI OAuth"
+    );
+    expect(mockState.repoWriteImpl).toHaveBeenCalledTimes(3);
+    expect(mockState.repoWrites).toHaveLength(0);
   });
 
   it("uses cached token after concurrent rotation when refresh gets 401", async () => {
@@ -239,18 +665,17 @@ describe("OpenAITokenRefreshService", () => {
     });
 
     const service = new OpenAITokenRefreshService(
-      {} as Env["DB"],
+      TEST_DB,
       "enc-key",
       async () => repoId,
       createLogger()
     );
 
     const promise = service.refresh(createSession());
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.runAllTimersAsync();
     const result = await promise;
 
     expect(result).toEqual({
-      ok: true,
       accessToken: "access-concurrent",
       expiresIn: expect.any(Number),
       accountId: "acct_concurrent",
@@ -277,7 +702,7 @@ describe("OpenAITokenRefreshService", () => {
     });
 
     const service = new OpenAITokenRefreshService(
-      {} as Env["DB"],
+      TEST_DB,
       "enc-key",
       async () => 123,
       createLogger()
@@ -286,7 +711,6 @@ describe("OpenAITokenRefreshService", () => {
     const result = await service.refresh(createSession({ environment_id: "env_flagship" }));
 
     expect(result).toEqual({
-      ok: true,
       accessToken: "env-access-new",
       expiresIn: 1800,
       accountId: "acct_env",
@@ -311,7 +735,7 @@ describe("OpenAITokenRefreshService", () => {
     };
 
     const service = new OpenAITokenRefreshService(
-      {} as Env["DB"],
+      TEST_DB,
       "enc-key",
       async () => 123,
       createLogger()
@@ -319,7 +743,6 @@ describe("OpenAITokenRefreshService", () => {
 
     const result = await service.refresh(createSession({ environment_id: "env_flagship" }));
 
-    expect(result.ok).toBe(true);
     expect(result).toMatchObject({ accessToken: "global-access" });
     expect(mockState.refreshImpl).not.toHaveBeenCalled();
   });

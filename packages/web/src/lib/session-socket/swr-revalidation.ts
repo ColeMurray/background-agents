@@ -38,6 +38,13 @@ export function swrKeysToRevalidate(
     case "diff_state_changed":
       return [`/api/sessions/${sessionId}/diff`];
 
+    case "subscribed":
+      return [
+        `/api/sessions/${sessionId}/diff`,
+        `/api/sessions/${sessionId}/children`,
+        `/api/sessions/${sessionId}/participant-profiles`,
+      ];
+
     default:
       return [];
   }

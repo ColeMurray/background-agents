@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "./session-index";
 import type { SessionEntry } from "./session-index";
 
@@ -12,7 +13,7 @@ type SessionRow = {
   base_branch: string | null;
   status: string;
   parent_session_id: string | null;
-  spawn_source: "user" | "agent" | "automation";
+  spawn_source: SpawnSource;
   spawn_depth: number;
   automation_id: string | null;
   automation_run_id: string | null;
@@ -43,6 +44,7 @@ const QUERY_PATTERNS = {
   SELECT_PR_SUMMARIES: /FROM session_pull_requests WHERE session_id IN/,
   DELETE_SESSION_REPOS: /^DELETE FROM session_repositories WHERE session_id = \?$/,
   SELECT_BY_ID: /^SELECT \* FROM sessions WHERE id = \?$/,
+  SELECT_EXISTS: /^SELECT 1 AS ok FROM sessions WHERE id = \?$/,
   SELECT_COUNT: /^SELECT COUNT\(\*\) as count FROM sessions\b/,
   SELECT_LIST: /^SELECT \* FROM sessions\b.*ORDER BY updated_at DESC LIMIT/,
   UPDATE_STATUS: /^UPDATE sessions SET status = \?/,
@@ -87,6 +89,11 @@ class FakeD1Database {
     if (QUERY_PATTERNS.SELECT_BY_ID.test(normalized)) {
       const id = args[0] as string;
       return this.rows.get(id) ?? null;
+    }
+
+    if (QUERY_PATTERNS.SELECT_EXISTS.test(normalized)) {
+      const id = args[0] as string;
+      return this.rows.has(id) ? { ok: 1 } : null;
     }
 
     if (QUERY_PATTERNS.SELECT_COUNT.test(normalized)) {
@@ -382,7 +389,10 @@ class FakeD1Database {
 
       if (conditions.includes("automation_id IS NULL")) {
         rows = rows.filter(
-          (row) => row.automation_id === null && row.spawn_source !== "automation"
+          (row) =>
+            row.automation_id === null &&
+            row.spawn_source !== "automation" &&
+            row.spawn_source !== "github-bot"
         );
       }
 
@@ -579,6 +589,15 @@ describe("SessionIndexStore", () => {
     });
   });
 
+  describe("exists", () => {
+    it("returns whether the session exists without loading it", async () => {
+      await store.create(makeSession());
+
+      await expect(store.exists("test-id")).resolves.toBe(true);
+      await expect(store.exists("nonexistent")).resolves.toBe(false);
+    });
+  });
+
   describe("list", () => {
     it("returns sessions sorted by updatedAt descending", async () => {
       await store.create(makeSession({ id: "old", updatedAt: 1000 }));
@@ -649,6 +668,36 @@ describe("SessionIndexStore", () => {
 
       expect(result.sessions.map((session) => session.id)).toEqual(["manual-new", "manual-old"]);
       expect(result.hasMore).toBe(false);
+    });
+
+    it("excludes github-bot sessions from lineage-filtered lists even when created by the user", async () => {
+      await store.create(
+        makeSession({ id: "web", spawnSource: "user", userId: "alice", updatedAt: 4000 })
+      );
+      await store.create(
+        makeSession({
+          id: "auto-review",
+          spawnSource: "github-bot",
+          userId: "alice",
+          updatedAt: 3000,
+        })
+      );
+      await store.create(
+        makeSession({ id: "slack", spawnSource: "slack-bot", userId: "alice", updatedAt: 2000 })
+      );
+
+      const filtered = await store.list({
+        excludeAutomationLineage: true,
+        createdByUserIds: ["alice"],
+      });
+      expect(filtered.sessions.map((session) => session.id)).toEqual(["web", "slack"]);
+
+      const unfiltered = await store.list({ createdByUserIds: ["alice"] });
+      expect(unfiltered.sessions.map((session) => session.id)).toEqual([
+        "web",
+        "auto-review",
+        "slack",
+      ]);
     });
 
     it("trims and lowercases repo filters", async () => {
@@ -892,18 +941,6 @@ describe("SessionIndexStore", () => {
 
       it("returns an empty array when no descendants exist", async () => {
         await expect(store.listActiveDescendantIds("no-children")).resolves.toEqual([]);
-      });
-    });
-
-    describe("countActiveChildren", () => {
-      it("excludes completed/failed/archived/cancelled", async () => {
-        const count = await store.countActiveChildren(parentId);
-        expect(count).toBe(1); // child-1 is "created", child-2 is "completed"
-      });
-
-      it("returns 0 when no children exist", async () => {
-        const count = await store.countActiveChildren("no-children");
-        expect(count).toBe(0);
       });
     });
 

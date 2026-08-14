@@ -9,6 +9,7 @@ function createHandler() {
   };
   const messageQueue = {
     failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
+    recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
   };
   const lifecycleManager = {
     handleAlarm: vi.fn<() => Promise<void>>().mockResolvedValue(),
@@ -57,6 +58,7 @@ describe("createAlarmHandler", () => {
     expect(now).not.toHaveBeenCalled();
     expect(alarmScheduler.scheduleAlarm).not.toHaveBeenCalled();
     expect(messageQueue.failStuckProcessingMessage).not.toHaveBeenCalled();
+    expect(messageQueue.recoverStopConfirmationTimeout).toHaveBeenCalledOnce();
     expect(lifecycleManager.handleAlarm).toHaveBeenCalledTimes(1);
   });
 
@@ -96,6 +98,7 @@ describe("createAlarmHandler", () => {
     };
     const messageQueue = {
       failStuckProcessingMessage: vi.fn<() => Promise<void>>().mockResolvedValue(),
+      recoverStopConfirmationTimeout: vi.fn<() => Promise<void>>().mockResolvedValue(),
     };
 
     const handler = createAlarmHandler({

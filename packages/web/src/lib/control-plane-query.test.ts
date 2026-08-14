@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SESSION_LIST_QUERY_PARAMS } from "@open-inspect/shared";
+import { SESSION_LIST_QUERY_PARAMS } from "@open-inspect/shared/session-list-query";
 import { buildControlPlanePath } from "./control-plane-query";
 
 describe("buildControlPlanePath", () => {

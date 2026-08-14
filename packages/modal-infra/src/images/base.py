@@ -37,8 +37,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v57: run Modal image builds through the gated main-process entrypoint
-CACHE_BUSTER = "v57-image-build-stdin-launch"
+# v58: run gated image builds with the VNC/noVNC desktop toolchain
+CACHE_BUSTER = "v58-image-build-stdin-launch-vnc"
 
 # Base image with all development tools
 base_image = (
@@ -54,6 +54,11 @@ base_image = (
         "jq",
         "unzip",  # Required for Bun installation
         "ffmpeg",
+        "xvfb",
+        "fluxbox",
+        "x11vnc",
+        "websockify",
+        "novnc",
         # Shared libraries required by headless Chromium
         "libnss3",
         "libnspr4",

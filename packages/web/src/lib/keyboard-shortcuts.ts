@@ -11,7 +11,7 @@ function hasPrimaryModifier(event: KeyboardEvent) {
   return event.metaKey || event.ctrlKey;
 }
 
-export function isEditableElement(target: EventTarget | null) {
+function isEditableElement(target: EventTarget | null) {
   const HTMLElementCtor = typeof HTMLElement === "undefined" ? null : HTMLElement;
   if (!HTMLElementCtor || !(target instanceof HTMLElementCtor)) return false;
   if (target.isContentEditable) return true;

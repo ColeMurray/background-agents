@@ -1,4 +1,4 @@
-export const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = ["status", "limit", "offset"] as const;
+const DEFAULT_CONTROL_PLANE_QUERY_PARAMS = ["status", "limit", "offset"] as const;
 
 export function buildControlPlanePath(
   basePath: string,

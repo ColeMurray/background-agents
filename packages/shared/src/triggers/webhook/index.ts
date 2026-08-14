@@ -4,7 +4,6 @@
 
 import type { TriggerSourceDefinition } from "../types";
 
-export type { WebhookAutomationEvent } from "../types";
 export { conditions as webhookConditions } from "./conditions";
 export { normalizeWebhookEvent, resolveJsonPath, evaluateJsonPathFilter } from "./normalizer";
 export { buildWebhookContextBlock } from "./context";

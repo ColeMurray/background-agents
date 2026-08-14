@@ -1,6 +1,6 @@
 import { getDefaultReasoningEffort, getReasoningConfig } from "@open-inspect/shared/models";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { CLEAR_REPO_BRANCH_ACTION_ID, REPO_BRANCH_SELECTOR_ACTION_ID } from "../branch-preferences";
-import type { RepoConfig } from "../types";
 import {
   CLEAR_BRANCH_PREFERENCE_ACTION_ID,
   MAX_RENDERED_REPO_OVERRIDES,

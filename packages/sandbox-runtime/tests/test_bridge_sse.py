@@ -26,7 +26,7 @@ from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _PromptState,
 )
-from tests.conftest import MockResponse, wire_opencode_transport
+from tests.conftest import MockResponse, oc_message_id, wire_opencode_transport
 
 MOCK_HTTP_TIMEOUT_SECONDS = 30.0
 PROMPT_TIMEOUT_TEST_BUDGET_SECONDS = 0.8
@@ -114,10 +114,10 @@ def make_prompt_state(
         opencode_message_id=opencode_message_id,
         start_time=0.0,
     )
-    state.user_message_ids.add(opencode_message_id)
     if cumulative_text is not None:
         state.cumulative_text = cumulative_text
-    state.compaction_occurred = compaction_occurred
+    if compaction_occurred:
+        state.attribution.mark_compacted()
     return state
 
 
@@ -1063,6 +1063,79 @@ class TestFetchFinalMessageState:
         # Should only have assistant message
         assert len(events) == 1
         assert events[0]["content"] == "Assistant response"
+
+    @pytest.mark.asyncio
+    async def test_compaction_fallback_skips_prior_prompt_messages(
+        self, bridge_with_mock_client: AgentBridge
+    ):
+        """After compaction the API's full-history response must not replay
+        prior turns' text: their parts were never streamed this prompt, so
+        every one of them reads as "longer than sent" and the last re-emitted
+        part would overwrite this prompt's final output. Only messages created
+        after this prompt's user message are eligible."""
+        bridge = bridge_with_mock_client
+
+        prompt_ts_ms = 1_754_000_000_000
+        prompt_user_id = oc_message_id(prompt_ts_ms, 2, "p")
+        prior_assistant_id = oc_message_id(prompt_ts_ms - 60_000, 1, "a")
+        prior_user_id = oc_message_id(prompt_ts_ms - 61_000, 1, "u")
+        compaction_user_id = oc_message_id(prompt_ts_ms + 900, 1, "w")
+        summary_id = oc_message_id(prompt_ts_ms + 1_000, 1, "s")
+        continue_user_id = oc_message_id(prompt_ts_ms + 1_500, 1, "v")
+        continuation_id = oc_message_id(prompt_ts_ms + 2_000, 1, "c")
+
+        all_messages = [
+            {
+                "info": {
+                    "id": prior_assistant_id,
+                    "role": "assistant",
+                    "parentID": prior_user_id,
+                },
+                "parts": [{"id": "part-prior", "type": "text", "text": "Prior turn final report"}],
+            },
+            {
+                "info": {
+                    "id": summary_id,
+                    "role": "assistant",
+                    "parentID": compaction_user_id,
+                    "summary": True,
+                },
+                "parts": [{"id": "part-summary", "type": "text", "text": "Internal summary"}],
+            },
+            {
+                "info": {
+                    "id": continuation_id,
+                    "role": "assistant",
+                    "parentID": continue_user_id,
+                },
+                "parts": [
+                    {
+                        "id": "part-continue",
+                        "type": "text",
+                        "text": "Final answer after compaction",
+                    }
+                ],
+            },
+        ]
+
+        bridge.http_client.get = AsyncMock(return_value=MockResponse(200, all_messages))
+
+        # The continuation's text was partially streamed before idle.
+        cumulative_text = {"part-continue": "Final answer"}
+
+        events = []
+        state = make_prompt_state(
+            "cp-msg-1",
+            prompt_user_id,
+            cumulative_text=cumulative_text,
+            compaction_occurred=True,
+        )
+        async for event in bridge._ensure_prompt_stream()._fetch_final_message_state(state):
+            events.append(event)
+
+        assert len(events) == 1
+        assert events[0]["content"] == "Final answer after compaction"
+        assert events[0]["messageId"] == "cp-msg-1"
 
 
 class TestExtractErrorMessage:
@@ -2659,6 +2732,15 @@ class TestCompactionHandling:
         assert [event["content"] for event in events if event["type"] == "token"] == [
             "Before compaction",
             "After compaction",
+        ]
+        assert [event for event in events if event["type"] == "context_compacted"] == [
+            {"type": "context_compacted", "messageId": "cp-msg-1"}
+        ]
+        assert [event["type"] for event in events] == [
+            "token",
+            "context_compacted",
+            "token",
+            "execution_complete",
         ]
         assert [event for event in events if event["type"] == "error"] == []
         assert events[-1] == {

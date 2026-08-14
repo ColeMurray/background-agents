@@ -66,6 +66,8 @@ export {
 export {
   slackSource,
   normalizeSlackEvent,
+  buildSlackContextBlock,
+  slackChannelLabel,
   SLACK_TEXT_MAX_LENGTH,
   REGEX_PATTERN_MAX_LENGTH,
   ALLOWED_REGEX_FLAGS,

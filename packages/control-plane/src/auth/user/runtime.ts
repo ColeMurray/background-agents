@@ -239,10 +239,6 @@ export interface UserAuthRuntime {
   readonly enabledProviders: readonly SignInProvider[];
 }
 
-export function createUserAuthFromEnv(env: Env, database: SqlDatabase): BetterAuthInstance {
-  return createUserAuthRuntimeFromEnv(env, database).auth;
-}
-
 interface CachedUserAuth {
   readonly fingerprint: string;
   readonly runtime: UserAuthRuntime;

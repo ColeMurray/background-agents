@@ -2,41 +2,8 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type {
-  ArtifactType,
-  MessageSource,
-  MessageStatus,
-  ParticipantRole,
-  SessionStatus,
-} from "@open-inspect/shared";
 import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
-
-export type {
-  ArtifactType,
-  CreateSessionRequest,
-  CreateSessionResponse,
-  EventResponse,
-  EventType,
-  GitSyncStatus,
-  ListEventsResponse,
-  MessageSource,
-  MessageStatus,
-  ParticipantRole,
-  ParticipantPresence,
-  SpawnSource,
-  SandboxEvent,
-  SandboxStatus,
-  SessionState,
-  SessionStatus,
-} from "@open-inspect/shared";
-export type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
-export type { ServerMessage } from "@open-inspect/shared/types/server-messages";
-export type {
-  SessionAttachmentReference,
-  ResolvedSessionAttachment,
-} from "@open-inspect/shared/types/session-attachments";
-export type { ClientMessage } from "@open-inspect/shared/types/websocket";
 
 // Environment bindings
 export interface Env {
@@ -153,66 +120,6 @@ export interface ClientInfo {
   clientId: string;
   ws: WebSocket;
   lastFetchHistoryAt?: number;
-}
-
-export interface SessionResponse {
-  id: string;
-  title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
-  branchName: string | null;
-  baseSha: string | null;
-  currentSha: string | null;
-  opencodeSessionId: string | null;
-  status: SessionStatus;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ListSessionsResponse {
-  sessions: SessionResponse[];
-  total: number;
-  hasMore: boolean;
-}
-
-export interface MessageResponse {
-  id: string;
-  authorId: string;
-  content: string;
-  source: MessageSource;
-  status: MessageStatus;
-  createdAt: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
-
-export interface ArtifactResponse {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: Record<string, unknown> | null;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ParticipantResponse {
-  id: string;
-  userId: string;
-  canonicalUserId?: string | null;
-  scmLogin: string | null;
-  scmName: string | null;
-  role: ParticipantRole;
-  joinedAt: number;
-}
-
-// GitHub OAuth types
-export interface GitHubUser {
-  id: number;
-  login: string;
-  name: string | null;
-  email: string | null;
-  avatar_url: string;
 }
 
 export const githubTokenResponseSchema = z.object({

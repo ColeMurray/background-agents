@@ -7,7 +7,6 @@ export { SessionWebSocketManagerImpl } from "./websocket-manager";
 export type {
   SessionWebSocketManager,
   ParsedTags,
-  WsKind,
   WebSocketManagerConfig,
 } from "./websocket-manager";
 export { initSchema, SCHEMA_SQL, applyMigrations, MIGRATIONS } from "./schema";

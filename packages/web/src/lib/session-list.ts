@@ -1,15 +1,15 @@
 import {
   serializeSessionListQuery,
   SESSION_LIST_CURRENT_USER,
-  type Session,
   type SessionListQuery,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/session-list-query";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
 export const SESSIONS_PAGE_SIZE = 50;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
-export const SESSIONS_API_PATH = "/api/sessions";
+const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
 export const SIDEBAR_SESSIONS_KEY = buildSessionsPageKey({
   excludeStatus: "archived",

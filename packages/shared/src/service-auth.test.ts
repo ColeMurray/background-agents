@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { computeHmacHex, verifyCallbackFromControlPlane } from "./auth";
+import { computeHmacHex, isSignedCallbackPayload, verifyCallbackFromControlPlane } from "./auth";
 import {
   ACTOR_HEADER,
   buildCanonicalRequestString,
@@ -336,6 +336,14 @@ describe("verifyCallbackFromControlPlane", () => {
       await verifyCallbackFromControlPlane(payload, { SERVICE_AUTH_SECRET: "bot-secret" })
     ).toBe(false);
     expect(await verifyCallbackFromControlPlane(payload, {})).toBe(false);
+  });
+});
+
+describe("isSignedCallbackPayload", () => {
+  it("accepts only objects with string signatures", () => {
+    expect(isSignedCallbackPayload({ signature: "signed" })).toBe(true);
+    expect(isSignedCallbackPayload({ signature: 42 })).toBe(false);
+    expect(isSignedCallbackPayload(null)).toBe(false);
   });
 });
 

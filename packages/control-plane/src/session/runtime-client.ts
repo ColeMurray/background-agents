@@ -11,7 +11,7 @@ export interface SessionRuntimeClient {
   ): Promise<Response>;
 }
 
-export class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
+class CloudflareSessionRuntimeClient implements SessionRuntimeClient {
   constructor(
     private readonly env: Env,
     private readonly ctx: CorrelationContext

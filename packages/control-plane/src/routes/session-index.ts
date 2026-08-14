@@ -1,8 +1,8 @@
 import {
   parseSessionListQuery,
   SESSION_LIST_CURRENT_USER,
-  sessionReadActionSchema,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/session-list-query";
+import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {

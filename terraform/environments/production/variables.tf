@@ -295,6 +295,12 @@ variable "anthropic_api_key" {
   description = "Anthropic API key for Claude"
   type        = string
   sensitive   = true
+  nullable    = false
+
+  validation {
+    condition     = trimspace(var.anthropic_api_key) != ""
+    error_message = "anthropic_api_key must be non-blank."
+  }
 }
 
 # =============================================================================
@@ -544,12 +550,6 @@ variable "app_name" {
   description = "Display name shown in the web UI tab title, sign-in page, bot messages (Slack, Linear), PR body footer, and outbound HTTP User-Agent headers."
   type        = string
   default     = "Open-Inspect"
-}
-
-variable "app_short_name" {
-  description = "Short brand label shown only in the web sidebar header. Defaults to 'Inspect' to keep the sidebar visually compact."
-  type        = string
-  default     = "Inspect"
 }
 
 variable "app_icon_url" {

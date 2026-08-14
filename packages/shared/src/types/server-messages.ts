@@ -3,21 +3,16 @@ import { sessionArtifactSchema } from "./artifacts";
 import { sessionRepositoryStateSchema } from "./repositories";
 import { sandboxEventSchema } from "./sandbox-events";
 import { sandboxStatusSchema, sessionStatusSchema } from "./sessions";
+import { clientRequestIdSchema } from "./prompts";
 
-/**
- * Sandbox event arrays for session hydration — both the initial `subscribed`
- * replay and paginated `history_page` items, which read from the same event
- * store. Resilient to unknown/legacy event shapes: each event is validated
- * individually and dropped if it doesn't match, instead of failing the whole
- * message. A single unrecognized event must never wedge session hydration and
- * strand the client on "loading session" forever.
- */
-const tolerantSandboxEventsSchema = z.array(z.unknown()).transform((events) =>
-  events.flatMap((event) => {
-    const result = sandboxEventSchema.safeParse(event);
-    return result.success ? [result.data] : [];
-  })
-);
+const timelineSequenceSchema = z.number().int().nonnegative().safe();
+
+export const promptQueueItemSchema = z.object({
+  messageId: z.string(),
+  content: z.string(),
+  status: z.enum(["pending", "processing"]),
+});
+export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 
 const sessionStateSchema = z.object({
   id: z.string(),
@@ -37,6 +32,8 @@ const sessionStateSchema = z.object({
   totalCost: z.number().optional(),
   codeServerUrl: z.string().nullable().optional(),
   codeServerPassword: z.string().nullable().optional(),
+  vncUrl: z.string().nullable().optional(),
+  vncPassword: z.string().nullable().optional(),
   tunnelUrls: z.record(z.string(), z.string()).nullable().optional(),
   ttydUrl: z.string().nullable().optional(),
   ttydToken: z.string().nullable().optional(),
@@ -53,6 +50,13 @@ const sessionStateSchema = z.object({
   environmentName: z.string().nullable().optional(),
 });
 export type SessionState = z.infer<typeof sessionStateSchema>;
+
+export const sessionSnapshotStateSchema = sessionStateSchema.omit({
+  codeServerPassword: true,
+  vncPassword: true,
+  ttydToken: true,
+});
+export type SessionSnapshotState = z.infer<typeof sessionSnapshotStateSchema>;
 
 const participantPresenceSchema = z.object({
   participantId: z.string(),
@@ -77,25 +81,60 @@ const historyCursorSchema = z.object({
   sequence: z.number().int().nonnegative().optional(),
 });
 
-export const serverMessageSchema = z.discriminatedUnion("type", [
+const sessionTimelineEventEnvelopeSchema = z
+  .object({
+    eventId: z.string().min(1),
+    timelineSequence: timelineSequenceSchema,
+    event: z.unknown(),
+  })
+  .strict();
+
+export const sessionTimelineEventSchema = sessionTimelineEventEnvelopeSchema.extend({
+  event: sandboxEventSchema,
+});
+export type SessionTimelineEvent = z.infer<typeof sessionTimelineEventSchema>;
+
+const tolerantSessionTimelineEventsSchema = z
+  .array(sessionTimelineEventEnvelopeSchema)
+  .transform((items) =>
+    items.flatMap((item) => {
+      const event = sandboxEventSchema.safeParse(item.event);
+      return event.success ? [{ ...item, event: event.data }] : [];
+    })
+  );
+
+const sessionTimelineSchema = z.object({
+  events: tolerantSessionTimelineEventsSchema,
+  hasMore: z.boolean(),
+  cursor: historyCursorSchema.nullable(),
+});
+
+export const sessionSnapshotSchema = z.object({
+  session: sessionSnapshotStateSchema,
+  artifacts: z.array(sessionArtifactSchema),
+  timeline: sessionTimelineSchema,
+  spawnError: z.string().nullable().optional(),
+  promptQueue: z.array(promptQueueItemSchema),
+});
+export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>;
+
+const serverMessageUnionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("pong"), timestamp: z.number() }),
-  z.object({
+  sessionSnapshotSchema.extend({
     type: z.literal("subscribed"),
-    sessionId: z.string(),
-    state: sessionStateSchema,
-    artifacts: z.array(sessionArtifactSchema),
     participantId: z.string(),
     participant: participantSummarySchema.optional(),
-    replay: z
-      .object({
-        events: tolerantSandboxEventsSchema,
-        hasMore: z.boolean(),
-        cursor: historyCursorSchema.nullable(),
-      })
-      .optional(),
-    spawnError: z.string().nullable().optional(),
   }),
-  z.object({ type: z.literal("prompt_queued"), messageId: z.string(), position: z.number() }),
+  z.object({
+    type: z.literal("prompt_queued"),
+    clientRequestId: clientRequestIdSchema,
+    messageId: z.string(),
+    position: z.number().int().positive().nullable(),
+  }),
+  z.object({
+    type: z.literal("prompt_queue_updated"),
+    promptQueue: z.array(promptQueueItemSchema),
+  }),
   z.object({ type: z.literal("sandbox_event"), event: sandboxEventSchema }),
   z.object({ type: z.literal("presence_sync"), participants: z.array(participantPresenceSchema) }),
   z.object({
@@ -132,7 +171,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("history_page"),
-    items: tolerantSandboxEventsSchema,
+    items: tolerantSessionTimelineEventsSchema,
     hasMore: z.boolean(),
     cursor: historyCursorSchema.nullable(),
   }),
@@ -144,11 +183,17 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     status: sessionStatusSchema,
     title: z.string().nullable(),
   }),
-  z.object({ type: z.literal("code_server_info"), url: z.string(), password: z.string() }),
-  z.object({ type: z.literal("ttyd_info"), url: z.string(), token: z.string() }),
   z.object({ type: z.literal("tunnel_urls"), urls: z.record(z.string(), z.string()) }),
   z.object({ type: z.literal("sandbox_dashboard_url"), url: z.string() }),
-  z.object({ type: z.literal("error"), code: z.string(), message: z.string() }),
+  z.object({ type: z.literal("sandbox_access_changed") }),
+  z.object({
+    type: z.literal("error"),
+    code: z.string(),
+    message: z.string(),
+    clientRequestId: clientRequestIdSchema.optional(),
+  }),
 ]);
+
+export const serverMessageSchema = serverMessageUnionSchema;
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
