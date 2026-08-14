@@ -172,9 +172,16 @@ export class AbandonedDraftSweep {
       }
     }
 
+    // Serialized field by field rather than spread: log fields are snake_case
+    // here, and these two share their names with the protocol outcomes.
     this.log.info("Abandoned draft sweep completed", {
       event: "scheduler.abandoned_draft_sweep",
-      ...result,
+      candidates: result.candidates,
+      archived: result.archived,
+      not_draft: result.notDraft,
+      has_work: result.hasWork,
+      errored: result.errored,
+      truncated: result.truncated,
     });
 
     return result;
