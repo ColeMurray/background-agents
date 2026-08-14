@@ -158,6 +158,18 @@ describe("VercelSandboxClient", () => {
     expect(result).toEqual({ commandId: "cmd-1", exitCode: null });
   });
 
+  it("rejects malformed API response shapes", async () => {
+    fetchSpy.mockResolvedValue(jsonResponse({ command: { exitCode: null } }));
+
+    await expect(
+      createClient().startCommand({ sessionId: "session-1", command: "bash" })
+    ).rejects.toMatchObject({
+      name: "VercelSandboxApiError",
+      status: 200,
+      responseText: JSON.stringify({ command: { exitCode: null } }),
+    });
+  });
+
   it("parses NDJSON output from a waited command", async () => {
     fetchSpy.mockResolvedValue(
       new Response(
