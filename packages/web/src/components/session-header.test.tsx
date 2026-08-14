@@ -5,6 +5,7 @@ import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
+import type { SessionState } from "@open-inspect/shared/types/server-messages";
 import { SessionHeader } from "./session-header";
 import type { SessionActionProps } from "./session-actions";
 
@@ -24,6 +25,22 @@ const actions: SessionActionProps = {
   sessionStatus: "active",
   artifacts: [],
 };
+
+function createSessionState(overrides: Partial<SessionState> = {}): SessionState {
+  return {
+    id: "session-1",
+    title: "Session 1",
+    repoOwner: "acme",
+    repoName: "web",
+    baseBranch: "main",
+    branchName: "feature/status-icons",
+    status: "active",
+    sandboxStatus: "ready",
+    messageCount: 0,
+    createdAt: 1,
+    ...overrides,
+  };
+}
 
 describe("SessionHeader", () => {
   it("lets desktop users hide and show the session details sidebar", () => {
@@ -48,7 +65,7 @@ describe("SessionHeader", () => {
     );
 
     const hideButton = screen.getByRole("button", { name: "Hide session details" });
-    const connectedStatus = screen.getByText("Connected");
+    const connectedStatus = screen.getByRole("status", { name: "Connection status: Connected" });
     expect(hideButton).toHaveClass("hidden", "lg:block");
     expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
     expect(hideButton).toHaveAttribute("aria-expanded", "true");
@@ -166,5 +183,119 @@ describe("SessionHeader", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Details" }));
     expect(onOpenMobileDetails).toHaveBeenCalledOnce();
     expect(onToggleDetails).not.toHaveBeenCalled();
+  });
+
+  it("renders separate status icons and reveals the connection label on hover", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState()}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Status icons" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const connection = screen.getByRole("status", { name: "Connection status: Connected" });
+    expect(connection.parentElement).not.toHaveClass("md:hidden");
+    expect(connection).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
+
+    fireEvent.pointerMove(connection, { pointerType: "mouse" });
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Connected");
+  });
+
+  it("reveals the connection label on keyboard focus", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState()}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Status icons" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.focus(screen.getByRole("status", { name: "Connection status: Connected" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Connected");
+  });
+
+  it("labels connecting and disconnected mobile connection states", () => {
+    const props = {
+      sessionState: createSessionState(),
+      fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Status icons" },
+      isDetailsOpen: false,
+      isDesktopDetailsOpen: true,
+      showDesktopDetailsToggle: true,
+      detailsButtonRef: createRef<HTMLButtonElement>(),
+      actionsButtonRef: createRef<HTMLButtonElement>(),
+      onToggleDetails: vi.fn(),
+      onToggleDesktopDetails: vi.fn(),
+      onOpenMobileDetails: vi.fn(),
+      actions,
+      renameSession: vi.fn(),
+    };
+    const { rerender } = render(<SessionHeader {...props} connected={false} connecting />);
+
+    expect(
+      screen.getByRole("status", { name: "Connection status: Connecting..." })
+    ).toBeInTheDocument();
+
+    rerender(<SessionHeader {...props} connected={false} connecting={false} />);
+    expect(
+      screen.getByRole("status", { name: "Connection status: Disconnected" })
+    ).toBeInTheDocument();
+  });
+
+  it("opens mobile sandbox details with a safe provider dashboard link", () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState({
+          sandboxStatus: "failed",
+          sandboxDashboardUrl: "https://modal.com/apps/acme/main/sandbox",
+        })}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Status icons" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const trigger = screen.getByRole("button", { name: "Sandbox status: Failed" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger);
+
+    expect(screen.getByText("Sandbox Failed")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open provider dashboard/ })).toHaveAttribute(
+      "href",
+      "https://modal.com/apps/acme/main/sandbox"
+    );
   });
 });

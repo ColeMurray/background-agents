@@ -7,6 +7,7 @@ import type { ImageBuildScope } from "./model";
 import type { ImageBuildAdapterFactory } from "./provider-factory";
 import { ImageBuildScheduler } from "./scheduler";
 import type { ResolvedImageBuildTarget } from "./scope";
+import { COMPATIBLE_RUNTIME_VERSION } from "./test-helpers";
 import type { ImageBuildWorkflow } from "./workflow";
 
 function harness(
@@ -232,7 +233,7 @@ describe("ImageBuildScheduler", () => {
               baseSha: "abc123",
             }))
           ),
-          runtime_version: "v57-vnc-runtime",
+          runtime_version: COMPATIBLE_RUNTIME_VERSION,
           build_duration_seconds: 1,
           error_message: null,
           created_at: 1,

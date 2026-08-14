@@ -1,0 +1,3 @@
+import { MIN_COMPATIBLE_RUNTIME_VERSION } from "./model";
+
+export const COMPATIBLE_RUNTIME_VERSION = `v${MIN_COMPATIBLE_RUNTIME_VERSION + 1}-test-runtime`;

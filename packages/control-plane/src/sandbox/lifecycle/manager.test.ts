@@ -20,6 +20,7 @@ import {
 } from "./manager";
 import type { ImageBuildSpawnRow } from "./image-selection";
 import { computeRepositoriesFingerprint } from "../../image-builds/fingerprint";
+import { COMPATIBLE_RUNTIME_VERSION } from "../../image-builds/test-helpers";
 import {
   SandboxProviderError,
   type SandboxProvider,
@@ -2209,7 +2210,7 @@ describe("SandboxLifecycleManager", () => {
         repository_shas: JSON.stringify([
           { repoOwner: "testowner", repoName: "testrepo", baseSha: "sha-def456" },
         ]),
-        runtime_version: "v56-managed-provider-runtime",
+        runtime_version: COMPATIBLE_RUNTIME_VERSION,
         ...overrides,
       };
     }
@@ -2424,7 +2425,7 @@ describe("SandboxLifecycleManager", () => {
           { repoOwner: "testowner", repoName: "testrepo", baseSha: "sha-primary" },
           { repoOwner: "testowner", repoName: "backend", baseSha: "sha-backend" },
         ]),
-        runtime_version: "v56-managed-provider-runtime",
+        runtime_version: COMPATIBLE_RUNTIME_VERSION,
         ...overrides,
       };
     }
