@@ -8,6 +8,9 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 integrations with adaptive thinking and reasoning efforts from low through max, and `xai/grok-4.6`
 to the opt-in xAI / SuperGrok catalog with low, medium, and high efforts.
 
+**Kimi K3 and GLM 5.3.** Adds `opencode/kimi-k3` to the opt-in OpenCode Zen catalog and
+`zai-coding-plan/glm-5.3` to the opt-in Z.AI Coding Plan catalog.
+
 ## August 9, 2026
 
 **Browser-based sandbox desktops.** Opt in to a full VNC desktop for sessions, available from the

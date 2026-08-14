@@ -46,6 +46,7 @@ const XAI_MODELS = ["xai/grok-4.5", "xai/grok-4.6", "xai/grok-build-0.1"] as con
 const ZEN_MODELS = [
   "opencode/kimi-k2.5",
   "opencode/kimi-k2.6",
+  "opencode/kimi-k3",
   "opencode/minimax-m2.5",
   "opencode/qwen3.7-max",
   "opencode/glm-5",
@@ -53,7 +54,7 @@ const ZEN_MODELS = [
 ] as const;
 
 const DEEPSEEK_MODELS = ["deepseek/deepseek-v4-flash", "deepseek/deepseek-v4-pro"] as const;
-const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2"] as const;
+const ZAI_CODING_PLAN_MODELS = ["zai-coding-plan/glm-5.2", "zai-coding-plan/glm-5.3"] as const;
 
 describe("model utilities", () => {
   it("derives every public model view from the authoritative catalog", () => {

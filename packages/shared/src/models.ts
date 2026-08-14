@@ -191,6 +191,7 @@ export const MODEL_CATALOG = [
     models: [
       { id: "opencode/kimi-k2.5", name: "Kimi K2.5", description: "Moonshot AI" },
       { id: "opencode/kimi-k2.6", name: "Kimi K2.6", description: "Moonshot AI" },
+      { id: "opencode/kimi-k3", name: "Kimi K3", description: "Moonshot AI" },
       { id: "opencode/minimax-m2.5", name: "MiniMax M2.5", description: "MiniMax" },
       { id: "opencode/qwen3.7-max", name: "Qwen3.7 Max", description: "Alibaba Cloud" },
       { id: "opencode/glm-5", name: "GLM 5", description: "Z.ai 744B MoE" },
@@ -223,7 +224,10 @@ export const MODEL_CATALOG = [
   {
     category: "Z.AI Coding Plan",
     enabledByDefault: false,
-    models: [{ id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" }],
+    models: [
+      { id: "zai-coding-plan/glm-5.2", name: "GLM 5.2", description: "Z.AI Coding Plan" },
+      { id: "zai-coding-plan/glm-5.3", name: "GLM 5.3", description: "Z.AI Coding Plan" },
+    ],
   },
   {
     category: "DeepSeek",
