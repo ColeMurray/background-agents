@@ -157,12 +157,12 @@ export class CallbackNotificationService {
   }
 
   /**
-   * Notify the originating client of completion with retry.
+   * Best-effort notification of the originating client with retry.
    * Routes to the correct service binding based on the message source.
    */
   async notifyComplete(messageId: string, success: boolean, error?: string): Promise<void> {
-    const sessionId = this.getSessionId();
     const startedAt = Date.now();
+    let sessionId: string | null = null;
     let source: string | null = null;
     let result: CallbackDeliveryResult = {
       delivered: false,
@@ -172,6 +172,7 @@ export class CallbackNotificationService {
     let thrownError: unknown;
 
     try {
+      sessionId = this.getSessionId();
       const message = this.repository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
         result.rejectReason = "no_callback_context";
@@ -232,7 +233,6 @@ export class CallbackNotificationService {
       );
     } catch (caught) {
       thrownError = caught;
-      throw caught;
     } finally {
       const outcome =
         thrownError !== undefined

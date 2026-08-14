@@ -34,7 +34,6 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
-import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -149,7 +148,11 @@ export class SessionMessageQueue {
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
-    private readonly terminalMessageProjection: SessionTerminalMessageProjection,
+    private readonly projectTerminalMessage: (
+      messageId: string,
+      messageCreatedAt: number,
+      completedAt: number
+    ) => Promise<void>,
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
@@ -498,21 +501,16 @@ export class SessionMessageQueue {
     const completion = this.repository.recordMessageCompletion(event, completedAt, expectedStatus);
     if (!completion) return false;
 
-    this.ctx.waitUntil(this.terminalMessageProjection.recordTerminalMessage(completion));
-    this.messenger.broadcast({ type: "sandbox_event", event });
-    this.scheduleCompletionCallback(message.id, false, error);
-    return true;
-  }
-
-  private scheduleCompletionCallback(messageId: string, success: boolean, error?: string): void {
     this.ctx.waitUntil(
-      this.callbackService.notifyComplete(messageId, success, error).catch((callbackError) => {
-        this.log.error("callback.complete.background_error", {
-          message_id: messageId,
-          error: callbackError,
-        });
-      })
+      this.projectTerminalMessage(
+        completion.messageId,
+        completion.messageCreatedAt,
+        completion.completedAt
+      )
     );
+    this.messenger.broadcast({ type: "sandbox_event", event });
+    this.ctx.waitUntil(this.callbackService.notifyComplete(message.id, false, error));
+    return true;
   }
 
   private createUserMessageEvent(

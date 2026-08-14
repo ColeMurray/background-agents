@@ -419,7 +419,12 @@ export class SessionDO extends DurableObject<Env> {
         this.participantService,
         this.callbackService,
         this.statusService,
-        this.terminalMessageProjection,
+        (messageId, messageCreatedAt, completedAt) =>
+          this.terminalMessageProjection.recordTerminalMessage({
+            messageId,
+            messageCreatedAt,
+            terminalMessageCompletedAt: completedAt,
+          }),
         this.lifecycleManager,
         this.db ? new SessionIndexStore(this.db) : null,
         resolveScmProviderFromEnv(this.env.SCM_PROVIDER),
@@ -704,7 +709,12 @@ export class SessionDO extends DurableObject<Env> {
         this.diffService,
         (title, options) => this.applySessionTitleUpdate(title, options),
         (reason) => this.triggerSnapshot(reason),
-        this.terminalMessageProjection,
+        (messageId, messageCreatedAt, completedAt) =>
+          this.terminalMessageProjection.recordTerminalMessage({
+            messageId,
+            messageCreatedAt,
+            terminalMessageCompletedAt: completedAt,
+          }),
         this.statusService,
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),

@@ -12,7 +12,6 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -153,7 +152,7 @@ function buildQueue() {
       messageId: event.messageId,
       messageCreatedAt: 1000,
       messageStartedAt: 1100,
-      terminalMessageCompletedAt: completedAt,
+      completedAt,
       status: "failed" as const,
     })),
     markMessageAwaitingStopConfirmation: vi.fn(),
@@ -193,7 +192,7 @@ function buildQueue() {
   const waitUntil = vi.fn();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
-  const terminalMessageProjection = { recordTerminalMessage: vi.fn(async () => {}) };
+  const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
@@ -205,7 +204,7 @@ function buildQueue() {
     participantService as unknown as ParticipantService,
     callbackService as unknown as CallbackNotificationService,
     sessionStatus as unknown as SessionStatusService,
-    terminalMessageProjection as unknown as SessionTerminalMessageProjection,
+    projectTerminalMessage,
     sandboxLifecycle,
     null,
     "github",
@@ -226,7 +225,7 @@ function buildQueue() {
     getAlarm,
     setAlarm,
     callbackService,
-    terminalMessageProjection,
+    projectTerminalMessage,
     log,
   };
 }
@@ -883,9 +882,7 @@ describe("SessionMessageQueue", () => {
     expect(h.repository.recordMessageCompletion.mock.invocationCallOrder[0]).toBeLessThan(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     );
-    expect(h.terminalMessageProjection.recordTerminalMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "msg-9" })
-    );
+    expect(h.projectTerminalMessage).toHaveBeenCalledWith("msg-9", 1000, expect.any(Number));
     expect(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     ).toBeLessThan(h.wsManager.send.mock.invocationCallOrder[0]);
@@ -1038,25 +1035,6 @@ describe("SessionMessageQueue", () => {
       expect.any(Number),
       "processing"
     );
-  });
-
-  it("absorbs completion callback failures", async () => {
-    const h = buildQueue();
-    const callbackError = new Error("callback failed");
-    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
-      id: "msg-timeout",
-      created_at: 800,
-    });
-    h.callbackService.notifyComplete.mockRejectedValue(callbackError);
-
-    await h.queue.failStuckProcessingMessage();
-    const results = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
-
-    expect(results.every(({ status }) => status === "fulfilled")).toBe(true);
-    expect(h.log.error).toHaveBeenCalledWith("callback.complete.background_error", {
-      message_id: "msg-timeout",
-      error: callbackError,
-    });
   });
 
   it("reconciles session status when failing a stuck processing message", async () => {

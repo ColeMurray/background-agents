@@ -7,7 +7,6 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionRepository } from "./repository";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
 function createPushSpec(repoOwner: string, repoName: string, targetBranch: string): GitPushSpec {
@@ -39,7 +38,7 @@ function createProcessor() {
         messageId: event.messageId,
         messageCreatedAt: 1000,
         messageStartedAt: 1100,
-        terminalMessageCompletedAt: completedAt,
+        completedAt,
         status: "completed" as const,
       };
     }),
@@ -62,7 +61,7 @@ function createProcessor() {
   const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
-  const terminalMessageProjection = { recordTerminalMessage: vi.fn(async () => {}) };
+  const projectTerminalMessage = vi.fn(async () => {});
   const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
@@ -88,7 +87,7 @@ function createProcessor() {
     diffService as unknown as SessionDiffService,
     applySessionTitleUpdate,
     triggerSnapshot,
-    terminalMessageProjection as unknown as SessionTerminalMessageProjection,
+    projectTerminalMessage,
     statusService as unknown as SessionStatusService,
     updateLastActivity,
     scheduleInactivityCheck,
@@ -104,7 +103,7 @@ function createProcessor() {
     broadcast,
     diffService,
     triggerSnapshot,
-    terminalMessageProjection,
+    projectTerminalMessage,
     statusService,
     scheduleInactivityCheck,
     processMessageQueue,
@@ -406,11 +405,11 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.callbackService.notifyComplete).toHaveBeenCalledWith("msg-1", true, undefined);
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
     expect(h.repository.recordMessageCompletion.mock.invocationCallOrder[0]).toBeLessThan(
-      h.terminalMessageProjection.recordTerminalMessage.mock.invocationCallOrder[0]
+      h.projectTerminalMessage.mock.invocationCallOrder[0]
     );
-    expect(
-      h.terminalMessageProjection.recordTerminalMessage.mock.invocationCallOrder[0]
-    ).toBeLessThan(h.broadcastPromptQueue.mock.invocationCallOrder[0]);
+    expect(h.projectTerminalMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      h.broadcastPromptQueue.mock.invocationCallOrder[0]
+    );
     expect(h.broadcastPromptQueue.mock.invocationCallOrder[0]).toBeLessThan(
       h.callbackService.notifyComplete.mock.invocationCallOrder[0]
     );
@@ -429,7 +428,7 @@ describe("SessionSandboxEventProcessor", () => {
     h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
     let resolveCompletion!: () => void;
-    h.terminalMessageProjection.recordTerminalMessage.mockReturnValue(
+    h.projectTerminalMessage.mockReturnValue(
       new Promise<void>((resolve) => {
         resolveCompletion = resolve;
       })

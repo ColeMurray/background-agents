@@ -38,7 +38,7 @@ import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-export type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
+type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
@@ -70,11 +70,11 @@ export interface SandboxCircuitBreakerState {
   last_spawn_failure: number | null;
 }
 
-export interface RecordedMessageCompletion {
+interface RecordedMessageCompletion {
   messageId: string;
   messageCreatedAt: number;
   messageStartedAt: number | null;
-  terminalMessageCompletedAt: number;
+  completedAt: number;
   status: "completed" | "failed";
 }
 
@@ -987,7 +987,7 @@ export class SessionRepository {
         messageId: event.messageId,
         messageCreatedAt: message.created_at,
         messageStartedAt: message.started_at,
-        terminalMessageCompletedAt: completedAt,
+        completedAt,
         status,
       };
     });

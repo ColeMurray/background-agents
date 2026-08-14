@@ -9,7 +9,6 @@ import type { CallbackNotificationService } from "./callback-notification-servic
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
 
@@ -48,7 +47,11 @@ export class SessionSandboxEventProcessor {
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
     private readonly triggerSnapshot: (reason: string) => Promise<void>,
-    private readonly terminalMessageProjection: SessionTerminalMessageProjection,
+    private readonly projectTerminalMessage: (
+      messageId: string,
+      messageCreatedAt: number,
+      completedAt: number
+    ) => Promise<void>,
     private readonly statusService: SessionStatusService,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
@@ -205,7 +208,11 @@ export class SessionSandboxEventProcessor {
           ? this.repository.recordMessageCompletion(event, now, "processing")
           : null;
       if (completion) {
-        await this.terminalMessageProjection.recordTerminalMessage(completion);
+        await this.projectTerminalMessage(
+          completion.messageId,
+          completion.messageCreatedAt,
+          completion.completedAt
+        );
         const totalDurationMs = now - completion.messageCreatedAt;
         const processingDurationMs =
           completion.messageStartedAt != null ? now - completion.messageStartedAt : undefined;
@@ -228,7 +235,9 @@ export class SessionSandboxEventProcessor {
           isProcessing: this.repository.getProcessingMessage() !== null,
         });
         this.broadcastPromptQueue();
-        this.scheduleCompletionCallback(event.messageId, event.success, event.error);
+        this.ctx.waitUntil(
+          this.callbackService.notifyComplete(event.messageId, event.success, event.error)
+        );
         await this.statusService.reconcileAfterExecution(event.success);
       } else {
         this.repository.clearMessageAwaitingStopConfirmation(event.messageId);
@@ -398,17 +407,6 @@ export class SessionSandboxEventProcessor {
     } else {
       this.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
     }
-  }
-
-  private scheduleCompletionCallback(messageId: string, success: boolean, error?: string): void {
-    this.ctx.waitUntil(
-      this.callbackService.notifyComplete(messageId, success, error).catch((callbackError) => {
-        this.log.error("callback.complete.background_error", {
-          message_id: messageId,
-          error: callbackError,
-        });
-      })
-    );
   }
 
   private pushResolverKey(repoOwner: string, repoName: string, branchName: string): string {

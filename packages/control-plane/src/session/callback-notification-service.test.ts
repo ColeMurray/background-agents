@@ -32,7 +32,10 @@ function createMockFetcher(): MockFetcher {
   return { fetch: vi.fn() } as unknown as MockFetcher;
 }
 
-function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
+function createTestHarness(overrides?: {
+  env?: Partial<CallbackServiceEnv>;
+  getSessionId?: () => string;
+}) {
   const log = createMockLogger();
   const repository = createMockRepository();
 
@@ -52,7 +55,7 @@ function createTestHarness(overrides?: { env?: Partial<CallbackServiceEnv> }) {
     repository,
     env,
     log,
-    getSessionId: () => "session-123",
+    getSessionId: overrides?.getSessionId ?? (() => "session-123"),
     sleep,
   };
 
@@ -108,6 +111,45 @@ describe("CallbackNotificationService", () => {
       expect(
         (harness.slackBot as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch
       ).not.toHaveBeenCalled();
+    });
+
+    it("absorbs and logs unexpected callback failures", async () => {
+      vi.mocked(harness.repository.getMessageCallbackContext).mockReturnValue({
+        callback_context: "{",
+        source: "slack",
+      });
+
+      await expect(harness.service.notifyComplete("msg-1", true)).resolves.toBeUndefined();
+
+      expect(harness.log.error).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({
+          message_id: "msg-1",
+          outcome: "error",
+          error: expect.any(SyntaxError),
+        })
+      );
+    });
+
+    it("absorbs session identity lookup failures", async () => {
+      const sessionError = new Error("session unavailable");
+      const h = createTestHarness({
+        getSessionId: () => {
+          throw sessionError;
+        },
+      });
+
+      await expect(h.service.notifyComplete("msg-1", true)).resolves.toBeUndefined();
+
+      expect(h.log.error).toHaveBeenCalledWith(
+        "callback.complete_delivery",
+        expect.objectContaining({
+          session_id: null,
+          message_id: "msg-1",
+          outcome: "error",
+          error: sessionError,
+        })
+      );
     });
 
     it("skips when the destination bot's signing secret is unbound", async () => {

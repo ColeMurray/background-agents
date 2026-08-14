@@ -877,7 +877,7 @@ describe("SessionRepository", () => {
         messageId: "msg-1",
         messageCreatedAt: 1000,
         messageStartedAt: 1200,
-        terminalMessageCompletedAt: 3000,
+        completedAt: 3000,
         status: "completed",
       });
 
