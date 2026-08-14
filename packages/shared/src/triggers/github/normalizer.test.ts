@@ -91,6 +91,22 @@ const checkSuiteCompletedPayload = {
   },
 };
 
+const workflowRunCompletedPayload = {
+  action: "completed",
+  repository: repo,
+  sender,
+  workflow_run: {
+    id: 123456789,
+    run_attempt: 1,
+    name: "CI",
+    conclusion: "failure",
+    head_branch: "main",
+    head_sha: "abc1234def5678",
+    path: ".github/workflows/ci.yml",
+    html_url: "https://github.com/acme-org/my-app/actions/runs/123456789",
+  },
+};
+
 const issuesOpenedPayload = {
   action: "opened",
   repository: repo,
@@ -252,6 +268,7 @@ describe("normalizeGitHubEvent", () => {
       expect(event).not.toBeNull();
       expect(event!.source).toBe("github");
       expect(event!.eventType).toBe("check_suite.completed");
+      expect(event!.conclusion).toBe("failure");
       expect(event!.checkConclusion).toBe("failure");
       expect(event!.triggerKey).toBe("check_suite:77777");
       expect(event!.concurrencyKey).toBe("check_suite:77777");
@@ -260,6 +277,40 @@ describe("normalizeGitHubEvent", () => {
       expect(event!.contextBlock).toContain("check_suite.completed");
       expect(event!.contextBlock).toContain("failure");
       expect(event!.meta).toMatchObject({ checkSuiteId: 77777, conclusion: "failure" });
+    });
+  });
+
+  describe("workflow_run.completed", () => {
+    it("normalizes a completed workflow run", () => {
+      const event = normalizeGitHubEvent("workflow_run", workflowRunCompletedPayload);
+
+      expect(event).not.toBeNull();
+      expect(event!.eventType).toBe("workflow_run.completed");
+      expect(event!.repoOwner).toBe("acme-org");
+      expect(event!.repoName).toBe("my-app");
+      expect(event!.workflowName).toBe("CI");
+      expect(event!.conclusion).toBe("failure");
+      expect(event!.checkConclusion).toBeUndefined();
+      expect(event!.branch).toBe("main");
+      expect(event!.triggerKey).toBe("workflow_run:123456789:1");
+      expect(event!.concurrencyKey).toBe("workflow:CI");
+      expect(event!.contextBlock).toContain("Run: 123456789");
+      expect(event!.contextBlock).toContain(".github/workflows/ci.yml");
+      expect(event!.meta).toMatchObject({
+        workflowRunId: 123456789,
+        workflowRunAttempt: 1,
+        workflowName: "CI",
+        conclusion: "failure",
+      });
+    });
+
+    it("uses the run attempt to distinguish workflow reruns", () => {
+      const rerun = normalizeGitHubEvent("workflow_run", {
+        ...workflowRunCompletedPayload,
+        workflow_run: { ...workflowRunCompletedPayload.workflow_run, run_attempt: 2 },
+      });
+
+      expect(rerun?.triggerKey).toBe("workflow_run:123456789:2");
     });
   });
 

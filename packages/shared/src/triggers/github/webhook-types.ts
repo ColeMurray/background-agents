@@ -56,6 +56,13 @@ export const GITHUB_WEBHOOK_EVENT_CATALOG = [
     shortLabel: "CI completed",
   },
   {
+    event: "workflow_run",
+    action: "completed",
+    displayName: "Workflow Run Completed",
+    description: "A GitHub Actions workflow run finished",
+    shortLabel: "workflow completed",
+  },
+  {
     event: "issues",
     action: "opened",
     displayName: "Issue Opened",
@@ -159,6 +166,17 @@ const checkSuiteObjectSchema = z.object({
   pull_requests: z.array(z.object({ number: z.number() })).optional(),
 });
 
+const workflowRunObjectSchema = z.object({
+  id: z.number(),
+  run_attempt: z.number().int().positive(),
+  name: z.string(),
+  conclusion: z.string().nullable().optional(),
+  head_branch: z.string().nullable().optional(),
+  head_sha: z.string().optional(),
+  path: z.string().optional(),
+  html_url: z.string().optional(),
+});
+
 // GitHub always includes the event's primary object (a pull_request event always
 // carries `pull_request`, an issue_comment always carries `issue` + `comment`,
 // etc.), so each is required — a payload missing it is malformed and fails the
@@ -181,6 +199,10 @@ export const checkSuiteEventSchema = baseEventSchema.extend({
   check_suite: checkSuiteObjectSchema,
 });
 
+export const workflowRunEventSchema = baseEventSchema.extend({
+  workflow_run: workflowRunObjectSchema,
+});
+
 export const issuesEventSchema = baseEventSchema.extend({
   issue: issueObjectSchema,
 });
@@ -191,4 +213,5 @@ export type PullRequestPayload = z.infer<typeof pullRequestEventSchema>;
 export type IssueCommentPayload = z.infer<typeof issueCommentEventSchema>;
 export type PullRequestReviewCommentPayload = z.infer<typeof pullRequestReviewCommentEventSchema>;
 export type CheckSuitePayload = z.infer<typeof checkSuiteEventSchema>;
+export type WorkflowRunPayload = z.infer<typeof workflowRunEventSchema>;
 export type IssuesPayload = z.infer<typeof issuesEventSchema>;

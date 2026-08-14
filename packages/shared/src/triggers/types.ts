@@ -64,7 +64,17 @@ const triggerConditionSchema = z.discriminatedUnion("type", [
     value: stringArrayConditionValueSchema,
   }),
   z.object({
+    type: z.literal("conclusion"),
+    operator: z.literal("eq"),
+    value: z.string(),
+  }),
+  z.object({
     type: z.literal("check_conclusion"),
+    operator: z.literal("eq"),
+    value: z.string(),
+  }),
+  z.object({
+    type: z.literal("workflow_name"),
     operator: z.literal("eq"),
     value: z.string(),
   }),
@@ -147,7 +157,9 @@ export const githubAutomationEventSchema = z.object({
   labels: z.array(z.string()).optional(),
   actor: z.string().optional(),
   changedFiles: z.array(z.string()).optional(),
+  conclusion: z.string().optional(),
   checkConclusion: z.string().optional(),
+  workflowName: z.string().optional(),
   /** Present only on pull_request events. */
   pullRequest: z
     .object({
