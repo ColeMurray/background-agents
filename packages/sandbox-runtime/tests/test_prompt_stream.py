@@ -6,7 +6,6 @@ the synchronous per-event translator (`_apply_sse_event`) dispositions and
 the cross-prompt session-title dedupe, which are directly testable now.
 """
 
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,12 +39,16 @@ def make_stream() -> OpenCodePromptStream:
     )
 
 
-def make_state(opencode_message_id: str = "msg_test") -> _PromptState:
+def make_state(
+    opencode_message_id: str = "msg_test", start_time: float = PROMPT_TS_MS / 1000
+) -> _PromptState:
+    """Anchor the prompt boundary to PROMPT_TS_MS so fixture creation times and
+    fixture IDs describe the same instant."""
     state = _PromptState(
         opencode_session_id=PARENT_SESSION_ID,
         message_id="cp-msg-1",
         opencode_message_id=opencode_message_id,
-        start_time=time.time(),
+        start_time=start_time,
     )
     return state
 
@@ -662,9 +665,9 @@ class TestApplySseEventDispositions:
         assert step.events == []
 
     def test_post_compaction_prior_prompt_message_is_not_accepted(self):
-        """The compaction fallback must not claim messages that predate the
-        prompt (IDs below the prompt's user message): forwarding them would
-        replay prior turns' text as current output."""
+        """The compaction fallback must not claim messages created before the
+        prompt: forwarding them would replay prior turns' text as current
+        output."""
         prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
         prior_user_id = oc_message_id(PROMPT_TS_MS - 61_000, 1, "u")
         stream = make_stream()
@@ -696,6 +699,7 @@ class TestApplySseEventDispositions:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": prior_user_id,
+                        "time": {"created": PROMPT_TS_MS - 60_000},
                     }
                 },
             ),
@@ -722,6 +726,7 @@ class TestApplySseEventDispositions:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": continue_user_id,
+                        "time": {"created": PROMPT_TS_MS + 5_000},
                     }
                 },
             ),
@@ -751,17 +756,20 @@ class TestApplySseEventDispositions:
             }
         ]
 
-    def test_post_compaction_same_timestamp_counter_boundary(self):
-        """Within one millisecond the encoded counter decides ordering: an
-        assistant ID one counter tick below the prompt's user message is
-        rejected, one tick above is accepted."""
-        same_ms_below_id = oc_message_id(PROMPT_TS_MS, 1, "s")
-        same_ms_above_id = oc_message_id(PROMPT_TS_MS, 3, "t")
+    def test_post_compaction_millisecond_boundary(self):
+        """The boundary is the prompt's start millisecond: a message created one
+        millisecond earlier is rejected, one created in that same millisecond is
+        accepted."""
+        before_boundary_id = oc_message_id(PROMPT_TS_MS - 1, 1, "s")
+        at_boundary_id = oc_message_id(PROMPT_TS_MS, 3, "t")
         stream = make_stream()
         state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
 
-        for oc_msg_id in (same_ms_below_id, same_ms_above_id):
+        for oc_msg_id, created in (
+            (before_boundary_id, PROMPT_TS_MS - 1),
+            (at_boundary_id, PROMPT_TS_MS),
+        ):
             stream._apply_sse_event(
                 state,
                 sse(
@@ -772,13 +780,14 @@ class TestApplySseEventDispositions:
                             "role": "assistant",
                             "sessionID": PARENT_SESSION_ID,
                             "parentID": oc_message_id(PROMPT_TS_MS, 0, "w"),
+                            "time": {"created": created},
                         }
                     },
                 ),
             )
 
-        assert not state.attribution.is_assistant_allowed(same_ms_below_id)
-        assert state.attribution.is_assistant_allowed(same_ms_above_id)
+        assert not state.attribution.is_assistant_allowed(before_boundary_id)
+        assert state.attribution.is_assistant_allowed(at_boundary_id)
 
     def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
         prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")
@@ -796,6 +805,7 @@ class TestApplySseEventDispositions:
                         "role": "assistant",
                         "sessionID": PARENT_SESSION_ID,
                         "parentID": oc_message_id(PROMPT_TS_MS - 61_000, 1, "u"),
+                        "time": {"created": PROMPT_TS_MS - 60_000},
                         "error": {"name": "SomeError", "data": {"message": "Old failure"}},
                     }
                 },
