@@ -47,10 +47,14 @@ describe("SessionHeader", () => {
     );
 
     const hideButton = screen.getByRole("button", { name: "Hide session details" });
+    const connectedStatus = screen.getByText("Connected");
     expect(hideButton).toHaveClass("hidden", "lg:block");
     expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
     expect(hideButton).toHaveAttribute("aria-expanded", "true");
     expect(hideButton.querySelector('line[x1="15"][x2="15"]')).toBeInTheDocument();
+    expect(
+      connectedStatus.compareDocumentPosition(hideButton) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
     fireEvent.click(hideButton);
     expect(onToggleDesktopDetails).toHaveBeenCalledOnce();
 

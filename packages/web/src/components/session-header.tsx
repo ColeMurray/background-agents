@@ -159,16 +159,6 @@ export function SessionHeader({
         </div>
         <div className="flex items-center gap-4">
           <button
-            type="button"
-            onClick={onToggleDesktopDetails}
-            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
-            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
-            aria-controls="session-details-sidebar"
-            aria-expanded={isDesktopDetailsOpen}
-          >
-            <RightSidebarIcon className="h-4 w-4" />
-          </button>
-          <button
             ref={detailsButtonRef}
             type="button"
             onClick={onToggleDetails}
@@ -199,6 +189,16 @@ export function SessionHeader({
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
           </div>
+          <button
+            type="button"
+            onClick={onToggleDesktopDetails}
+            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+            aria-controls="session-details-sidebar"
+            aria-expanded={isDesktopDetailsOpen}
+          >
+            <RightSidebarIcon className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </header>
