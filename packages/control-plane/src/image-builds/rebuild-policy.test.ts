@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
+import { MANAGED_SANDBOX_VERSION } from "../runtime-release";
 import { evaluateImageBuildRebuildPolicy } from "./rebuild-policy";
 
 const unit = {
@@ -17,7 +18,7 @@ function row(overrides: Partial<ImageBuildRecordView> = {}): ImageBuildRecordVie
     status: "ready",
     repositories_fingerprint: "fp-current",
     repository_shas: JSON.stringify([{ repoOwner: "acme", repoName: "web", baseSha: "abc123" }]),
-    runtime_version: "v57-vnc-runtime",
+    runtime_version: MANAGED_SANDBOX_VERSION,
     build_duration_seconds: 1,
     error_message: null,
     created_at: 1,

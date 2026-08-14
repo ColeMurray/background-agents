@@ -2,23 +2,31 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from daytona import CreateSnapshotParams, Daytona, Image
 
-# OpenCode version to install.
-#
-# OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
-# eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v5-vnc-opencode-1-18-11"
+DAYTONA_IMAGE_REVISION = "v5-vnc"
 
 
 def build_base_image(repo_root: Path) -> Image:
     """Build the Open-Inspect Daytona base image."""
+    release = json.loads(
+        (
+            repo_root
+            / "packages"
+            / "sandbox-runtime"
+            / "src"
+            / "sandbox_runtime"
+            / "release.json"
+        ).read_text()
+    )
+    opencode_version = release["opencode_version"]
+    sandbox_version = f"daytona-{DAYTONA_IMAGE_REVISION}-opencode-{opencode_version.replace('.', '-')}"
     sandbox_runtime_dir = (
         repo_root / "packages" / "sandbox-runtime" / "src" / "sandbox_runtime"
     )
@@ -53,8 +61,8 @@ def build_base_image(repo_root: Path) -> Image:
             "PyJWT[crypto]",
         )
         .run_commands(
-            f"npm install -g opencode-ai@{OPENCODE_VERSION}",
-            f"npm install -g @opencode-ai/plugin@{OPENCODE_VERSION} zod",
+            f"npm install -g opencode-ai@{opencode_version}",
+            f"npm install -g @opencode-ai/plugin@{opencode_version} zod",
             f"curl -fsSL -o /tmp/code-server.deb "
             f"https://github.com/coder/code-server/releases/download/v{CODE_SERVER_VERSION}/"
             f"code-server_{CODE_SERVER_VERSION}_amd64.deb",
@@ -69,7 +77,7 @@ def build_base_image(repo_root: Path) -> Image:
             # below. Mirror packages/modal-infra/src/images/base.py.
             "printf '%s\\n'"
             " '#!/bin/sh'"
-            ' \'exec python3 -m sandbox_runtime.credentials.git_credential_helper "$@"\''
+            " 'exec python3 -m sandbox_runtime.credentials.git_credential_helper \"$@\"'"
             " > /usr/local/bin/oi-git-credentials",
             "chmod 0755 /usr/local/bin/oi-git-credentials",
             "git config --system credential.helper /usr/local/bin/oi-git-credentials",
@@ -84,7 +92,7 @@ def build_base_image(repo_root: Path) -> Image:
                 "PATH": "/root/.bun/bin:/usr/local/bin:/usr/bin:/bin",
                 "PYTHONPATH": "/app",
                 "NODE_PATH": "/usr/lib/node_modules",
-                "SANDBOX_VERSION": SANDBOX_VERSION,
+                "SANDBOX_VERSION": sandbox_version,
             }
         )
         .add_local_dir(str(sandbox_runtime_dir), "/app/sandbox_runtime")

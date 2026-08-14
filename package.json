@@ -19,6 +19,7 @@
     "typecheck": "npm run build -w @open-inspect/shared && npm run typecheck --workspaces --if-present",
     "knip": "knip",
     "build": "npm run build -w @open-inspect/shared && npm run build --workspaces --if-present",
+    "test:runtime-release": "node scripts/validate-runtime-release.mjs",
     "build:opencomputer-template": "npm run build-template -w @open-inspect/opencomputer-infra --",
     "prepare": "node -e \"if (process.env.CI) process.exit(0)\" && husky"
   },

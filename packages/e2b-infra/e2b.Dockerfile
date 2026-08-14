@@ -1,8 +1,8 @@
 # Open-Inspect E2B sandbox template.
 #
-# Mirrors the toolchain pinned in packages/daytona-infra/src/toolchain.py so an
-# E2B sandbox boots the same sandbox-runtime supervisor that Modal and Daytona use.
-# Keep the versions below in sync with toolchain.py.
+# Mirrors the shared sandbox runtime toolchain so an E2B sandbox boots the same
+# supervisor that Modal and Daytona use. build-template.py resolves the OpenCode
+# version token from sandbox_runtime/release.json before sending this to E2B.
 #
 # Built remotely on E2B (amd64) via the Template SDK — see build-template.py,
 # which stages packages/sandbox-runtime/src/sandbox_runtime and applies the COPY /
@@ -13,8 +13,8 @@
 
 FROM python:3.12-slim-bookworm
 
-# Pinned toolchain versions (keep in sync with daytona-infra/src/toolchain.py).
-ARG OPENCODE_VERSION=1.18.11
+# Pinned toolchain versions.
+ARG OPENCODE_VERSION=__OPENCODE_VERSION__
 ARG CODE_SERVER_VERSION=4.109.5
 ARG AGENT_BROWSER_VERSION=0.21.2
 

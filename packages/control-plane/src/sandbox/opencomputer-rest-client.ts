@@ -7,6 +7,7 @@
  */
 
 import { createLogger } from "../logger";
+import { MANAGED_SANDBOX_VERSION } from "../runtime-release";
 import { z } from "zod";
 
 const log = createLogger("opencomputer-rest-client");
@@ -225,9 +226,8 @@ const RUNTIME_HOSTS_BOOTSTRAP =
 // OpenComputer launches the runtime via `exec`, which does NOT inherit the
 // image's baked env, so SANDBOX_VERSION must be re-exported here — otherwise the
 // runtime reports an empty version and the build-complete callback is rejected
-// (runtime-version floor check). Keep in sync with the value baked in
-// packages/opencomputer-infra/src/build-template.ts (SANDBOX_VERSION).
-const OPENCOMPUTER_SANDBOX_VERSION = "v57-vnc-opencode-1-18-11";
+// (runtime-version floor check). Both this export and the image's baked value
+// derive from sandbox-runtime's release manifest.
 const RUNTIME_ENV_EXPORTS =
   "export HOME=/home/sandbox " +
   `VIRTUAL_ENV=${PYTHON_VENV} ` +
@@ -238,7 +238,7 @@ const RUNTIME_ENV_EXPORTS =
   `NO_PROXY=${LOCAL_NO_PROXY} ` +
   `no_proxy=${LOCAL_NO_PROXY} ` +
   `PATH=${PYTHON_VENV}/bin:/home/sandbox/.npm-global/bin:${USER_BIN}:/home/sandbox/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin ` +
-  `SANDBOX_VERSION=${OPENCOMPUTER_SANDBOX_VERSION} ` +
+  `SANDBOX_VERSION=${MANAGED_SANDBOX_VERSION} ` +
   RUNTIME_CA_EXPORTS;
 const RUNTIME_CA_BOOTSTRAP =
   `[ -f ${OPENSANDBOX_PROXY_CA} ] && sudo update-ca-certificates >/tmp/openinspect-update-ca.log 2>&1 || true; ` +

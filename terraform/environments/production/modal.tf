@@ -4,7 +4,7 @@
 
 # Calculate hash of Modal source files for change detection
 # Uses sha256sum (Linux) or shasum (macOS) for cross-platform compatibility
-# Includes .py/.js/.ts under src/ AND modal-infra's pyproject.toml + uv.lock, so
+# Includes source files under src/ AND modal-infra's pyproject.toml + uv.lock, so
 # dependency-only changes (e.g. a modal version bump) also trigger a redeploy.
 data "external" "modal_source_hash" {
   count = local.use_modal_backend ? 1 : 0
@@ -12,9 +12,9 @@ data "external" "modal_source_hash" {
   program = ["bash", "-c", <<-EOF
     cd ${var.project_root}
     if command -v sha256sum &> /dev/null; then
-      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec sha256sum {} \; ; sha256sum packages/modal-infra/deploy.py packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock terraform/modules/modal-app/scripts/deploy.sh ) | sha256sum | cut -d' ' -f1)
+      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.json" \) -exec sha256sum {} \; ; sha256sum packages/modal-infra/deploy.py packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock terraform/modules/modal-app/scripts/deploy.sh ) | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
     else
-      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" \) -exec shasum -a 256 {} \; ; shasum -a 256 packages/modal-infra/deploy.py packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock terraform/modules/modal-app/scripts/deploy.sh ) | shasum -a 256 | cut -d' ' -f1)
+      hash=$( ( find packages/modal-infra/src packages/sandbox-runtime/src -type f \( -name "*.py" -o -name "*.js" -o -name "*.ts" -o -name "*.json" \) -exec shasum -a 256 {} \; ; shasum -a 256 packages/modal-infra/deploy.py packages/modal-infra/pyproject.toml packages/modal-infra/uv.lock terraform/modules/modal-app/scripts/deploy.sh ) | LC_ALL=C sort | shasum -a 256 | cut -d' ' -f1)
     fi
     echo "{\"hash\": \"$hash\"}"
   EOF

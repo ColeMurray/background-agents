@@ -16,15 +16,15 @@ from pathlib import Path
 import modal
 
 import sandbox_runtime
+from sandbox_runtime.release import (
+    MANAGED_RUNTIME_VERSION,
+)
+from sandbox_runtime.release import (
+    OPENCODE_VERSION as OPENCODE_VERSION,
+)
 
 # Get the path to the sandbox runtime code (provider-agnostic)
 SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
-
-# OpenCode version to install.
-#
-# OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
-# eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -39,6 +39,7 @@ TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 # Cache buster - change this to force Modal image rebuild
 # v58: run gated image builds with the VNC/noVNC desktop toolchain
 CACHE_BUSTER = "v58-image-build-stdin-launch-vnc"
+SANDBOX_VERSION = f"v{MANAGED_RUNTIME_VERSION}-modal-{CACHE_BUSTER}"
 
 # Base image with all development tools
 base_image = (
@@ -205,7 +206,7 @@ base_image = (
             "PNPM_HOME": "/root/.local/share/pnpm",
             "PATH": "/root/.bun/bin:/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
             "PYTHONPATH": "/app",
-            "SANDBOX_VERSION": CACHE_BUSTER,
+            "SANDBOX_VERSION": SANDBOX_VERSION,
             # NODE_PATH for globally installed modules (used by custom tools)
             "NODE_PATH": "/usr/lib/node_modules",
         }

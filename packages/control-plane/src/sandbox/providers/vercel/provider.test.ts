@@ -18,6 +18,7 @@ import {
   MIN_COMPATIBLE_RUNTIME_VERSION,
   parseRuntimeVersionNumber,
 } from "../../../image-builds/model";
+import { MANAGED_SANDBOX_VERSION } from "../../../runtime-release";
 import { VERCEL_SANDBOX_VERSION } from "./bootstrap";
 
 function createSessionResponse(
@@ -691,6 +692,7 @@ describe("VercelSandboxProvider", () => {
   it("reports a compatible authoritative runtime version for image builds", () => {
     const version = parseRuntimeVersionNumber(VERCEL_SANDBOX_VERSION);
 
+    expect(VERCEL_SANDBOX_VERSION).toBe(MANAGED_SANDBOX_VERSION);
     expect(version).not.toBeNull();
     expect(version).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
   });

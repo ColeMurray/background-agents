@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { computeRepositoriesFingerprint } from "./fingerprint";
 import { MIN_COMPATIBLE_RUNTIME_VERSION, parseRuntimeVersionNumber } from "./model";
+import {
+  MANAGED_RUNTIME_VERSION,
+  MANAGED_SANDBOX_VERSION,
+  OPENCODE_VERSION,
+} from "../runtime-release";
 
 const repositories = [
   { repoOwner: "Acme", repoName: "Web", baseBranch: "main" },
@@ -62,8 +67,12 @@ describe("parseRuntimeVersionNumber", () => {
     expect(parseRuntimeVersionNumber("release-v53")).toBeNull();
   });
 
-  it("keeps the floor itself parseable-shaped", () => {
+  it("keeps release metadata internally compatible", () => {
+    expect(OPENCODE_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(Number.isInteger(MANAGED_RUNTIME_VERSION)).toBe(true);
     expect(Number.isInteger(MIN_COMPATIBLE_RUNTIME_VERSION)).toBe(true);
     expect(MIN_COMPATIBLE_RUNTIME_VERSION).toBeGreaterThan(0);
+    expect(parseRuntimeVersionNumber(MANAGED_SANDBOX_VERSION)).toBe(MANAGED_RUNTIME_VERSION);
+    expect(MANAGED_RUNTIME_VERSION).toBeGreaterThanOrEqual(MIN_COMPATIBLE_RUNTIME_VERSION);
   });
 });
