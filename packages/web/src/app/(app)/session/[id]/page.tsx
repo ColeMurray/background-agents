@@ -142,6 +142,7 @@ export default function SessionPage() {
   const isPhone = useMediaQuery("(max-width: 767px)");
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+  const [isDesktopDetailsOpen, setIsDesktopDetailsOpen] = useState(true);
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -175,6 +176,9 @@ export default function SessionPage() {
 
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => !prev);
+  }, []);
+  const toggleDesktopDetails = useCallback(() => {
+    setIsDesktopDetailsOpen((prev) => !prev);
   }, []);
   const openMobileDetails = useCallback(() => {
     setIsDetailsOpen(true);
@@ -352,9 +356,12 @@ export default function SessionPage() {
         connected={connected && ready}
         connecting={connecting || (connected && !ready)}
         isDetailsOpen={isDetailsOpen}
+        isDesktopDetailsOpen={isDesktopDetailsOpen}
+        showDesktopDetailsToggle={!resolvedDiff}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
         onToggleDetails={toggleDetails}
+        onToggleDesktopDetails={toggleDesktopDetails}
         onOpenMobileDetails={openMobileDetails}
         actions={{
           sessionId,
@@ -388,6 +395,7 @@ export default function SessionPage() {
             workspace={sessionWorkspace}
             sidebar={
               <SessionRightSidebar
+                isOpen={isDesktopDetailsOpen && !resolvedDiff}
                 sessionId={sessionId}
                 sessionState={sessionState}
                 participants={profiledParticipants}

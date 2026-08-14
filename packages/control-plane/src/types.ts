@@ -2,7 +2,6 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import { z } from "zod";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 // Environment bindings
@@ -121,13 +120,3 @@ export interface ClientInfo {
   ws: WebSocket;
   lastFetchHistoryAt?: number;
 }
-
-export const githubTokenResponseSchema = z.object({
-  access_token: z.string(),
-  token_type: z.string(),
-  scope: z.string(),
-  refresh_token: z.string().optional(),
-  expires_in: z.number().optional(),
-});
-
-export type GitHubTokenResponse = z.infer<typeof githubTokenResponseSchema>;

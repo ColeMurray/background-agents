@@ -43,6 +43,87 @@ function createSessionState(overrides: Partial<SessionState> = {}): SessionState
 }
 
 describe("SessionHeader", () => {
+  it("lets desktop users hide and show the session details sidebar", () => {
+    const onToggleDesktopDetails = vi.fn();
+    const { rerender } = render(
+      <SessionHeader
+        sessionState={null}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Desktop details" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={onToggleDesktopDetails}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const hideButton = screen.getByRole("button", { name: "Hide session details" });
+    const connectedStatus = screen.getByText("Connected");
+    expect(hideButton).toHaveClass("hidden", "lg:block");
+    expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
+    expect(hideButton).toHaveAttribute("aria-expanded", "true");
+    expect(hideButton.querySelector('line[x1="15"][x2="15"]')).toBeInTheDocument();
+    expect(
+      connectedStatus.compareDocumentPosition(hideButton) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    fireEvent.click(hideButton);
+    expect(onToggleDesktopDetails).toHaveBeenCalledOnce();
+
+    rerender(
+      <SessionHeader
+        sessionState={null}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Desktop details" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen={false}
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={onToggleDesktopDetails}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Show session details" })).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+  });
+
+  it("hides the desktop details toggle while changes own the right-hand surface", () => {
+    render(
+      <SessionHeader
+        sessionState={null}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Review changes" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle={false}
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: "Hide session details" })).not.toBeInTheDocument();
+  });
+
   it("renders no-repository fallback data as loaded while socket state is absent", () => {
     render(
       <SessionHeader
@@ -51,9 +132,12 @@ describe("SessionHeader", () => {
         connected={false}
         connecting={true}
         isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
@@ -75,9 +159,12 @@ describe("SessionHeader", () => {
         connected
         connecting={false}
         isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={onToggleDetails}
+        onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={onOpenMobileDetails}
         actions={actions}
         renameSession={vi.fn()}
@@ -106,9 +193,12 @@ describe("SessionHeader", () => {
         connected
         connecting={false}
         isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
@@ -129,9 +219,12 @@ describe("SessionHeader", () => {
       sessionState: createSessionState(),
       fallbackSessionInfo: { repoOwner: "acme", repoName: "web", title: "Status icons" },
       isDetailsOpen: false,
+      isDesktopDetailsOpen: true,
+      showDesktopDetailsToggle: true,
       detailsButtonRef: createRef<HTMLButtonElement>(),
       actionsButtonRef: createRef<HTMLButtonElement>(),
       onToggleDetails: vi.fn(),
+      onToggleDesktopDetails: vi.fn(),
       onOpenMobileDetails: vi.fn(),
       actions,
       renameSession: vi.fn(),
@@ -159,9 +252,12 @@ describe("SessionHeader", () => {
         connected
         connecting={false}
         isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
