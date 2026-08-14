@@ -25,10 +25,12 @@ export default function AutomationTemplatesPage() {
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-3xl mx-auto">
           <div className="mb-6">
-            <h1 className="text-3xl font-semibold text-foreground">Automation templates</h1>
+            <h1 className="text-2xl font-semibold text-foreground sm:text-3xl">
+              Automation templates
+            </h1>
             <p className="mt-1.5 text-sm text-muted-foreground">
               Start from a pre-built idea instead of a blank form. Pick a template, choose a
               repository, and create.
