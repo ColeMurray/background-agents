@@ -6,7 +6,11 @@ import type {
   AutomationEventSource,
   JsonPathFilter,
 } from "@open-inspect/shared/triggers";
-import { conditionRegistry, GITHUB_CONCLUSIONS } from "@open-inspect/shared/triggers";
+import {
+  conditionRegistry,
+  DEFAULT_GITHUB_CONCLUSION,
+  GITHUB_CONCLUSIONS,
+} from "@open-inspect/shared/triggers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -89,14 +93,14 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
         newCondition = {
           type: "conclusion",
           operator: "eq",
-          value: GITHUB_CONCLUSIONS[0],
+          value: DEFAULT_GITHUB_CONCLUSION,
         };
         break;
       case "check_conclusion":
         newCondition = {
           type: "check_conclusion",
           operator: "eq",
-          value: GITHUB_CONCLUSIONS[0],
+          value: DEFAULT_GITHUB_CONCLUSION,
         };
         break;
       case "workflow_name":

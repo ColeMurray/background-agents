@@ -208,6 +208,12 @@ export function buildCheckSuiteContextBlock(payload: CheckSuitePayload): string 
   return wrapUserContextTag(lines.join("\n"));
 }
 
+/**
+ * Build the context block for `workflow_run.completed`. The workflow name and
+ * run ID are required; a missing conclusion is rendered as unknown. The
+ * workflow path, branch, commit, and run URL are appended when GitHub supplies
+ * them.
+ */
 export function buildWorkflowRunContextBlock(payload: WorkflowRunPayload): string {
   const run = payload.workflow_run;
   const lines = [

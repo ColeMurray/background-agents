@@ -14,12 +14,18 @@ import { slackSource, slackConditions } from "./slack";
 import { matchGlob } from "./glob";
 import type { AutomationEvent } from "./types";
 
+export const DEFAULT_GITHUB_CONCLUSION = "success" as const;
+
 export const GITHUB_CONCLUSIONS = [
-  "success",
+  DEFAULT_GITHUB_CONCLUSION,
   "failure",
   "neutral",
   "cancelled",
   "timed_out",
+  "action_required",
+  "skipped",
+  "stale",
+  "startup_failure",
 ] as const;
 
 const githubConclusionSet: ReadonlySet<string> = new Set(GITHUB_CONCLUSIONS);
