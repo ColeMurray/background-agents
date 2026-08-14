@@ -135,13 +135,13 @@ export function useSessionSocket(
       const finish = (result: T | CorrelatedRequestFailure) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        clearTimeout(ackTimeoutId);
         pendingRequestsRef.current.delete(clientRequestId);
         onSettled?.();
         resolve(result);
       };
 
-      const timeout = setTimeout(
+      const ackTimeoutId = setTimeout(
         () => finish({ ok: false, reason: "timeout" }),
         PROMPT_ACK_TIMEOUT_MS
       );
