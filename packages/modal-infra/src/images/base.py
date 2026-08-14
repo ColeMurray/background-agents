@@ -43,9 +43,12 @@ AGENT_BROWSER_VERSION = "0.21.2"
 TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
-# Cache buster - change this to force Modal image rebuild
+# Cache buster - change this to force Modal image rebuild.
+# The numeric generation is one sequence shared by every image-build provider,
+# and MIN_REBUILD_RUNTIME_VERSION gates which prebuilt images get rebuilt onto
+# it, so bump every provider's label together.
 # v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
-CACHE_BUSTER = "v59-opencode-message-id-wraparound"
+CACHE_BUSTER = "v59-opencode-1-18-18"
 
 # Base image with all development tools
 base_image = (
