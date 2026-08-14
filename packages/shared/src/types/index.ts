@@ -163,7 +163,6 @@ export {
   automationRepositorySchema,
   automationSchema,
   listAutomationsResponseSchema,
-  listAutomationsPageResponseSchema,
 } from "./automations";
 export type {
   AutomationRepository,
@@ -173,7 +172,6 @@ export type {
   UpdateAutomationRequest,
   AutomationRun,
   ListAutomationsResponse,
-  ListAutomationsPageResponse,
   AutomationInvocation,
   ListAutomationInvocationsResponse,
 } from "./automations";

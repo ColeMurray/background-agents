@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Automation, ListAutomationsPageResponse } from "@open-inspect/shared";
+import type { Automation, ListAutomationsResponse } from "@open-inspect/shared";
 import { useAutomations } from "./use-automations";
 
 vi.mock("@/lib/auth-session", () => ({
@@ -54,7 +54,7 @@ describe("useAutomations", () => {
   });
 
   it("loads and appends cursor pages for a name search", async () => {
-    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsPageResponse> => {
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
       if (path.includes("cursor=")) {
         return { automations: [secondAutomation], hasMore: false, nextCursor: null };
       }
@@ -80,7 +80,7 @@ describe("useAutomations", () => {
 
   it("replaces loaded pages when the search changes", async () => {
     const fetcher = vi.fn(
-      async (path: string): Promise<ListAutomationsPageResponse> => ({
+      async (path: string): Promise<ListAutomationsResponse> => ({
         automations: path.includes("search=Weekly") ? [secondAutomation] : [firstAutomation],
         hasMore: false,
         nextCursor: null,
@@ -101,7 +101,7 @@ describe("useAutomations", () => {
   it("rebuilds later cursor pages when the first page changes", async () => {
     const insertedAutomation = automation("auto-3", "New automation");
     let listVersion: "initial" | "updated" = "initial";
-    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsPageResponse> => {
+    const fetcher = vi.fn(async (path: string): Promise<ListAutomationsResponse> => {
       if (path.includes("cursor=updated")) {
         return {
           automations: [firstAutomation, secondAutomation],

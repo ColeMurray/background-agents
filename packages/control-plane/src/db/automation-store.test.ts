@@ -250,7 +250,7 @@ describe("AutomationStore", () => {
         allResults: [sampleRow],
       });
       const store = new AutomationStore(db);
-      const result = await store.listPage({ limit: 25 });
+      const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(1);
       expect(result.hasMore).toBe(false);
     });

@@ -69,7 +69,7 @@ export interface AutomationRow {
   trigger_auth_data: string | null;
 }
 
-export type AutomationListPage = { automations: AutomationRow[] } & (
+export type AutomationListResult = { automations: AutomationRow[] } & (
   | { hasMore: false; nextCursor: null }
   | { hasMore: true; nextCursor: AutomationListCursor }
 );
@@ -350,31 +350,13 @@ export class AutomationStore {
       .first<AutomationRow>();
   }
 
-  async list(
-    options: { repoOwner?: string; repoName?: string } = {}
-  ): Promise<{ automations: AutomationRow[]; total: number }> {
-    const conditions: string[] = ["deleted_at IS NULL"];
-    const params: unknown[] = [];
-
-    appendRepositoryFilter(conditions, params, options);
-
-    const result = await this.db
-      .prepare(
-        `SELECT * FROM automations WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC`
-      )
-      .bind(...params)
-      .all<AutomationRow>();
-    const automations = result.results || [];
-    return { automations, total: automations.length };
-  }
-
-  async listPage(options: {
+  async list(options: {
     limit: number;
     cursor?: AutomationListCursor | null;
     nameSearch?: string;
     repoOwner?: string;
     repoName?: string;
-  }): Promise<AutomationListPage> {
+  }): Promise<AutomationListResult> {
     const conditions: string[] = ["deleted_at IS NULL"];
     const params: unknown[] = [];
 

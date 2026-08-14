@@ -17,7 +17,6 @@ import type { Env } from "../types";
 
 const mockStore = {
   list: vi.fn(),
-  listPage: vi.fn(),
   getById: vi.fn(),
   update: vi.fn(),
   softDelete: vi.fn(),
@@ -223,45 +222,51 @@ describe("automation route handlers", () => {
   });
 
   describe("GET /automations (list)", () => {
-    it("returns list of automations", async () => {
+    it("returns the first page with default pagination", async () => {
       mockStore.list.mockResolvedValue({
         automations: [sampleRow],
-        total: 1,
+        hasMore: false,
+        nextCursor: null,
       });
 
       const res = await callRoute("GET", "/automations");
       expect(res.status).toBe(200);
 
-      const body = await res.json<{ automations: unknown[]; total: number }>();
+      const body = await res.json<{
+        automations: unknown[];
+        hasMore: boolean;
+        nextCursor: string | null;
+      }>();
       expect(body.automations).toHaveLength(1);
-      expect(body.total).toBe(1);
-      expect(mockStore.list).toHaveBeenCalledWith({});
-      expect(mockStore.listPage).not.toHaveBeenCalled();
+      expect(body.hasMore).toBe(false);
+      expect(body.nextCursor).toBeNull();
+      expect(mockStore.list).toHaveBeenCalledWith({ limit: 25, cursor: null });
     });
 
     it("passes name search and pagination params to the store", async () => {
-      mockStore.listPage.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
+      mockStore.list.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
 
       await callRoute("GET", "/automations", {
         query: { search: "  Daily sync  ", limit: "10", cursor: "123:auto-9" },
       });
 
-      expect(mockStore.listPage).toHaveBeenCalledWith({
+      expect(mockStore.list).toHaveBeenCalledWith({
         nameSearch: "Daily sync",
         limit: 10,
         cursor: { createdAt: 123, id: "auto-9" },
       });
-      expect(mockStore.list).not.toHaveBeenCalled();
     });
 
     it("preserves explicit repository filters", async () => {
-      mockStore.list.mockResolvedValue({ automations: [], total: 0 });
+      mockStore.list.mockResolvedValue({ automations: [], hasMore: false, nextCursor: null });
 
       await callRoute("GET", "/automations", {
         query: { repoOwner: "acme", repoName: "web-app" },
       });
 
       expect(mockStore.list).toHaveBeenCalledWith({
+        limit: 25,
+        cursor: null,
         repoOwner: "acme",
         repoName: "web-app",
       });

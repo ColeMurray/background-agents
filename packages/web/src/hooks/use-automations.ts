@@ -1,10 +1,10 @@
 import useSWR, { useSWRConfig } from "swr";
 import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
-import { listAutomationsPageResponseSchema } from "@open-inspect/shared";
+import { listAutomationsResponseSchema } from "@open-inspect/shared";
 import type {
   Automation,
-  ListAutomationsPageResponse,
+  ListAutomationsResponse,
   ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
 
@@ -22,15 +22,15 @@ export function useAutomations(nameSearch: string) {
   const { fetcher } = useSWRConfig();
   const normalizedNameSearch = nameSearch.trim();
 
-  const fetchAutomationPage = async (path: string): Promise<ListAutomationsPageResponse> => {
+  const fetchAutomationPage = async (path: string): Promise<ListAutomationsResponse> => {
     if (!fetcher) throw new Error("Missing SWR fetcher");
-    const parsed = listAutomationsPageResponseSchema.safeParse(await fetcher(path));
+    const parsed = listAutomationsResponseSchema.safeParse(await fetcher(path));
     if (!parsed.success) throw new Error("Invalid automations response");
     return parsed.data;
   };
 
   const { data, error, isValidating, mutate, setSize, size } =
-    useSWRInfinite<ListAutomationsPageResponse>(
+    useSWRInfinite<ListAutomationsResponse>(
       (pageIndex, previousPage) => {
         if (!session) return null;
         if (pageIndex === 0) return buildAutomationListPath(normalizedNameSearch);

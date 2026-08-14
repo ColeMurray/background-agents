@@ -17,7 +17,6 @@ import type {
   AutomationRepositoryInput,
   CreateEnvironmentInput,
   ListAutomationsResponse,
-  ListAutomationsPageResponse,
   RepositoryInput,
   ServerMessage,
   UpdateEnvironmentInput,
@@ -26,7 +25,6 @@ import type {
   serverMessageSchema,
   updateEnvironmentInputSchema,
   automationSchema,
-  listAutomationsPageResponseSchema,
   listAutomationsResponseSchema,
 } from ".";
 import type { SandboxEvent, sandboxEventSchema } from "./sandbox-events";
@@ -58,9 +56,6 @@ it("preserves public Zod input and output relationships", () => {
   expectTypeOf<Automation>().toEqualTypeOf<z.output<typeof automationSchema>>();
   expectTypeOf<ListAutomationsResponse>().toEqualTypeOf<
     z.output<typeof listAutomationsResponseSchema>
-  >();
-  expectTypeOf<ListAutomationsPageResponse>().toEqualTypeOf<
-    z.output<typeof listAutomationsPageResponseSchema>
   >();
 });
 

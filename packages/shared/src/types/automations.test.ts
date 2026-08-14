@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listAutomationsPageResponseSchema } from "./automations";
+import { listAutomationsResponseSchema } from "./automations";
 
 const automation = {
   id: "auto-1",
@@ -23,10 +23,10 @@ const automation = {
   environmentIds: [],
 };
 
-describe("listAutomationsPageResponseSchema", () => {
+describe("listAutomationsResponseSchema", () => {
   it("accepts a valid cursor page", () => {
     expect(
-      listAutomationsPageResponseSchema.parse({
+      listAutomationsResponseSchema.parse({
         automations: [automation],
         hasMore: true,
         nextCursor: "123:auto-1",
@@ -36,7 +36,7 @@ describe("listAutomationsPageResponseSchema", () => {
 
   it("rejects contradictory pagination", () => {
     expect(
-      listAutomationsPageResponseSchema.safeParse({
+      listAutomationsResponseSchema.safeParse({
         automations: [automation],
         hasMore: true,
         nextCursor: null,
@@ -46,7 +46,7 @@ describe("listAutomationsPageResponseSchema", () => {
 
   it("rejects malformed automation and trigger-condition records", () => {
     expect(
-      listAutomationsPageResponseSchema.safeParse({
+      listAutomationsResponseSchema.safeParse({
         automations: [
           {
             ...automation,

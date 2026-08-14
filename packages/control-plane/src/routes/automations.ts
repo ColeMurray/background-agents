@@ -314,7 +314,7 @@ const automationListLimitSchema = z
     message: "Invalid limit",
   });
 
-const automationListPageQuerySchema = z.object({
+const automationListQuerySchema = z.object({
   limit: automationListLimitSchema.optional(),
   cursor: z.string().optional(),
   search: z
@@ -353,71 +353,42 @@ function readAutomationListQuery(searchParams: URLSearchParams): ReadAutomationL
 type ParseAutomationListParamsResult =
   | {
       ok: true;
-      request:
-        | {
-            kind: "complete";
-            filters: { repoOwner?: string; repoName?: string };
-          }
-        | {
-            kind: "page";
-            options: {
-              limit: number;
-              cursor: AutomationListCursor | null;
-              nameSearch?: string;
-              repoOwner?: string;
-              repoName?: string;
-            };
-          };
+      options: {
+        limit: number;
+        cursor: AutomationListCursor | null;
+        nameSearch?: string;
+        repoOwner?: string;
+        repoName?: string;
+      };
     }
   | { ok: false; error: string };
 
 function parseAutomationListParams(request: Request): ParseAutomationListParamsResult {
   const url = new URL(request.url);
-  const usesPagination =
-    url.searchParams.has("limit") ||
-    url.searchParams.has("cursor") ||
-    url.searchParams.has("search");
   const rawQuery = readAutomationListQuery(url.searchParams);
   if (!rawQuery.ok) return rawQuery;
 
-  const parsedQuery = automationListPageQuerySchema.safeParse(rawQuery.query);
+  const parsedQuery = automationListQuerySchema.safeParse(rawQuery.query);
   if (!parsedQuery.success) {
     return {
       ok: false,
       error: parsedQuery.error.issues[0]?.message ?? "Invalid automation list query",
     };
   }
-  const { repoOwner, repoName } = parsedQuery.data;
-
-  if (!usesPagination) {
-    return {
-      ok: true,
-      request: {
-        kind: "complete",
-        filters: {
-          ...(repoOwner ? { repoOwner } : {}),
-          ...(repoName ? { repoName } : {}),
-        },
-      },
-    };
-  }
-
   const parsedCursor = parseAutomationListCursor(parsedQuery.data.cursor ?? null);
   if (!parsedCursor.ok) return parsedCursor;
 
+  const { repoOwner, repoName } = parsedQuery.data;
   const nameSearch = parsedQuery.data.search;
 
   return {
     ok: true,
-    request: {
-      kind: "page",
-      options: {
-        limit: parsedQuery.data.limit ?? DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
-        cursor: parsedCursor.cursor,
-        ...(nameSearch ? { nameSearch } : {}),
-        ...(repoOwner ? { repoOwner } : {}),
-        ...(repoName ? { repoName } : {}),
-      },
+    options: {
+      limit: parsedQuery.data.limit ?? DEFAULT_AUTOMATION_LIST_PAGE_SIZE,
+      cursor: parsedCursor.cursor,
+      ...(nameSearch ? { nameSearch } : {}),
+      ...(repoOwner ? { repoOwner } : {}),
+      ...(repoName ? { repoName } : {}),
     },
   };
 }
@@ -432,10 +403,7 @@ async function handleListAutomations(
   if (!parsed.ok) return error(parsed.error, 400);
 
   const store = new AutomationStore(ctx.db);
-  const result =
-    parsed.request.kind === "complete"
-      ? await store.list(parsed.request.filters)
-      : await store.listPage(parsed.request.options);
+  const result = await store.list(parsed.options);
   const automationIds = result.automations.map((row) => row.id);
   const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
     store.getRepositoriesForAutomationIds(automationIds),
@@ -449,10 +417,6 @@ async function handleListAutomations(
       environmentsByAutomation.get(row.id) ?? []
     )
   );
-  if ("total" in result) {
-    return json({ automations, total: result.total });
-  }
-
   return json({
     automations,
     hasMore: result.hasMore,

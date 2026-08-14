@@ -153,12 +153,7 @@ export interface AutomationRun {
   environmentId: string | null;
 }
 
-export const listAutomationsResponseSchema = z.object({
-  automations: z.array(automationSchema),
-  total: z.number().int().nonnegative(),
-});
-
-export const listAutomationsPageResponseSchema = z.discriminatedUnion("hasMore", [
+export const listAutomationsResponseSchema = z.discriminatedUnion("hasMore", [
   z.object({
     automations: z.array(automationSchema),
     hasMore: z.literal(false),
@@ -172,8 +167,6 @@ export const listAutomationsPageResponseSchema = z.discriminatedUnion("hasMore",
 ]);
 
 export type ListAutomationsResponse = z.infer<typeof listAutomationsResponseSchema>;
-
-export type ListAutomationsPageResponse = z.infer<typeof listAutomationsPageResponseSchema>;
 
 /**
  * One firing of an automation: 0 runs when skipped, else one run per target —

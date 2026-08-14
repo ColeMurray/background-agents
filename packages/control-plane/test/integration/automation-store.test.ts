@@ -222,9 +222,9 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-a", name: "First" }));
       await store.create(makeAutomation({ id: "auto-b", name: "Second" }));
 
-      const result = await store.list();
+      const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(2);
-      expect(result.total).toBe(2);
+      expect(result.hasMore).toBe(false);
     });
 
     it("filters by repo owner and name via repository rows", async () => {
@@ -238,7 +238,7 @@ describe("AutomationStore (D1 integration)", () => {
         { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: null },
       ]);
 
-      const result = await store.list({ repoOwner: "acme", repoName: "api" });
+      const result = await store.list({ limit: 25, repoOwner: "acme", repoName: "api" });
       expect(result.automations[0].id).toBe("auto-c");
     });
 
@@ -258,11 +258,11 @@ describe("AutomationStore (D1 integration)", () => {
         { repo_owner: "acme", repo_name: "web", repo_id: 2, base_branch: "develop" },
       ]);
 
-      const byApi = await store.list({ repoOwner: "acme", repoName: "api" });
+      const byApi = await store.list({ limit: 25, repoOwner: "acme", repoName: "api" });
       expect(byApi.automations.map((a) => a.id)).toEqual(["auto-multi"]);
-      const byWeb = await store.list({ repoOwner: "acme", repoName: "web" });
+      const byWeb = await store.list({ limit: 25, repoOwner: "acme", repoName: "web" });
       expect(byWeb.automations.map((a) => a.id)).toEqual(["auto-multi"]);
-      const byOther = await store.list({ repoOwner: "acme", repoName: "other" });
+      const byOther = await store.list({ limit: 25, repoOwner: "acme", repoName: "other" });
       expect(byOther.automations).toHaveLength(0);
     });
 
@@ -271,7 +271,7 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-e" }));
       await store.softDelete("auto-e");
 
-      const result = await store.list();
+      const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(0);
     });
 
@@ -281,7 +281,7 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-old", created_at: now - 2000 }));
       await store.create(makeAutomation({ id: "auto-new", created_at: now }));
 
-      const result = await store.list();
+      const result = await store.list({ limit: 25 });
       expect(result.automations[0].id).toBe("auto-new");
       expect(result.automations[1].id).toBe("auto-old");
     });
@@ -301,18 +301,18 @@ describe("AutomationStore (D1 integration)", () => {
         })
       );
 
-      const daily = await store.listPage({ limit: 25, nameSearch: "DEPENDENCY" });
+      const daily = await store.list({ limit: 25, nameSearch: "DEPENDENCY" });
       expect(daily.automations.map((automation) => automation.id)).toEqual(["auto-daily"]);
 
-      const percent = await store.listPage({ limit: 25, nameSearch: "100%" });
+      const percent = await store.list({ limit: 25, nameSearch: "100%" });
       expect(percent.automations.map((automation) => automation.id)).toEqual(["auto-percent"]);
 
-      const underscore = await store.listPage({ limit: 25, nameSearch: "Audit_" });
+      const underscore = await store.list({ limit: 25, nameSearch: "Audit_" });
       expect(underscore.automations.map((automation) => automation.id)).toEqual([
         "auto-underscore",
       ]);
 
-      const slash = await store.listPage({ limit: 25, nameSearch: String.raw`Audit\team` });
+      const slash = await store.list({ limit: 25, nameSearch: String.raw`Audit\team` });
       expect(slash.automations.map((automation) => automation.id)).toEqual(["auto-slash"]);
     });
 
@@ -323,7 +323,7 @@ describe("AutomationStore (D1 integration)", () => {
       await store.create(makeAutomation({ id: "auto-b", created_at: createdAt }));
       await store.create(makeAutomation({ id: "auto-c", created_at: createdAt }));
 
-      const firstPage = await store.listPage({ limit: 2 });
+      const firstPage = await store.list({ limit: 2 });
       expect(firstPage.automations.map((automation) => automation.id)).toEqual([
         "auto-c",
         "auto-b",
@@ -331,7 +331,7 @@ describe("AutomationStore (D1 integration)", () => {
       expect(firstPage.hasMore).toBe(true);
       expect(firstPage.nextCursor).toEqual({ createdAt, id: "auto-b" });
 
-      const secondPage = await store.listPage({ limit: 2, cursor: firstPage.nextCursor! });
+      const secondPage = await store.list({ limit: 2, cursor: firstPage.nextCursor! });
       expect(secondPage.automations.map((automation) => automation.id)).toEqual(["auto-a"]);
       expect(secondPage.hasMore).toBe(false);
       expect(secondPage.nextCursor).toBeNull();
