@@ -1,48 +1,17 @@
+import { z } from "zod";
 import type { SqlStorage } from "./sql-storage";
 
 /** WS client mapping result for hibernation recovery. */
-export interface WsClientMappingResult {
-  participant_id: string;
-  client_id: string | null;
-  user_id: string;
-  canonical_user_id: string | null;
-  scm_name: string | null;
-  scm_login: string | null;
-}
+const wsClientMappingResultSchema = z.object({
+  participant_id: z.string(),
+  client_id: z.string().nullable(),
+  user_id: z.string(),
+  canonical_user_id: z.string().nullable(),
+  scm_name: z.string().nullable(),
+  scm_login: z.string().nullable(),
+});
 
-function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function parseWsClientMapping(row: unknown): WsClientMappingResult {
-  if (
-    row === null ||
-    typeof row !== "object" ||
-    !("participant_id" in row) ||
-    typeof row.participant_id !== "string" ||
-    !("client_id" in row) ||
-    !isNullableString(row.client_id) ||
-    !("user_id" in row) ||
-    typeof row.user_id !== "string" ||
-    !("canonical_user_id" in row) ||
-    !isNullableString(row.canonical_user_id) ||
-    !("scm_name" in row) ||
-    !isNullableString(row.scm_name) ||
-    !("scm_login" in row) ||
-    !isNullableString(row.scm_login)
-  ) {
-    throw new Error("Invalid WebSocket client mapping row");
-  }
-
-  return {
-    participant_id: row.participant_id,
-    client_id: row.client_id,
-    user_id: row.user_id,
-    canonical_user_id: row.canonical_user_id,
-    scm_name: row.scm_name,
-    scm_login: row.scm_login,
-  };
-}
+export type WsClientMappingResult = z.infer<typeof wsClientMappingResultSchema>;
 
 /** Data for a WS client mapping. */
 export interface WsClientMappingData {
@@ -78,7 +47,7 @@ export class WsClientMappingRepository {
       wsId
     );
     const row = result.toArray()[0];
-    return row === undefined ? null : parseWsClientMapping(row);
+    return row === undefined ? null : wsClientMappingResultSchema.parse(row);
   }
 
   hasWsClientMapping(wsId: string): boolean {
