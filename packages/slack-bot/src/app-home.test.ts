@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { RepoConfig } from "@open-inspect/shared/types/repository-catalog";
 import { buildAppHomeIntroText, buildAppHomeView } from "./app-home";
-import type { RepoConfig } from "./types";
 
 describe("buildAppHomeIntroText", () => {
   it("uses the configured app name", () => {

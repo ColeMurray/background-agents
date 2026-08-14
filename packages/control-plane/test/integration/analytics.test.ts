@@ -5,7 +5,7 @@ import type {
   AnalyticsSummaryResponse,
   AnalyticsTimeseriesResponse,
 } from "@open-inspect/shared/types/analytics";
-import type { SpawnSource } from "@open-inspect/shared";
+import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";

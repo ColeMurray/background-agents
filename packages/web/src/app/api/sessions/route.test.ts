@@ -43,12 +43,12 @@ describe("sessions API route", () => {
 
     const response = await GET(
       request(
-        "/api/sessions?debug=true&limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
+        "/api/sessions?debug=true&limit=10&offset=20&status=active&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
       )
     );
 
     expect(controlPlaneUserFetch).toHaveBeenCalledWith(
-      "/sessions?limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
+      "/sessions?status=active&limit=10&offset=20&excludeStatus=archived&excludeAutomationLineage=true&createdBy=0123456789abcdef0123456789abcdef"
     );
     expect(getServerAuthSession).not.toHaveBeenCalled();
     expect(response.status).toBe(200);

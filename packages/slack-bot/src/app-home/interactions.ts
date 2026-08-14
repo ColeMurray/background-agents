@@ -73,7 +73,7 @@ const APP_HOME_BLOCK_ACTIONS: Record<string, AppHomeBlockActionHandler> = {
   [CLEAR_BRANCH_PREFERENCE_ACTION_ID]: { handle: handleClearBranchPreference },
 };
 
-export async function getRepoBranchSuggestionOptions(
+async function getRepoBranchSuggestionOptions(
   env: Env,
   userId: string,
   query: string | undefined,

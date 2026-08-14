@@ -176,6 +176,8 @@ describe("ModalClient", () => {
             created_at: 1,
             code_server_url: "https://code.test",
             code_server_password: "pw",
+            vnc_url: "https://vnc.test",
+            vnc_password: "vnc-pw",
             ttyd_url: "https://ttyd.test",
             tunnel_urls: { "3000": "https://3000.test" },
           },
@@ -200,6 +202,8 @@ describe("ModalClient", () => {
       createdAt: 1,
       codeServerUrl: "https://code.test",
       codeServerPassword: "pw",
+      vncUrl: "https://vnc.test",
+      vncPassword: "vnc-pw",
       ttydUrl: "https://ttyd.test",
       tunnelUrls: { "3000": "https://3000.test" },
     });
@@ -217,6 +221,8 @@ describe("ModalClient", () => {
             created_at: 1,
             code_server_url: null,
             code_server_password: null,
+            vnc_url: null,
+            vnc_password: null,
             ttyd_url: null,
             tunnel_urls: null,
           },
@@ -241,6 +247,8 @@ describe("ModalClient", () => {
       createdAt: 1,
       codeServerUrl: undefined,
       codeServerPassword: undefined,
+      vncUrl: undefined,
+      vncPassword: undefined,
       ttydUrl: undefined,
       tunnelUrls: undefined,
     });
@@ -336,6 +344,8 @@ describe("ModalClient", () => {
             status: "warming",
             code_server_url: null,
             code_server_password: null,
+            vnc_url: null,
+            vnc_password: null,
             ttyd_url: null,
             tunnel_urls: null,
           },
@@ -363,9 +373,49 @@ describe("ModalClient", () => {
       modalObjectId: undefined,
       codeServerUrl: undefined,
       codeServerPassword: undefined,
+      vncUrl: undefined,
+      vncPassword: undefined,
       ttydUrl: undefined,
       tunnelUrls: undefined,
     });
+  });
+
+  it("sends VNC enablement on create and restore", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            data: { sandbox_id: "sb-1", status: "spawning", created_at: 1 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+    );
+    const client = createModalClient("secret", "acme", "prod-web");
+
+    await client.createSandbox({
+      sessionId: "session-123",
+      repoOwner: null,
+      repoName: null,
+      controlPlaneUrl: "https://control-plane.test",
+      sandboxAuthToken: "auth-token",
+      vncEnabled: true,
+    });
+    await client.restoreSandbox({
+      snapshotImageId: "img-1",
+      sessionId: "session-123",
+      sandboxId: "sandbox-456",
+      sandboxAuthToken: "auth-token",
+      controlPlaneUrl: "https://control-plane.test",
+      repoOwner: null,
+      repoName: null,
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4-5",
+      vncEnabled: true,
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)).vnc_enabled).toBe(true);
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)).vnc_enabled).toBe(true);
   });
 
   it("parses valid snapshot responses", async () => {
@@ -481,7 +531,7 @@ describe("ModalClient", () => {
       callback_url: "https://worker.test/image-builds/build-complete",
       failure_callback_url: "https://worker.test/image-builds/build-failed",
       build_execution_timeout_seconds: 1800,
-      build_timeout_seconds: 2400,
+      provider_session_timeout_seconds: 2400,
     });
     expect(result).toEqual({ providerSessionId: "modal-session-1" });
   });
@@ -498,8 +548,6 @@ describe("ModalClient", () => {
     await client.startImageBuildSandbox({
       buildId: "imgb-1",
       providerSessionId: "modal-session-1",
-      callbackUrl: "https://cp.test/image-builds/build-complete",
-      failureCallbackUrl: "https://cp.test/image-builds/build-failed",
       callbackToken: "cb-token-1",
     });
 
@@ -511,9 +559,86 @@ describe("ModalClient", () => {
     expect(body).toEqual({
       build_id: "imgb-1",
       provider_session_id: "modal-session-1",
-      callback_url: "https://cp.test/image-builds/build-complete",
-      failure_callback_url: "https://cp.test/image-builds/build-failed",
       callback_token: "cb-token-1",
     });
+  });
+
+  it("rejects malformed image build sandbox responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { provider_session_id: 123 } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.createImageBuildSandbox({
+        scopeKind: "repo",
+        scopeId: "acme/repo",
+        buildId: "imgb-1",
+        repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
+        cloneToken: "clone-token",
+        cloneHost: "github.com",
+        cloneUsername: "x-access-token",
+        callbackUrl: "https://cp.test/image-builds/build-complete",
+        failureCallbackUrl: "https://cp.test/image-builds/build-failed",
+        buildExecutionTimeoutSeconds: 1800,
+        providerSessionTimeoutSeconds: 2400,
+      })
+    ).rejects.toThrow("Modal API error: Invalid response");
+  });
+
+  it("rejects malformed image build operation responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ success: "yes" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(
+      client.startImageBuildSandbox({
+        buildId: "imgb-1",
+        providerSessionId: "modal-session-1",
+        callbackToken: "cb-token-1",
+      })
+    ).rejects.toThrow("Modal API error: Invalid response");
+  });
+
+  it("parses valid provider image delete responses", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { provider_image_id: "img-1", deleted: true },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).resolves.toEqual({
+      providerImageId: "img-1",
+      deleted: true,
+    });
+  });
+
+  it("rejects malformed provider image delete responses instead of trusting the payload", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { provider_image_id: "img-1", deleted: "yes" },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    );
+
+    const client = createModalClient("secret", "acme", "prod-web");
+    await expect(client.deleteProviderImage({ providerImageId: "img-1" })).rejects.toThrow(
+      "Modal API error: Invalid response"
+    );
   });
 });

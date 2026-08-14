@@ -1,6 +1,6 @@
 import type { RepositoryShaEntry } from "@open-inspect/shared/types/image-builds";
 import type { CorrelationContext } from "../logger";
-import type { ImageBuildProvider, ImageBuildProviderImageRef, ImageBuildScope } from "./model";
+import type { ImageBuildProviderImageRef, ImageBuildScope } from "./model";
 
 export type ImageBuildWorkflowContext = CorrelationContext;
 
@@ -52,7 +52,6 @@ export type ImageBuildCloneAuth =
 
 /** Every supported provider uses the same create-bind-launch session contract. */
 export interface ImageBuildPlan extends BaseImageBuildPlan {
-  provider: ImageBuildProvider;
   callbackToken: string;
   cloneAuth: ImageBuildCloneAuth;
 }
@@ -65,20 +64,21 @@ export interface ImageBuildStartCallbacks {
 /**
  * Wire form of the build-complete callback after route-level parsing.
  * repository_shas and runtime_version are reported by the build itself —
- * registration fails closed when either is missing or unparseable, because an
- * unversioned image must never pass the floor check.
+ * the route fails closed (400) when either is missing or unparseable, because
+ * an unversioned image must never pass the floor check.
  */
 export interface CompleteImageBuildCallback {
   buildId: string;
-  providerSessionId?: string;
-  repositoryShas?: RepositoryShaEntry[];
-  runtimeVersion?: string;
-  buildDurationMs?: number;
+  providerSessionId: string;
+  repositoryShas: RepositoryShaEntry[];
+  runtimeVersion: string;
+  /** Wire seconds passed through unconverted — the D1 column is also seconds. */
+  buildDurationSeconds: number;
 }
 
 export interface FailImageBuildCallback {
   buildId: string;
-  providerSessionId?: string;
+  providerSessionId: string;
   errorMessage: string;
 }
 

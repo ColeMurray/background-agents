@@ -14,6 +14,7 @@ import {
   type GitHubBotSettings,
   type LinearBotSettings,
   type CodeServerSettings,
+  type VncSettings,
   type SlackGlobalSettings,
   type SlackMentionsPolicy,
   type SlackRoutingRule,
@@ -43,7 +44,7 @@ const ENVIRONMENT_SETTINGS_INTEGRATIONS = new Set<string>(ENVIRONMENT_SETTINGS_I
 
 /** Whether an integration accepts environment-level setting overrides (design §13.5). */
 export function supportsEnvironmentSettings(
-  id: IntegrationId
+  id: keyof IntegrationSettingsMap
 ): id is EnvironmentSettingsIntegrationId {
   return ENVIRONMENT_SETTINGS_INTEGRATIONS.has(id);
 }
@@ -51,7 +52,7 @@ export function supportsEnvironmentSettings(
 export class IntegrationSettingsStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async getGlobal<K extends IntegrationId>(
+  async getGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K
   ): Promise<IntegrationSettingsMap[K]["global"] | null> {
     const row = await this.db
@@ -64,7 +65,7 @@ export class IntegrationSettingsStore {
     return this.normalizeStoredGlobalSettings(integrationId, settings);
   }
 
-  async setGlobal<K extends IntegrationId>(
+  async setGlobal<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): Promise<void> {
@@ -101,14 +102,14 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async deleteGlobal<K extends IntegrationId>(integrationId: K): Promise<void> {
+  async deleteGlobal<K extends keyof IntegrationSettingsMap>(integrationId: K): Promise<void> {
     await this.db
       .prepare("DELETE FROM integration_settings WHERE integration_id = ?")
       .bind(integrationId)
       .run();
   }
 
-  async getRepoSettings<K extends IntegrationId>(
+  async getRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string
   ): Promise<IntegrationSettingsMap[K]["repo"] | null> {
@@ -124,7 +125,7 @@ export class IntegrationSettingsStore {
     return this.normalizeStoredRepoSettings(integrationId, settings);
   }
 
-  async setRepoSettings<K extends IntegrationId>(
+  async setRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string,
     settings: IntegrationSettingsMap[K]["repo"]
@@ -144,14 +145,17 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async deleteRepoSettings<K extends IntegrationId>(integrationId: K, repo: string): Promise<void> {
+  async deleteRepoSettings<K extends keyof IntegrationSettingsMap>(
+    integrationId: K,
+    repo: string
+  ): Promise<void> {
     await this.db
       .prepare("DELETE FROM integration_repo_settings WHERE integration_id = ? AND repo = ?")
       .bind(integrationId, repo.toLowerCase())
       .run();
   }
 
-  async listRepoSettings<K extends IntegrationId>(
+  async listRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K
   ): Promise<Array<{ repo: string; settings: IntegrationSettingsMap[K]["repo"] }>> {
     const { results } = await this.db
@@ -222,7 +226,7 @@ export class IntegrationSettingsStore {
       .run();
   }
 
-  async getResolvedConfig<K extends IntegrationId>(
+  async getResolvedConfig<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     repo: string,
     environmentId?: string | null
@@ -264,7 +268,7 @@ export class IntegrationSettingsStore {
     >;
   }
 
-  private normalizeStoredGlobalSettings<K extends IntegrationId>(
+  private normalizeStoredGlobalSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["global"]
   ): IntegrationSettingsMap[K]["global"] {
@@ -275,7 +279,7 @@ export class IntegrationSettingsStore {
     } as IntegrationSettingsMap[K]["global"];
   }
 
-  private normalizeStoredRepoSettings<K extends IntegrationId>(
+  private normalizeStoredRepoSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"]
   ): IntegrationSettingsMap[K]["repo"] {
@@ -285,7 +289,7 @@ export class IntegrationSettingsStore {
     }) as IntegrationSettingsMap[K]["repo"];
   }
 
-  private validateAndNormalizeSettings<K extends IntegrationId>(
+  private validateAndNormalizeSettings<K extends keyof IntegrationSettingsMap>(
     integrationId: K,
     settings: IntegrationSettingsMap[K]["repo"],
     level: SettingsLevel
@@ -302,6 +306,10 @@ export class IntegrationSettingsStore {
 
     if (integrationId === "code-server") {
       this.validateCodeServerSettings(settings as CodeServerSettings);
+    }
+
+    if (integrationId === "vnc") {
+      this.validateVncSettings(settings as VncSettings);
     }
 
     if (integrationId === "sandbox") {
@@ -414,6 +422,12 @@ export class IntegrationSettingsStore {
   }
 
   private validateCodeServerSettings(settings: CodeServerSettings): void {
+    if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
+      throw new IntegrationSettingsValidationError("enabled must be a boolean");
+    }
+  }
+
+  private validateVncSettings(settings: VncSettings): void {
     if (settings.enabled !== undefined && typeof settings.enabled !== "boolean") {
       throw new IntegrationSettingsValidationError("enabled must be a boolean");
     }

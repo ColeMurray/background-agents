@@ -7,7 +7,7 @@ import { SESSION_ATTACHMENT_IMAGE_MAX_BYTES } from "../media";
 
 const objectKeySchema = z.string().min(1).max(1024);
 
-export const recordAttachmentCommandSchema = z
+const recordAttachmentCommandSchema = z
   .object({
     action: z.literal("record"),
     attachmentId: sessionAttachmentIdSchema,
@@ -16,7 +16,7 @@ export const recordAttachmentCommandSchema = z
   })
   .strict();
 
-export const completeAttachmentCleanupCommandSchema = z
+const completeAttachmentCleanupCommandSchema = z
   .object({
     action: z.literal("complete_cleanup"),
     cleanupClaimedAt: z.number().int().nonnegative(),

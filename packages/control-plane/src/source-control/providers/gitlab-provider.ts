@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
-import type { PullRequestStatus } from "@open-inspect/shared";
+import type { PullRequestStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SourceControlProvider,
   SourceControlAuthContext,
@@ -29,7 +29,7 @@ import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
 /** GitLab API base URL. */
-export const GITLAB_API_BASE = "https://gitlab.com/api/v4";
+const GITLAB_API_BASE = "https://gitlab.com/api/v4";
 
 /** Default per_page for paginated GitLab API requests (GitLab API maximum). */
 const PER_PAGE = 100;
@@ -141,6 +141,14 @@ const gitlabRepositoryListSchema = z.array(
     visibility: z.enum(["private", "internal", "public"]),
   })
 );
+
+/** Wire shape of a GitLab branch response, limited to the head commit ID. */
+const gitlabBranchHeadSchema = z.object({
+  commit: z.object({ id: z.string().min(1) }),
+});
+
+/** Wire shape of list-branches results, limited to the branch name. */
+const gitlabBranchListSchema = z.array(z.object({ name: z.string() }));
 
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
@@ -513,7 +521,11 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         );
       }
 
-      const data = (await response.json()) as Array<{ name: string }>;
+      const data = await parseProviderResponse(
+        response,
+        gitlabBranchListSchema,
+        "GitLab list branches"
+      );
       return data.map((b) => ({ name: b.name }));
     } catch (error) {
       if (error instanceof SourceControlProviderError) {
@@ -544,13 +556,11 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
           response.status
         );
       }
-      const data = (await response.json()) as { commit?: { id?: unknown } };
-      if (typeof data.commit?.id !== "string" || !data.commit.id) {
-        throw new SourceControlProviderError(
-          "Failed to resolve branch head: malformed response",
-          "transient"
-        );
-      }
+      const data = await parseProviderResponse(
+        response,
+        gitlabBranchHeadSchema,
+        "Failed to resolve branch head"
+      );
       return data.commit.id;
     } catch (error) {
       if (error instanceof SourceControlProviderError) throw error;

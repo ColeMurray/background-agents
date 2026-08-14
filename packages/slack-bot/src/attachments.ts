@@ -17,9 +17,10 @@ import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   SESSION_ATTACHMENT_IMAGE_MAX_BYTES,
   SESSION_ATTACHMENT_IMAGE_MIME_TYPES,
+  sessionAttachmentUploadResponseSchema,
   type SessionAttachmentReference,
 } from "@open-inspect/shared/types/session-attachments";
-import { readBodyCapped } from "@open-inspect/shared";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { signedControlPlaneFetch } from "./internal-auth";
 import { createLogger } from "./logger";
 import { OUTBOUND_REQUEST_TIMEOUT_MS } from "./request-options";
@@ -287,8 +288,8 @@ async function uploadToSession(
       });
       return { sessionMissing: response.status === 404 };
     }
-    const body = (await response.json()) as { attachmentId?: unknown };
-    if (typeof body.attachmentId !== "string" || !body.attachmentId) {
+    const parsed = sessionAttachmentUploadResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
       log.warn("slack.attachment.upload_failed", {
         trace_id: traceId,
         session_id: sessionId,
@@ -297,7 +298,7 @@ async function uploadToSession(
       });
       return { sessionMissing: false };
     }
-    return { reference: { attachmentId: body.attachmentId, name: attachment.name } };
+    return { reference: { attachmentId: parsed.data.attachmentId, name: attachment.name } };
   } catch (e) {
     log.warn("slack.attachment.upload_error", {
       trace_id: traceId,

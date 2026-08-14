@@ -1,5 +1,6 @@
 import { generateBranchName } from "@open-inspect/shared/git";
-import { toDisplayStatus } from "@open-inspect/shared";
+import type { ScmSettings } from "@open-inspect/shared/types/integrations";
+import { toDisplayStatus } from "@open-inspect/shared/types/artifacts";
 import type {
   SessionPullRequestRecord,
   SessionPullRequestStore,
@@ -45,6 +46,11 @@ export interface CreatePullRequestInput {
   promptingUserId: string;
   promptingAuth: SourceControlAuthContext | null;
   sessionUrl: string;
+  /**
+   * Whether to open the PR in draft mode. When configured, the SCM setting
+   * "always use draft mode" overrides.
+   */
+  draft?: boolean;
 }
 
 export type CreatePullRequestResult =
@@ -123,6 +129,8 @@ export interface PullRequestServiceDeps {
    * deployment has no D1 binding; the write is best-effort either way.
    */
   sessionPullRequests?: Pick<SessionPullRequestStore, "upsert">;
+  /** Resolves SCM policy for the pull request's target repository. */
+  resolveScmSettings: (repo: RepoIdentity) => Promise<ScmSettings>;
 }
 
 /**
@@ -182,6 +190,23 @@ export class SessionPullRequestService {
       if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
         return this.duplicatePrError(targetRepo);
       }
+
+      let scmSettings: ScmSettings;
+      try {
+        scmSettings = await this.deps.resolveScmSettings(targetRepo);
+      } catch (error) {
+        this.deps.log.error("Failed to resolve pull request SCM policy", {
+          repo_owner: targetRepo.repoOwner,
+          repo_name: targetRepo.repoName,
+          error: error instanceof Error ? error : String(error),
+        });
+        return {
+          kind: "error",
+          status: 503,
+          error: "Pull request policy is temporarily unavailable",
+        };
+      }
+      const draft = scmSettings.alwaysUseDraftMode === true || (input.draft ?? false);
 
       let pushAuth: GitPushAuthContext;
       try {
@@ -287,6 +312,8 @@ export class SessionPullRequestService {
         body: fullBody,
         sourceBranch: sanitizedHeadBranch,
         targetBranch: baseBranch,
+        draft,
+        labels: scmSettings.pullRequestLabel ? [scmSettings.pullRequestLabel] : undefined,
       });
 
       const artifactId = this.deps.generateId();

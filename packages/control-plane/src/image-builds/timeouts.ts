@@ -13,15 +13,11 @@ export const MAX_IMAGE_BUILD_PROVIDER_SESSION_TIMEOUT_MS =
   MAX_BUILD_TIMEOUT_SECONDS * MS_PER_SECOND + IMAGE_BUILD_FINALIZATION_GRACE_MS;
 
 /**
+ * Provider-session budget in the whole seconds expected by provider APIs.
  * Provider sessions must outlive the user-configured build-execution budget:
  * after setup reports success, the Queue consumer still needs time to receive
  * the callback and create the provider artifact.
  */
-export function resolveImageBuildProviderSessionTimeoutMs(buildTimeoutMs: number): number {
-  return buildTimeoutMs + IMAGE_BUILD_FINALIZATION_GRACE_MS;
-}
-
-/** Provider-session budget in the whole seconds expected by provider APIs. */
 export function resolveImageBuildProviderSessionTimeoutSeconds(buildTimeoutMs: number): number {
-  return Math.ceil(resolveImageBuildProviderSessionTimeoutMs(buildTimeoutMs) / MS_PER_SECOND);
+  return Math.ceil((buildTimeoutMs + IMAGE_BUILD_FINALIZATION_GRACE_MS) / MS_PER_SECOND);
 }

@@ -111,7 +111,7 @@ const sampleRunRow: AutomationRunRow = {
   started_at: null,
   completed_at: null,
   created_at: now,
-  invocation_id: null,
+  invocation_id: "inv-test1",
   repo_owner: null,
   repo_name: null,
   repo_id: null,

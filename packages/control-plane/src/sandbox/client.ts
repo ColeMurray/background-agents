@@ -39,6 +39,8 @@ const createSandboxModalResponseSchema = z.discriminatedUnion("success", [
       created_at: z.number(),
       code_server_url: z.string().nullable().optional(),
       code_server_password: z.string().nullable().optional(),
+      vnc_url: z.string().nullable().optional(),
+      vnc_password: z.string().nullable().optional(),
       ttyd_url: z.string().nullable().optional(),
       tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
     }),
@@ -55,6 +57,8 @@ const restoreSandboxModalResponseSchema = z.discriminatedUnion("success", [
         modal_object_id: z.string().nullable().optional(),
         code_server_url: z.string().nullable().optional(),
         code_server_password: z.string().nullable().optional(),
+        vnc_url: z.string().nullable().optional(),
+        vnc_password: z.string().nullable().optional(),
         ttyd_url: z.string().nullable().optional(),
         tunnel_urls: modalTunnelUrlsSchema.nullable().optional(),
       })
@@ -71,6 +75,39 @@ const snapshotSandboxModalResponseSchema = z.discriminatedUnion("success", [
         image_id: z.string(),
       })
       .optional(),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const createImageBuildSandboxModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      // Non-empty: the previous hand-rolled check rejected a blank id.
+      provider_session_id: z.string().min(1),
+    }),
+  }),
+  modalErrorResponseSchema,
+]);
+
+/**
+ * Image-build operations (start/terminate) only signal success or failure; their
+ * `data` payload is never read, so it is deliberately left unvalidated.
+ */
+const imageBuildOperationModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+  }),
+  modalErrorResponseSchema,
+]);
+
+const deleteProviderImageModalResponseSchema = z.discriminatedUnion("success", [
+  z.object({
+    success: z.literal(true),
+    data: z.object({
+      provider_image_id: z.string(),
+      deleted: z.boolean(),
+    }),
   }),
   modalErrorResponseSchema,
 ]);
@@ -121,7 +158,6 @@ export interface CreateSandboxRequest {
   repoName: string | null;
   controlPlaneUrl: string;
   sandboxAuthToken: string;
-  snapshotId?: string;
   opencodeSessionId?: string;
   provider?: string;
   model?: string;
@@ -131,6 +167,7 @@ export interface CreateSandboxRequest {
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
@@ -144,6 +181,8 @@ export interface CreateSandboxResponse {
   createdAt: number;
   codeServerUrl?: string;
   codeServerPassword?: string;
+  vncUrl?: string;
+  vncPassword?: string;
   ttydUrl?: string;
   tunnelUrls?: Record<string, string>;
 }
@@ -162,6 +201,7 @@ export interface RestoreSandboxRequest {
   timeoutSeconds?: number;
   branch?: string | null;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   agentSlackNotifyEnabled?: boolean;
   mcpServers?: McpServerConfig[];
   sandboxSettings?: SandboxSettings;
@@ -175,6 +215,8 @@ export interface RestoreSandboxResponse {
   error?: string;
   codeServerUrl?: string;
   codeServerPassword?: string;
+  vncUrl?: string;
+  vncPassword?: string;
   ttydUrl?: string;
   tunnelUrls?: Record<string, string>;
 }
@@ -214,7 +256,7 @@ export interface CreateImageBuildSandboxRequest {
   userEnvVars?: Record<string, string>;
   buildExecutionTimeoutSeconds: number;
   /** Provider-session lifetime, including deferred Queue finalization headroom. */
-  providerSessionTimeoutSeconds?: number;
+  providerSessionTimeoutSeconds: number;
 }
 
 export interface CreateImageBuildSandboxResponse {
@@ -224,8 +266,6 @@ export interface CreateImageBuildSandboxResponse {
 export interface StartImageBuildSandboxRequest {
   buildId: string;
   providerSessionId: string;
-  callbackUrl: string;
-  failureCallbackUrl: string;
   callbackToken: string;
 }
 
@@ -244,12 +284,6 @@ export interface DeleteProviderImageRequest {
 export interface DeleteProviderImageResponse {
   providerImageId: string;
   deleted: boolean;
-}
-
-interface ModalApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
 }
 
 /**
@@ -341,7 +375,6 @@ export class ModalClient {
           repo_name: request.repoName,
           control_plane_url: request.controlPlaneUrl,
           sandbox_auth_token: request.sandboxAuthToken,
-          snapshot_id: request.snapshotId || null,
           opencode_session_id: request.opencodeSessionId || null,
           provider: request.provider || "anthropic",
           model: request.model || "claude-sonnet-4-6",
@@ -351,6 +384,7 @@ export class ModalClient {
           timeout_seconds: request.timeoutSeconds || null,
           branch: request.branch || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           mcp_servers: request.mcpServers || null,
           sandbox_settings: request.sandboxSettings ?? null,
@@ -384,6 +418,8 @@ export class ModalClient {
         createdAt: result.data.created_at,
         codeServerUrl: result.data.code_server_url ?? undefined,
         codeServerPassword: result.data.code_server_password ?? undefined,
+        vncUrl: result.data.vnc_url ?? undefined,
+        vncPassword: result.data.vnc_password ?? undefined,
         ttydUrl: result.data.ttyd_url ?? undefined,
         tunnelUrls: result.data.tunnel_urls ?? undefined,
       };
@@ -428,6 +464,7 @@ export class ModalClient {
           user_env_vars: request.userEnvVars || null,
           timeout_seconds: request.timeoutSeconds || null,
           code_server_enabled: request.codeServerEnabled ?? false,
+          vnc_enabled: request.vncEnabled ?? false,
           agent_slack_notify_enabled: request.agentSlackNotifyEnabled ?? false,
           sandbox_settings: request.sandboxSettings ?? null,
         }),
@@ -456,6 +493,8 @@ export class ModalClient {
         modalObjectId: result.data?.modal_object_id ?? undefined,
         codeServerUrl: result.data?.code_server_url ?? undefined,
         codeServerPassword: result.data?.code_server_password ?? undefined,
+        vncUrl: result.data?.vnc_url ?? undefined,
+        vncPassword: result.data?.vnc_password ?? undefined,
         ttydUrl: result.data?.ttyd_url ?? undefined,
         tunnelUrls: result.data?.tunnel_urls ?? undefined,
       };
@@ -619,7 +658,7 @@ export class ModalClient {
           failure_callback_url: request.failureCallbackUrl,
           user_env_vars: request.userEnvVars,
           build_execution_timeout_seconds: request.buildExecutionTimeoutSeconds,
-          build_timeout_seconds: request.providerSessionTimeoutSeconds ?? null,
+          provider_session_timeout_seconds: request.providerSessionTimeoutSeconds,
         }),
       });
 
@@ -630,11 +669,12 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        provider_session_id: string;
-      }>;
+      const result = parseModalApiResponse(
+        createImageBuildSandboxModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data?.provider_session_id) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 
@@ -669,8 +709,6 @@ export class ModalClient {
       {
         build_id: request.buildId,
         provider_session_id: request.providerSessionId,
-        callback_url: request.callbackUrl,
-        failure_callback_url: request.failureCallbackUrl,
         callback_token: request.callbackToken,
       },
       correlation
@@ -718,8 +756,11 @@ export class ModalClient {
           response.status
         );
       }
-      const result = (await response.json()) as ModalApiResponse<Record<string, unknown>>;
-      if (!result.success) {
+      const result = parseModalApiResponse(
+        imageBuildOperationModalResponseSchema,
+        await response.json()
+      );
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
       outcome = "success";
@@ -768,12 +809,12 @@ export class ModalClient {
         throw new ModalApiError(`Modal API error: ${response.status} ${text}`, response.status);
       }
 
-      const result = (await response.json()) as ModalApiResponse<{
-        provider_image_id: string;
-        deleted: boolean;
-      }>;
+      const result = parseModalApiResponse(
+        deleteProviderImageModalResponseSchema,
+        await response.json()
+      );
 
-      if (!result.success || !result.data) {
+      if (result.success === false) {
         throw new Error(`Modal API error: ${result.error || "Unknown error"}`);
       }
 

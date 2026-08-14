@@ -11,7 +11,7 @@ import { browserApiFetch } from "./browser-api-fetch";
 
 const BROWSER_AUTH_SESSION_PATH = "/api/auth/get-session";
 
-export type AuthSessionUser = BrowserAuthSessionUser;
+type AuthSessionUser = BrowserAuthSessionUser;
 
 export interface AuthSession {
   user: AuthSessionUser;

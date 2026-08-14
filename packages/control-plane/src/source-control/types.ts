@@ -5,7 +5,7 @@
  */
 
 import type { InstallationRepository } from "@open-inspect/shared/types/repository-catalog";
-import type { PullRequestLifecycleState } from "@open-inspect/shared";
+import type { PullRequestLifecycleState } from "@open-inspect/shared/types/artifacts";
 
 /**
  * Repository information.

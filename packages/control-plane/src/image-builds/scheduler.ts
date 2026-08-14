@@ -45,7 +45,7 @@ export class ImageBuildScheduler {
     private readonly provider: ImageBuildProvider | null,
     private readonly store: ImageBuildStore,
     private readonly workflow: ImageBuildWorkflow,
-    private readonly adapterFactory: ImageBuildAdapterFactory,
+    adapterFactory: ImageBuildAdapterFactory,
     private readonly sourceControl: SourceControlProvider | null,
     private readonly resolveTarget: typeof resolveScopeTarget = resolveScopeTarget,
     private readonly listScopes: typeof listEnabledScopes = listEnabledScopes

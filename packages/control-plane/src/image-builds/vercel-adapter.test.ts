@@ -5,7 +5,7 @@ import type { ImageBuildPlan } from "./types";
 
 function createProvider(): VercelSandboxProvider {
   return {
-    triggerEnvironmentImageBuild: vi.fn(async () => undefined),
+    triggerImageBuild: vi.fn(async () => undefined),
     takeSnapshot: vi.fn(async () => ({ success: true, imageId: "vercel-snapshot-1" })),
     stopSandbox: vi.fn(async () => ({ success: true })),
     deleteProviderImage: vi.fn(async () => undefined),
@@ -14,7 +14,6 @@ function createProvider(): VercelSandboxProvider {
 
 function createPlan(buildTimeoutMs = 1_800_001): ImageBuildPlan {
   return {
-    provider: "vercel",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
@@ -45,8 +44,9 @@ describe("VercelImageBuildAdapter", () => {
 
     await adapter.startBuild(createPlan(), { bindProviderSession });
 
-    expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith({
-      environmentId: "acme/repo",
+    expect(provider.triggerImageBuild).toHaveBeenCalledWith({
+      scopeKind: "repo",
+      scopeId: "acme/repo",
       buildId: "build-1",
       repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],
       callbackUrl: "https://worker.test/image-builds/build-complete",
@@ -79,7 +79,7 @@ describe("VercelImageBuildAdapter", () => {
         bindProviderSession: vi.fn(),
       });
 
-      expect(provider.triggerEnvironmentImageBuild).toHaveBeenCalledWith(
+      expect(provider.triggerImageBuild).toHaveBeenCalledWith(
         expect.objectContaining({
           buildExecutionTimeoutSeconds: expectedExecutionMinutes * 60,
           providerSessionTimeoutSeconds: expectedSessionMinutes * 60,

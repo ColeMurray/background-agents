@@ -1,14 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BUILD_TIMEOUT_SECONDS,
+  INTERNAL_TTYD_PORT,
+  INTERNAL_VNC_PORT,
   MAX_BUILD_TIMEOUT_SECONDS,
   MAX_SLACK_ROUTING_RULES,
   isValidSandboxTimeoutMs,
+  findSandboxPortConflict,
   matchRoutingRules,
   normalizeRoutingRules,
   resolveBuildTimeoutSeconds,
+  slackIntegrationSettingsRoutingResponseSchema,
   type SlackRoutingRule,
 } from "./integrations";
+
+describe("findSandboxPortConflict", () => {
+  it.each([INTERNAL_TTYD_PORT, INTERNAL_VNC_PORT])("rejects reserved internal port %i", (port) => {
+    expect(findSandboxPortConflict([{ port, label: "tunnel port" }])).toEqual({
+      kind: "reserved",
+      port,
+      label: "tunnel port",
+    });
+  });
+});
 
 describe("isValidSandboxTimeoutMs", () => {
   it("accepts safe positive whole-second millisecond values", () => {
@@ -146,6 +160,34 @@ describe("normalizeRoutingRules", () => {
       })
     );
     expect(normalizeRoutingRules(many)).toHaveLength(MAX_SLACK_ROUTING_RULES);
+  });
+});
+
+describe("slackIntegrationSettingsRoutingResponseSchema", () => {
+  it("parses a valid routing settings response", () => {
+    const parsed = slackIntegrationSettingsRoutingResponseSchema.safeParse({
+      settings: {
+        defaults: {
+          routingRules: [{ keyword: "frontend", target: "acme/web" }],
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("parses a null settings response", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({ settings: null }).success
+    ).toBe(true);
+  });
+
+  it("rejects malformed routing rules", () => {
+    expect(
+      slackIntegrationSettingsRoutingResponseSchema.safeParse({
+        settings: { defaults: { routingRules: [{ keyword: "frontend" }] } },
+      }).success
+    ).toBe(false);
   });
 });
 

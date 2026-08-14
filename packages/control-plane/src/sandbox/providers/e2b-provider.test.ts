@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { computeHmacHex } from "@open-inspect/shared/auth";
+import { deriveVncPassword } from "../sandbox-env";
 import { E2BSandboxProvider, type E2BProviderConfig } from "./e2b-provider";
 import { SandboxProviderError } from "../provider";
 import {
@@ -12,7 +13,7 @@ import {
 
 const providerConfig: E2BProviderConfig = {
   scmProvider: "github",
-  codeServerPasswordSecret: "secret",
+  sandboxAccessPasswordSecret: "secret",
   sandboxTimeoutSeconds: 1800,
   autoPause: true,
 };
@@ -34,13 +35,7 @@ function mockClient(overrides: Partial<E2BRestClient> = {}): E2BRestClient {
       })
     ),
     pauseSandbox: vi.fn(async () => {}),
-    connectSandbox: vi.fn(
-      async (): Promise<E2BSandboxDetail> => ({
-        sandboxID: "e2b-id",
-        templateID: "tmpl",
-        state: "running",
-      })
-    ),
+    connectSandbox: vi.fn(async (): Promise<void> => {}),
     killSandbox: vi.fn(async () => {}),
     setSandboxTimeout: vi.fn(async () => {}),
     getHostnameForPort: vi.fn((id: string, port: number) => `https://${port}-${id}.e2b.app`),
@@ -72,6 +67,24 @@ describe("E2BSandboxProvider", () => {
     expect(result.codeServerUrl).toBe("https://8080-e2b-id.e2b.app");
     const expected = (await computeHmacHex("code-server:sandbox-logical", "secret")).slice(0, 32);
     expect(result.codeServerPassword).toBe(expected);
+  });
+
+  it("injects and returns VNC access without including its port in generic tunnels", async () => {
+    const client = mockClient();
+    const provider = new E2BSandboxProvider(client, providerConfig);
+    const result = await provider.createSandbox({
+      ...baseCreateConfig,
+      vncEnabled: true,
+      sandboxSettings: { vncPort: 6099, tunnelPorts: [6099, 3000] },
+    });
+    const [, env] = vi.mocked(client.writeSessionEnv).mock.calls[0];
+    const expected = await deriveVncPassword("sandbox-logical", "secret");
+
+    expect(env).toMatchObject({ VNC_PASSWORD: expected, NOVNC_PORT: "6099" });
+    expect(result).toMatchObject({
+      vncAccess: { url: "https://6099-e2b-id.e2b.app", password: expected },
+      tunnelUrls: { "3000": "https://3000-e2b-id.e2b.app" },
+    });
   });
 
   it("system vars override user vars (delivered via writeSessionEnv)", async () => {
@@ -119,6 +132,18 @@ describe("E2BSandboxProvider", () => {
     });
     expect(result.success).toBe(true);
     expect(client.connectSandbox).toHaveBeenCalledWith("e2b-id", 1800);
+  });
+
+  it("returns VNC access after resume", async () => {
+    const result = await new E2BSandboxProvider(mockClient(), providerConfig).resumeSandbox({
+      providerObjectId: "e2b-id",
+      sessionId: "sess",
+      sandboxId: "sandbox-logical",
+      vncEnabled: true,
+    });
+
+    expect(result.vncAccess?.url).toBe("https://6080-e2b-id.e2b.app");
+    expect(result.vncAccess?.password).toMatch(/^[A-Za-z0-9]{8}$/);
   });
 
   it("resumeSandbox running uses setSandboxTimeout only", async () => {

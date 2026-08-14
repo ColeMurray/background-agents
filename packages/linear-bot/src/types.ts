@@ -2,7 +2,7 @@
  * Type definitions for the Linear bot.
  */
 
-import type { LinearCallbackContext } from "@open-inspect/shared";
+import type { LinearCallbackContext } from "@open-inspect/shared/types/session-api";
 import { z } from "zod";
 
 /**
@@ -43,73 +43,84 @@ export interface Env {
  * A single repo configuration with an optional label filter.
  * Used for static team→repo mapping (legacy/override).
  */
-export interface StaticRepoConfig {
-  owner: string;
-  name: string;
-  label?: string;
-}
+const staticRepoConfigSchema = z.object({
+  owner: z.string(),
+  name: z.string(),
+  label: z.string().optional(),
+});
 
 /**
  * An environment target with an optional label filter. References the stable
  * `env_…` id, not the rename-able display name.
  */
-export interface StaticEnvironmentConfig {
-  environmentId: string;
-  label?: string;
-}
+const staticEnvironmentConfigSchema = z.object({
+  environmentId: z.string(),
+  label: z.string().optional(),
+});
 
 /**
  * A mapping entry: a repository or a saved environment. Targets unify instead
  * of migrate — repository entries never stop working; environments join them.
+ *
+ * The environment variant is listed first, and the order is load-bearing: a
+ * stored entry carrying both an `environmentId` and repo keys is ambiguous,
+ * and `resolveMappedTarget` launched its environment (`"environmentId" in
+ * config`) long before these entries were validated. Environment-first keeps
+ * that entry pointed at the same target — validating stored config may reject
+ * an entry, but it must never quietly re-point a working one somewhere else.
  */
-export type StaticTargetConfig = StaticRepoConfig | StaticEnvironmentConfig;
+const staticTargetConfigSchema = z.union([staticEnvironmentConfigSchema, staticRepoConfigSchema]);
+
+export type StaticTargetConfig = z.infer<typeof staticTargetConfigSchema>;
+
+/** The targets stored under one team key, validated as a unit. */
+export const teamTargetsSchema = z.array(staticTargetConfigSchema);
 
 /**
- * Static team→target mapping stored in KV under "config:team-repos".
+ * Static team→target mapping stored in KV under "config:team-repos". Only the
+ * entries are schemas: the record is validated key by key on read, so one
+ * malformed team never invalidates the others.
  */
-export interface TeamRepoMapping {
-  [teamId: string]: StaticTargetConfig[];
-}
+export type TeamRepoMapping = Record<string, StaticTargetConfig[]>;
 
 /**
- * Dynamic repo config from control plane.
+ * The target stored under one project key. Environment-first for the same
+ * reason as {@link staticTargetConfigSchema}: an entry holding both shapes
+ * keeps resolving to its environment.
  */
-export type {
-  RepoConfig,
-  RepoMetadata,
-  ControlPlaneRepo,
-  ControlPlaneReposResponse,
-} from "@open-inspect/shared/types/repository-catalog";
-export type {
-  Environment,
-  ListEnvironmentsResponse,
-} from "@open-inspect/shared/types/environments";
+export const projectTargetSchema = z.union([
+  z.object({ environmentId: z.string() }),
+  z.object({ owner: z.string(), name: z.string() }),
+]);
 
 /**
- * Project→target mapping stored in KV under "config:project-repos".
+ * Project→target mapping stored in KV under "config:project-repos", validated
+ * key by key like {@link TeamRepoMapping}.
  */
-export interface ProjectRepoMapping {
-  [projectId: string]: { owner: string; name: string } | { environmentId: string };
-}
+export type ProjectRepoMapping = Record<string, z.infer<typeof projectTargetSchema>>;
 
 // ─── Issue-to-Session Mapping ────────────────────────────────────────────────
 
-export interface IssueSession {
-  sessionId: string;
-  issueId: string;
-  issueIdentifier: string;
+/**
+ * The issue→session mapping persisted in KV. Canonical as a schema because the
+ * stored value is untrusted on read: `lookupIssueSession` parses with this, so
+ * the runtime contract and the type can never drift apart.
+ */
+export const issueSessionSchema = z.object({
+  sessionId: z.string(),
+  issueId: z.string(),
+  issueIdentifier: z.string(),
   /** Set for repository sessions; absent for environment sessions. */
-  repoOwner?: string;
-  repoName?: string;
+  repoOwner: z.string().optional(),
+  repoName: z.string().optional(),
   /** Set for environment sessions. */
-  environmentId?: string;
-  model: string;
-  agentSessionId?: string;
-  createdAt: number;
-}
+  environmentId: z.string().optional(),
+  model: z.string(),
+  agentSessionId: z.string().optional(),
+  createdAt: z.number(),
+});
 
-// Re-export CallbackContext types from shared
-export type { LinearCallbackContext, CallbackContext } from "@open-inspect/shared";
+export type IssueSession = z.infer<typeof issueSessionSchema>;
 
 /**
  * Completion callback payload from control-plane.
@@ -138,29 +149,6 @@ export interface ToolCallCallback {
   signature: string;
 }
 
-// ─── Classification Types ────────────────────────────────────────────────────
-
-export type {
-  ClassificationResult,
-  ConfidenceLevel,
-} from "@open-inspect/shared/types/repository-catalog";
-
-// ─── Event / Artifact Types ──────────────────────────────────────────────────
-
-export type {
-  EventResponse,
-  ListEventsResponse,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  AgentResponse,
-} from "@open-inspect/shared";
-
-// ─── User Preferences ────────────────────────────────────────────────────────
-
-export type { UserPreferences } from "@open-inspect/shared";
-
 // ─── Linear Issue Details ────────────────────────────────────────────────────
 
 const linearNameSchema = z.object({ id: z.string(), name: z.string() });
@@ -169,7 +157,7 @@ const linearCommentSchema = z.object({
   user: z.object({ name: z.string() }).nullable().optional(),
 });
 
-export const linearIssueDetailsSchema = z
+const linearIssueDetailsSchema = z
   .object({
     id: z.string(),
     identifier: z.string(),
@@ -262,12 +250,12 @@ export interface AgentSessionWebhook {
   organizationId: string;
   webhookId: string;
   appUserId: string;
+  promptContext?: string;
   agentSession: {
     id: string;
     creatorId?: string | null;
     issue?: AgentSessionWebhookIssue;
     comment?: { body: string; userId?: string };
-    promptContext?: string;
   };
   agentActivity?: {
     userId?: string;

@@ -6,12 +6,23 @@
 import { verifySentrySignature, normalizeSentryEvent } from "@open-inspect/shared/triggers";
 import { AutomationStore } from "../db/automation-store";
 import { decryptSentrySecret } from "../auth/webhook-key";
+import { createLogger } from "../logger";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
 
 /** Maximum Sentry webhook payload size (256KB — Sentry payloads with stack traces can be large). */
 const MAX_PAYLOAD_SIZE = 256 * 1024;
+const logger = createLogger("sentry-webhook");
+
+function classifySentryAction(action: unknown): "created" | "critical" | "other" | "missing" {
+  if (action === "created" || action === "critical") return action;
+  return typeof action === "string" ? "other" : "missing";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 
 async function handleSentryWebhook(
   request: Request,
@@ -66,17 +77,35 @@ async function handleSentryWebhook(
   }
 
   // 3. Parse and normalize
-  let payload: Record<string, unknown>;
+  let parsedPayload: unknown;
   try {
-    payload = JSON.parse(body) as Record<string, unknown>;
+    parsedPayload = JSON.parse(body) as unknown;
   } catch {
     return error("Invalid JSON", 400);
   }
+  const payload = isRecord(parsedPayload) ? parsedPayload : {};
 
-  const event = normalizeSentryEvent(payload, automationId);
-  if (!event) {
+  const sentryResource = request.headers.get("sentry-hook-resource");
+  const normalization = normalizeSentryEvent(payload, automationId, sentryResource);
+  if (normalization.status === "skipped") {
+    const logData = {
+      event: "sentry.webhook_skipped",
+      reason: normalization.reason,
+      automation_id: automationId,
+      configured_event_type: automation.event_type,
+      sentry_resource: sentryResource,
+      sentry_action: classifySentryAction(payload.action),
+      request_id: ctx.request_id,
+      trace_id: ctx.trace_id,
+    };
+    if (normalization.reason === "unsupported_action") {
+      logger.info("Sentry webhook action is not configured for automation", logData);
+    } else {
+      logger.warn("Sentry webhook skipped during normalization", logData);
+    }
     return json({ ok: true, skipped: true });
   }
+  const event = normalization.event;
 
   // 4. Forward to SchedulerDO
   if (!env.SCHEDULER) {

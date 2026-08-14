@@ -17,11 +17,12 @@ from __future__ import annotations
 import os
 import subprocess
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
 import pytest
 
-from sandbox_runtime import entrypoint
-from sandbox_runtime.entrypoint import GH_WRAPPER_BODY, SandboxSupervisor
+from sandbox_runtime import repository_sync
+from sandbox_runtime.repository_sync import GH_WRAPPER_BODY, RepositorySynchronizer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -116,11 +117,11 @@ def test_runtime_installs_canonical_wrapper(
     real_gh.touch()
     real_gh.chmod(0o755)
     wrapper = tmp_path / "gh"
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_REAL_PATH", str(real_gh))
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_INSTALL_PATH", wrapper)
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
-    supervisor = object.__new__(SandboxSupervisor)
-    supervisor._install_gh_wrapper()
+    synchronizer = RepositorySynchronizer("github.com", MagicMock())
+    synchronizer._install_gh_wrapper()
 
     assert wrapper.read_text() == GH_WRAPPER_BODY
     assert os.access(wrapper, os.X_OK)
@@ -133,9 +134,9 @@ def test_runtime_fails_when_wrapper_cannot_be_installed(
     real_gh.touch()
     real_gh.chmod(0o755)
     wrapper = tmp_path / "missing" / "gh"
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_REAL_PATH", str(real_gh))
-    monkeypatch.setattr(entrypoint, "GH_WRAPPER_INSTALL_PATH", wrapper)
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_REAL_PATH", str(real_gh))
+    monkeypatch.setattr(repository_sync, "GH_WRAPPER_INSTALL_PATH", wrapper)
 
+    synchronizer = RepositorySynchronizer("github.com", MagicMock())
     with pytest.raises(RuntimeError, match="Cannot install authenticated gh wrapper"):
-        supervisor = object.__new__(SandboxSupervisor)
-        supervisor._install_gh_wrapper()
+        synchronizer._install_gh_wrapper()

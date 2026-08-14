@@ -15,14 +15,16 @@ export {
   sessionAttachmentReferencesSchema,
   resolvedSessionAttachmentSchema,
   resolvedSessionAttachmentsSchema,
+  sessionAttachmentUploadResponseSchema,
 } from "./session-attachments";
 export type {
   SessionAttachmentMimeType,
   SessionAttachmentReference,
   ResolvedSessionAttachment,
+  SessionAttachmentUploadResponse,
 } from "./session-attachments";
 
-export { clientMessageSchema } from "./websocket";
+export { clientMessageSchema, clientRequestIdSchema } from "./websocket";
 export type { ClientMessage } from "./websocket";
 
 export {
@@ -66,66 +68,21 @@ export type {
   ConfidenceLevel,
 } from "./repository-catalog";
 
-export { toDisplayStatus } from "./artifacts";
-export type {
-  SessionArtifact,
-  ManualPullRequestArtifactMetadata,
-  ScreenshotArtifactMetadata,
-  VideoArtifactMetadata,
-  PullRequest,
-  PullRequestLifecycleState,
-  PullRequestStatus,
-  PullRequestDisplayStatus,
-  PullRequestArtifactMetadata,
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  MediaArtifactInfo,
-  AgentResponse,
-  ArtifactType,
-} from "./artifacts";
-
-export { sandboxEventSchema } from "./sandbox-events";
-export type {
-  AgentEvent,
-  SandboxEvent,
-  EventResponse,
-  ListEventsResponse,
-  GitSyncStatus,
-  EventType,
-} from "./sandbox-events";
-
-export type {
-  SessionParticipant,
-  Session,
-  SessionMessage,
-  SessionState,
-  ParticipantPresence,
-  PullRequestSummary,
-  SessionReadState,
-  SessionReadAction,
-  SessionReadResult,
-  SessionParticipantProfile,
-  SessionParticipantProfilesResponse,
-  SessionStatus,
-  SandboxStatus,
-  MessageStatus,
-  MessageSource,
-  ParticipantRole,
-  SpawnSource,
-} from "./sessions";
 export {
-  messageSourceSchema,
-  sessionStatusSchema,
-  sessionReadActionSchema,
-  sessionReadResultSchema,
-  sessionParticipantProfileSchema,
-  sessionParticipantProfilesResponseSchema,
-} from "./sessions";
-
-export { serverMessageSchema } from "./server-messages";
-export type { ServerMessage } from "./server-messages";
+  serverMessageSchema,
+  sessionSnapshotSchema,
+  sessionSnapshotStateSchema,
+  sessionTimelineEventSchema,
+} from "./server-messages";
+export type {
+  ParticipantPresence,
+  PromptQueueItem,
+  ServerMessage,
+  SessionSnapshot,
+  SessionSnapshotState,
+  SessionState,
+  SessionTimelineEvent,
+} from "./server-messages";
 
 export {
   SESSION_DIFF_VERSION,
@@ -172,49 +129,14 @@ export type {
 } from "./session-diffs";
 
 export {
-  automationCallbackContextSchema,
-  callbackContextSchema,
-  linearCallbackContextSchema,
-  linearStartCallbackSchema,
-  sendPromptRequestSchema,
-  slackCallbackContextSchema,
-  createSessionRequestSchema,
-  createSessionInputSchema,
-  createMediaArtifactRequestSchema,
-  createSessionResponseSchema,
-  sendPromptResponseSchema,
-  spawnChildSessionRequestSchema,
-  cancelChildSessionRequestSchema,
-  spawnContextSchema,
-} from "./session-api";
-export type {
-  UserPreferences,
-  SlackCallbackContext,
-  LinearCallbackContext,
-  LinearStartCallback,
-  AutomationCallbackContext,
-  CallbackContext,
-  SendPromptRequest,
-  CreateSessionRequest,
-  CreateSessionInput,
-  CreateMediaArtifactRequest,
-  CreateSessionResponse,
-  SendPromptResponse,
-  ListSessionsResponse,
-  SpawnChildSessionRequest,
-  CancelChildSessionRequest,
-  SpawnContext,
-  ChildSessionFinalResponse,
-  ChildSessionTrajectory,
-  ChildSessionDetail,
-} from "./session-api";
-
-export {
   MAX_ENVIRONMENT_NAME_LENGTH,
   MAX_ENVIRONMENT_DESCRIPTION_LENGTH,
   MAX_ENVIRONMENT_CHANNEL_ASSOCIATIONS,
   isEnvironmentId,
   environmentRepositoriesInputSchema,
+  environmentRepositorySchema,
+  environmentSchema,
+  listEnvironmentsResponseSchema,
   createEnvironmentInputSchema,
   updateEnvironmentInputSchema,
 } from "./environments";

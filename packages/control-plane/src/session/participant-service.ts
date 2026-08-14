@@ -226,7 +226,6 @@ export class ParticipantService {
       const newTokens = await refreshAccessToken(d1Tokens.refreshToken, {
         clientId: this.env.GITHUB_CLIENT_ID,
         clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
       });
 
       const newAccessToken = newTokens.access_token;
@@ -360,7 +359,6 @@ export class ParticipantService {
       const newTokens = await refreshAccessToken(refreshToken, {
         clientId: this.env.GITHUB_CLIENT_ID,
         clientSecret: this.env.GITHUB_CLIENT_SECRET,
-        encryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
       });
 
       const newAccessTokenEncrypted = await encryptToken(

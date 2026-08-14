@@ -1,10 +1,10 @@
 import type { SlackPlainText } from "./slack-blocks";
 
 /** Slack caps a select option's plain_text label/description at 75 characters. */
-export const SELECT_OPTION_TEXT_LIMIT = 75;
+const SELECT_OPTION_TEXT_LIMIT = 75;
 
 /** Truncate option text to Slack's per-option limit, with an ellipsis when cut. */
-export function truncateSelectOptionText(text: string): string {
+function truncateSelectOptionText(text: string): string {
   if (text.length <= SELECT_OPTION_TEXT_LIMIT) {
     return text;
   }

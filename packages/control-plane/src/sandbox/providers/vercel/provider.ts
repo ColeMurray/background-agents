@@ -2,29 +2,27 @@
  * Vercel Sandbox provider implementation.
  */
 
-import {
-  DEFAULT_BUILD_TIMEOUT_SECONDS,
-  type SandboxSettings,
-} from "@open-inspect/shared/types/integrations";
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { resolveServicePorts, resolveTunnelPorts } from "../port-resolution";
 import { createLogger } from "../../../logger";
-import type { CorrelationContext } from "../../../logger";
 import type { SourceControlProviderName } from "../../../source-control";
 import {
-  applyScmCloneEnv,
+  buildImageBuildCallbackEnv,
+  buildImageBuildEnvVars,
   buildSandboxEnvVars,
   deriveCodeServerPassword,
+  deriveVncPassword,
   IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-  IMAGE_BUILD_MODE_ENV_VAR,
+  imageBuildSandboxIdentity,
   scmCloneIdentity,
-  SESSION_CONFIG_ENV_VAR,
-  toRepositoryConfigPayload,
 } from "../../sandbox-env";
 import {
   DEFAULT_SANDBOX_TIMEOUT_SECONDS,
   SandboxProviderError,
+  createVncAccess,
   type CreateSandboxConfig,
   type CreateSandboxResult,
+  type ImageBuildProviderTriggerConfig,
   type RestoreConfig,
   type RestoreResult,
   type SandboxProvider,
@@ -33,6 +31,7 @@ import {
   type SnapshotResult,
   type StopConfig,
   type StopResult,
+  type VncAccess,
 } from "../../provider";
 import type {
   VercelCommandResult,
@@ -59,18 +58,6 @@ const VERCEL_MEMORY_MIB_PER_VCPU = 2048;
 const VERCEL_SUPPORTED_VCPUS: readonly VercelVcpus[] = [1, 2, 4, 8];
 const VERCEL_MAX_VCPUS = VERCEL_SUPPORTED_VCPUS[VERCEL_SUPPORTED_VCPUS.length - 1];
 const VERCEL_TUNNEL_ENV_WRITE_TIMEOUT_MS = 30_000;
-const REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  "OI_REPO_IMAGE_PROVIDER_SESSION_ID",
-  "OI_REPO_IMAGE_BUILD_ID",
-  "OI_REPO_IMAGE_CALLBACK_URL",
-  "OI_REPO_IMAGE_CALLBACK_TOKEN",
-  "OI_REPO_IMAGE_FAILURE_CALLBACK_URL",
-] as const;
-const RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS = [
-  ...REPO_IMAGE_CALLBACK_ENV_KEYS,
-  "OI_REPO_IMAGE_CALLBACK_SECRET",
-  IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY,
-] as const;
 
 function resolveVercelTimeoutMs(timeoutSeconds?: number): number {
   const requestedMs = (timeoutSeconds ?? DEFAULT_SANDBOX_TIMEOUT_SECONDS) * 1000;
@@ -83,32 +70,11 @@ export interface VercelProviderConfig {
   baseSnapshotName?: string;
   runtime?: string;
   snapshotExpirationMs?: number;
-  codeServerPasswordSecret: string;
+  /** Secret used for domain-separated sandbox access password derivation. */
+  sandboxAccessPasswordSecret: string;
   apiBaseUrl?: string;
   token: string;
   teamId?: string;
-}
-
-export interface TriggerVercelEnvironmentImageBuildConfig {
-  buildId: string;
-  environmentId: string;
-  /** Repositories in position order ([0] = primary), cloned at their base branches. */
-  repositories: Array<{ repoOwner: string; repoName: string; baseBranch: string }>;
-  callbackUrl: string;
-  failureCallbackUrl: string;
-  callbackToken: string;
-  userEnvVars?: Record<string, string>;
-  cloneToken?: string;
-  buildExecutionTimeoutSeconds: number;
-  /** Provider-session lifetime, including deferred finalization headroom. */
-  providerSessionTimeoutSeconds?: number;
-  onProviderSessionCreated?: (providerSessionId: string) => Promise<void>;
-  correlation?: CorrelationContext;
-}
-
-export interface TriggerVercelEnvironmentImageBuildResult {
-  buildId: string;
-  status: string;
 }
 
 export class VercelSandboxProvider implements SandboxProvider {
@@ -140,6 +106,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       );
       const ports = collectExposedPorts(
         config.codeServerEnabled,
+        config.vncEnabled,
         config.sandboxSettings
       ).allExposedPorts;
       const sourceSnapshotId =
@@ -168,6 +135,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         created,
         config.sandboxId,
         config.codeServerEnabled,
+        config.vncEnabled,
         config.sandboxSettings,
         config.correlation
       );
@@ -182,6 +150,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
+        vncAccess: access.vncAccess,
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
@@ -198,6 +167,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       );
       const ports = collectExposedPorts(
         config.codeServerEnabled,
+        config.vncEnabled,
         config.sandboxSettings
       ).allExposedPorts;
 
@@ -219,6 +189,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         created,
         config.sandboxId,
         config.codeServerEnabled,
+        config.vncEnabled,
         config.sandboxSettings,
         config.correlation
       );
@@ -232,6 +203,7 @@ export class VercelSandboxProvider implements SandboxProvider {
         codeServerUrl: access.codeServerUrl,
         codeServerPassword: access.codeServerPassword,
         ttydUrl: access.ttydUrl,
+        vncAccess: access.vncAccess,
         tunnelUrls: access.tunnelUrls,
       };
     } catch (error) {
@@ -287,9 +259,7 @@ export class VercelSandboxProvider implements SandboxProvider {
    * SESSION_CONFIG carries the repository list so the list-native runtime
    * clones and sets up every repository.
    */
-  async triggerEnvironmentImageBuild(
-    config: TriggerVercelEnvironmentImageBuildConfig
-  ): Promise<TriggerVercelEnvironmentImageBuildResult> {
+  async triggerImageBuild(config: ImageBuildProviderTriggerConfig): Promise<void> {
     try {
       const baseSnapshotId = await this.resolveBaseSnapshotId(config.correlation);
       if (!baseSnapshotId) {
@@ -298,45 +268,21 @@ export class VercelSandboxProvider implements SandboxProvider {
         );
       }
 
-      const primary = config.repositories[0];
-      if (!primary) {
-        throw new Error("environment build requires at least one repository");
-      }
-
-      const sandboxName = `build-env-${config.environmentId}-${Date.now()}`;
-      const env = this.buildBuildEnvVars({
-        userEnvVars: config.userEnvVars,
-        cloneToken: config.cloneToken,
-        sandboxId: `build-env-${config.environmentId}`,
-        repoOwner: primary.repoOwner,
-        repoName: primary.repoName,
-        sessionConfig: {
-          branch: primary.baseBranch,
-          repositories: config.repositories.map(toRepositoryConfigPayload),
-        },
-      });
+      const identity = imageBuildSandboxIdentity(config, Date.now());
+      const env = this.buildBuildEnvVars(config, identity.sandboxId);
       const created = await this.client.createSandbox(
         {
-          name: sandboxName,
+          name: identity.sandboxName,
           runtime: this.providerConfig.runtime || DEFAULT_VERCEL_RUNTIME,
-          timeoutMs: resolveVercelTimeoutMs(
-            config.providerSessionTimeoutSeconds ?? DEFAULT_BUILD_TIMEOUT_SECONDS
-          ),
+          timeoutMs: resolveVercelTimeoutMs(config.providerSessionTimeoutSeconds),
           env,
-          tags: {
-            openinspect_framework: "open-inspect",
-            openinspect_kind: "environment-image-build",
-            openinspect_build_id: config.buildId,
-            openinspect_environment: config.environmentId,
-          },
+          tags: identity.labels,
           sourceSnapshotId: baseSnapshotId,
         },
         config.correlation
       );
 
-      if (config.onProviderSessionCreated) {
-        await config.onProviderSessionCreated(created.session.id);
-      }
+      await config.onProviderSessionCreated(created.session.id);
 
       const command = await this.launchEntrypoint(
         created.session.id,
@@ -344,15 +290,17 @@ export class VercelSandboxProvider implements SandboxProvider {
         config.correlation
       );
 
+      // Spread correlation first so the explicit fields (notably session_id,
+      // the new provider session) win over correlation's.
       log.info("vercel.environment_image_build_triggered", {
+        ...config.correlation,
         build_id: config.buildId,
-        environment_id: config.environmentId,
+        scope_kind: config.scopeKind,
+        scope_id: config.scopeId,
         session_id: created.session.id,
         command_id: command.commandId,
-        sandbox_name: sandboxName,
+        sandbox_name: identity.sandboxName,
       });
-
-      return { buildId: config.buildId, status: "building" };
     } catch (error) {
       if (error instanceof SandboxProviderError) throw error;
       throw this.classifyError("Failed to trigger Vercel environment image build", error);
@@ -385,8 +333,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       codeServerPassword: config.codeServerEnabled
         ? await deriveCodeServerPassword(
             config.sandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
+        : undefined,
+      vncPassword: config.vncEnabled
+        ? await deriveVncPassword(config.sandboxId, this.providerConfig.sandboxAccessPasswordSecret)
         : undefined,
     });
     Object.assign(envVars, this.buildPlatformEnvVars());
@@ -403,6 +354,7 @@ export class VercelSandboxProvider implements SandboxProvider {
 
     const tunnelPorts = collectExposedPorts(
       config.codeServerEnabled,
+      config.vncEnabled,
       config.sandboxSettings
     ).extraTunnelPorts;
     if (tunnelPorts.length > 0) {
@@ -412,30 +364,21 @@ export class VercelSandboxProvider implements SandboxProvider {
     return envVars;
   }
 
-  /** Build-sandbox env for both repo- and environment-image builds; the caller owns identity + SESSION_CONFIG shape. */
-  private buildBuildEnvVars(config: {
-    userEnvVars?: Record<string, string>;
-    cloneToken?: string;
-    sandboxId: string;
-    repoOwner: string;
-    repoName: string;
-    sessionConfig: Record<string, unknown>;
-  }): Record<string, string> {
-    const envVars: Record<string, string> = { ...(config.userEnvVars ?? {}) };
-    for (const key of RESERVED_REPO_IMAGE_CALLBACK_ENV_KEYS) {
-      delete envVars[key];
-    }
-
-    Object.assign(envVars, this.buildPlatformEnvVars(), {
-      SANDBOX_ID: config.sandboxId,
-      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
-      REPO_OWNER: config.repoOwner,
-      REPO_NAME: config.repoName,
-      [IMAGE_BUILD_MODE_ENV_VAR]: "true",
-      [SESSION_CONFIG_ENV_VAR]: JSON.stringify(config.sessionConfig),
+  /** Shared build-sandbox env assembly plus Vercel's platform overlay. */
+  private buildBuildEnvVars(
+    config: ImageBuildProviderTriggerConfig,
+    sandboxId: string
+  ): Record<string, string> {
+    const envVars = buildImageBuildEnvVars({
+      sandboxId,
+      repositories: config.repositories,
+      scmIdentity: scmCloneIdentity(this.providerConfig.scmProvider),
+      cloneToken: config.cloneToken,
+      baseEnvVars: config.userEnvVars,
     });
-
-    applyScmCloneEnv(envVars, scmCloneIdentity(this.providerConfig.scmProvider), config.cloneToken);
+    Object.assign(envVars, this.buildPlatformEnvVars(), {
+      SANDBOX_VERSION: VERCEL_SANDBOX_VERSION,
+    });
     return envVars;
   }
 
@@ -466,16 +409,22 @@ export class VercelSandboxProvider implements SandboxProvider {
     created: VercelCreateSandboxResponse,
     logicalSandboxId: string,
     codeServerEnabled: boolean | undefined,
+    vncEnabled: boolean | undefined,
     sandboxSettings: SandboxSettings | undefined,
     correlation?: CreateSandboxConfig["correlation"]
   ): Promise<{
     codeServerUrl?: string;
     codeServerPassword?: string;
     ttydUrl?: string;
+    vncAccess?: VncAccess;
     tunnelUrls?: Record<string, string>;
   }> {
     const routeByPort = new Map(created.routes.map((route) => [route.port, route]));
-    const { extraTunnelPorts } = collectExposedPorts(codeServerEnabled, sandboxSettings);
+    const { extraTunnelPorts } = collectExposedPorts(
+      codeServerEnabled,
+      vncEnabled,
+      sandboxSettings
+    );
     const tunnelUrls: Record<string, string> = {};
 
     for (const port of extraTunnelPorts) {
@@ -487,12 +436,16 @@ export class VercelSandboxProvider implements SandboxProvider {
       await this.writeTunnelEnvFile(created.session.id, logicalSandboxId, tunnelUrls, correlation);
     }
 
-    const { codeServerPort, terminalPort } = resolveServicePorts(sandboxSettings);
+    const { codeServerPort, terminalPort, vncPort } = resolveServicePorts(sandboxSettings);
     const codeServerUrl = codeServerEnabled
       ? routeToUrl(routeByPort.get(codeServerPort))
       : undefined;
     const ttydUrl = sandboxSettings?.terminalEnabled
       ? routeToUrl(routeByPort.get(terminalPort))
+      : undefined;
+    const vncUrl = vncEnabled ? routeToUrl(routeByPort.get(vncPort)) : undefined;
+    const vncPassword = vncEnabled
+      ? await deriveVncPassword(logicalSandboxId, this.providerConfig.sandboxAccessPasswordSecret)
       : undefined;
 
     return {
@@ -500,10 +453,11 @@ export class VercelSandboxProvider implements SandboxProvider {
       codeServerPassword: codeServerEnabled
         ? await deriveCodeServerPassword(
             logicalSandboxId,
-            this.providerConfig.codeServerPasswordSecret
+            this.providerConfig.sandboxAccessPasswordSecret
           )
         : undefined,
       ttydUrl,
+      vncAccess: createVncAccess(vncUrl, vncPassword),
       tunnelUrls: Object.keys(tunnelUrls).length > 0 ? tunnelUrls : undefined,
     };
   }
@@ -615,11 +569,13 @@ export class VercelSandboxProvider implements SandboxProvider {
     sessionId: string
   ): Record<string, string> {
     return {
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[0]]: sessionId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[1]]: config.buildId,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[2]]: config.callbackUrl,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[3]]: config.callbackToken,
-      [REPO_IMAGE_CALLBACK_ENV_KEYS[4]]: config.failureCallbackUrl,
+      ...buildImageBuildCallbackEnv({
+        buildId: config.buildId,
+        callbackUrl: config.callbackUrl,
+        failureCallbackUrl: config.failureCallbackUrl,
+        token: config.callbackToken,
+        providerSessionId: sessionId,
+      }),
       [IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_KEY]: String(config.buildExecutionTimeoutSeconds),
     };
   }
@@ -641,9 +597,10 @@ export class VercelSandboxProvider implements SandboxProvider {
 
 function collectExposedPorts(
   codeServerEnabled: boolean | undefined,
+  vncEnabled: boolean | undefined,
   sandboxSettings: SandboxSettings | undefined
 ): { allExposedPorts: number[]; extraTunnelPorts: number[] } {
-  const { codeServerPort, terminalPort } = resolveServicePorts(sandboxSettings);
+  const { codeServerPort, terminalPort, vncPort } = resolveServicePorts(sandboxSettings);
   const reserved = new Set<number>();
   const exposed: number[] = [];
 
@@ -654,6 +611,10 @@ function collectExposedPorts(
   if (sandboxSettings?.terminalEnabled) {
     exposed.push(terminalPort);
     reserved.add(terminalPort);
+  }
+  if (vncEnabled) {
+    exposed.push(vncPort);
+    reserved.add(vncPort);
   }
 
   const extraTunnelPorts = resolveTunnelPorts(sandboxSettings?.tunnelPorts).filter(
