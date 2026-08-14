@@ -10,11 +10,14 @@ from daytona import CreateSnapshotParams, Daytona, Image
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
 # eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
+#
+# Never pin below 1.18.15 — see packages/modal-infra/src/images/base.py for why
+# (OpenCode's message-ID counter wraps and earlier releases order by ID string).
+OPENCODE_VERSION = "1.18.18"
 CODE_SERVER_VERSION = "4.109.5"
 AGENT_BROWSER_VERSION = "0.21.2"
 # Bump when changing image contents to invalidate the Daytona snapshot.
-SANDBOX_VERSION = "daytona-v5-vnc-opencode-1-18-11"
+SANDBOX_VERSION = "daytona-v6-vnc-opencode-1-18-18"
 
 
 def build_base_image(repo_root: Path) -> Image:

@@ -24,7 +24,14 @@ SANDBOX_RUNTIME_DIR = Path(sandbox_runtime.__file__).parent
 #
 # OpenCode restored `/event` stream context in 1.14.50 and fixed the remaining
 # eager-subscription race in 1.15.5. Keep the CLI and plugin on the same pin.
-OPENCODE_VERSION = "1.18.11"
+#
+# Never pin below 1.18.15: OpenCode's message-ID counter is a 48-bit truncation
+# of `Date.now() * 0x1000`, so it wraps roughly every 795 days (most recently
+# 2026-08-14) and IDs minted afterwards sort below every older one. Earlier
+# releases order the turn loop by comparing those IDs as strings, which makes
+# any session carrying pre-wraparound history exit the loop without calling the
+# model. 1.18.15 orders by message creation time instead.
+OPENCODE_VERSION = "1.18.18"
 
 # code-server version to install (pinned for reproducible images)
 CODE_SERVER_VERSION = "4.109.5"
@@ -37,8 +44,8 @@ TTYD_VERSION = "1.7.7"
 TTYD_SHA256 = "8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55"
 
 # Cache buster - change this to force Modal image rebuild
-# v58: run gated image builds with the VNC/noVNC desktop toolchain
-CACHE_BUSTER = "v58-image-build-stdin-launch-vnc"
+# v59: OpenCode past the message-ID wraparound (see OPENCODE_VERSION)
+CACHE_BUSTER = "v59-opencode-message-id-wraparound"
 
 # Base image with all development tools
 base_image = (
