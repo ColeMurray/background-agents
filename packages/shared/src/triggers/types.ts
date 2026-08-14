@@ -6,54 +6,119 @@ import { z } from "zod";
 
 // ─── Trigger Configuration ───────────────────────────────────────────────────
 
-export type AutomationTriggerType =
-  | "schedule"
-  | "github_event"
-  | "linear_event"
-  | "sentry"
-  | "webhook"
-  | "slack_event";
+export const automationTriggerTypeSchema = z.enum([
+  "schedule",
+  "github_event",
+  "linear_event",
+  "sentry",
+  "webhook",
+  "slack_event",
+]);
 
-export interface ConditionConfigMap {
-  branch: { operator: "glob_match" | "exact"; value: string[] };
-  target_branch: { operator: "glob_match" | "exact"; value: string[] };
-  label: { operator: "any_of" | "none_of"; value: string[] };
-  path_glob: { operator: "any_match"; value: string[] };
-  actor: { operator: "include" | "exclude"; value: string[] };
-  check_conclusion: { operator: "eq"; value: string };
-  linear_status: { operator: "any_of"; value: string[] };
-  sentry_project: { operator: "any_of"; value: string[] };
-  sentry_level: { operator: "any_of"; value: string[] };
-  jsonpath: { operator: "all_match"; value: JsonPathFilter[] };
-  text_match: { operator: "contains" | "exact" | "regex"; value: TextMatchValue };
-  slack_channel: { operator: "any_of"; value: string[] };
-  slack_actor: { operator: "include" | "exclude"; value: string[] };
-}
+export type AutomationTriggerType = z.infer<typeof automationTriggerTypeSchema>;
 
-export interface JsonPathFilter {
-  path: string;
-  comparison: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains" | "exists";
-  value?: string | number | boolean;
-}
+const jsonPathFilterSchema = z.object({
+  path: z.string(),
+  comparison: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "contains", "exists"]),
+  value: z.union([z.string(), z.number(), z.boolean()]).optional(),
+});
+
+export type JsonPathFilter = z.infer<typeof jsonPathFilterSchema>;
 
 /** Value shape for the `text_match` condition (keyword / substring / regex). */
-export interface TextMatchValue {
+const textMatchValueSchema = z.object({
   /** Keyword/substring (contains/exact) or regular-expression source (regex). */
-  pattern: string;
+  pattern: z.string(),
   /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
-  flags?: string;
-}
+  flags: z.string().optional(),
+});
 
-export type TriggerCondition = {
-  [K in keyof ConditionConfigMap]: { type: K } & ConditionConfigMap[K];
-}[keyof ConditionConfigMap];
+export type TextMatchValue = z.infer<typeof textMatchValueSchema>;
 
-export type ConditionType = keyof ConditionConfigMap;
+const stringArrayConditionValueSchema = z.array(z.string());
+
+const triggerConditionSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("branch"),
+    operator: z.enum(["glob_match", "exact"]),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("target_branch"),
+    operator: z.enum(["glob_match", "exact"]),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("label"),
+    operator: z.enum(["any_of", "none_of"]),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("path_glob"),
+    operator: z.literal("any_match"),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("actor"),
+    operator: z.enum(["include", "exclude"]),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("check_conclusion"),
+    operator: z.literal("eq"),
+    value: z.string(),
+  }),
+  z.object({
+    type: z.literal("linear_status"),
+    operator: z.literal("any_of"),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("sentry_project"),
+    operator: z.literal("any_of"),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("sentry_level"),
+    operator: z.literal("any_of"),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("jsonpath"),
+    operator: z.literal("all_match"),
+    value: z.array(jsonPathFilterSchema),
+  }),
+  z.object({
+    type: z.literal("text_match"),
+    operator: z.enum(["contains", "exact", "regex"]),
+    value: textMatchValueSchema,
+  }),
+  z.object({
+    type: z.literal("slack_channel"),
+    operator: z.literal("any_of"),
+    value: stringArrayConditionValueSchema,
+  }),
+  z.object({
+    type: z.literal("slack_actor"),
+    operator: z.enum(["include", "exclude"]),
+    value: stringArrayConditionValueSchema,
+  }),
+]);
+
+export type TriggerCondition = z.infer<typeof triggerConditionSchema>;
+
+export type ConditionType = TriggerCondition["type"];
+
+export type ConditionConfigMap = {
+  [K in ConditionType]: Omit<Extract<TriggerCondition, { type: K }>, "type">;
+};
 
 /** Trigger settings stored as JSON in D1. */
-export interface TriggerConfig {
-  conditions: TriggerCondition[];
-}
+export const triggerConfigSchema = z.object({
+  conditions: z.array(triggerConditionSchema),
+});
+
+export type TriggerConfig = z.infer<typeof triggerConfigSchema>;
 
 // ─── Event Sources ────────────────────────────────────────────────────────────
 

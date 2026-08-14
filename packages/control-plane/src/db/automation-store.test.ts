@@ -245,14 +245,14 @@ describe("AutomationStore", () => {
   });
 
   describe("list", () => {
-    it("returns automations and total", async () => {
+    it("returns a bounded page", async () => {
       const { db } = createFakeD1({
         allResults: [sampleRow],
       });
       const store = new AutomationStore(db);
-      const result = await store.list();
-      expect(result.total).toBe(1);
+      const result = await store.list({ limit: 25 });
       expect(result.automations).toHaveLength(1);
+      expect(result.hasMore).toBe(false);
     });
   });
 

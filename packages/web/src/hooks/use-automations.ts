@@ -1,22 +1,63 @@
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
+import useSWRInfinite from "swr/infinite";
 import { useAuthSession } from "@/lib/auth-session";
+import { listAutomationsResponseSchema } from "@open-inspect/shared";
 import type {
   Automation,
   ListAutomationsResponse,
   ListAutomationInvocationsResponse,
 } from "@open-inspect/shared/types/automations";
 
-export function useAutomations() {
-  const { data: session } = useAuthSession();
+const AUTOMATION_LIST_PAGE_SIZE = 25;
 
-  const { data, isLoading, mutate } = useSWR<ListAutomationsResponse>(
-    session ? "/api/automations" : null
-  );
+function buildAutomationListPath(nameSearch: string, cursor?: string): `/api/${string}` {
+  const searchParams = new URLSearchParams({ limit: String(AUTOMATION_LIST_PAGE_SIZE) });
+  if (nameSearch) searchParams.set("search", nameSearch);
+  if (cursor) searchParams.set("cursor", cursor);
+  return `/api/automations?${searchParams.toString()}`;
+}
+
+export function useAutomations(nameSearch: string) {
+  const { data: session, status: authStatus } = useAuthSession();
+  const { fetcher } = useSWRConfig();
+  const normalizedNameSearch = nameSearch.trim();
+
+  const fetchAutomationPage = async (path: string): Promise<ListAutomationsResponse> => {
+    if (!fetcher) throw new Error("Missing SWR fetcher");
+    const parsed = listAutomationsResponseSchema.safeParse(await fetcher(path));
+    if (!parsed.success) throw new Error("Invalid automations response");
+    return parsed.data;
+  };
+
+  const { data, error, isValidating, mutate, setSize, size } =
+    useSWRInfinite<ListAutomationsResponse>(
+      (pageIndex, previousPage) => {
+        if (!session) return null;
+        if (pageIndex === 0) return buildAutomationListPath(normalizedNameSearch);
+        if (!previousPage?.hasMore) return null;
+        return buildAutomationListPath(normalizedNameSearch, previousPage.nextCursor);
+      },
+      fetchAutomationPage,
+      { revalidateFirstPage: true }
+    );
+
+  const loadedPages = data?.filter((page) => page !== undefined) ?? [];
+  const automations = loadedPages.flatMap((page) => page.automations);
+  const lastPage = loadedPages[loadedPages.length - 1];
+  const loading = authStatus === "loading" || (!!session && !data && !error);
+  const loadingMore = !!data && isValidating && data[size - 1] === undefined;
+  const hasMore = lastPage?.hasMore ?? false;
 
   return {
-    automations: data?.automations ?? [],
-    total: data?.total ?? 0,
-    loading: isLoading,
+    automations,
+    loading,
+    loadingMore,
+    error: error instanceof Error ? error : undefined,
+    hasMore,
+    loadMore: async () => {
+      if (loadingMore || !hasMore) return;
+      await setSize((pageCount) => pageCount + 1);
+    },
     mutate,
   };
 }

@@ -1,14 +1,19 @@
-/**
- * GitHub authentication utilities.
- */
-
 import { z } from "zod";
-import { githubTokenResponseSchema, type GitHubTokenResponse } from "../types";
 
 const githubOAuthErrorSchema = z.object({
   error: z.string().optional(),
   error_description: z.string().optional(),
 });
+
+const githubTokenResponseSchema = z.object({
+  access_token: z.string(),
+  token_type: z.string(),
+  scope: z.string(),
+  refresh_token: z.string().optional(),
+  expires_in: z.number().optional(),
+});
+
+export type GitHubTokenResponse = z.infer<typeof githubTokenResponseSchema>;
 
 async function parseGitHubTokenResponse(response: Response): Promise<GitHubTokenResponse> {
   const data: unknown = await response.json();
@@ -25,35 +30,9 @@ async function parseGitHubTokenResponse(response: Response): Promise<GitHubToken
   return tokenResult.data;
 }
 
-/**
- * GitHub OAuth configuration.
- */
 export interface GitHubOAuthConfig {
   clientId: string;
   clientSecret: string;
-}
-
-/**
- * Exchange authorization code for tokens.
- */
-export async function exchangeCodeForToken(
-  code: string,
-  config: GitHubOAuthConfig
-): Promise<GitHubTokenResponse> {
-  const response = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      client_id: config.clientId,
-      client_secret: config.clientSecret,
-      code,
-    }),
-  });
-
-  return parseGitHubTokenResponse(response);
 }
 
 /**

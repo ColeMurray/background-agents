@@ -160,6 +160,7 @@ export {
   toRepositoryRef,
   automationRepositoryInputSchema,
   automationRepositoriesInputSchema,
+  listAutomationsResponseSchema,
 } from "./automations";
 export type {
   AutomationRepository,
