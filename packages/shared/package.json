@@ -50,6 +50,10 @@
       "import": "./dist/browser-auth-routes.js",
       "types": "./dist/browser-auth-routes.d.ts"
     },
+    "./session-list-query": {
+      "import": "./dist/session-list-query.js",
+      "types": "./dist/session-list-query.d.ts"
+    },
     "./types/commit-signing": {
       "import": "./dist/types/commit-signing.js",
       "types": "./dist/types/commit-signing.d.ts"
@@ -137,6 +141,10 @@
     "./types/session-diffs": {
       "import": "./dist/types/session-diffs.js",
       "types": "./dist/types/session-diffs.d.ts"
+    },
+    "./types/prompts": {
+      "import": "./dist/types/prompts.js",
+      "types": "./dist/types/prompts.d.ts"
     },
     "./types/analytics": {
       "import": "./dist/types/analytics.js",

@@ -103,7 +103,9 @@ describe("RepoClassifier", () => {
     mockGetAvailableRepos.mockResolvedValue(TEST_REPOS);
     mockGetRoutingRules.mockResolvedValue([]);
     mockGetAvailableEnvironments.mockResolvedValue([]);
-    mockBuildRepoDescriptions.mockResolvedValue("- acme/prod\n- acme/web");
+    // buildRepoDescriptions is synchronous — a resolved-value mock would interpolate
+    // "[object Promise]" into the prompt instead of the repository list.
+    mockBuildRepoDescriptions.mockReturnValue("- acme/prod\n- acme/web");
   });
 
   it("uses tool output when provider returns valid structured classification", async () => {
@@ -139,6 +141,8 @@ describe("RepoClassifier", () => {
         tools: [expect.objectContaining({ name: "classify_target" })],
       })
     );
+    const prompt = mockMessagesCreate.mock.calls[0][0].messages[0].content as string;
+    expect(prompt).toContain("## Available Repositories\n- acme/prod\n- acme/web");
   });
 
   it("asks for clarification when tool payload is invalid", async () => {

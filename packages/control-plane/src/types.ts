@@ -2,12 +2,6 @@
  * Type definitions for Open-Inspect Control Plane.
  */
 
-import type {
-  MessageSource,
-  MessageStatus,
-  ParticipantRole,
-  SessionStatus,
-} from "@open-inspect/shared/types/sessions";
 import type { ImageBuildFinalizationJob } from "./image-builds/finalization-job";
 
 // Environment bindings
@@ -125,46 +119,4 @@ export interface ClientInfo {
   clientId: string;
   ws: WebSocket;
   lastFetchHistoryAt?: number;
-}
-
-export interface SessionResponse {
-  id: string;
-  title: string | null;
-  repoOwner: string;
-  repoName: string;
-  baseBranch: string;
-  branchName: string | null;
-  baseSha: string | null;
-  currentSha: string | null;
-  opencodeSessionId: string | null;
-  status: SessionStatus;
-  createdAt: number;
-  updatedAt: number;
-}
-
-export interface ListSessionsResponse {
-  sessions: SessionResponse[];
-  total: number;
-  hasMore: boolean;
-}
-
-export interface MessageResponse {
-  id: string;
-  authorId: string;
-  content: string;
-  source: MessageSource;
-  status: MessageStatus;
-  createdAt: number;
-  startedAt: number | null;
-  completedAt: number | null;
-}
-
-export interface ParticipantResponse {
-  id: string;
-  userId: string;
-  canonicalUserId?: string | null;
-  scmLogin: string | null;
-  scmName: string | null;
-  role: ParticipantRole;
-  joinedAt: number;
 }

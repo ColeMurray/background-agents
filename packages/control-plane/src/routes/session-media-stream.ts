@@ -12,8 +12,6 @@ import {
 import { getSessionArtifactFromRuntime } from "./session-media-artifacts";
 import { error, parsePattern, type Route } from "./shared";
 import { sessionRoute, type SessionRouteContext } from "./session-route";
-export { parseByteRangeHeader } from "./requests/byte-range";
-
 const logger = createLogger("router:session-media");
 
 function getMediaMimeType(

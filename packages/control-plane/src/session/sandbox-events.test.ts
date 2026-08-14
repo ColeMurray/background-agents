@@ -38,6 +38,7 @@ function createProcessor() {
     updateMessageCompletion: vi.fn(() => {
       getProcessingMessage.mockReturnValue(null);
     }),
+    clearMessageAwaitingStopConfirmation: vi.fn(),
     getMessageTimestamps: vi.fn(
       () => null as { created_at: number; started_at: number | null } | null
     ),
@@ -62,6 +63,7 @@ function createProcessor() {
   const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
+  const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
   const recordTerminalMessage = vi.fn(async () => {});
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
@@ -88,6 +90,7 @@ function createProcessor() {
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue,
+    broadcastPromptQueue,
     recordTerminalMessage
   );
 
@@ -102,6 +105,7 @@ function createProcessor() {
     statusService,
     scheduleInactivityCheck,
     processMessageQueue,
+    broadcastPromptQueue,
     updateLastActivity,
     applySessionTitleUpdate,
     waitUntil,
@@ -401,7 +405,8 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
       "completed",
-      expect.any(Number)
+      expect.any(Number),
+      null
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-1",
@@ -410,6 +415,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
+    expect(h.broadcastPromptQueue).toHaveBeenCalledOnce();
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
@@ -430,6 +436,7 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.recordTerminalMessage).not.toHaveBeenCalled();
     expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
+    expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-1");
   });
 
   it("projects a failed sandbox completion", async () => {
@@ -449,7 +456,8 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-failed",
       "failed",
-      expect.any(Number)
+      expect.any(Number),
+      "Agent failed"
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-failed",

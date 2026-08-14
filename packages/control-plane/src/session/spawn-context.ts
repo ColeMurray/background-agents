@@ -12,6 +12,18 @@ const sandboxTimeoutMsSchema = z.number().refine(isValidSandboxTimeoutMs);
  * repository requires spawnContext.repositories, a named fast-follow (design
  * §13.13), not a v1 promise.
  */
+const promptAuthorSchema = z.object({
+  userId: z.string(),
+  canonicalUserId: z.string().nullable().optional(),
+  scmUserId: z.string().nullable(),
+  scmLogin: z.string().nullable(),
+  scmName: z.string().nullable(),
+  scmEmail: z.string().nullable(),
+  scmAccessTokenEncrypted: z.string().nullable(),
+  scmRefreshTokenEncrypted: z.string().nullable(),
+  scmTokenExpiresAt: z.number().nullable(),
+});
+
 export const spawnContextSchema = z.object({
   repoOwner: z.string().nullable(),
   repoName: z.string().nullable(),
@@ -20,17 +32,7 @@ export const spawnContextSchema = z.object({
   reasoningEffort: z.string().nullable(),
   baseBranch: z.string().nullable(),
   sandboxTimeoutMs: sandboxTimeoutMsSchema.optional(),
-  owner: z.object({
-    userId: z.string(),
-    canonicalUserId: z.string().nullable().optional(),
-    scmUserId: z.string().nullable(),
-    scmLogin: z.string().nullable(),
-    scmName: z.string().nullable(),
-    scmEmail: z.string().nullable(),
-    scmAccessTokenEncrypted: z.string().nullable(),
-    scmRefreshTokenEncrypted: z.string().nullable(),
-    scmTokenExpiresAt: z.number().nullable(),
-  }),
+  promptAuthor: promptAuthorSchema,
 });
 
 export type SpawnContext = z.infer<typeof spawnContextSchema>;

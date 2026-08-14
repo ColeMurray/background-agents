@@ -95,6 +95,7 @@ describe("swrKeysToRevalidate", () => {
           participantId: "participant-1",
           participant: { participantId: "participant-1", name: "User" },
           timeline: { events: [], hasMore: false, cursor: null },
+          promptQueue: [],
         },
         SESSION_ID
       )

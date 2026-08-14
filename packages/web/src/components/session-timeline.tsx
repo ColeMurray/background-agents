@@ -12,13 +12,16 @@ import {
 } from "react";
 import { SafeMarkdown } from "@/components/safe-markdown";
 import { ScreenshotArtifactCard } from "@/components/screenshot-artifact-card";
+import { SessionWorkGroup } from "@/components/session-work-group";
 import { TaskActivityItem } from "@/components/task-activity-item";
+import { TimelineRowContent } from "@/components/timeline-row-content";
 import { ToolCallGroup } from "@/components/tool-call-group";
 import { copyToClipboard } from "@/lib/format";
 import {
-  buildTimelineItems,
+  buildSessionTimelineItems,
   toolCallKey,
   type FlatTimelineItem,
+  type TimelineItem,
   type ToolCallEvent,
 } from "@/lib/timeline-items";
 import type { Artifact, SandboxEvent } from "@/types/session";
@@ -27,6 +30,7 @@ import { CheckIcon, CopyIcon, ErrorIcon } from "@/components/ui/icons";
 import { resolveParticipantDisplay } from "@/lib/participant-display";
 import { TerminalMessageReadObserver } from "./terminal-message-read-observer";
 import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
+import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 
 export function SessionTimeline({
   events,
@@ -34,6 +38,7 @@ export function SessionTimeline({
   currentParticipantId,
   participantProfiles,
   isProcessing,
+  promptQueue = [],
   loadingHistory,
   showSkeleton,
   onLoadOlder,
@@ -46,6 +51,7 @@ export function SessionTimeline({
   currentParticipantId: string | null;
   participantProfiles: Record<string, SessionParticipantProfile>;
   isProcessing: boolean;
+  promptQueue?: PromptQueueItem[];
   loadingHistory: boolean;
   showSkeleton: boolean;
   onLoadOlder: () => void;
@@ -53,9 +59,17 @@ export function SessionTimeline({
   terminalMessageReadObservationEnabled?: boolean;
   onMarkMessageRead?: (messageId: string) => Promise<SessionReadAttemptDisposition>;
 }) {
-  const timelineItems = useMemo(() => buildTimelineItems(events), [events]);
+  const timelineItems = useMemo(() => buildSessionTimelineItems(events), [events]);
+  const pendingMessageIds = useMemo(
+    () =>
+      new Set(
+        promptQueue.filter((item) => item.status === "pending").map((item) => item.messageId)
+      ),
+    [promptQueue]
+  );
   const [expandedToolGroups, setExpandedToolGroups] = useState<Set<string>>(new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<Set<string>>(new Set());
+  const [expandedWorkGroups, setExpandedWorkGroups] = useState<Set<string>>(new Set());
   const latestTerminalMessageId = useMemo(() => {
     for (let index = events.length - 1; index >= 0; index -= 1) {
       const event = events[index];
@@ -132,7 +146,7 @@ export function SessionTimeline({
     }
   }, [events]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (didPrependRef.current) {
       didPrependRef.current = false;
       return;
@@ -141,7 +155,7 @@ export function SessionTimeline({
       const container = scrollContainerRef.current;
       if (container) container.scrollTop = container.scrollHeight;
     }
-  }, [events]);
+  }, [events, isProcessing]);
 
   const toggleToolCall = useCallback((event: ToolCallEvent) => {
     const key = toolCallKey(event);
@@ -166,6 +180,15 @@ export function SessionTimeline({
     });
   }, []);
 
+  const toggleWorkGroup = useCallback((messageId: string) => {
+    setExpandedWorkGroups((expanded) => {
+      const next = new Set(expanded);
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
+      return next;
+    });
+  }, []);
+
   const renderFlatItem = (item: FlatTimelineItem): ReactNode => {
     if (item.type === "tool_group") {
       return (
@@ -179,6 +202,13 @@ export function SessionTimeline({
         />
       );
     }
+    if (
+      item.event.type === "user_message" &&
+      item.event.messageId &&
+      pendingMessageIds.has(item.event.messageId)
+    ) {
+      return null;
+    }
     return (
       <EventItem
         key={item.id}
@@ -191,7 +221,7 @@ export function SessionTimeline({
     );
   };
 
-  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
+  const renderBaseTimelineItem = (item: TimelineItem): ReactNode =>
     item.type === "task_group" ? (
       <TaskActivityItem key={item.id} event={item.event} hasActivity={item.activity.length > 0}>
         {item.activity.map(renderFlatItem)}
@@ -200,11 +230,29 @@ export function SessionTimeline({
       renderFlatItem(item)
     );
 
+  const renderTimelineItem = (item: (typeof timelineItems)[number]): ReactNode =>
+    item.type === "work_group" ? (
+      <SessionWorkGroup
+        key={item.id}
+        durationMs={item.durationMs}
+        isExpanded={expandedWorkGroups.has(item.messageId)}
+        onToggle={() => toggleWorkGroup(item.messageId)}
+      >
+        {item.activity.map(renderBaseTimelineItem)}
+      </SessionWorkGroup>
+    ) : (
+      renderBaseTimelineItem(item)
+    );
+
   return (
     <div
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="h-full overflow-y-auto overflow-x-hidden p-4"
+      // `relative` makes this scroller the containing block for
+      // absolutely-positioned descendants (e.g. sr-only live-status spans in
+      // task rows). Without it they anchor to the document, escape every
+      // ancestor overflow clip, and grow the page itself.
+      className="relative h-full overflow-y-auto overflow-x-hidden p-3 sm:p-4"
     >
       <div className="w-full min-w-0 max-w-3xl mx-auto space-y-2">
         <div ref={topSentinelRef} className="h-1" />
@@ -238,6 +286,7 @@ export function SessionTimeline({
             }
             if (
               latestTerminalMessageGroupRange &&
+              onMarkMessageRead &&
               index > latestTerminalMessageGroupRange.start &&
               index <= latestTerminalMessageGroupRange.end
             ) {
@@ -247,7 +296,6 @@ export function SessionTimeline({
           })
         )}
         {isProcessing && <ThinkingIndicator />}
-
         <div />
       </div>
     </div>
@@ -266,16 +314,16 @@ function ThinkingIndicator() {
 function TimelineSkeleton() {
   return (
     <div className="space-y-3 py-2 animate-pulse">
-      <div className="bg-card p-4 space-y-2">
+      <div className="bg-card p-3 space-y-2 sm:p-4">
         <div className="h-3 w-24 bg-muted rounded" />
         <div className="h-3 w-full bg-muted rounded" />
         <div className="h-3 w-5/6 bg-muted rounded" />
       </div>
-      <div className="bg-accent-muted p-4 ml-8 space-y-2">
+      <div className="bg-accent-muted p-3 space-y-2 sm:ml-8 sm:p-4">
         <div className="h-3 w-20 bg-muted rounded" />
         <div className="h-3 w-4/5 bg-muted rounded" />
       </div>
-      <div className="bg-card p-4 space-y-2">
+      <div className="bg-card p-3 space-y-2 sm:p-4">
         <div className="h-3 w-32 bg-muted rounded" />
         <div className="h-3 w-3/4 bg-muted rounded" />
       </div>
@@ -337,10 +385,10 @@ function MessageFrame({
   children,
 }: MessageFrameProps) {
   return (
-    <div className={className}>
-      <div className="flex items-center justify-between mb-2">
+    <div className={`min-w-0 ${className}`}>
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
         {label}
-        <div className="flex items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1.5">
           <CopyButton
             copied={copied}
             className={copyButtonClassName}
@@ -381,10 +429,9 @@ function StatusRow({
           : "text-muted-foreground";
 
   return (
-    <div className={`flex items-center gap-2 text-sm ${textClassName}`}>
-      <span className={`w-2 h-2 rounded-full ${dotClassName}`} />
-      {children}
-      <span className="text-xs text-secondary-foreground">{time}</span>
+    <div className={`flex min-w-0 items-start gap-2 text-sm ${textClassName}`}>
+      <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotClassName}`} />
+      <TimelineRowContent time={time}>{children}</TimelineRowContent>
     </div>
   );
 }
@@ -448,7 +495,7 @@ function UserMessageEvent({
   return (
     <MessageFrame
       label={
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           {!isCurrentUser && avatar && (
             <img src={avatar} alt={authorName} className="w-5 h-5 rounded-full" />
           )}
@@ -458,12 +505,14 @@ function UserMessageEvent({
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-accent-muted p-4 ml-8"
+      className="group bg-accent-muted p-3 sm:ml-8 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted/60 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
       {event.content && (
-        <pre className="whitespace-pre-wrap text-sm text-foreground">{event.content}</pre>
+        <pre className="whitespace-pre-wrap text-sm text-foreground [overflow-wrap:anywhere]">
+          {event.content}
+        </pre>
       )}
       {attachments.length > 0 && (
         <UserMessageAttachments attachments={attachments} sessionId={sessionId} />
@@ -481,7 +530,7 @@ function AssistantMessageEvent({ event, copied, onCopyContent }: EventRendererPr
       time={formatEventTime(event)}
       copied={copied}
       content={event.content}
-      className="group bg-card p-4"
+      className="group bg-card p-3 sm:p-4"
       copyButtonClassName="p-1 text-secondary-foreground hover:text-foreground hover:bg-muted opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-colors"
       onCopyContent={onCopyContent}
     >
@@ -494,10 +543,9 @@ function ToolResultEvent({ event }: EventRendererProps) {
   if (event.type !== "tool_result" || !event.error) return null;
 
   return (
-    <div className="flex items-center gap-2 text-sm text-destructive py-1">
-      <ErrorIcon className="w-4 h-4" />
-      <span className="truncate">{event.error}</span>
-      <span className="text-xs text-secondary-foreground ml-auto">{formatEventTime(event)}</span>
+    <div className="flex min-w-0 items-start gap-2 py-1 text-sm text-destructive">
+      <ErrorIcon className="h-4 w-4 shrink-0" />
+      <TimelineRowContent time={formatEventTime(event)}>{event.error}</TimelineRowContent>
     </div>
   );
 }
@@ -522,7 +570,7 @@ function ArtifactEvent({ event, sessionId, onOpenMedia }: EventRendererProps) {
   }
 
   return (
-    <div className="space-y-2 border border-border-muted bg-card p-4">
+    <div className="space-y-2 border border-border-muted bg-card p-3 sm:p-4">
       <div className="flex items-center justify-between">
         <span className="text-xs text-muted-foreground">
           {event.artifactType === "video" ? "Video" : "Screenshot"}

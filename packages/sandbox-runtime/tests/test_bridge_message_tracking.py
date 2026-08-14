@@ -66,14 +66,12 @@ def bridge() -> AgentBridge:
 
 def make_state(message_id: str) -> _PromptState:
     """Per-prompt state as stream_prompt would build it."""
-    state = _PromptState(
+    return _PromptState(
         opencode_session_id="oc-session-123",
         message_id=message_id,
         opencode_message_id="msg_test",
         start_time=0.0,
     )
-    state.user_message_ids.add("msg_test")
-    return state
 
 
 class TestToolCallEvent:

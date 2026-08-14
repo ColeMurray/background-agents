@@ -1,9 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { serverMessageSchema } from "@open-inspect/shared/types/server-messages";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
+import {
+  serverMessageSchema,
+  type ServerMessage,
+} from "@open-inspect/shared/types/server-messages";
+
+function parseWsMessage(raw: unknown): ServerMessage | null {
+  const result = serverMessageSchema.safeParse(raw);
+  return result.success ? result.data : null;
+}
 
 // WebSocket URL (should come from env in production)
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8787";
@@ -17,11 +24,6 @@ const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const MAX_RECONNECT_DELAY_MS = 30000;
 const PING_INTERVAL_MS = 30000;
-
-function parseWsMessage(raw: unknown): ServerMessage | null {
-  const result = serverMessageSchema.safeParse(raw);
-  return result.success ? result.data : null;
-}
 
 function reconnectDelayMs(attemptsSoFar: number): number {
   return Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, attemptsSoFar), MAX_RECONNECT_DELAY_MS);

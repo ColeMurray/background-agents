@@ -4,6 +4,7 @@ import { buildServiceAuthHeaders, type ServiceName } from "@open-inspect/shared/
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionDO } from "../../src/session/durable-object";
 import { hashToken } from "../../src/auth/crypto";
+import { SessionIndexStore } from "../../src/db/session-index";
 
 const DEFAULT_WAIT_FOR_SANDBOX_STATUS_TIMEOUT_MS = 3000;
 const TEST_BROWSER_USER_ID = "11111111111111111111111111111111";
@@ -12,6 +13,12 @@ const TEST_BROWSER_PROVIDER_SUBJECT = "583231";
 const TEST_BROWSER_SESSION_ID = "test-browser-session";
 const TEST_BROWSER_SESSION_TOKEN = "test-browser-session-token";
 const TEST_BROWSER_SESSION_COOKIE = "__Secure-openinspect.session_token";
+const TEST_NAMED_SESSION_DEFAULTS = {
+  repoOwner: "acme",
+  repoName: "web-app",
+  repoId: 12345,
+  userId: "user-1",
+} as const;
 
 async function signCookieValue(value: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -267,8 +274,7 @@ export async function seedMessage(
 // ---------------------------------------------------------------------------
 
 /**
- * Create a session using idFromName() so the worker's /sessions/:name/ws
- * route can locate the DO via the same name. Returns stub + sessionName.
+ * Create a production-shaped named session: D1 index first, then the session DO.
  */
 export async function initNamedSession(
   sessionName: string,
@@ -287,27 +293,48 @@ export async function initNamedSession(
     model?: string;
     reasoningEffort?: string;
     userId?: string;
+    canonicalUserId?: string;
     scmLogin?: string;
     parentSessionId?: string;
-    spawnSource?: string;
+    spawnSource?: "user" | "agent" | "automation";
     spawnDepth?: number;
     sandboxSettings?: Record<string, unknown>;
   }
 ) {
-  const id = env.SESSION.idFromName(sessionName);
-  const stub = env.SESSION.get(id);
   const defaults = {
     sessionName,
-    repoOwner: "acme",
-    repoName: "web-app",
-    repoId: 12345,
-    userId: "user-1",
+    ...TEST_NAMED_SESSION_DEFAULTS,
     ...overrides,
   };
+  const now = Date.now();
+  await new SessionIndexStore(env.DB).create({
+    id: sessionName,
+    title: defaults.title ?? null,
+    repoOwner: defaults.repoOwner ?? null,
+    repoName: defaults.repoName ?? null,
+    model: defaults.model ?? "anthropic/claude-haiku-4-5",
+    reasoningEffort: defaults.reasoningEffort ?? null,
+    baseBranch: defaults.defaultBranch ?? "main",
+    status: "created",
+    parentSessionId: defaults.parentSessionId ?? null,
+    spawnSource: defaults.spawnSource ?? "user",
+    spawnDepth: defaults.spawnDepth ?? 0,
+    userId: defaults.canonicalUserId ?? defaults.userId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return initNamedSessionDO(sessionName, defaults);
+}
+
+/** Create only the named session DO for tests that manage the D1 row explicitly. */
+export async function initNamedSessionDO(sessionName: string, init: Record<string, unknown> = {}) {
+  const id = env.SESSION.idFromName(sessionName);
+  const stub = env.SESSION.get(id);
   const res = await stub.fetch("http://internal/internal/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(defaults),
+    body: JSON.stringify({ sessionName, ...TEST_NAMED_SESSION_DEFAULTS, ...init }),
   });
   if (res.status !== 200) throw new Error(`Init failed: ${res.status}`);
   return { stub, id, sessionName };
@@ -343,7 +370,11 @@ export function collectMessages(
  */
 export async function openClientWs(
   sessionName: string,
-  opts?: { subscribe?: boolean; userId?: string; canonicalUserId?: string }
+  opts?: {
+    subscribe?: boolean;
+    userId?: string;
+    canonicalUserId?: string;
+  }
 ) {
   const response = await SELF.fetch(`https://test.local/sessions/${sessionName}/ws`, {
     headers: { Upgrade: "websocket" },

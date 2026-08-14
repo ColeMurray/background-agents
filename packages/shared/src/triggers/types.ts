@@ -263,8 +263,6 @@ export const automationEventSchema = z.discriminatedUnion("source", [
   }),
 ]);
 
-export type ParsedAutomationEvent = z.infer<typeof automationEventSchema>;
-
 // ─── Trigger Source Definition ────────────────────────────────────────────────
 
 export interface TriggerSourceDefinition {

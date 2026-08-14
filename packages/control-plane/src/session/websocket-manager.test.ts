@@ -359,6 +359,18 @@ describe("SessionWebSocketManagerImpl", () => {
       expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox terminated");
     });
 
+    it("checks persisted terminal status before returning a cached open socket", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      const row = createSandboxRow("sb-1");
+      row.status = "stale";
+      mockRepo.setSandbox(row);
+
+      expect(manager.getSandboxSocket()).toBeNull();
+      expect(ws.close).toHaveBeenCalledWith(1000, "Sandbox terminated");
+    });
+
     it("returns null and closes zombie WS when sandbox status is stale", () => {
       const { manager, sockets, mockRepo } = createManager();
       const ws = createFakeWebSocket();
@@ -397,6 +409,22 @@ describe("SessionWebSocketManagerImpl", () => {
       // Close the socket so hibernation recovery also fails,
       // confirming the cached ref was cleared.
       Object.defineProperty(ws, "readyState", { value: WebSocket.CLOSED });
+      expect(manager.getSandboxSocket()).toBeNull();
+    });
+  });
+
+  describe("detachSandboxSocket", () => {
+    it("clears and closes the cached sandbox socket even after status becomes terminal", () => {
+      const { manager, mockRepo } = createManager();
+      const ws = createFakeWebSocket();
+      manager.acceptAndSetSandboxSocket(ws, "sb-1");
+      const row = createSandboxRow("sb-1");
+      row.status = "stale";
+      mockRepo.setSandbox(row);
+
+      manager.detachSandboxSocket(1011, "Stop confirmation timed out");
+
+      expect(ws.close).toHaveBeenCalledWith(1011, "Stop confirmation timed out");
       expect(manager.getSandboxSocket()).toBeNull();
     });
   });

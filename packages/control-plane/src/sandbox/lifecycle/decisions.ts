@@ -20,11 +20,7 @@ import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
  * through to their own checks (e.g. token comparison) instead of locking out
  * every sandbox.
  */
-export const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set([
-  "stopped",
-  "stale",
-  "failed",
-]);
+const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set(["stopped", "stale", "failed"]);
 
 export function isDeadSandboxStatus(status: SandboxStatus): boolean {
   return DEAD_SANDBOX_STATUSES.has(status);

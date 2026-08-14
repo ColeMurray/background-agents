@@ -98,8 +98,13 @@ jobs:
         run: terraform validate -no-color
         working-directory: ${{ env.TF_WORKING_DIR }}
 
+      - name: Terraform Tests
+        id: test
+        run: terraform test -filter=tests/auth_provider_configuration.tftest.hcl
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
       - name: Post Validation Results
-        if: github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v8
         with:
           script: |
@@ -115,6 +120,7 @@ jobs:
             | Format | ${{ steps.fmt.outcome == 'success' && '✅' || '⚠️' }} |
             | Init | ${{ steps.init.outcome == 'success' && '✅' || '❌' }} |
             | Validate | ${{ steps.validate.outcome == 'success' && '✅' || '❌' }} |
+            | Tests | ${{ steps.test.outcome == 'success' && '✅' || '❌' }} |
             ${planNote}
 
             *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;

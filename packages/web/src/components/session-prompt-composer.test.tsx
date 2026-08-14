@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { SessionPromptComposer } from "./session-prompt-composer";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 
 expect.extend(matchers);
 
@@ -16,10 +17,18 @@ vi.mock("@/components/attachment-preview-strip", () => ({
   AttachmentPreviewStrip: () => null,
 }));
 vi.mock("@/components/reasoning-effort-pills", () => ({
-  ReasoningEffortPills: () => null,
+  ReasoningEffortPills: ({ disabled }: { disabled?: boolean }) => (
+    <button type="button" disabled={disabled}>
+      Reasoning
+    </button>
+  ),
 }));
 vi.mock("@/components/ui/combobox", () => ({
-  Combobox: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Combobox: ({ children, disabled }: { children: React.ReactNode; disabled?: boolean }) => (
+    <button type="button" disabled={disabled} aria-label="Model">
+      {children}
+    </button>
+  ),
 }));
 
 afterEach(() => {
@@ -31,10 +40,14 @@ function ComposerHarness({
   initialValue = "",
   isProcessing = false,
   isUploading = false,
+  status = "active",
+  submitError = null,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
   isUploading?: boolean;
+  status?: "active" | "archived" | "cancelled";
+  submitError?: string | null;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -43,7 +56,7 @@ function ComposerHarness({
     <SessionPromptComposer
       session={{
         id: "session-1",
-        status: "active",
+        status,
         artifacts: [],
         onArchive: vi.fn(),
         onUnarchive: vi.fn(),
@@ -52,6 +65,7 @@ function ComposerHarness({
         value,
         isProcessing,
         draftLocked: isUploading,
+        submitError,
         inputRef,
         onSubmit: vi.fn(),
         onChange: (event) => setValue(event.target.value),
@@ -84,6 +98,10 @@ describe("SessionPromptComposer", () => {
       "autocomplete",
       "off"
     );
+    expect(screen.getByPlaceholderText("Ask or build anything")).toHaveAttribute(
+      "maxlength",
+      String(MAX_WEB_PROMPT_CHARS)
+    );
   });
 
   it("starts with one row and grows and shrinks with its content", () => {
@@ -109,19 +127,39 @@ describe("SessionPromptComposer", () => {
     expect(input).toHaveStyle({ height: "72px" });
   });
 
-  it("keeps processing and uploading controls in the mobile layout flow", () => {
+  it("keeps queue, stop, and uploading controls in the mobile layout flow", () => {
     render(<ComposerHarness initialValue="Queued prompt" isProcessing isUploading />);
 
-    const input = screen.getByPlaceholderText("Type your next message...");
+    const input = screen.getByPlaceholderText("Add a follow-up...");
     const actions = screen.getByTestId("prompt-actions");
 
     expect(screen.getByText("Uploading…")).toBeInTheDocument();
-    expect(screen.getByText("Waiting...")).toBeInTheDocument();
-    expect(screen.getByTitle("Stop")).toBeInTheDocument();
+    expect(screen.queryByText("Waiting...")).not.toBeInTheDocument();
+    expect(screen.getByText("Queue")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Stop current prompt; queued prompts will continue")
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("Queue follow-up; runs after the current prompt")).toBeDisabled();
     expect(input).toHaveClass("min-w-48", "flex-1");
     expect(input).not.toHaveClass("pr-24");
     expect(input.parentElement).toHaveClass("flex-wrap", "justify-end");
     expect(actions).toHaveClass("shrink-0", "sm:absolute");
+  });
+
+  it("keeps model controls editable while processing and blocks terminal sessions", () => {
+    const { rerender } = render(<ComposerHarness initialValue="Follow up" isProcessing />);
+    expect(screen.getByTitle("Queue follow-up; runs after the current prompt")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeEnabled();
+
+    rerender(<ComposerHarness initialValue="Cannot send" status="archived" />);
+    expect(screen.getByTitle(/Send/)).toBeDisabled();
+  });
+
+  it("shows an inline submission error", () => {
+    render(<ComposerHarness initialValue="Keep me" submitError="The prompt queue is full" />);
+    expect(screen.getByRole("alert")).toHaveTextContent("The prompt queue is full");
+    expect(screen.getByDisplayValue("Keep me")).toBeInTheDocument();
   });
 
   it("removes the action bar row and spacing below md", () => {

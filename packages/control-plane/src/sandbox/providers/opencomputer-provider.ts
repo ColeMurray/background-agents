@@ -265,7 +265,7 @@ export class OpenComputerSandboxProvider implements SandboxProvider {
       let wokeSandbox = false;
       if (state !== "running" && state !== "started" && state !== "ready") {
         const wakeResult = await this.client.wakeSandbox(config.providerObjectId);
-        if (wakeResult && typeof wakeResult === "object") sandbox = wakeResult;
+        if (wakeResult) sandbox = wakeResult;
         wokeSandbox = true;
       }
 

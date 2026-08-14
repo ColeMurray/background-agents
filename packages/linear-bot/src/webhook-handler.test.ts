@@ -625,7 +625,7 @@ describe("handleAgentSessionEvent environment targets", () => {
     return fetchMock;
   }
 
-  it("resolves an explicit owner/repo from a clarification reply without classifying", async () => {
+  it("resolves a clarification reply and preserves the original instruction", async () => {
     // The elicitation path created no session, so no issue mapping exists; the
     // user's reply arrives as a prompted event whose text lives on the agent
     // activity. It must reach target resolution and match deterministically —
@@ -636,10 +636,18 @@ describe("handleAgentSessionEvent environment targets", () => {
     const env = makeLinearBotEnv(kv, { SERVICE_AUTH_SECRET: "service-auth-secret" });
     const fetchMock = stubClarificationControlPlane(env);
     const webhook = makeWebhook();
+    const originalInstruction =
+      "Preserve the original task requirements exactly. " +
+      "x".repeat(200) +
+      " ORIGINAL_INSTRUCTION_END";
     webhook.action = "prompted";
+    webhook.agentSession.comment = {
+      body: originalInstruction,
+      userId: "creator-user-1",
+    };
     webhook.agentActivity = {
       userId: "human-user-1",
-      content: { type: "prompt", body: "Use acme/backend and preserve the migration." },
+      content: { type: "prompt", body: "acme/backend" },
     };
 
     await handleAgentSessionEvent(webhook, env, "trace-clarification-reply");
@@ -655,8 +663,11 @@ describe("handleAgentSessionEvent environment targets", () => {
       repoOwner: "acme",
       repoName: "backend",
     });
-    expect(promptBody(fetchMock)?.content).toContain(
-      "Use acme/backend and preserve the migration."
+    const prompt = String(promptBody(fetchMock)?.content);
+    expect(prompt).toContain(originalInstruction);
+    expect(prompt).toContain('<user_content source="linear_agent_instruction" author="unknown">');
+    expect(prompt).toContain(
+      '<user_content source="linear_repository_clarification" author="unknown">\nacme/backend'
     );
   });
 

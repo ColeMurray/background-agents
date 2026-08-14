@@ -1,4 +1,8 @@
-import { sessionReadActionSchema, type SessionStatus } from "@open-inspect/shared/types/sessions";
+import {
+  parseSessionListQuery,
+  SESSION_LIST_CURRENT_USER,
+} from "@open-inspect/shared/session-list-query";
+import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
 import {
@@ -14,29 +18,20 @@ import { createLogger } from "../logger";
 
 const log = createLogger("session-read-state");
 
-const SESSION_STATUSES: SessionStatus[] = [
-  "created",
-  "active",
-  "completed",
-  "failed",
-  "archived",
-  "cancelled",
-];
-function parseSessionStatus(value: string | null): SessionStatus | undefined {
-  if (!value) return undefined;
-  return SESSION_STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : undefined;
-}
-
 function parseCreatedByFilters(
-  searchParams: URLSearchParams,
+  values: readonly string[],
   principal: RequestContext["principal"]
 ): string[] | Response {
-  const values = searchParams.getAll("createdBy");
   const userIds: string[] = [];
   const seen = new Set<string>();
 
   for (const value of values) {
-    const userId = value === "me" ? (principal?.kind === "user" ? principal.userId : null) : value;
+    const userId =
+      value === SESSION_LIST_CURRENT_USER
+        ? principal?.kind === "user"
+          ? principal.userId
+          : null
+        : value;
 
     if (!isCanonicalUserId(userId)) {
       return error("Invalid createdBy", 400);
@@ -51,18 +46,6 @@ function parseCreatedByFilters(
   return userIds;
 }
 
-function parsePaginationLimit(value: string | null): number {
-  const parsed = Number.parseInt(value ?? "50", 10);
-  if (!Number.isFinite(parsed)) return 50;
-  return Math.min(Math.max(parsed, 1), 100);
-}
-
-function parsePaginationOffset(value: string | null): number {
-  const parsed = Number.parseInt(value ?? "0", 10);
-  if (!Number.isFinite(parsed)) return 0;
-  return Math.max(parsed, 0);
-}
-
 async function handleListSessions(
   request: Request,
   env: Env,
@@ -70,31 +53,12 @@ async function handleListSessions(
   ctx: RequestContext
 ): Promise<Response> {
   const url = new URL(request.url);
-  const limit = parsePaginationLimit(url.searchParams.get("limit"));
-  const offset = parsePaginationOffset(url.searchParams.get("offset"));
-  const statusParam = url.searchParams.get("status");
-  const excludeStatusParam = url.searchParams.get("excludeStatus");
-  const excludeAutomationLineageParam = url.searchParams.get("excludeAutomationLineage");
-  const status = parseSessionStatus(statusParam);
-  const excludeStatus = parseSessionStatus(excludeStatusParam);
-  const excludeAutomationLineage = excludeAutomationLineageParam === "true";
-  const createdByUserIds = parseCreatedByFilters(url.searchParams, ctx.principal);
+  const parsedQuery = parseSessionListQuery(url.searchParams);
+  if (!parsedQuery.success) return error(`Invalid ${parsedQuery.invalidParam}`, 400);
 
-  if (statusParam && !status) {
-    return error("Invalid status", 400);
-  }
-
-  if (excludeStatusParam && !excludeStatus) {
-    return error("Invalid excludeStatus", 400);
-  }
-
-  if (
-    excludeAutomationLineageParam !== null &&
-    excludeAutomationLineageParam !== "true" &&
-    excludeAutomationLineageParam !== "false"
-  ) {
-    return error("Invalid excludeAutomationLineage", 400);
-  }
+  const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
+    parsedQuery.data;
+  const createdByUserIds = parseCreatedByFilters(createdBy, ctx.principal);
 
   if (createdByUserIds instanceof Response) {
     return createdByUserIds;

@@ -49,6 +49,7 @@ describe("VNC session protocol", () => {
         vncPassword: "secret",
       },
       artifacts: [],
+      promptQueue: [],
       participantId: "participant-1",
       timeline: { events: [], hasMore: false, cursor: null },
     });
@@ -91,6 +92,7 @@ describe("session view contracts", () => {
         ttydToken: "secret",
       },
       artifacts: [],
+      promptQueue: [],
       timeline: {
         events: [
           {
@@ -115,6 +117,7 @@ describe("session view contracts", () => {
     const snapshot = {
       session: snapshotState,
       artifacts: [],
+      promptQueue: [],
       timeline: { events: [], hasMore: false, cursor: null },
     };
     expect(
@@ -127,5 +130,69 @@ describe("session view contracts", () => {
         },
       }).success
     ).toBe(false);
+  });
+
+  it("parses authoritative prompt queues in snapshots and live updates", () => {
+    const promptQueue = [
+      {
+        messageId: "message-running",
+        content: "Run this",
+        status: "processing",
+      },
+      {
+        messageId: "message-pending",
+        content: "Then this",
+        status: "pending",
+      },
+    ];
+
+    expect(
+      sessionSnapshotSchema.parse({
+        session: snapshotState,
+        artifacts: [],
+        timeline: { events: [], hasMore: false, cursor: null },
+        promptQueue,
+      }).promptQueue
+    ).toEqual(promptQueue);
+    expect(
+      serverMessageSchema.parse({ type: "prompt_queue_updated", promptQueue }).promptQueue
+    ).toEqual(promptQueue);
+  });
+
+  it("echoes prompt request correlation", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "prompt_queued",
+        clientRequestId: "request-1",
+        messageId: "message-1",
+        position: 2,
+      })
+    ).toMatchObject({ clientRequestId: "request-1" });
+    expect(
+      serverMessageSchema.parse({
+        type: "prompt_queued",
+        clientRequestId: "request-complete",
+        messageId: "message-complete",
+        position: null,
+      })
+    ).toMatchObject({ position: null });
+    expect(
+      serverMessageSchema.safeParse({
+        type: "prompt_queued",
+        messageId: "message-1",
+        position: 1,
+      }).success
+    ).toBe(false);
+  });
+
+  it("parses correlated prompt rejections", () => {
+    expect(
+      serverMessageSchema.parse({
+        type: "error",
+        code: "PROMPT_QUEUE_FULL",
+        message: "Queue full",
+        clientRequestId: "request-1",
+      })
+    ).toMatchObject({ clientRequestId: "request-1" });
   });
 });

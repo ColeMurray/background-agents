@@ -4,7 +4,7 @@
  * Uses a mock SqlStorage to verify SQL operations are called correctly.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SessionRepository } from "./repository";
 import {
   AttachmentClaimConflictError,
@@ -715,6 +715,44 @@ describe("SessionRepository", () => {
     });
   });
 
+  describe("prompt queue", () => {
+    it("returns null instead of position zero for a finished idempotent message", () => {
+      mock.setData(
+        `SELECT id FROM messages WHERE status IN ('pending', 'processing')
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`,
+        [{ id: "msg-other" }]
+      );
+      expect(repo.getUnfinishedMessagePosition("msg-complete")).toBeNull();
+    });
+
+    it("projects only fields needed to render the queue", () => {
+      vi.spyOn(repo, "listUnfinishedMessages").mockReturnValue([
+        {
+          id: "msg-legacy",
+          author_id: "part-1",
+          content: "continue",
+          source: "web",
+          model: null,
+          reasoning_effort: null,
+          attachments: "{bad json",
+          callback_context: null,
+          client_request_id: null,
+          request_fingerprint: null,
+          status: "pending",
+          error_message: null,
+          stop_confirmation_deadline: null,
+          created_at: 1000,
+          started_at: null,
+          completed_at: null,
+        },
+      ]);
+
+      expect(repo.listPromptQueue()).toEqual([
+        { messageId: "msg-legacy", content: "continue", status: "pending" },
+      ]);
+    });
+  });
+
   describe("createMessage", () => {
     it("creates message with all fields", () => {
       repo.createMessage({
@@ -740,6 +778,8 @@ describe("SessionRepository", () => {
         null,
         "[]",
         '{"channel":"C123"}',
+        null,
+        null,
         "pending",
         1000,
       ]);
@@ -756,7 +796,7 @@ describe("SessionRepository", () => {
       createdAt: 1000,
     };
 
-    it("claims every upload and creates the message in one transaction", () => {
+    it("claims uploads and creates the pending message in one transaction", () => {
       let transactions = 0;
       repo = new SessionRepository(
         mock.sql,
@@ -774,6 +814,7 @@ describe("SessionRepository", () => {
       expect(mock.calls[0].query).toContain("UPDATE attachments SET message_id");
       expect(mock.calls[0].params).toEqual(["msg-1", "up-1", "up-2"]);
       expect(mock.calls[1].query).toContain("INSERT INTO messages");
+      expect(mock.calls).toHaveLength(2);
     });
 
     it("fails before creating the message when not every upload can be claimed", () => {
@@ -786,25 +827,70 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("updateMessageToProcessing", () => {
-    it("changes status and sets startedAt", () => {
-      repo.updateMessageToProcessing("msg-1", 2000);
+  describe("startMessageProcessing", () => {
+    it("updates processing state and materializes the user event in one transaction", () => {
+      repo.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      });
 
-      expect(mock.calls.length).toBe(1);
+      expect(transactionSyncCalls).toBe(1);
       expect(mock.calls[0].query).toContain("status = 'processing'");
-      expect(mock.calls[0].query).toContain("started_at");
       expect(mock.calls[0].params).toEqual([2000, "msg-1"]);
+      expect(mock.calls[1].query).toContain("INSERT INTO events");
+      expect(mock.calls[1].params.at(-1)).toBe(2000);
+    });
+
+    it("appends the canonical event without updating legacy timeline rows", () => {
+      repo.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      });
+
+      expect(mock.calls).toHaveLength(2);
+      expect(mock.calls[1].query).toContain("INSERT INTO events");
+      expect(mock.calls[1].query).not.toContain("UPDATE events");
+      expect(mock.calls[1].params[0]).toBe("user_message:msg-1");
     });
   });
 
   describe("updateMessageCompletion", () => {
-    it("sets status and completedAt", () => {
+    it("sets status and completedAt without an error for normal completion", () => {
       repo.updateMessageCompletion("msg-1", "completed", 3000);
 
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("status = ?");
       expect(mock.calls[0].query).toContain("completed_at");
-      expect(mock.calls[0].params).toEqual(["completed", 3000, "msg-1"]);
+      expect(mock.calls[0].query).toContain("error_message = ?");
+      expect(mock.calls[0].params).toEqual(["completed", 3000, null, "msg-1"]);
+    });
+
+    it("persists a failed completion reason", () => {
+      repo.updateMessageCompletion("msg-1", "failed", 3000, "Agent failed");
+
+      expect(mock.calls[0].params).toEqual(["failed", 3000, "Agent failed", "msg-1"]);
+    });
+  });
+
+  describe("stop confirmation deadline", () => {
+    it("marks, reads, and clears the dedicated deadline without changing error_message", () => {
+      const query = `SELECT id, stop_confirmation_deadline FROM messages
+       WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`;
+      mock.setData(query, [{ id: "msg-1", stop_confirmation_deadline: 5000 }]);
+
+      repo.markMessageAwaitingStopConfirmation("msg-1", 5000);
+      expect(mock.calls[0].query).toContain("SET stop_confirmation_deadline = ?");
+      expect(mock.calls[0].query).not.toContain("error_message");
+      expect(repo.getMessageAwaitingStopConfirmation()).toEqual({ id: "msg-1", deadline: 5000 });
+      repo.clearMessageAwaitingStopConfirmation("msg-1");
+      expect(mock.calls[2].query).toContain("SET stop_confirmation_deadline = NULL");
+      expect(mock.calls[2].query).not.toContain("error_message");
     });
   });
 
@@ -1264,6 +1350,33 @@ describe("SessionRepository", () => {
       expect(mock.calls.length).toBe(1);
       expect(mock.calls[0].query).toContain("INSERT OR REPLACE INTO ws_client_mapping");
       expect(mock.calls[0].params).toEqual(["ws-1", "p-1", "client-1", 1000]);
+    });
+  });
+
+  describe("getWsClientMapping", () => {
+    it("restores a persisted client mapping", () => {
+      mock.setData(
+        `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
+       FROM ws_client_mapping m
+       JOIN participants p ON m.participant_id = p.id
+       WHERE m.ws_id = ?`,
+        [
+          {
+            participant_id: "p-1",
+            client_id: "client-1",
+            user_id: "user-1",
+            canonical_user_id: null,
+            scm_name: null,
+            scm_login: null,
+          },
+        ]
+      );
+
+      expect(repo.getWsClientMapping("ws-1")).toMatchObject({
+        participant_id: "p-1",
+        client_id: "client-1",
+        user_id: "user-1",
+      });
     });
   });
 

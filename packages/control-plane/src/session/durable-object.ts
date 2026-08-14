@@ -10,6 +10,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
 import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
+import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import {
   sessionSnapshotSchema,
   type ServerMessage,
@@ -127,6 +128,7 @@ import { SessionDiffService } from "./diffs/service";
 import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
+import { parseArtifactMetadataJson } from "./artifact-metadata";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -255,6 +257,7 @@ export class SessionDO extends DurableObject<Env> {
     scmCredentials: (_request, _url, log) => this.sandboxHandler.scmCredentials(log),
     tunnelUrls: (_request, _url, log) => this.sandboxHandler.tunnelUrls(log),
     spawnContext: () => this.childSessionsHandler.getSpawnContext(),
+    activePromptAuthor: () => this.childSessionsHandler.getActivePromptAuthor(),
     childSummary: (_request, url) => this.childSessionsHandler.getChildSummary(url),
     parentPrompt: (request) => this.childSessionsHandler.parentPrompt(request),
     cancel: () => this.sessionLifecycleHandler.cancel(),
@@ -705,6 +708,7 @@ export class SessionDO extends DurableObject<Env> {
         (timestamp) => this.updateLastActivity(timestamp),
         () => this.scheduleInactivityCheck(),
         () => this.messageQueue.processMessageQueue(),
+        () => this.messageQueue.broadcastPromptQueue(),
         (input) => this.terminalMessageProjection.recordTerminalMessage(input)
       );
     }
@@ -808,13 +812,7 @@ export class SessionDO extends DurableObject<Env> {
     // WebSocket manager adapter — thin delegation to wsManager
     const wsManager: WebSocketManager = {
       getSandboxWebSocket: () => this.wsManager.getSandboxSocket(),
-      closeSandboxWebSocket: (code, reason) => {
-        const ws = this.wsManager.getSandboxSocket();
-        if (ws) {
-          this.wsManager.close(ws, code, reason);
-          this.wsManager.clearSandboxSocket();
-        }
-      },
+      detachSandboxWebSocket: (code, reason) => this.wsManager.detachSandboxSocket(code, reason),
       sendToSandbox: (message) => {
         const ws = this.wsManager.getSandboxSocket();
         return ws ? this.wsManager.send(ws, message) : false;
@@ -903,6 +901,7 @@ export class SessionDO extends DurableObject<Env> {
       config,
       {
         onSandboxTerminating: () => this.messageQueue.failStuckProcessingMessage(),
+        onSandboxTerminated: () => this.messageQueue.resumeAfterSandboxTermination(),
       },
       imageBuildLookup
     );
@@ -1282,10 +1281,14 @@ export class SessionDO extends DurableObject<Env> {
     try {
       const data = this.parseWebSocketMessage(message, "client", clientMessageSchema);
       if (!data) {
+        const invalidPrompt = this.readInvalidPrompt(message);
         this.safeSend(ws, {
           type: "error",
-          code: "INVALID_MESSAGE",
-          message: "Failed to process message",
+          code: invalidPrompt ? "INVALID_PROMPT" : "INVALID_MESSAGE",
+          message: invalidPrompt ? "Invalid prompt" : "Failed to process message",
+          ...(invalidPrompt?.clientRequestId
+            ? { clientRequestId: invalidPrompt.clientRequestId }
+            : {}),
         });
         return;
       }
@@ -1364,12 +1367,28 @@ export class SessionDO extends DurableObject<Env> {
     return result.data;
   }
 
+  private readInvalidPrompt(message: string): { clientRequestId?: string } | null {
+    try {
+      const raw = JSON.parse(message) as unknown;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const candidate = raw as Record<string, unknown>;
+      if (candidate.type !== "prompt") return null;
+      const clientRequestId = clientRequestIdSchema.safeParse(candidate.clientRequestId);
+      return clientRequestId.success ? { clientRequestId: clientRequestId.data } : {};
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Handle client subscription with token validation.
    */
   private async handleSubscribe(
     ws: WebSocket,
-    data: { token: string; clientId: string }
+    data: {
+      token: string;
+      clientId: string;
+    }
   ): Promise<void> {
     // Validate the WebSocket auth token
     if (!data.token) {
@@ -1546,6 +1565,7 @@ export class SessionDO extends DurableObject<Env> {
       model?: string;
       reasoningEffort?: string;
       attachments?: SessionAttachmentReference[];
+      clientRequestId: string;
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, client, data);
@@ -1784,6 +1804,7 @@ export class SessionDO extends DurableObject<Env> {
         session: local.session,
         artifacts: this.messageService.listArtifacts().artifacts,
         timeline: this.eventStream.getReplay(),
+        promptQueue: this.repository.listPromptQueue(),
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });
@@ -2080,7 +2101,14 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     try {
-      return JSON.parse(artifact.metadata) as Record<string, unknown>;
+      const metadata = parseArtifactMetadataJson(artifact.metadata);
+      if (!metadata) {
+        this.log.warn("Invalid artifact metadata shape", {
+          artifact_id: artifact.id,
+        });
+        return null;
+      }
+      return metadata;
     } catch (error) {
       this.log.warn("Invalid artifact metadata JSON", {
         artifact_id: artifact.id,

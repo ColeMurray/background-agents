@@ -45,10 +45,10 @@ export default function AutomationsPage() {
         </header>
       )}
 
-      <div className="flex-1 overflow-y-auto p-8">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
         <div className="max-w-3xl mx-auto">
           <div className="flex items-center justify-between mb-6">
-            <h1 className="text-3xl font-semibold text-foreground">Automations</h1>
+            <h1 className="text-2xl font-semibold text-foreground sm:text-3xl">Automations</h1>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" asChild>
                 <Link href="/automations/templates">Browse templates</Link>

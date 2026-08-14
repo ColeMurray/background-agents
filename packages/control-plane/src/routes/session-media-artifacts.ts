@@ -41,9 +41,12 @@ async function parseErrorMessage(response: Response, fallback: string): Promise<
   if (!responseText) return fallback;
 
   try {
-    const parsedError = JSON.parse(responseText) as { error?: unknown };
-    if (typeof parsedError.error === "string" && parsedError.error.trim()) {
-      return parsedError.error;
+    const parsedError: unknown = JSON.parse(responseText);
+    if (typeof parsedError === "object" && parsedError !== null && "error" in parsedError) {
+      const errorMessage = parsedError.error;
+      if (typeof errorMessage === "string" && errorMessage.trim()) {
+        return errorMessage;
+      }
     }
   } catch {
     // Fall through to raw response text.

@@ -2,11 +2,11 @@ import type { Env } from "../types";
 
 type ObjectStoragePutValue = ArrayBuffer | ArrayBufferView | ReadableStream | string;
 
-export type ObjectStoragePutOptions = {
+type ObjectStoragePutOptions = {
   contentType?: string;
 };
 
-export type ObjectStorageRange = {
+type ObjectStorageRange = {
   offset: number;
   length: number;
 };
@@ -17,7 +17,7 @@ export type ObjectStorageMetadata = {
   writeHttpMetadata(headers: Headers): void;
 };
 
-export type ObjectStorageObject = ObjectStorageMetadata & {
+type ObjectStorageObject = ObjectStorageMetadata & {
   body: ReadableStream;
 };
 

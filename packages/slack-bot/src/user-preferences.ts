@@ -192,7 +192,7 @@ export async function getResolvedUserPreferences(
   );
 }
 
-export async function saveUserPreferences(
+async function saveUserPreferences(
   env: Env,
   userId: string,
   preferences: UserPreferences,

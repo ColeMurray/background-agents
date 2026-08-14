@@ -39,8 +39,9 @@ function makeAutomation(overrides?: Partial<AutomationRow>): AutomationRow {
 
 function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): AutomationRunRow {
   const now = Date.now();
+  const id = `run-${Math.random().toString(36).slice(2, 8)}`;
   return {
-    id: `run-${Math.random().toString(36).slice(2, 8)}`,
+    id,
     automation_id: automationId,
     session_id: null,
     status: "starting",
@@ -50,7 +51,7 @@ function makeRun(automationId: string, overrides?: Partial<AutomationRunRow>): A
     started_at: null,
     completed_at: null,
     created_at: now,
-    invocation_id: null,
+    invocation_id: `inv-${id}`,
     repo_owner: null,
     repo_name: null,
     repo_id: null,
@@ -380,7 +381,7 @@ describe("AutomationStore (D1 integration)", () => {
   // ─── Run management ────────────────────────────────────────────────────────
 
   describe("run management", () => {
-    it("round-trips a legacy-shaped skipped row (rollback-window shape)", async () => {
+    it("round-trips a skipped run", async () => {
       const store = new AutomationStore(env.DB);
       const now = Date.now();
       await store.create(makeAutomation({ id: "auto-r2" }));
@@ -398,6 +399,46 @@ describe("AutomationStore (D1 integration)", () => {
       expect(runs).toHaveLength(1);
       expect(runs[0].status).toBe("skipped");
       expect(runs[0].skip_reason).toBe("concurrent_run_active");
+    });
+
+    it("seeds invocation and run atomically", async () => {
+      const store = new AutomationStore(env.DB);
+      await store.create(makeAutomation({ id: "auto-seed-atomic" }));
+      await seedRun(
+        makeRun("auto-seed-atomic", { id: "run-duplicate", invocation_id: "inv-original" })
+      );
+
+      await expect(
+        seedRun(
+          makeRun("auto-seed-atomic", { id: "run-duplicate", invocation_id: "inv-rolled-back" })
+        )
+      ).rejects.toThrow(/UNIQUE constraint failed/);
+
+      expect(await store.getInvocationById("inv-rolled-back")).toBeNull();
+    });
+
+    it("preserves caller-seeded invocation metadata", async () => {
+      const store = new AutomationStore(env.DB);
+      const now = Date.now();
+      await store.create(makeAutomation({ id: "auto-seed-metadata" }));
+      await env.DB.prepare(
+        `INSERT INTO automation_invocations
+           (id, automation_id, source, scheduled_at, trigger_key, concurrency_key,
+            trigger_metadata, skip_reason, failure_counted_at, created_at, updated_at)
+         VALUES ('inv-metadata', 'auto-seed-metadata', 'event', NULL, 'event-1', 'scope-1',
+                 '{"source":"test"}', NULL, NULL, ?, ?)`
+      )
+        .bind(now, now)
+        .run();
+
+      await seedRun(makeRun("auto-seed-metadata", { invocation_id: "inv-metadata" }));
+
+      expect(await store.getInvocationById("inv-metadata")).toMatchObject({
+        source: "event",
+        trigger_key: "event-1",
+        concurrency_key: "scope-1",
+        trigger_metadata: '{"source":"test"}',
+      });
     });
 
     it("updates a run's status and fields", async () => {

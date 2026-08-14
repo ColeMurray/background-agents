@@ -17,7 +17,6 @@ function createProvider(): ModalImageBuildProvider {
 
 function createPlan(): ImageBuildPlan {
   return {
-    provider: "modal",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],

@@ -29,7 +29,7 @@ import type { GitLabProviderConfig } from "./types";
 import { USER_AGENT } from "./constants";
 
 /** GitLab API base URL. */
-export const GITLAB_API_BASE = "https://gitlab.com/api/v4";
+const GITLAB_API_BASE = "https://gitlab.com/api/v4";
 
 /** Default per_page for paginated GitLab API requests (GitLab API maximum). */
 const PER_PAGE = 100;
@@ -146,6 +146,9 @@ const gitlabRepositoryListSchema = z.array(
 const gitlabBranchHeadSchema = z.object({
   commit: z.object({ id: z.string().min(1) }),
 });
+
+/** Wire shape of list-branches results, limited to the branch name. */
+const gitlabBranchListSchema = z.array(z.object({ name: z.string() }));
 
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
@@ -518,7 +521,11 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
         );
       }
 
-      const data = (await response.json()) as Array<{ name: string }>;
+      const data = await parseProviderResponse(
+        response,
+        gitlabBranchListSchema,
+        "GitLab list branches"
+      );
       return data.map((b) => ({ name: b.name }));
     } catch (error) {
       if (error instanceof SourceControlProviderError) {

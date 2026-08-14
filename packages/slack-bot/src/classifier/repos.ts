@@ -313,30 +313,6 @@ export function filterReposByQuery(repos: RepoConfig[], query: string | undefine
 }
 
 /**
- * Find a repository by owner and name.
- */
-export async function getRepoByFullName(
-  env: Env,
-  fullName: string,
-  traceId?: string
-): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.find((r) => r.fullName.toLowerCase() === fullName.toLowerCase());
-}
-
-/**
- * Find a repository by its ID.
- */
-export async function getRepoById(
-  env: Env,
-  id: string,
-  traceId?: string
-): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.find((r) => r.id.toLowerCase() === id.toLowerCase());
-}
-
-/**
  * Build a description string for the given repos.
  * Used in the classification prompt.
  */

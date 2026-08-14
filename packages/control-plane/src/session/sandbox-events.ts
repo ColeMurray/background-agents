@@ -52,6 +52,7 @@ export class SessionSandboxEventProcessor {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
+    private readonly broadcastPromptQueue: () => void,
     private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
@@ -206,7 +207,12 @@ export class SessionSandboxEventProcessor {
       if (isStillProcessing) {
         this.repository.upsertExecutionCompleteEvent(completionMessageId, event, now);
         const status = event.success ? "completed" : "failed";
-        this.repository.updateMessageCompletion(completionMessageId, status, now);
+        this.repository.updateMessageCompletion(
+          completionMessageId,
+          status,
+          now,
+          event.success ? null : (event.error ?? null)
+        );
 
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
         if (timestamps) {
@@ -239,12 +245,16 @@ export class SessionSandboxEventProcessor {
           type: "processing_status",
           isProcessing: this.repository.getProcessingMessage() !== null,
         });
+        this.broadcastPromptQueue();
         this.ctx.waitUntil(
           this.callbackService.notifyComplete(completionMessageId, event.success, event.error)
         );
 
         await this.statusService.reconcileAfterExecution(event.success);
       } else {
+        if (completionMessageId) {
+          this.repository.clearMessageAwaitingStopConfirmation(completionMessageId);
+        }
         this.log.info("prompt.complete", {
           event: "prompt.complete",
           message_id: completionMessageId,

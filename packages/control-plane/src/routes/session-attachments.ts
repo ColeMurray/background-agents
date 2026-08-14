@@ -17,7 +17,10 @@
  */
 
 import { readBodyCapped } from "@open-inspect/shared/http-body";
-import { sessionAttachmentIdSchema } from "@open-inspect/shared/types/session-attachments";
+import {
+  sessionAttachmentIdSchema,
+  type SessionAttachmentUploadResponse,
+} from "@open-inspect/shared/types/session-attachments";
 import { generateId } from "../auth/crypto";
 import { createLogger } from "../logger";
 import {
@@ -160,7 +163,12 @@ async function handleAttachmentPost(
     trace_id: ctx.trace_id,
   });
 
-  return json({ attachmentId, mimeType: detected.mimeType }, 201);
+  // Typed against the shared schema its clients parse with, so dropping or
+  // renaming a field here fails the build rather than the upload.
+  return json(
+    { attachmentId, mimeType: detected.mimeType } satisfies SessionAttachmentUploadResponse,
+    201
+  );
 }
 
 async function handleAttachmentGet(

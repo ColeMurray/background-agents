@@ -7,6 +7,7 @@ import {
   normalizeOptionalRepositoryPair,
   RepositoryPairValidationError,
   serverMessageSchema,
+  sessionAttachmentUploadResponseSchema,
 } from ".";
 import { sessionParticipantProfilesResponseSchema } from "./sessions";
 import { listArtifactsResponseSchema } from "./artifacts";
@@ -21,6 +22,7 @@ import {
   sendPromptResponseSchema,
   spawnChildSessionRequestSchema,
 } from "./session-api";
+import { MAX_WEB_PROMPT_CHARS } from "./websocket";
 import {
   listEventsResponseSchema,
   sandboxEventSchema,
@@ -135,6 +137,51 @@ describe("boundary schemas", () => {
         createSessionResponseSchema.safeParse({ sessionId: "", status: "created" }).success
       ).toBe(false);
       expect(sendPromptResponseSchema.safeParse({ messageId: "" }).success).toBe(false);
+    });
+  });
+
+  describe("sessionAttachmentUploadResponseSchema", () => {
+    it("parses an upload response and ignores unknown fields", () => {
+      const result = sessionAttachmentUploadResponseSchema.safeParse({
+        attachmentId: "att-1",
+        mimeType: "image/png",
+        sizeBytes: 1024,
+      });
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual({ attachmentId: "att-1", mimeType: "image/png" });
+    });
+
+    it("rejects ids the prompt schema would reject", () => {
+      // Non-empty but not a canonical id: accepting these lets a bad id reach
+      // client state and fail later, at prompt validation.
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({
+          attachmentId: "bad id",
+          mimeType: "image/png",
+        }).success
+      ).toBe(false);
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({
+          attachmentId: "a".repeat(129),
+          mimeType: "image/png",
+        }).success
+      ).toBe(false);
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({ attachmentId: "", mimeType: "image/png" })
+          .success
+      ).toBe(false);
+    });
+
+    it("rejects unsupported or missing mime types", () => {
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({
+          attachmentId: "att-1",
+          mimeType: "application/pdf",
+        }).success
+      ).toBe(false);
+      expect(
+        sessionAttachmentUploadResponseSchema.safeParse({ attachmentId: "att-1" }).success
+      ).toBe(false);
     });
   });
 
@@ -549,9 +596,10 @@ describe("boundary schemas", () => {
   });
 
   describe("clientMessageSchema", () => {
-    it("parses a valid prompt with attachments", () => {
+    it("parses a valid prompt with attachments and request correlation", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",
+        clientRequestId: "0190cc3e-95ca-7dd8-b0a7-55ca8456ee31",
         content: "Investigate the failing build",
         model: "anthropic/claude-sonnet-4-6",
         reasoningEffort: "high",
@@ -566,6 +614,47 @@ describe("boundary schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("requires clientRequestId for prompt correlation", () => {
+      expect(clientMessageSchema.safeParse({ type: "prompt", content: "Continue" }).success).toBe(
+        false
+      );
+    });
+
+    it("rejects invalid prompt request correlation identifiers", () => {
+      expect(
+        clientMessageSchema.safeParse({ type: "prompt", content: "Continue", clientRequestId: "" })
+          .success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "prompt",
+          content: "Continue",
+          clientRequestId: "x".repeat(129),
+        }).success
+      ).toBe(false);
+    });
+
+    it("rejects blank and oversized prompts but accepts attachment-only prompts", () => {
+      expect(clientMessageSchema.safeParse({ type: "prompt", content: "  \n" }).success).toBe(
+        false
+      );
+      expect(
+        clientMessageSchema.safeParse({
+          type: "prompt",
+          clientRequestId: "request-oversized",
+          content: "x".repeat(MAX_WEB_PROMPT_CHARS + 1),
+        }).success
+      ).toBe(false);
+      expect(
+        clientMessageSchema.safeParse({
+          type: "prompt",
+          clientRequestId: "request-attachment-only",
+          content: " \n",
+          attachments: [{ name: "evidence.png", attachmentId: "attachment-1" }],
+        }).success
+      ).toBe(true);
+    });
+
     it("rejects inline and remote attachment sources", () => {
       for (const attachment of [
         { name: "inline.png", content: "aGVsbG8=" },
@@ -573,6 +662,7 @@ describe("boundary schemas", () => {
       ]) {
         const result = clientMessageSchema.safeParse({
           type: "prompt",
+          clientRequestId: "request-source",
           content: "Look",
           attachments: [attachment],
         });
@@ -583,6 +673,7 @@ describe("boundary schemas", () => {
     it("rejects prompts with more than six attachments", () => {
       const result = clientMessageSchema.safeParse({
         type: "prompt",
+        clientRequestId: "request-attachments",
         content: "Compare these",
         attachments: Array.from({ length: 7 }, (_, index) => ({
           name: `${index}.png`,
@@ -601,6 +692,7 @@ describe("boundary schemas", () => {
         expect(
           clientMessageSchema.safeParse({
             type: "prompt",
+            clientRequestId: "request-attachment-bounds",
             content: "Look",
             attachments: [attachment],
           }).success
@@ -663,12 +755,37 @@ describe("boundary schemas", () => {
           },
         ],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: {
           events: [],
           hasMore: false,
           cursor: null,
         },
         spawnError: null,
+      });
+
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts subscribed snapshots", () => {
+      const result = serverMessageSchema.safeParse({
+        type: "subscribed",
+        session: {
+          id: "session-1",
+          title: null,
+          repoOwner: null,
+          repoName: null,
+          baseBranch: null,
+          branchName: null,
+          status: "active",
+          sandboxStatus: "ready",
+          messageCount: 0,
+          createdAt: 123,
+        },
+        artifacts: [],
+        participantId: "participant-1",
+        promptQueue: [],
+        timeline: { events: [], hasMore: false, cursor: null },
       });
 
       expect(result.success).toBe(true);
@@ -693,6 +810,7 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: {
           events: [
             {
@@ -805,6 +923,7 @@ describe("boundary schemas", () => {
         },
         artifacts: [],
         participantId: "participant-1",
+        promptQueue: [],
         timeline: {
           events: [{ eventId: "event-1", timelineSequence: 1, event }],
           hasMore: false,
