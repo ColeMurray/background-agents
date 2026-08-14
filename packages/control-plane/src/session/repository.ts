@@ -880,7 +880,10 @@ export class SessionRepository {
       messageId: message.id,
       content: message.content,
       status: message.status as "pending" | "processing",
-      canCancel: message.source === "web" && message.callback_context === null,
+      canCancel:
+        message.status === "pending" &&
+        message.source === "web" &&
+        message.callback_context === null,
     }));
   }
 

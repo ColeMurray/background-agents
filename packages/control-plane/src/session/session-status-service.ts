@@ -113,7 +113,12 @@ export class SessionStatusService {
   async reconcileAfterQueueRemoval(): Promise<void> {
     if (this.repository.getPendingOrProcessingCount() > 0) return;
     const latestMessage = this.repository.getLatestTerminalMessage();
-    await this.transition(latestMessage?.status === "failed" ? "failed" : "completed");
+    const nextStatus: SessionStatus = latestMessage
+      ? latestMessage.status === "failed"
+        ? "failed"
+        : "completed"
+      : "created";
+    await this.transition(nextStatus);
   }
 
   /**

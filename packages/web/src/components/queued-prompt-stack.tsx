@@ -28,7 +28,7 @@ export function QueuedPromptStack({
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-secondary-foreground">
                 {prompt.content}
               </p>
-              {prompt.canCancel !== false && (
+              {prompt.canCancel === true && (
                 <button
                   type="button"
                   onClick={() => onRemove(prompt.messageId)}

@@ -308,6 +308,14 @@ describe("SessionStatusService.reconcileAfterQueueRemoval", () => {
     expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "completed" });
   });
 
+  it("returns to created when no prompt has executed", async () => {
+    const h = harness({ session: createSession({ status: "active" }) });
+
+    await h.service.reconcileAfterQueueRemoval();
+
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "session_status", status: "created" });
+  });
+
   it("does not transition while other work remains", async () => {
     const h = harness({ session: createSession({ status: "active" }) });
     h.repository.getPendingOrProcessingCount.mockReturnValue(1);

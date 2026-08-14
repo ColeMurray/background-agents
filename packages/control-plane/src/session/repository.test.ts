@@ -751,6 +751,33 @@ describe("SessionRepository", () => {
         { messageId: "msg-legacy", content: "continue", status: "pending", canCancel: true },
       ]);
     });
+
+    it("does not mark processing prompts as cancellable", () => {
+      vi.spyOn(repo, "listUnfinishedMessages").mockReturnValue([
+        {
+          id: "msg-running",
+          author_id: "part-1",
+          content: "running",
+          source: "web",
+          model: null,
+          reasoning_effort: null,
+          attachments: null,
+          callback_context: null,
+          client_request_id: null,
+          request_fingerprint: null,
+          status: "processing",
+          error_message: null,
+          stop_confirmation_deadline: null,
+          created_at: 1000,
+          started_at: 1100,
+          completed_at: null,
+        },
+      ]);
+
+      expect(repo.listPromptQueue()).toEqual([
+        { messageId: "msg-running", content: "running", status: "processing", canCancel: false },
+      ]);
+    });
   });
 
   describe("createMessage", () => {

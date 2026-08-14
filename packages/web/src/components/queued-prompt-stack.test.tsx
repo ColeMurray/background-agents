@@ -18,8 +18,8 @@ describe("QueuedPromptStack", () => {
         onRemove={vi.fn()}
         promptQueue={[
           { messageId: "running", content: "Already running", status: "processing" },
-          { messageId: "next", content: "Run next", status: "pending" },
-          { messageId: "later", content: "Run after that", status: "pending" },
+          { messageId: "next", content: "Run next", status: "pending", canCancel: true },
+          { messageId: "later", content: "Run after that", status: "pending", canCancel: true },
         ]}
       />
     );
@@ -48,7 +48,9 @@ describe("QueuedPromptStack", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
-        promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
+        promptQueue={[
+          { messageId: "next", content: "Run next", status: "pending", canCancel: true },
+        ]}
         cancellingPromptIds={new Set(["next"])}
         onRemove={onRemove}
       />
@@ -64,7 +66,9 @@ describe("QueuedPromptStack", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
-        promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
+        promptQueue={[
+          { messageId: "next", content: "Run next", status: "pending", canCancel: true },
+        ]}
         cancellingPromptIds={new Set()}
         onRemove={onRemove}
       />
@@ -91,6 +95,19 @@ describe("QueuedPromptStack", () => {
     );
 
     expect(screen.getByText("Reply in Linear")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove queued prompt/ })).not.toBeInTheDocument();
+  });
+
+  it("defaults missing cancellation capability closed", () => {
+    render(
+      <QueuedPromptStack
+        promptQueue={[{ messageId: "legacy", content: "Legacy prompt", status: "pending" }]}
+        cancellingPromptIds={new Set()}
+        onRemove={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Legacy prompt")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Remove queued prompt/ })).not.toBeInTheDocument();
   });
 });

@@ -690,6 +690,46 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     watcher.ws.close();
   });
 
+  it("returns a session to created when its first prompt is removed before execution", async () => {
+    const name = `ws-client-cancel-first-prompt-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const enqueueRequestId = crypto.randomUUID();
+    const enqueued = collectMessages(ws, {
+      until: (message) => message.type === "prompt_queued",
+      timeoutMs: 2000,
+    });
+    ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: enqueueRequestId,
+        content: "Cancel before execution",
+      })
+    );
+    const queued = (await enqueued).find((message) => message.type === "prompt_queued") as {
+      messageId: string;
+    };
+    const cancelRequestId = crypto.randomUUID();
+    const cancelled = collectMessages(ws, {
+      until: (message) => message.type === "prompt_cancelled",
+      timeoutMs: 2000,
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "cancel_prompt",
+        messageId: queued.messageId,
+        clientRequestId: cancelRequestId,
+      })
+    );
+    await cancelled;
+
+    expect(await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1")).toEqual([
+      { status: "created" },
+    ]);
+    ws.close();
+  });
+
   it("rejects cancellation when the prompt is already processing", async () => {
     const name = `ws-client-cancel-processing-${Date.now()}`;
     const { stub } = await initNamedSession(name);
