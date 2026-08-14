@@ -402,4 +402,67 @@ describe("DO internal sub-session routes", () => {
       expect(sandbox[0].status).toBe("stopped");
     });
   });
+
+  describe("POST /internal/expire-draft", () => {
+    it("archives a session that never left the draft status", async () => {
+      const { stub } = await initSession();
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "archived", status: "archived" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("archived");
+    });
+
+    it("spares a session that started work after the sweep selected it", async () => {
+      const { stub } = await initSession();
+      // The sweep reads candidates from D1, so the session may have been
+      // prompted between that read and this call. The DO is the authority.
+      await queryDO(stub, "UPDATE session SET status = 'active'");
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "not_draft", status: "active" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("active");
+    });
+
+    it("spares a draft that has a message queued", async () => {
+      const { stub } = await initSession();
+      const [{ id: participantId }] = await queryDO<{ id: string }>(
+        stub,
+        "SELECT id FROM participants LIMIT 1"
+      );
+      await queryDO(
+        stub,
+        `INSERT INTO messages (id, author_id, content, source, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        "msg-draft-1",
+        participantId,
+        "Ship it",
+        "web",
+        "pending",
+        100
+      );
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "has_work", status: "created" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("created");
+    });
+
+    it("is idempotent across repeated sweeps", async () => {
+      const { stub } = await initSession();
+
+      await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+      const second = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(second.status).toBe(200);
+      expect(await second.json()).toEqual({ outcome: "not_draft", status: "archived" });
+    });
+  });
 });

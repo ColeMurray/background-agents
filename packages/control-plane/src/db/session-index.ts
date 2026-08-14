@@ -661,6 +661,28 @@ export class SessionIndexStore {
     return (result.meta?.changes ?? 0) > 0;
   }
 
+  /**
+   * Warm sessions that never received a prompt, untouched since `staleBefore`.
+   *
+   * `created` is the status a session holds until its first prompt is enqueued,
+   * so a row still sitting there long after its last update was abandoned before
+   * any work started. Ordered oldest-first so a backlog drains deterministically
+   * across ticks rather than re-reading the same head each time.
+   */
+  async listAbandonedDraftSessionIds(staleBefore: number, limit: number): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT id FROM sessions
+         WHERE status = 'created' AND updated_at < ?
+         ORDER BY updated_at ASC
+         LIMIT ?`
+      )
+      .bind(staleBefore, limit)
+      .all<{ id: string }>();
+
+    return (result.results ?? []).map((row) => row.id);
+  }
+
   async touchUpdatedAt(id: string): Promise<boolean> {
     const result = await this.db
       .prepare("UPDATE sessions SET updated_at = ? WHERE id = ?")

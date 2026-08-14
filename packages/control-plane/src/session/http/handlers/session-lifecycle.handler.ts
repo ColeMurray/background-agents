@@ -27,6 +27,7 @@ export interface SessionLifecycleHandlerDeps {
     | "createSandbox"
     | "createParticipant"
     | "getPendingOrProcessingCount"
+    | "getMessageCount"
   >;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -69,6 +70,7 @@ export interface SessionLifecycleHandler {
   updateTitle: (request: Request) => Promise<Response>;
   archive: (request: Request) => Promise<Response>;
   unarchive: (request: Request) => Promise<Response>;
+  expireDraft: () => Promise<Response>;
   cancel: () => Promise<Response>;
 }
 
@@ -430,6 +432,41 @@ export function createSessionLifecycleHandler(
       await deps.statusService.transition("archived");
 
       return Response.json({ status: "archived" });
+    },
+
+    /**
+     * Retire a warm session that never received a prompt.
+     *
+     * The web client warms a session on the first keystroke, so navigating away
+     * without submitting leaves a `created` row whose sandbox idles out — and no
+     * other transition reaches it, because `active` needs an enqueued prompt and
+     * the terminal statuses need a finished execution.
+     *
+     * The sweep selects candidates from the D1 index, which it may have read
+     * before a prompt arrived. Re-checking here is what makes that safe: the
+     * Durable Object is the authority on the session's own state and runs
+     * single-threaded, so a session that started work in the meantime is left
+     * alone rather than archived out from under its author.
+     */
+    async expireDraft(): Promise<Response> {
+      const session = deps.getSession();
+      if (!session) {
+        return Response.json({ error: "Session not found" }, { status: 404 });
+      }
+
+      if (session.status !== "created") {
+        return Response.json({ outcome: "not_draft", status: session.status });
+      }
+
+      if (
+        deps.repository.getMessageCount() > 0 ||
+        deps.repository.getPendingOrProcessingCount() > 0
+      )
+        return Response.json({ outcome: "has_work", status: session.status });
+
+      await deps.statusService.transition("archived");
+
+      return Response.json({ outcome: "archived", status: "archived" });
     },
 
     async unarchive(request: Request): Promise<Response> {

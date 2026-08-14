@@ -89,6 +89,7 @@ function createHandler() {
     createSandbox: vi.fn(),
     createParticipant: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
+    getMessageCount: vi.fn(() => 0),
   };
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
@@ -844,6 +845,63 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "archived" });
     expect(transition).toHaveBeenCalledWith("archived");
+  });
+
+  it("archives a draft that was never prompted", async () => {
+    const { handler, getSession, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "created" }));
+    transition.mockResolvedValue(true);
+
+    const response = await handler.expireDraft();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "archived", status: "archived" });
+    expect(transition).toHaveBeenCalledWith("archived");
+  });
+
+  it("leaves a draft alone once it has a message", async () => {
+    const { handler, getSession, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "created" }));
+    repository.getMessageCount.mockReturnValue(1);
+
+    const response = await handler.expireDraft();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "has_work", status: "created" });
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("leaves a draft alone once work is queued", async () => {
+    const { handler, getSession, repository, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "created" }));
+    repository.getPendingOrProcessingCount.mockReturnValue(1);
+
+    const response = await handler.expireDraft();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "has_work", status: "created" });
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("does not expire a session that has left the draft status", async () => {
+    const { handler, getSession, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "active" }));
+
+    const response = await handler.expireDraft();
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "not_draft", status: "active" });
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when expiring a missing session", async () => {
+    const { handler, getSession, transition } = createHandler();
+    getSession.mockReturnValue(null);
+
+    const response = await handler.expireDraft();
+
+    expect(response.status).toBe(404);
+    expect(transition).not.toHaveBeenCalled();
   });
 
   it("returns 409 when archiving a session with queued work", async () => {
