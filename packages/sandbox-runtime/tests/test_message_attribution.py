@@ -76,7 +76,7 @@ def test_compaction_fallback_only_accepts_messages_created_after_the_prompt():
 
     assert (
         attribution.assistant_disposition(
-            "after-prompt", "unknown", is_summary=False, created_epoch_ms=PROMPT_TS_MS
+            "after-prompt", "unknown", is_summary=False, created_epoch_ms=PROMPT_TS_MS + 1
         )
         is AssistantMessageDisposition.REJECT
     )
@@ -91,10 +91,24 @@ def test_compaction_fallback_only_accepts_messages_created_after_the_prompt():
     )
     assert (
         attribution.assistant_disposition(
-            "after-prompt", "unknown", is_summary=False, created_epoch_ms=PROMPT_TS_MS
+            "after-prompt", "unknown", is_summary=False, created_epoch_ms=PROMPT_TS_MS + 1
         )
         is AssistantMessageDisposition.OUTPUT
     )
+
+
+def test_compaction_fallback_rejects_the_boundary_millisecond():
+    """The boundary is truncated to whole milliseconds, so a prior turn's
+    message created earlier within it must not be claimed. Nothing this prompt
+    produces shares that millisecond."""
+    attribution = _attribution()
+    attribution.mark_compacted()
+
+    disposition = attribution.assistant_disposition(
+        "same-millisecond", "unknown", is_summary=False, created_epoch_ms=PROMPT_TS_MS
+    )
+
+    assert disposition is AssistantMessageDisposition.REJECT
 
 
 def test_compaction_fallback_ignores_id_order_across_a_rollover():
@@ -121,7 +135,7 @@ def test_compaction_fallback_ignores_id_order_across_a_rollover():
     )
     assert (
         attribution.assistant_disposition(
-            fresh_message_id, "unknown", is_summary=False, created_epoch_ms=prompt_ts_ms
+            fresh_message_id, "unknown", is_summary=False, created_epoch_ms=prompt_ts_ms + 1
         )
         is AssistantMessageDisposition.OUTPUT
     )

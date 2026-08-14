@@ -15,6 +15,7 @@ from sandbox_runtime.opencode_identifier import OpenCodeIdentifier
 from sandbox_runtime.prompt_stream import (
     OpenCodePromptStream,
     _Disposition,
+    _message_created_epoch_ms,
     _PromptState,
 )
 from tests.conftest import oc_message_id
@@ -55,6 +56,19 @@ def make_state(
 
 def sse(event_type: str, properties: dict) -> dict:
     return {"type": event_type, "properties": properties}
+
+
+def test_message_created_epoch_ms_treats_unusable_values_as_absent():
+    """Anything int() would reject must read as absent: raising here would tear
+    down the SSE loop over one malformed message."""
+    assert _message_created_epoch_ms({"time": {"created": PROMPT_TS_MS}}) == PROMPT_TS_MS
+    assert _message_created_epoch_ms({}) is None
+    assert _message_created_epoch_ms({"time": None}) is None
+    assert _message_created_epoch_ms({"time": {}}) is None
+    assert _message_created_epoch_ms({"time": {"created": "1754000000000"}}) is None
+    assert _message_created_epoch_ms({"time": {"created": True}}) is None
+    assert _message_created_epoch_ms({"time": {"created": float("nan")}}) is None
+    assert _message_created_epoch_ms({"time": {"created": float("inf")}}) is None
 
 
 def test_oc_message_id_matches_real_generator_format():
@@ -757,18 +771,18 @@ class TestApplySseEventDispositions:
         ]
 
     def test_post_compaction_millisecond_boundary(self):
-        """The boundary is the prompt's start millisecond: a message created one
-        millisecond earlier is rejected, one created in that same millisecond is
-        accepted."""
-        before_boundary_id = oc_message_id(PROMPT_TS_MS - 1, 1, "s")
-        at_boundary_id = oc_message_id(PROMPT_TS_MS, 3, "t")
+        """The boundary is the prompt's start millisecond and the comparison is
+        strict: a message created in that same millisecond is rejected, because
+        a prior turn could have produced it earlier within that millisecond."""
+        at_boundary_id = oc_message_id(PROMPT_TS_MS, 1, "s")
+        after_boundary_id = oc_message_id(PROMPT_TS_MS + 1, 3, "t")
         stream = make_stream()
         state = make_state(PROMPT_MESSAGE_ID)
         stream._apply_sse_event(state, sse("session.compacted", {"sessionID": PARENT_SESSION_ID}))
 
         for oc_msg_id, created in (
-            (before_boundary_id, PROMPT_TS_MS - 1),
             (at_boundary_id, PROMPT_TS_MS),
+            (after_boundary_id, PROMPT_TS_MS + 1),
         ):
             stream._apply_sse_event(
                 state,
@@ -786,8 +800,8 @@ class TestApplySseEventDispositions:
                 ),
             )
 
-        assert not state.attribution.is_assistant_allowed(before_boundary_id)
-        assert state.attribution.is_assistant_allowed(at_boundary_id)
+        assert not state.attribution.is_assistant_allowed(at_boundary_id)
+        assert state.attribution.is_assistant_allowed(after_boundary_id)
 
     def test_post_compaction_error_on_prior_prompt_message_is_ignored(self):
         prior_assistant_id = oc_message_id(PROMPT_TS_MS - 60_000, 1, "q")

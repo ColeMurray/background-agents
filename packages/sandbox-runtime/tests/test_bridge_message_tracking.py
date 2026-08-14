@@ -311,8 +311,14 @@ class TestOpenCodeIdentifier:
         ids = [OpenCodeIdentifier.ascending("message") for _ in range(100)]
         assert len(set(ids)) == 100  # All unique
 
-    def test_ascending_ids_are_lexicographically_ordered(self):
-        """IDs generated later should be lexicographically greater."""
+    def test_ascending_ids_increase_within_one_rollover_window(self):
+        """Consecutive IDs increase — but only inside a rollover window.
+
+        The encoded value is truncated to 48 bits and wraps roughly every 795
+        days, so this is not an ordering guarantee callers may rely on: nothing
+        may compare these IDs to order messages. It holds here because all
+        three are generated back to back.
+        """
         id1 = OpenCodeIdentifier.ascending("message")
         id2 = OpenCodeIdentifier.ascending("message")
         id3 = OpenCodeIdentifier.ascending("message")

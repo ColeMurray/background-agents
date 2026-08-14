@@ -88,7 +88,14 @@ class MessageAttribution:
         messages compare greater than this prompt's and would be replayed as
         this turn's output. A message with no timestamp is rejected rather than
         risk that replay.
+
+        The comparison is strict because the boundary is truncated to whole
+        milliseconds: a prior turn's message created earlier within the
+        boundary millisecond would otherwise be claimed. Nothing this prompt
+        produces can share that millisecond — the boundary is taken before the
+        prompt is posted, and this fallback only runs after a compaction and a
+        model round trip.
         """
         if not self._compaction_occurred or created_epoch_ms is None:
             return False
-        return created_epoch_ms >= self.prompt_started_epoch_ms
+        return created_epoch_ms > self.prompt_started_epoch_ms

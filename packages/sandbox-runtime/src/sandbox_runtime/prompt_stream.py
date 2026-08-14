@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from contextlib import AsyncExitStack
@@ -126,12 +127,19 @@ class _StreamStep:
 
 
 def _message_created_epoch_ms(info: dict[str, Any]) -> int | None:
-    """Read `time.created` off an OpenCode message, or None when it is absent."""
+    """Read `time.created` off an OpenCode message, or None when it is absent.
+
+    Non-finite values are treated as absent rather than converted: `int()`
+    raises on NaN and infinity, which would tear down the SSE loop over a
+    malformed payload.
+    """
     time_info = info.get("time")
     if not isinstance(time_info, dict):
         return None
     created = time_info.get("created")
     if isinstance(created, bool) or not isinstance(created, (int, float)):
+        return None
+    if not math.isfinite(created):
         return None
     return int(created)
 
@@ -183,9 +191,10 @@ class OpenCodePromptStream:
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream response from OpenCode using Server-Sent Events.
 
-        The ascending ID ensures our user message ID is lexicographically
-        greater than any previous assistant message IDs, preventing the early
-        exit condition in OpenCode's prompt loop (lastUser.id < lastAssistant.id).
+        Supplying our own user message ID is what makes attribution possible:
+        OpenCode stamps the assistant messages it generates for this prompt
+        with `parentID` pointing at it. The ID's ordering carries no meaning —
+        see OpenCodeIdentifier on why these IDs must never be compared.
         """
         opencode_message_id = OpenCodeIdentifier.ascending("message")
         request_body = self._build_prompt_request_body(
