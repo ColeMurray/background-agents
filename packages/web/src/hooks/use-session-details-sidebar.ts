@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+export const DEFAULT_SESSION_DETAILS_SIDEBAR_OPEN = true;
 const SESSION_DETAILS_SIDEBAR_OPEN_STORAGE_KEY = "open-inspect-session-details-sidebar-open";
 
 export function useSessionDetailsSidebar() {
-  const [isOpen, setIsOpen] = useState(true);
+  const [isOpen, setIsOpen] = useState(DEFAULT_SESSION_DETAILS_SIDEBAR_OPEN);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   useEffect(() => {
     try {
@@ -14,19 +16,23 @@ export function useSessionDetailsSidebar() {
         setIsOpen(stored === "true");
       }
     } catch {
-      // Storage is optional; the sidebar remains open when it is unavailable.
+      // Storage is optional; the sidebar keeps DEFAULT_SESSION_DETAILS_SIDEBAR_OPEN.
     }
+    setIsHydrated(true);
   }, []);
 
-  const toggle = useCallback(() => {
-    const next = !isOpen;
-    setIsOpen(next);
+  useEffect(() => {
+    if (!isHydrated) return;
     try {
-      localStorage.setItem(SESSION_DETAILS_SIDEBAR_OPEN_STORAGE_KEY, String(next));
+      localStorage.setItem(SESSION_DETAILS_SIDEBAR_OPEN_STORAGE_KEY, String(isOpen));
     } catch {
       // Continue with the in-memory preference when storage is unavailable.
     }
-  }, [isOpen]);
+  }, [isHydrated, isOpen]);
+
+  const toggle = useCallback(() => {
+    setIsOpen((previous) => !previous);
+  }, []);
 
   return { isOpen, toggle };
 }

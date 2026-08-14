@@ -29,6 +29,18 @@ describe("useSessionDetailsSidebar", () => {
     await waitFor(() => expect(secondRender.result.current.isOpen).toBe(false));
   });
 
+  it("applies multiple queued toggles in order", () => {
+    const { result } = renderHook(() => useSessionDetailsSidebar());
+
+    act(() => {
+      result.current.toggle();
+      result.current.toggle();
+    });
+
+    expect(result.current.isOpen).toBe(true);
+    expect(localStorage.getItem("open-inspect-session-details-sidebar-open")).toBe("true");
+  });
+
   it("keeps working when browser storage is unavailable", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("Storage unavailable");
