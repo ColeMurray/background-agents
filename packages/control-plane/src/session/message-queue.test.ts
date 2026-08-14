@@ -12,7 +12,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionExecutionCompletion } from "./execution-completion";
+import type { SessionMessageFinalizer } from "./message-finalizer";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -188,11 +188,9 @@ function buildQueue() {
   const waitUntil = vi.fn();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
-  const executionCompletion = {
-    completeFromSandbox: vi.fn(async () => {}),
-    stopProcessingMessage: vi.fn(async () => null as string | null),
-    failStuckProcessingMessage: vi.fn(async () => false),
-    cancelUnfinishedMessages: vi.fn(),
+  const messageFinalizer = {
+    finalizeSandboxCompletion: vi.fn(async () => {}),
+    finalizeSyntheticFailure: vi.fn(),
   };
 
   const queue = new SessionMessageQueue(
@@ -205,7 +203,7 @@ function buildQueue() {
     participantService as unknown as ParticipantService,
     callbackService as unknown as CallbackNotificationService,
     sessionStatus as unknown as SessionStatusService,
-    executionCompletion as unknown as SessionExecutionCompletion,
+    messageFinalizer as unknown as SessionMessageFinalizer,
     sandboxLifecycle,
     null,
     "github",
@@ -226,7 +224,7 @@ function buildQueue() {
     getAlarm,
     setAlarm,
     callbackService,
-    executionCompletion,
+    messageFinalizer,
     log,
   };
 }
@@ -857,48 +855,38 @@ describe("SessionMessageQueue", () => {
     const h = buildQueue();
     const sandboxWs = { readyState: 1 } as WebSocket;
     h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-    h.executionCompletion.stopProcessingMessage.mockResolvedValue("msg-9");
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-9",
+      created_at: 900,
+    });
 
     await h.queue.stopExecution();
 
-    expect(h.executionCompletion.stopProcessingMessage).toHaveBeenCalledOnce();
+    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
+      { id: "msg-9", createdAt: 900 },
+      "Execution was stopped",
+      expect.any(Number)
+    );
     expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
       "msg-9",
       expect.any(Number)
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-  });
-
-  it("waits for stop finalization before broadcasting idle and stopping the sandbox", async () => {
-    const h = buildQueue();
-    const sandboxWs = { readyState: 1 } as WebSocket;
-    h.wsManager.getSandboxSocket.mockReturnValue(sandboxWs);
-    let resolveCompletion!: () => void;
-    h.executionCompletion.stopProcessingMessage.mockReturnValue(
-      new Promise<string | null>((resolve) => {
-        resolveCompletion = () => resolve("msg-9");
-      })
+    expect(h.messageFinalizer.finalizeSyntheticFailure.mock.invocationCallOrder[0]).toBeLessThan(
+      h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
     );
-
-    const stopping = h.queue.stopExecution();
-
-    expect(h.broadcast).not.toHaveBeenCalledWith({
-      type: "processing_status",
-      isProcessing: false,
-    });
-    expect(h.wsManager.send).not.toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-
-    resolveCompletion();
-    await stopping;
-
-    expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
-    expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
+    expect(
+      h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
+    ).toBeLessThan(h.wsManager.send.mock.invocationCallOrder[0]);
   });
 
   it("waits for sandbox stop confirmation before dispatching the next prompt", async () => {
     const h = buildQueue();
-    h.executionCompletion.stopProcessingMessage.mockResolvedValue("msg-running");
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-running",
+      created_at: 900,
+    });
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
 
@@ -918,7 +906,10 @@ describe("SessionMessageQueue", () => {
 
   it("terminates the sandbox and resumes safely when stop cannot be sent", async () => {
     const h = buildQueue();
-    h.executionCompletion.stopProcessingMessage.mockResolvedValue("msg-running");
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-running",
+      created_at: 900,
+    });
     h.repository.getNextPendingMessage.mockReturnValue(createMessage({ id: "msg-next" }));
     h.wsManager.getSandboxSocket.mockReturnValue(null);
 
@@ -932,7 +923,10 @@ describe("SessionMessageQueue", () => {
 
   it("terminates the sandbox when the connected socket rejects the stop send", async () => {
     const h = buildQueue();
-    h.executionCompletion.stopProcessingMessage.mockResolvedValue("msg-running");
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-running",
+      created_at: 900,
+    });
     h.wsManager.getSandboxSocket.mockReturnValue({ readyState: 1 } as WebSocket);
     h.wsManager.send.mockReturnValue(false);
 
@@ -986,26 +980,82 @@ describe("SessionMessageQueue", () => {
 
   it("suppresses session status reconcile when stopExecution is called with suppress flag", async () => {
     const h = buildQueue();
-    h.executionCompletion.stopProcessingMessage.mockResolvedValue("msg-10");
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-10",
+      created_at: 900,
+    });
     await h.queue.stopExecution({ suppressStatusReconcile: true });
 
     expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
   });
 
+  it("does not finalize or stop when no message is processing", async () => {
+    const h = buildQueue();
+
+    await h.queue.stopExecution();
+    await h.queue.failStuckProcessingMessage();
+
+    expect(h.messageFinalizer.finalizeSyntheticFailure).not.toHaveBeenCalled();
+    expect(h.wsManager.send).not.toHaveBeenCalledWith(expect.anything(), { type: "stop" });
+    expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
+  });
+
   it("emits completion events and callbacks for prompts cancelled before dispatch", async () => {
     const h = buildQueue();
+    h.repository.listPendingMessagesWithCreatedAt.mockReturnValue([
+      { id: "msg-pending", created_at: 700 },
+    ]);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-processing",
+      created_at: 800,
+    });
 
     h.queue.cancelExecution();
 
-    expect(h.executionCompletion.cancelUnfinishedMessages).toHaveBeenCalledOnce();
+    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
+      { id: "msg-pending", createdAt: 700 },
+      "Execution was cancelled before it started",
+      expect.any(Number)
+    );
+    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
+      { id: "msg-processing", createdAt: 800 },
+      "Execution was cancelled",
+      expect.any(Number)
+    );
+  });
+
+  it("absorbs completion callback failures", async () => {
+    const h = buildQueue();
+    const callbackError = new Error("callback failed");
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-timeout",
+      created_at: 800,
+    });
+    h.callbackService.notifyComplete.mockRejectedValue(callbackError);
+
+    await h.queue.failStuckProcessingMessage();
+    const results = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+
+    expect(results.every(({ status }) => status === "fulfilled")).toBe(true);
+    expect(h.log.error).toHaveBeenCalledWith("callback.complete.background_error", {
+      message_id: "msg-timeout",
+      error: callbackError,
+    });
   });
 
   it("reconciles session status when failing a stuck processing message", async () => {
     const h = buildQueue();
-    h.executionCompletion.failStuckProcessingMessage.mockResolvedValue(true);
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue({
+      id: "msg-timeout",
+      created_at: 800,
+    });
     await h.queue.failStuckProcessingMessage();
 
-    expect(h.executionCompletion.failStuckProcessingMessage).toHaveBeenCalledOnce();
+    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
+      { id: "msg-timeout", createdAt: 800 },
+      "Execution timed out (stuck processing)",
+      expect.any(Number)
+    );
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });
 

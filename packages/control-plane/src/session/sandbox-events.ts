@@ -7,8 +7,9 @@ import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
-import type { SessionExecutionCompletion } from "./execution-completion";
+import type { SessionMessageFinalizer } from "./message-finalizer";
 import type { SessionMessenger } from "./messenger";
+import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
 
@@ -47,10 +48,12 @@ export class SessionSandboxEventProcessor {
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
     private readonly triggerSnapshot: (reason: string) => Promise<void>,
-    private readonly executionCompletion: SessionExecutionCompletion,
+    private readonly messageFinalizer: SessionMessageFinalizer,
+    private readonly statusService: SessionStatusService,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
-    private readonly processMessageQueue: () => Promise<void>
+    private readonly processMessageQueue: () => Promise<void>,
+    private readonly broadcastPromptQueue: () => void
   ) {}
 
   private get log(): Logger {
@@ -197,7 +200,23 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "execution_complete") {
-      await this.executionCompletion.completeFromSandbox(event, now);
+      if (processingMessage?.id === event.messageId) {
+        await this.messageFinalizer.finalizeSandboxCompletion(event, now);
+        this.messenger.broadcast({
+          type: "processing_status",
+          isProcessing: this.repository.getProcessingMessage() !== null,
+        });
+        this.broadcastPromptQueue();
+        this.scheduleCompletionCallback(event.messageId, event.success, event.error);
+        await this.statusService.reconcileAfterExecution(event.success);
+      } else {
+        this.repository.clearMessageAwaitingStopConfirmation(event.messageId);
+        this.log.info("prompt.complete", {
+          event: "prompt.complete",
+          message_id: event.messageId,
+          outcome: "already_stopped",
+        });
+      }
 
       this.ctx.waitUntil(
         this.triggerSnapshot("execution_complete").catch((error) => {
@@ -358,6 +377,17 @@ export class SessionSandboxEventProcessor {
     } else {
       this.log.debug("Cannot send ACK: no sandbox socket", { ack_id: ackId });
     }
+  }
+
+  private scheduleCompletionCallback(messageId: string, success: boolean, error?: string): void {
+    this.ctx.waitUntil(
+      this.callbackService.notifyComplete(messageId, success, error).catch((callbackError) => {
+        this.log.error("callback.complete.background_error", {
+          message_id: messageId,
+          error: callbackError,
+        });
+      })
+    );
   }
 
   private pushResolverKey(repoOwner: string, repoName: string, branchName: string): string {
