@@ -13,6 +13,7 @@ the durable OAuth refresh token and gives each sandbox only a short-lived access
 | Model ID             | Display name   | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------- | -------------- |
 | `xai/grok-4.5`       | Grok 4.5       | low, medium, high | high           |
+| `xai/grok-4.6`       | Grok 4.6       | low, medium, high | high           |
 | `xai/grok-build-0.1` | Grok Build 0.1 | Not configurable  | N/A            |
 
 Grok Build performs reasoning internally but does not accept a configurable reasoning effort.
@@ -68,7 +69,7 @@ only, then fall back to global. A secondary repository cannot become the token r
 ### Step 3: Enable and Select Grok
 
 1. Open **Settings > Models**.
-2. Enable **Grok 4.5** or **Grok Build 0.1** under **xAI / SuperGrok**.
+2. Enable **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **xAI / SuperGrok**.
 3. Create a new session or restart an existing sandbox.
 4. Select the enabled Grok model and the desired reasoning effort.
 
@@ -113,8 +114,8 @@ Before production rollout, run a staging session with an eligible SuperGrok acco
 
 ### Grok does not appear in the model selector
 
-Enable **Grok 4.5** or **Grok Build 0.1** under **Settings > Models**. The xAI group is opt-in and
-is not part of the default enabled model set.
+Enable **Grok 4.6**, **Grok 4.5**, or **Grok Build 0.1** under **Settings > Models**. The xAI group
+is opt-in and is not part of the default enabled model set.
 
 ### `XAI_OAUTH_REFRESH_TOKEN not configured`
 
@@ -127,7 +128,7 @@ sandbox after changing secrets.
 The refresh token was revoked, expired, or already rotated elsewhere. Repeat the local OpenCode
 login and replace `XAI_OAUTH_REFRESH_TOKEN` in the same secret scope.
 
-### `Model not found: xai/grok-4.5` or `xai/grok-build-0.1`
+### `Model not found: xai/grok-4.6`, `xai/grok-4.5`, or `xai/grok-build-0.1`
 
 Rebuild the sandbox image so it includes the xAI auth proxy plugin and confirm the deployment uses
 OpenCode 1.17.18 or newer.

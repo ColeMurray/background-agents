@@ -12,7 +12,8 @@ managed xAI OAuth credentials; Z.AI Coding Plan requires `ZHIPU_API_KEY`; DeepSe
 | ----------------------------- | ----------------- | ---------------------------------- | ----------------------------- | -------------- |
 | `anthropic/claude-haiku-4-5`  | Claude Haiku 4.5  | Fast and efficient                 | high, max                     | max            |
 | `anthropic/claude-sonnet-4-5` | Claude Sonnet 4.5 | Balanced performance               | high, max                     | max            |
-| `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | Latest balanced, fast coding       | low, medium, high, max        | high           |
+| `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | Balanced, fast coding              | low, medium, high, max        | high           |
+| `anthropic/claude-sonnet-5`   | Claude Sonnet 5   | Latest Sonnet, adaptive thinking   | low, medium, high, xhigh, max | high           |
 | `anthropic/claude-opus-4-5`   | Claude Opus 4.5   | Most capable                       | high, max                     | max            |
 | `anthropic/claude-opus-4-6`   | Claude Opus 4.6   | Most capable, adaptive thinking    | low, medium, high, max        | high           |
 | `anthropic/claude-opus-4-7`   | Claude Opus 4.7   | Most capable, adaptive thinking    | low, medium, high, xhigh, max | high           |
@@ -42,7 +43,8 @@ Grok models require a SuperGrok OAuth refresh token and are disabled by default.
 
 | Model ID             | Display name   | Description                                     | Reasoning efforts | Default effort |
 | -------------------- | -------------- | ----------------------------------------------- | ----------------- | -------------- |
-| `xai/grok-4.5`       | Grok 4.5       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
+| `xai/grok-4.5`       | Grok 4.5       | Grok for chat, coding, and agentic tools        | low, medium, high | high           |
+| `xai/grok-4.6`       | Grok 4.6       | Latest Grok for chat, coding, and agentic tools | low, medium, high | high           |
 | `xai/grok-build-0.1` | Grok Build 0.1 | Coding model for SuperGrok subscribers          | Not configurable  | N/A            |
 
 ## OpenCode Zen

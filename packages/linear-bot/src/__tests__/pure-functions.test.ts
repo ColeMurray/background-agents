@@ -118,6 +118,10 @@ describe("extractModelFromLabels", () => {
     expect(extractModelFromLabels([{ name: "model:opus-5" }])).toBe("anthropic/claude-opus-5");
   });
 
+  it("returns Sonnet 5 for model:sonnet-5 label", () => {
+    expect(extractModelFromLabels([{ name: "model:sonnet-5" }])).toBe("anthropic/claude-sonnet-5");
+  });
+
   it("returns null for unknown model label", () => {
     expect(extractModelFromLabels([{ name: "model:unknown-model" }])).toBeNull();
   });

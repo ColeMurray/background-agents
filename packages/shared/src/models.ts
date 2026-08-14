@@ -59,9 +59,18 @@ export const MODEL_CATALOG = [
       {
         id: "anthropic/claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
-        description: "Latest balanced, fast coding",
+        description: "Balanced, fast coding",
         default: true,
         reasoning: { efforts: ["low", "medium", "high", "max"], default: "high" },
+      },
+      {
+        id: "anthropic/claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        description: "Latest Sonnet, adaptive thinking",
+        reasoning: {
+          efforts: ["low", "medium", "high", "xhigh", "max"],
+          default: "high",
+        },
       },
       {
         id: "anthropic/claude-opus-4-5",
@@ -195,6 +204,12 @@ export const MODEL_CATALOG = [
       {
         id: "xai/grok-4.5",
         name: "Grok 4.5",
+        description: "Grok for chat, coding, and agentic tools",
+        reasoning: { efforts: ["low", "medium", "high"], default: "high" },
+      },
+      {
+        id: "xai/grok-4.6",
+        name: "Grok 4.6",
         description: "Latest Grok for chat, coding, and agentic tools",
         reasoning: { efforts: ["low", "medium", "high"], default: "high" },
       },

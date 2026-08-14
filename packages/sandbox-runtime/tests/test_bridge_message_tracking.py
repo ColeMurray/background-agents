@@ -287,6 +287,23 @@ class TestBuildPromptRequestBody:
             "outputConfig": {"effort": "high"},
         }
 
+    def test_with_sonnet_5_adaptive_thinking(self, bridge: AgentBridge):
+        """Sonnet 5 should use adaptive thinking instead of manual budgets."""
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "anthropic/claude-sonnet-5",
+            reasoning_effort="xhigh",
+        )
+
+        assert body["model"] == {
+            "providerID": "anthropic",
+            "modelID": "claude-sonnet-5",
+            "options": {
+                "thinking": {"type": "adaptive"},
+                "outputConfig": {"effort": "xhigh"},
+            },
+        }
+
     def test_with_xai_reasoning_effort(self, bridge: AgentBridge):
         body = bridge._ensure_prompt_stream()._build_prompt_request_body(
             "Hello",
@@ -296,6 +313,16 @@ class TestBuildPromptRequestBody:
 
         assert body["variant"] == "high"
         assert "options" not in body["model"]
+
+    def test_with_grok_4_6_reasoning_effort(self, bridge: AgentBridge):
+        body = bridge._ensure_prompt_stream()._build_prompt_request_body(
+            "Hello",
+            "xai/grok-4.6",
+            reasoning_effort="medium",
+        )
+
+        assert body["variant"] == "medium"
+        assert body["model"] == {"providerID": "xai", "modelID": "grok-4.6"}
 
 
 class TestOpenCodeIdentifier:
