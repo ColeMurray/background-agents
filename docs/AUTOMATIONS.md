@@ -228,7 +228,8 @@ App's read-only Actions permission and the **Workflow runs** event subscription.
 conditions to restrict it:
 
 - **Workflow Name** matches the workflow name exactly.
-- **Conclusion** matches `success`, `failure`, `neutral`, `cancelled`, or `timed_out`.
+- **Conclusion** matches `success`, `failure`, `neutral`, `cancelled`, `timed_out`,
+  `action_required`, `skipped`, `stale`, or `startup_failure`.
 
 All configured conditions must match. Open-Inspect includes the workflow name, conclusion, and run
 ID in the untrusted event context sent to the agent. When GitHub supplies them, the context also

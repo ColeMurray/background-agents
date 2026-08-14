@@ -273,6 +273,12 @@ function normalizeCheckSuite(eventType: string, payload: CheckSuitePayload): Git
   };
 }
 
+/**
+ * Normalize `workflow_run.completed`. Including the attempt number in the
+ * trigger key deduplicates each attempt independently. Grouping concurrency by
+ * workflow name suppresses a new run while an invocation for that workflow is
+ * still active.
+ */
 function normalizeWorkflowRun(
   eventType: string,
   payload: WorkflowRunPayload

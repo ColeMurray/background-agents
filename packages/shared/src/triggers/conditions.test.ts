@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { matchesConditions, validateConditions } from "./conditions";
-import { conditionRegistry } from "./registry";
+import { conditionRegistry, GITHUB_CONCLUSIONS } from "./registry";
 import { buildMockEvent } from "./testing";
 
 describe("matchesConditions", () => {
@@ -230,5 +230,17 @@ describe("validateConditions", () => {
       conditionRegistry
     );
     expect(errors).toHaveLength(0);
+  });
+
+  it.each(GITHUB_CONCLUSIONS)("accepts the %s GitHub conclusion", (conclusion) => {
+    for (const type of ["conclusion", "check_conclusion"] as const) {
+      expect(
+        validateConditions(
+          [{ type, operator: "eq", value: conclusion }],
+          "github",
+          conditionRegistry
+        )
+      ).toHaveLength(0);
+    }
   });
 });
