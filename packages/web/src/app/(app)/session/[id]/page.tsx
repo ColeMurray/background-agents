@@ -52,6 +52,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
+import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
 import {
   promptRequestSignature,
   resolvePromptRequestIdentity,
@@ -142,7 +143,7 @@ export default function SessionPage() {
   const isPhone = useMediaQuery("(max-width: 767px)");
 
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
-  const [isDesktopDetailsOpen, setIsDesktopDetailsOpen] = useState(true);
+  const { isOpen: isDesktopDetailsOpen, toggle: toggleDesktopDetails } = useSessionDetailsSidebar();
   const detailsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -176,9 +177,6 @@ export default function SessionPage() {
 
   const toggleDetails = useCallback(() => {
     setIsDetailsOpen((prev) => !prev);
-  }, []);
-  const toggleDesktopDetails = useCallback(() => {
-    setIsDesktopDetailsOpen((prev) => !prev);
   }, []);
   const openMobileDetails = useCallback(() => {
     setIsDetailsOpen(true);
