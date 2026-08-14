@@ -214,6 +214,30 @@ describe("SessionHeader", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Connected");
   });
 
+  it("reveals the connection label on keyboard focus", async () => {
+    render(
+      <SessionHeader
+        sessionState={createSessionState()}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Status icons" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        showDesktopDetailsToggle
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    fireEvent.focus(screen.getByRole("status", { name: "Connection status: Connected" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Connected");
+  });
+
   it("labels connecting and disconnected mobile connection states", () => {
     const props = {
       sessionState: createSessionState(),
