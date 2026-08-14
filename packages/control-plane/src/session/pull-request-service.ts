@@ -15,6 +15,7 @@ import {
   type GitPushSpec,
 } from "../source-control";
 import type { SessionMessenger } from "./messenger";
+import type { ArtifactRepository } from "./artifact-repository";
 import { findPrArtifactForRepo } from "./pr-artifacts";
 import {
   mergeSnapshotMetadata,
@@ -27,7 +28,7 @@ import {
   type RepoIdentity,
   type SessionRepositoryEntry,
 } from "./repository-target";
-import type { ArtifactRow, SessionRow } from "./types";
+import type { SessionRow } from "./types";
 
 /**
  * Inputs required to create a PR once caller identity/auth are already resolved.
@@ -100,14 +101,6 @@ export interface PullRequestRepository {
   getSessionRepositories(): SessionRepositoryEntry[];
   updateSessionBranch(sessionId: string, branchName: string): void;
   updateSessionRepositoryBranch(repoOwner: string, repoName: string, branchName: string): void;
-  listArtifacts(): ArtifactRow[];
-  createArtifact(data: {
-    id: string;
-    type: "pr" | "branch";
-    url: string | null;
-    metadata: string | null;
-    createdAt: number;
-  }): void;
 }
 
 /**
@@ -115,6 +108,7 @@ export interface PullRequestRepository {
  */
 export interface PullRequestServiceDeps {
   repository: PullRequestRepository;
+  artifactRepository: ArtifactRepository;
   /** DO-instance-scoped in-flight claims — must outlive individual requests. */
   claims: PullRequestCreationClaims;
   sourceControlProvider: SourceControlProvider;
@@ -187,7 +181,9 @@ export class SessionPullRequestService {
 
       // The claim above serializes in-flight creation; this scan catches PRs
       // persisted by earlier (completed) requests.
-      if (findPrArtifactForRepo(this.deps.repository.listArtifacts(), targetRepo, isPrimary)) {
+      if (
+        findPrArtifactForRepo(this.deps.artifactRepository.listArtifacts(), targetRepo, isPrimary)
+      ) {
         return this.duplicatePrError(targetRepo);
       }
 
@@ -335,7 +331,7 @@ export class SessionPullRequestService {
         providerUpdatedAt: prResult.providerUpdatedAt,
       };
       const artifactMetadata = mergeSnapshotMetadata({}, snapshot);
-      this.deps.repository.createArtifact({
+      this.deps.artifactRepository.createArtifact({
         id: artifactId,
         type: "pr",
         url: prResult.webUrl,

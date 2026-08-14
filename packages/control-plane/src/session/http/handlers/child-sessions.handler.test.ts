@@ -15,6 +15,7 @@ import type {
   SandboxRow,
   SessionRow,
 } from "../../types";
+import type { ArtifactRepository } from "../../artifact-repository";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -145,12 +146,12 @@ function createHandler() {
       author_id: "participant-1",
     })),
     getParticipantById: vi.fn<(id: string) => ParticipantRow | null>(() => createParticipant()),
-    listArtifacts: vi.fn(),
     listEventPage: vi.fn(),
     getLatestTerminalMessage: vi.fn(),
     getEventTimelinePage: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
   };
+  const artifactRepository = { listArtifacts: vi.fn() };
   const getSession = vi.fn<() => SessionRow | null>();
   const getSandbox = vi.fn<() => SandboxRow | null>();
   const getPublicSessionId = vi.fn<(session: SessionRow) => string>();
@@ -167,6 +168,7 @@ function createHandler() {
 
   const handler = createChildSessionsHandler({
     repository,
+    artifactRepository: artifactRepository as unknown as ArtifactRepository,
     getSession,
     getSandbox,
     getPublicSessionId,
@@ -178,6 +180,7 @@ function createHandler() {
   return {
     handler,
     repository,
+    artifactRepository,
     getSession,
     getSandbox,
     getPublicSessionId,
@@ -523,12 +526,13 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("maps child summary and filters noisy events", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
 
-    repository.listArtifacts.mockReturnValue([
+    artifactRepository.listArtifacts.mockReturnValue([
       createArtifact({ type: "pr", metadata: '{"number":42}' }),
       createArtifact({ type: "preview", metadata: null }),
     ]);
@@ -595,11 +599,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("includes final response when requested", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
     getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([
+    artifactRepository.listArtifacts.mockReturnValue([
       createArtifact({
         type: "branch",
         url: "https://example.com/tree/fix",
@@ -669,11 +674,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("scopes final response artifacts to the terminal message window", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
     getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([
+    artifactRepository.listArtifacts.mockReturnValue([
       createArtifact({
         id: "artifact-old",
         type: "branch",
@@ -733,11 +739,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("paginates final response events when requested", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession({ status: "completed" }));
     getSandbox.mockReturnValue(createSandbox({ status: "stopped" }));
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([]);
+    artifactRepository.listArtifacts.mockReturnValue([]);
     repository.getLatestTerminalMessage.mockReturnValue(createMessage({ id: "msg-final" }));
     repository.listEventPage
       .mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null })
@@ -818,11 +825,12 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("includes chronological trajectory when requested", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([]);
+    artifactRepository.listArtifacts.mockReturnValue([]);
     repository.getLatestTerminalMessage.mockReturnValue(null);
     repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
     repository.getEventTimelinePage.mockReturnValue({
@@ -860,7 +868,8 @@ describe("createChildSessionsHandler", () => {
   });
 
   it("returns 400 for malformed trajectory cursors", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
@@ -871,14 +880,21 @@ describe("createChildSessionsHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid trajectoryCursor" });
-    expect(repository.listArtifacts).not.toHaveBeenCalled();
+    expect(artifactRepository.listArtifacts).not.toHaveBeenCalled();
     expect(repository.getEventTimelinePage).not.toHaveBeenCalled();
   });
 
   it.each(["0", "-1", "abc", "1.5"])(
     "returns 400 for invalid trajectory limits (%s)",
     async (trajectoryLimit) => {
-      const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+      const {
+        handler,
+        getSession,
+        getSandbox,
+        getPublicSessionId,
+        repository,
+        artifactRepository,
+      } = createHandler();
       getSession.mockReturnValue(createSession());
       getSandbox.mockReturnValue(createSandbox());
       getPublicSessionId.mockReturnValue("public-session-1");
@@ -891,13 +907,13 @@ describe("createChildSessionsHandler", () => {
 
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error: "Invalid trajectoryLimit" });
-      expect(repository.listArtifacts).not.toHaveBeenCalled();
+      expect(artifactRepository.listArtifacts).not.toHaveBeenCalled();
       expect(repository.getEventTimelinePage).not.toHaveBeenCalled();
     }
   );
 
   it("returns 400 for invalid child summary includes", async () => {
-    const { handler, getSession, repository } = createHandler();
+    const { handler, getSession, repository, artifactRepository } = createHandler();
     getSession.mockReturnValue(createSession());
 
     const response = handler.getChildSummary(
@@ -906,16 +922,17 @@ describe("createChildSessionsHandler", () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid include: unknown" });
-    expect(repository.listArtifacts).not.toHaveBeenCalled();
+    expect(artifactRepository.listArtifacts).not.toHaveBeenCalled();
     expect(repository.listEventPage).not.toHaveBeenCalled();
   });
 
   it("paginates trajectory with an explicit limit and cursor", async () => {
-    const { handler, getSession, getSandbox, getPublicSessionId, repository } = createHandler();
+    const { handler, getSession, getSandbox, getPublicSessionId, repository, artifactRepository } =
+      createHandler();
     getSession.mockReturnValue(createSession());
     getSandbox.mockReturnValue(createSandbox());
     getPublicSessionId.mockReturnValue("public-session-1");
-    repository.listArtifacts.mockReturnValue([]);
+    artifactRepository.listArtifacts.mockReturnValue([]);
     repository.getLatestTerminalMessage.mockReturnValue(null);
     repository.listEventPage.mockReturnValueOnce({ events: [], hasMore: false, nextCursor: null });
     repository.getEventTimelinePage.mockReturnValue({

@@ -6,6 +6,7 @@ import * as branchResolution from "../source-control/branch-resolution";
 import type { SessionRepositoryRow } from "./types";
 import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRow } from "./types";
+import type { ArtifactRepository, CreateArtifactData } from "./artifact-repository";
 import {
   PullRequestCreationClaims,
   SessionPullRequestService,
@@ -158,8 +159,10 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
         );
       }
     ),
+  };
+  const artifactRepository = {
     listArtifacts: () => [...artifacts],
-    createArtifact: (data) => {
+    createArtifact: (data: CreateArtifactData) => {
       artifacts.unshift({
         id: data.id,
         type: data.type,
@@ -169,13 +172,14 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
         updated_at: data.createdAt,
       } as ArtifactRow);
     },
-  };
+  } as unknown as ArtifactRepository;
 
   const sessionPullRequests = { upsert: vi.fn(async () => ({ applied: true })) };
 
   let idCounter = 0;
   const deps: PullRequestServiceDeps = {
     repository,
+    artifactRepository,
     claims: new PullRequestCreationClaims(),
     sourceControlProvider: provider,
     log,

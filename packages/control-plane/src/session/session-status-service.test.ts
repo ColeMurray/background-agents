@@ -5,6 +5,7 @@ import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
 import type { SessionRow, ArtifactRow } from "./types";
 import type { SessionRepository } from "./repository";
+import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -46,10 +47,12 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 3),
     getActiveDurationMs: vi.fn(() => 4500),
+  };
+  const artifactRepository = {
     listArtifacts: vi.fn(
       () => [{ type: "pr" }, { type: "screenshot" }, { type: "pr" }] as ArtifactRow[]
     ),
-  };
+  } as unknown as ArtifactRepository;
 
   const broadcast = vi.fn();
   const messenger = { broadcast, sendToSandbox: vi.fn(() => true) } as SessionMessenger;
@@ -85,6 +88,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     ctx,
     log as unknown as Logger,
     repository as unknown as SessionRepository,
+    artifactRepository,
     messenger,
     sessionIndex as unknown as SessionIndexStore | null,
     parentSessions as unknown as DurableObjectNamespace
@@ -93,6 +97,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   return {
     service,
     repository,
+    artifactRepository,
     broadcast,
     sessionIndex,
     waitUntil,

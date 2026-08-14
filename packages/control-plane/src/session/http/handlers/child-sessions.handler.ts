@@ -9,6 +9,7 @@ import {
   SessionNotPromptableError,
 } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
+import type { ArtifactRepository } from "../../artifact-repository";
 import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
 import { activePromptAuthorSchema, type ActivePromptAuthor } from "../../active-prompt-author";
@@ -26,7 +27,6 @@ export interface ChildSessionsHandlerDeps {
   repository: Pick<
     SessionRepository,
     | "listParticipants"
-    | "listArtifacts"
     | "listEventPage"
     | "getLatestTerminalMessage"
     | "getEventTimelinePage"
@@ -34,6 +34,7 @@ export interface ChildSessionsHandlerDeps {
     | "getProcessingMessageAuthor"
     | "getParticipantById"
   >;
+  artifactRepository: ArtifactRepository;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
   getPublicSessionId: (session: SessionRow) => string;
@@ -149,7 +150,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
 
       const options = parsedOptions.options;
       const sandbox = deps.getSandbox();
-      const artifacts = deps.repository.listArtifacts();
+      const artifacts = deps.artifactRepository.listArtifacts();
       const recentEventRows = deps.repository.listEventPage({
         limit: RECENT_EVENT_FETCH_LIMIT,
       }).events;

@@ -62,6 +62,7 @@ import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
+import { ArtifactRepository } from "./artifact-repository";
 import { resolveParticipantName } from "./participant-name";
 import { validateReasoningEffort } from "./reasoning-effort";
 import { parseTunnelUrls } from "./tunnel-urls";
@@ -166,6 +167,7 @@ export class SessionDO extends DurableObject<Env> {
   private readonly db: SqlDatabase | null;
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
+  private artifactRepository: ArtifactRepository;
   private initialized = false;
   // Session-scoped logger. Assigned during initialization only — never
   // per-request. Request-serving code receives a request-scoped child
@@ -275,6 +277,7 @@ export class SessionDO extends DurableObject<Env> {
     this.db = env.DB ?? null;
     this.sql = ctx.storage.sql;
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);
+    this.artifactRepository = new ArtifactRepository(this.sql);
     this.repository = new SessionRepository(
       this.sql,
       (closure) => ctx.storage.transactionSync(closure),
@@ -454,6 +457,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._messageService) {
       this._messageService = new MessageService({
         repository: this.repository,
+        artifactRepository: this.artifactRepository,
         messageQueue: this.messageQueue,
         stopExecution: () => this.stopExecution(),
         parseArtifactMetadata: (artifact) => this.parseArtifactMetadata(artifact),
@@ -485,6 +489,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._childSessionsHandler) {
       this._childSessionsHandler = createChildSessionsHandler({
         repository: this.repository,
+        artifactRepository: this.artifactRepository,
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
         getPublicSessionId: (session) => this.getPublicSessionId(session),
@@ -501,6 +506,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._sandboxHandler) {
       this._sandboxHandler = createSandboxHandler({
         repository: this.repository,
+        artifactRepository: this.artifactRepository,
         processSandboxEvent: (event) => this.processSandboxEvent(event),
         getSandbox: () => this.getSandbox(),
         isValidSandboxToken: (token, sandbox) => this.isValidSandboxToken(token, sandbox),
@@ -602,6 +608,7 @@ export class SessionDO extends DurableObject<Env> {
         createPullRequest: async (input, log) => {
           const pullRequestService = new SessionPullRequestService({
             repository: this.repository,
+            artifactRepository: this.artifactRepository,
             claims: this.prCreationClaims,
             sourceControlProvider: this.sourceControlProvider,
             log,
@@ -615,8 +622,9 @@ export class SessionDO extends DurableObject<Env> {
 
           return pullRequestService.createPullRequest(input);
         },
-        getArtifactById: (artifactId) => this.repository.getArtifactById(artifactId),
-        updateArtifact: (artifactId, data) => this.repository.updateArtifact(artifactId, data),
+        getArtifactById: (artifactId) => this.artifactRepository.getArtifactById(artifactId),
+        updateArtifact: (artifactId, data) =>
+          this.artifactRepository.updateArtifact(artifactId, data),
         messenger: this.messenger,
         now: () => Date.now(),
         triggerPullRequestRefresh: () => this.schedulePullRequestRefresh("manual"),
@@ -631,6 +639,7 @@ export class SessionDO extends DurableObject<Env> {
     this.ctx.waitUntil(
       refreshSessionPullRequests(
         this.repository,
+        this.artifactRepository,
         this.sourceControlProvider,
         this.db ? new SessionPullRequestStore(this.db) : null
       )
@@ -703,6 +712,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         () => this.log,
         this.repository,
+        this.artifactRepository,
         this.callbackService,
         this.wsManager,
         this.messenger,
@@ -737,6 +747,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         this.log,
         this.repository,
+        this.artifactRepository,
         this.messenger,
         this.db ? new SessionIndexStore(this.db) : null,
         this.env.SESSION ?? null
@@ -1925,7 +1936,9 @@ export class SessionDO extends DurableObject<Env> {
     repoName: string,
     isPrimary: boolean
   ) => string | null {
-    const artifacts = this.repository.listArtifacts().filter((artifact) => artifact.url !== null);
+    const artifacts = this.artifactRepository
+      .listArtifacts()
+      .filter((artifact) => artifact.url !== null);
     return (repoOwner, repoName, isPrimary) =>
       findPrArtifactForRepo(artifacts, { repoOwner, repoName }, isPrimary)?.url ?? null;
   }

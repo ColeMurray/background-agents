@@ -6,6 +6,7 @@ import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionRepository } from "./repository";
+import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
@@ -29,7 +30,6 @@ function createProcessor() {
     upsertTokenEvent: vi.fn(),
     createContextCompactionEvent: vi.fn(),
     upsertToolCallEvent: vi.fn(),
-    createArtifact: vi.fn(),
     createEvent: vi.fn(),
     addSessionCost: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
@@ -46,6 +46,7 @@ function createProcessor() {
     updateSandboxGitSyncStatus: vi.fn(),
     updateSessionCurrentSha: vi.fn(),
   };
+  const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
 
   const callbackService = {
     notifyToolCall: vi.fn(async () => {}),
@@ -81,6 +82,7 @@ function createProcessor() {
     { waitUntil } as unknown as DurableObjectState,
     () => log,
     repository as unknown as SessionRepository,
+    artifactRepository,
     callbackService as unknown as CallbackNotificationService,
     wsManager as unknown as SessionWebSocketManager,
     messenger,
@@ -97,6 +99,7 @@ function createProcessor() {
 
   return {
     processor,
+    artifactRepository,
     repository,
     wsManager,
     callbackService,
@@ -269,7 +272,7 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.createArtifact).toHaveBeenCalledWith({
+    expect(h.artifactRepository.createArtifact).toHaveBeenCalledWith({
       id: expect.any(String),
       type: "screenshot",
       url: "sessions/session-1/media/artifact-1.png",

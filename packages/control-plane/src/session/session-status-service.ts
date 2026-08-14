@@ -14,6 +14,7 @@ import type { SessionIndexStore } from "../db/session-index";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
+import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
@@ -24,6 +25,7 @@ export class SessionStatusService {
     private readonly ctx: DurableObjectState,
     private readonly log: Logger,
     private readonly repository: SessionRepository,
+    private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly parentSessions: DurableObjectNamespace | null
@@ -198,7 +200,7 @@ export class SessionStatusService {
 
     const messageCount = this.repository.getMessageCount();
     const activeDurationMs = this.repository.getActiveDurationMs();
-    const artifacts = this.repository.listArtifacts();
+    const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
     this.ctx.waitUntil(

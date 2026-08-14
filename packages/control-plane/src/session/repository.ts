@@ -11,7 +11,6 @@ import type {
   ParticipantRow,
   MessageRow,
   EventRow,
-  ArtifactRow,
   SandboxRow,
   SessionRepositoryRow,
 } from "./types";
@@ -25,7 +24,6 @@ import type {
   ParticipantRole,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 import {
   eventTimelineCursorFromRow,
@@ -223,26 +221,6 @@ export interface ListMessagesOptions {
   cursor?: string | null;
   limit: number;
   status?: string | null;
-}
-
-/**
- * Data for creating an artifact.
- */
-export interface CreateArtifactData {
-  id: string;
-  type: ArtifactType;
-  url: string | null;
-  metadata: string | null;
-  createdAt: number;
-}
-
-/**
- * Data for updating an artifact's content in place (PR lifecycle updates).
- */
-export interface UpdateArtifactData {
-  url: string;
-  metadata: string | null;
-  updatedAt: number;
 }
 
 /**
@@ -1162,43 +1140,6 @@ export class SessionRepository {
     const nextCursor =
       pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
     return { events: pageEvents, hasMore, nextCursor };
-  }
-
-  // === ARTIFACTS ===
-
-  createArtifact(data: CreateArtifactData): void {
-    // updated_at starts at created_at; only content changes advance it.
-    this.sql.exec(
-      `INSERT INTO artifacts (id, type, url, metadata, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      data.id,
-      data.type,
-      data.url,
-      data.metadata,
-      data.createdAt,
-      data.createdAt
-    );
-  }
-
-  updateArtifact(artifactId: string, data: UpdateArtifactData): void {
-    this.sql.exec(
-      `UPDATE artifacts SET url = ?, metadata = ?, updated_at = ? WHERE id = ?`,
-      data.url,
-      data.metadata,
-      data.updatedAt,
-      artifactId
-    );
-  }
-
-  listArtifacts(): ArtifactRow[] {
-    const result = this.sql.exec(`SELECT * FROM artifacts ORDER BY created_at DESC`);
-    return this.rows<ArtifactRow>(result);
-  }
-
-  getArtifactById(artifactId: string): ArtifactRow | null {
-    const result = this.sql.exec(`SELECT * FROM artifacts WHERE id = ?`, artifactId);
-    const rows = this.rows<ArtifactRow>(result);
-    return rows[0] ?? null;
   }
 
   // === WS CLIENT MAPPING ===

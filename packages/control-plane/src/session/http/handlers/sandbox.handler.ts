@@ -18,6 +18,7 @@ import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
+import type { ArtifactRepository } from "../../artifact-repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
@@ -34,10 +35,8 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "createParticipant" | "createArtifact" | "createEvent" | "getProcessingMessage"
-  >;
+  repository: Pick<SessionRepository, "createParticipant" | "createEvent" | "getProcessingMessage">;
+  artifactRepository: ArtifactRepository;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
   isValidSandboxToken: (token: string | null, sandbox: SandboxRow | null) => Promise<boolean>;
@@ -123,7 +122,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         updatedAt: now,
       };
 
-      deps.repository.createArtifact({
+      deps.artifactRepository.createArtifact({
         id: artifact.id,
         type: artifact.type,
         url: artifact.url,

@@ -5,6 +5,7 @@ import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
+import type { ArtifactRepository } from "./artifact-repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionMessenger } from "./messenger";
@@ -38,6 +39,7 @@ export class SessionSandboxEventProcessor {
     // capturing one by value at construction time.
     private readonly getLog: () => Logger,
     private readonly repository: SessionRepository,
+    private readonly artifactRepository: ArtifactRepository,
     private readonly callbackService: CallbackNotificationService,
     private readonly wsManager: SessionWebSocketManager,
     private readonly messenger: SessionMessenger,
@@ -115,7 +117,7 @@ export class SessionSandboxEventProcessor {
         updatedAt: now,
       };
 
-      this.repository.createArtifact({
+      this.artifactRepository.createArtifact({
         id: artifact.id,
         type: artifact.type,
         url: artifact.url,

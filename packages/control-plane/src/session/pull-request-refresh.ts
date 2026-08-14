@@ -18,14 +18,11 @@ import {
   preparePullRequestArtifactUpdate,
   snapshotToRecord,
 } from "./pull-request-snapshot";
-import type { UpdateArtifactData } from "./repository";
-import type { ArtifactRow, SessionRow } from "./types";
+import type { ArtifactRepository } from "./artifact-repository";
+import type { SessionRow } from "./types";
 
 export interface PullRequestRefreshRepository {
   getSession(): SessionRow | null;
-  listArtifacts(): ArtifactRow[];
-  getArtifactById(artifactId: string): ArtifactRow | null;
-  updateArtifact(artifactId: string, data: UpdateArtifactData): void;
 }
 
 /** A per-artifact problem from a refresh pass; the caller decides logging. */
@@ -85,6 +82,7 @@ function resolveRefreshTarget(
  */
 export async function refreshSessionPullRequests(
   repository: PullRequestRefreshRepository,
+  artifactRepository: ArtifactRepository,
   sourceControlProvider: Pick<SourceControlProvider, "getPullRequest">,
   sessionPullRequests: Pick<SessionPullRequestStore, "upsert"> | null
 ): Promise<PullRequestRefreshResult> {
@@ -95,7 +93,9 @@ export async function refreshSessionPullRequests(
   if (!session) return { updated, failures };
   const sessionId = session.session_name || session.id;
 
-  const prArtifacts = repository.listArtifacts().filter((artifact) => artifact.type === "pr");
+  const prArtifacts = artifactRepository
+    .listArtifacts()
+    .filter((artifact) => artifact.type === "pr");
 
   for (const artifact of prArtifacts) {
     const target = resolveRefreshTarget(
@@ -154,13 +154,13 @@ export async function refreshSessionPullRequests(
     // DO between this pass's awaits, and the staleness guard must evaluate
     // against the artifact's current state, not the pre-await copy (the
     // snapshot-push handler re-reads the same way).
-    const currentArtifact = repository.getArtifactById(artifact.id);
+    const currentArtifact = artifactRepository.getArtifactById(artifact.id);
     if (!currentArtifact) continue;
 
     const artifactUpdate = preparePullRequestArtifactUpdate(currentArtifact, snapshot, Date.now());
     if (!artifactUpdate) continue;
 
-    repository.updateArtifact(currentArtifact.id, artifactUpdate.update);
+    artifactRepository.updateArtifact(currentArtifact.id, artifactUpdate.update);
     updated.push(artifactUpdate.artifact);
   }
 
