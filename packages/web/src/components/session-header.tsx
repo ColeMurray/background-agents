@@ -33,6 +33,7 @@ export type SessionHeaderProps = {
   connecting: boolean;
   isDetailsOpen: boolean;
   isDesktopDetailsOpen: boolean;
+  showDesktopDetailsToggle: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
@@ -49,6 +50,7 @@ export function SessionHeader({
   connecting,
   isDetailsOpen,
   isDesktopDetailsOpen,
+  showDesktopDetailsToggle,
   detailsButtonRef,
   actionsButtonRef,
   onToggleDetails,
@@ -189,16 +191,18 @@ export function SessionHeader({
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
           </div>
-          <button
-            type="button"
-            onClick={onToggleDesktopDetails}
-            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
-            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
-            aria-controls="session-details-sidebar"
-            aria-expanded={isDesktopDetailsOpen}
-          >
-            <RightSidebarIcon className="h-4 w-4" />
-          </button>
+          {showDesktopDetailsToggle && (
+            <button
+              type="button"
+              onClick={onToggleDesktopDetails}
+              className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+              aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+              aria-controls="session-details-sidebar"
+              aria-expanded={isDesktopDetailsOpen}
+            >
+              <RightSidebarIcon className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
     </header>

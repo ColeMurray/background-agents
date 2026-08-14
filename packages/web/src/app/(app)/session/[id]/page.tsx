@@ -357,6 +357,7 @@ export default function SessionPage() {
         connecting={connecting || (connected && !ready)}
         isDetailsOpen={isDetailsOpen}
         isDesktopDetailsOpen={isDesktopDetailsOpen}
+        showDesktopDetailsToggle={!resolvedDiff}
         detailsButtonRef={detailsButtonRef}
         actionsButtonRef={actionsButtonRef}
         onToggleDetails={toggleDetails}
@@ -393,23 +394,22 @@ export default function SessionPage() {
           <SessionDesktopLayout
             workspace={sessionWorkspace}
             sidebar={
-              isDesktopDetailsOpen ? (
-                <SessionRightSidebar
-                  sessionId={sessionId}
-                  sessionState={sessionState}
-                  participants={profiledParticipants}
-                  presenceSynced={presenceSynced}
-                  events={events}
-                  artifacts={artifacts}
-                  terminalOpen={terminalOpen}
-                  onToggleTerminal={toggleTerminal}
-                  onOpenMedia={setSelectedMediaArtifactId}
-                  diffState={diffState}
-                  diffLoading={diffLoading}
-                  selectedDiff={selectedDiff}
-                  onOpenDiff={openDiff}
-                />
-              ) : null
+              <SessionRightSidebar
+                isOpen={isDesktopDetailsOpen && !resolvedDiff}
+                sessionId={sessionId}
+                sessionState={sessionState}
+                participants={profiledParticipants}
+                presenceSynced={presenceSynced}
+                events={events}
+                artifacts={artifacts}
+                terminalOpen={terminalOpen}
+                onToggleTerminal={toggleTerminal}
+                onOpenMedia={setSelectedMediaArtifactId}
+                diffState={diffState}
+                diffLoading={diffLoading}
+                selectedDiff={selectedDiff}
+                onOpenDiff={openDiff}
+              />
             }
             changes={
               resolvedDiff && diffState ? (

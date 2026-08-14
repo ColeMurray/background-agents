@@ -26,6 +26,7 @@ import { deriveSessionDiffView } from "@/lib/session-diffs";
 import { DiffRetryNotice } from "@/components/diff-retry-notice";
 
 interface SessionRightSidebarProps {
+  isOpen?: boolean;
   sessionId: string;
   sessionState: SessionState | null;
   participants: ParticipantPresence[];
@@ -269,6 +270,7 @@ export function SessionRightSidebarContent({
 }
 
 export function SessionRightSidebar({
+  isOpen = true,
   sessionId,
   sessionState,
   participants,
@@ -286,7 +288,12 @@ export function SessionRightSidebar({
   return (
     <aside
       id="session-details-sidebar"
-      className="hidden w-80 shrink-0 overflow-y-auto border-l border-border-muted lg:block"
+      aria-hidden={!isOpen}
+      className={
+        isOpen
+          ? "hidden w-80 shrink-0 overflow-y-auto border-l border-border-muted lg:block"
+          : "hidden"
+      }
     >
       <SessionRightSidebarContent
         sessionId={sessionId}
