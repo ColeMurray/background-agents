@@ -1,11 +1,11 @@
 import type { ImageBuildRecordView } from "@open-inspect/shared/types/image-builds";
-import {
-  MIN_COMPATIBLE_RUNTIME_VERSION,
-  parseRuntimeVersionNumber,
-  type ImageBuildProvider,
-} from "./model";
+import { parseRuntimeVersionNumber, type ImageBuildProvider } from "./model";
 import { parseRepositoryShasJson, repositoryIdentityKey } from "./provenance";
 import type { EnabledScopeUnit } from "./scope";
+
+// v57 adds the VNC/noVNC toolchain. v56 remains safe to boot while the
+// scheduler converges prebuilt images in the background.
+const MIN_REBUILD_RUNTIME_VERSION = 57;
 
 export type ImageBuildRebuildDecision =
   | { type: "skip"; reason: "building" }
@@ -31,7 +31,9 @@ export function evaluateImageBuildRebuildPolicy(
   if (!ready) return { type: "rebuild", reason: "missing_image" };
 
   const runtimeVersion = parseRuntimeVersionNumber(ready.runtime_version);
-  if (runtimeVersion === null || runtimeVersion < MIN_COMPATIBLE_RUNTIME_VERSION) {
+  // Rebuild old images to the current toolchain without invalidating images
+  // that remain safe to boot during the rollout gap.
+  if (runtimeVersion === null || runtimeVersion < MIN_REBUILD_RUNTIME_VERSION) {
     return { type: "rebuild", reason: "runtime_incompatible" };
   }
 

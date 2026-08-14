@@ -1,4 +1,4 @@
-import { generateId } from "../auth/crypto";
+import { generateId, hashToken } from "../auth/crypto";
 import type { SessionIndexStore } from "../db/session-index";
 import type { Logger } from "../logger";
 import type {
@@ -11,11 +11,15 @@ import {
   getValidModelOrDefault,
   isValidModel,
 } from "@open-inspect/shared/models";
-import type { ClientInfo, MessageSource, SandboxEvent } from "../types";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { MessageSource } from "@open-inspect/shared/types/sessions";
+import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
+import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
-import type { ParticipantRow, PromptGitIdentity, SandboxCommand } from "./types";
+import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
+import { STOP_CONFIRMATION_TIMEOUT_MS } from "./repository";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -30,7 +34,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
-import type { SessionExecutionCompletion, StopExecutionOptions } from "./execution-completion";
+import type { SessionExecutionCompletion } from "./execution-completion";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -38,10 +42,15 @@ import {
 } from "./session-attachment-resolver";
 
 interface PromptMessageData {
+  clientRequestId?: string;
   content: string;
   model?: string;
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
+}
+
+interface StopExecutionOptions {
+  suppressStatusReconcile?: boolean;
 }
 
 interface EnqueuePromptCoreData {
@@ -53,11 +62,60 @@ interface EnqueuePromptCoreData {
   reasoningEffort?: string;
   attachments?: SessionAttachmentReference[];
   callbackContext?: Record<string, unknown>;
+  clientRequestId?: string;
 }
 
 interface EnqueuedPrompt {
   messageId: string;
-  position: number;
+  position: number | null;
+}
+
+export class SessionNotPromptableError extends Error {
+  constructor(readonly sessionStatus: SessionRow["status"]) {
+    super(`Cannot prompt a ${sessionStatus} session`);
+    this.name = "SessionNotPromptableError";
+  }
+}
+
+export class PromptQueueFullError extends Error {
+  constructor() {
+    super(`A session may have at most ${MAX_UNFINISHED_PROMPTS} unfinished prompts`);
+    this.name = "PromptQueueFullError";
+  }
+}
+
+export class PromptRequestConflictError extends Error {
+  constructor() {
+    super("clientRequestId was already used for a different prompt");
+    this.name = "PromptRequestConflictError";
+  }
+}
+
+export async function fingerprintWebPrompt(
+  participantId: string,
+  data: Pick<PromptMessageData, "content" | "model" | "reasoningEffort" | "attachments">
+): Promise<string> {
+  const canonicalRequest = JSON.stringify({
+    participantId,
+    content: data.content,
+    model: data.model ?? null,
+    reasoningEffort: data.reasoningEffort ?? null,
+    attachmentIds: data.attachments?.map((attachment) => attachment.attachmentId) ?? [],
+  });
+  return hashToken(canonicalRequest);
+}
+
+export function isPromptableSessionStatus(status: SessionRow["status"]): boolean {
+  switch (status) {
+    case "created":
+    case "active":
+    case "completed":
+    case "failed":
+      return true;
+    case "archived":
+    case "cancelled":
+      return false;
+  }
 }
 
 function resolveParticipantGitIdentity(
@@ -106,8 +164,11 @@ export class SessionMessageQueue {
   ): Promise<void> {
     let enqueued: EnqueuedPrompt;
     try {
-      let participant = this.participantService.getByUserId(client.userId);
+      this.assertPromptableSession();
+      let participant = this.repository.getParticipantById(client.participantId);
+      participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
+        this.assertQueueCapacity();
         participant = this.participantService.create(client.userId, client.name);
       }
       enqueued = await this.enqueuePromptCore({
@@ -118,15 +179,46 @@ export class SessionMessageQueue {
         model: data.model,
         reasoningEffort: data.reasoningEffort,
         attachments: data.attachments,
+        clientRequestId: data.clientRequestId,
       });
     } catch (error) {
-      if (!(error instanceof SessionAttachmentError)) throw error;
-      this.wsManager.send(ws, {
-        type: "error",
-        code: "INVALID_ATTACHMENTS",
-        message: error.message,
-      });
-      return;
+      if (error instanceof SessionAttachmentError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "INVALID_ATTACHMENTS",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      if (error instanceof SessionNotPromptableError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "SESSION_NOT_PROMPTABLE",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      if (error instanceof PromptQueueFullError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "PROMPT_QUEUE_FULL",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      if (error instanceof PromptRequestConflictError) {
+        this.wsManager.send(ws, {
+          type: "error",
+          code: "PROMPT_REQUEST_CONFLICT",
+          message: error.message,
+          clientRequestId: data.clientRequestId,
+        });
+        return;
+      }
+      throw error;
     }
 
     const sessionIndex = this.sessionIndex;
@@ -147,6 +239,7 @@ export class SessionMessageQueue {
 
     this.wsManager.send(ws, {
       type: "prompt_queued",
+      clientRequestId: data.clientRequestId,
       messageId: enqueued.messageId,
       position: enqueued.position,
     });
@@ -155,6 +248,20 @@ export class SessionMessageQueue {
   }
 
   async processMessageQueue(): Promise<void> {
+    const currentSession = this.repository.getSession();
+    if (!currentSession || !isPromptableSessionStatus(currentSession.status)) {
+      return;
+    }
+    const awaitingStop = this.repository.getMessageAwaitingStopConfirmation();
+    if (awaitingStop) {
+      if (awaitingStop.deadline <= Date.now()) {
+        await this.recoverStopConfirmationTimeout();
+      } else {
+        await this.alarmScheduler.scheduleAlarm(awaitingStop.deadline);
+      }
+      this.log.debug("processMessageQueue: waiting for sandbox stop confirmation");
+      return;
+    }
     if (this.repository.getProcessingMessage()) {
       this.log.debug("processMessageQueue: already processing, returning");
       return;
@@ -198,15 +305,19 @@ export class SessionMessageQueue {
       return;
     }
 
-    this.repository.updateMessageToProcessing(message.id, now);
-    this.messenger.broadcast({ type: "processing_status", isProcessing: true });
-    this.sandboxLifecycle.updateLastActivity(now);
-
-    // Execution timeout shares the DO's single alarm slot with lifecycle checks.
-    const deadline = now + this.executionTimeoutMs;
-    await this.alarmScheduler.scheduleAlarm(deadline);
-
     const author = this.repository.getParticipantById(message.author_id);
+    if (!author) {
+      throw new Error(`Missing prompt author ${message.author_id}`);
+    }
+    const userMessageEvent = this.createUserMessageEvent(
+      author,
+      message.content,
+      message.id,
+      now,
+      parseStoredSessionAttachments(message.attachments, () =>
+        this.log.error("prompt.invalid_stored_attachments")
+      )
+    );
     const gitIdentity = resolveParticipantGitIdentity(author, this.scmProvider);
     const session = this.repository.getSession();
     const resolvedModel = getValidModelOrDefault(message.model || session?.model);
@@ -234,7 +345,19 @@ export class SessionMessageQueue {
 
     const sent = this.wsManager.send(sandboxWs, command);
 
-    if (sent) {
+    if (!sent) {
+      await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
+    } else {
+      this.repository.startMessageProcessing(message.id, now, userMessageEvent);
+      this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
+      this.messenger.broadcast({ type: "processing_status", isProcessing: true });
+      this.broadcastPromptQueue();
+      this.sandboxLifecycle.updateLastActivity(now);
+
+      // Execution timeout shares the DO's single alarm slot with lifecycle checks.
+      const deadline = now + this.executionTimeoutMs;
+      await this.alarmScheduler.scheduleAlarm(deadline);
+
       this.ctx.waitUntil(
         this.callbackService.notifyStarted(message.id).catch((error) => {
           this.log.error("callback.started.background_error", {
@@ -262,14 +385,60 @@ export class SessionMessageQueue {
   }
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
-    await this.executionCompletion.stopProcessingMessage(options);
+    const now = Date.now();
+    const processingMessageId = await this.executionCompletion.stopProcessingMessage();
+
+    if (processingMessageId) {
+      const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
+      this.repository.markMessageAwaitingStopConfirmation(
+        processingMessageId,
+        stopConfirmationDeadline
+      );
+      await this.alarmScheduler.scheduleAlarm(stopConfirmationDeadline);
+      this.broadcastPromptQueue();
+      this.log.info("prompt.stopped", {
+        event: "prompt.stopped",
+        message_id: processingMessageId,
+      });
+      if (!options.suppressStatusReconcile) {
+        await this.sessionStatus.reconcileAfterExecution(false);
+      }
+    }
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 
     const sandboxWs = this.wsManager.getSandboxSocket();
-    if (sandboxWs) {
-      this.wsManager.send(sandboxWs, { type: "stop" });
+    if (processingMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
+      await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
     }
+  }
+
+  async recoverStopConfirmationTimeout(): Promise<void> {
+    const awaitingStop = this.repository.getMessageAwaitingStopConfirmation();
+    if (!awaitingStop || awaitingStop.deadline > Date.now()) return;
+    this.log.warn("Sandbox did not confirm stop before deadline", {
+      event: "prompt.stop_confirmation_timeout",
+      message_id: awaitingStop.id,
+    });
+    await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_confirmation_timeout");
+  }
+
+  async resumeAfterSandboxTermination(): Promise<void> {
+    const awaitingStop = this.repository.getMessageAwaitingStopConfirmation();
+    if (awaitingStop) {
+      this.repository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
+    }
+    await this.processMessageQueue();
+  }
+
+  /** Close every unfinished message synchronously; status projection happens afterwards. */
+  cancelExecution(): void {
+    this.executionCompletion.cancelUnfinishedMessages();
+
+    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+    this.broadcastPromptQueue();
+    const sandboxWs = this.wsManager.getSandboxSocket();
+    if (sandboxWs) this.wsManager.send(sandboxWs, { type: "stop" });
   }
 
   /**
@@ -280,19 +449,21 @@ export class SessionMessageQueue {
    * prompt could be dispatched to a sandbox being shut down.
    */
   async failStuckProcessingMessage(): Promise<void> {
-    await this.executionCompletion.failStuckProcessingMessage();
+    const failed = await this.executionCompletion.failStuckProcessingMessage();
+    if (!failed) return;
+    this.messenger.broadcast({ type: "processing_status", isProcessing: false });
+    this.broadcastPromptQueue();
+    await this.sessionStatus.reconcileAfterExecution(false);
   }
 
-  writeUserMessageEvent(
+  private createUserMessageEvent(
     participant: ParticipantRow,
     content: string,
     messageId: string,
     now: number,
     attachments?: ResolvedSessionAttachment[]
-  ): void {
-    // Metadata only — base64 payloads would bloat the events table and every
-    // broadcast, and DO SQLite rows cap at 2 MB.
-    const userMessageEvent: SandboxEvent = {
+  ): Extract<SandboxEvent, { type: "user_message" }> {
+    return {
       type: "user_message",
       content,
       messageId,
@@ -305,19 +476,13 @@ export class SessionMessageQueue {
       },
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
     };
-    this.repository.createEvent({
-      id: generateId(),
-      type: "user_message",
-      data: JSON.stringify(userMessageEvent),
-      messageId,
-      createdAt: now,
-    });
-    this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
   }
 
   async enqueuePromptFromApi(
     data: EnqueuePromptRequest
   ): Promise<{ messageId: string; status: "queued" }> {
+    this.assertPromptableSession();
+    this.assertQueueCapacity();
     let participant = this.participantService.getByUserId(data.authorId);
     if (!participant) {
       const name = data.scmEnrichment?.name || data.authorId;
@@ -367,6 +532,45 @@ export class SessionMessageQueue {
   }
 
   private async enqueuePromptCore(data: EnqueuePromptCoreData): Promise<EnqueuedPrompt> {
+    this.assertPromptableSession();
+    let requestFingerprint: string | undefined;
+    if (data.clientRequestId) {
+      requestFingerprint = await fingerprintWebPrompt(data.participant.id, data);
+    }
+
+    // Keep the idempotency lookup, capacity check, and insert in one synchronous
+    // turn so concurrent WebSocket requests cannot race between them.
+    const queueDepthBefore = this.repository.getPendingOrProcessingCount();
+    if (data.clientRequestId) {
+      const existing = this.repository.getMessageByClientRequestId(data.clientRequestId);
+      if (existing) {
+        if (
+          existing.author_id !== data.participant.id ||
+          existing.request_fingerprint !== requestFingerprint
+        ) {
+          this.log.warn("prompt.enqueue", {
+            event: "prompt.enqueue",
+            outcome: "conflict",
+            source: data.source,
+            queue_depth_before: queueDepthBefore,
+            queue_depth_after: queueDepthBefore,
+          });
+          throw new PromptRequestConflictError();
+        }
+        this.log.info("prompt.enqueue", {
+          event: "prompt.enqueue",
+          outcome: "deduplicated",
+          source: data.source,
+          queue_depth_before: queueDepthBefore,
+          queue_depth_after: queueDepthBefore,
+        });
+        return {
+          messageId: existing.id,
+          position: this.repository.getUnfinishedMessagePosition(existing.id),
+        };
+      }
+    }
+    this.assertQueueCapacity(queueDepthBefore);
     const resolvedAttachments = resolveSessionAttachments(
       data.attachments,
       this.attachmentRepository
@@ -402,6 +606,8 @@ export class SessionMessageQueue {
           reasoningEffort: messageReasoningEffort,
           attachments: attachments ? JSON.stringify(attachments) : null,
           callbackContext: data.callbackContext ? JSON.stringify(data.callbackContext) : null,
+          clientRequestId: data.clientRequestId ?? null,
+          requestFingerprint: requestFingerprint ?? null,
           status: "pending",
           createdAt: now,
         },
@@ -417,11 +623,12 @@ export class SessionMessageQueue {
     }
 
     await this.sessionStatus.transition("active");
-    this.writeUserMessageEvent(data.participant, data.content, messageId, now, attachments);
+    this.broadcastPromptQueue();
 
     const position = this.repository.getPendingOrProcessingCount();
     this.log.info("prompt.enqueue", {
       event: "prompt.enqueue",
+      outcome: "enqueued",
       message_id: messageId,
       source: data.source,
       author_id: data.participant.id,
@@ -433,8 +640,37 @@ export class SessionMessageQueue {
       attachments_count: attachments?.length ?? 0,
       has_callback_context: !!data.callbackContext,
       queue_position: position,
+      queue_depth_before: queueDepthBefore,
+      queue_depth_after: position,
     });
 
     return { messageId, position };
+  }
+
+  private assertPromptableSession(): void {
+    const session = this.repository.getSession();
+    if (session && !isPromptableSessionStatus(session.status)) {
+      throw new SessionNotPromptableError(session.status);
+    }
+  }
+
+  private assertQueueCapacity(queueDepth = this.repository.getPendingOrProcessingCount()): void {
+    if (queueDepth >= MAX_UNFINISHED_PROMPTS) {
+      this.log.warn("prompt.enqueue", {
+        event: "prompt.enqueue",
+        outcome: "rejected",
+        reason: "queue_full",
+        queue_depth_before: queueDepth,
+        queue_depth_after: queueDepth,
+      });
+      throw new PromptQueueFullError();
+    }
+  }
+
+  broadcastPromptQueue(): void {
+    this.messenger.broadcast({
+      type: "prompt_queue_updated",
+      promptQueue: this.repository.listPromptQueue(),
+    });
   }
 }

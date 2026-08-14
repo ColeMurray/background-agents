@@ -2,7 +2,7 @@
  * Agent plan step types and factory used by both the webhook handler and callbacks.
  */
 
-export type PlanStepStatus = "pending" | "inProgress" | "completed" | "canceled";
+type PlanStepStatus = "pending" | "inProgress" | "completed" | "canceled";
 
 export interface PlanStep {
   content: string;

@@ -37,6 +37,9 @@ jobs:
       - name: Check Prettier formatting
         run: npm run format:check
 
+      - name: Run Knip (unused code detection)
+        run: npm run knip -- --no-exit-code
+
   typecheck-typescript:
     name: TypeCheck (TypeScript)
     runs-on: ubuntu-latest

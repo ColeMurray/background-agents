@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildControlPlanePath, SESSION_CONTROL_PLANE_QUERY_PARAMS } from "./control-plane-query";
+import { SESSION_LIST_QUERY_PARAMS } from "@open-inspect/shared/session-list-query";
+import { buildControlPlanePath } from "./control-plane-query";
 
 describe("buildControlPlanePath", () => {
   it("forwards allowed query parameters in allowlist order", () => {
@@ -37,9 +38,7 @@ describe("buildControlPlanePath", () => {
       "excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&status=running&debug=true"
     );
 
-    expect(
-      buildControlPlanePath("/sessions", searchParams, SESSION_CONTROL_PLANE_QUERY_PARAMS)
-    ).toBe(
+    expect(buildControlPlanePath("/sessions", searchParams, SESSION_LIST_QUERY_PARAMS)).toBe(
       "/sessions?status=running&excludeStatus=archived&createdBy=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     );
   });

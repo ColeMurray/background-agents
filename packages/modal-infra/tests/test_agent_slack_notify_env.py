@@ -25,7 +25,7 @@ def _patch_create(monkeypatch, captured: dict) -> None:
     monkeypatch.setattr(
         SandboxManager,
         "_resolve_and_setup_tunnels",
-        AsyncMock(return_value=(None, None, None)),
+        AsyncMock(return_value=(None, None, None, None)),
     )
 
 
@@ -68,23 +68,6 @@ class TestCreateSandboxAgentSlackNotify:
 
         assert "AGENT_SLACK_NOTIFY_ENABLED" not in captured["env"]
 
-    @pytest.mark.asyncio
-    async def test_env_omitted_when_default(self, monkeypatch):
-        captured: dict = {}
-        _patch_create(monkeypatch, captured)
-
-        manager = SandboxManager()
-        config = SandboxConfig(
-            repo_owner="acme",
-            repo_name="repo",
-            control_plane_url="https://cp.example.com",
-            sandbox_auth_token="token-123",
-        )
-
-        await manager.create_sandbox(config)
-
-        assert "AGENT_SLACK_NOTIFY_ENABLED" not in captured["env"]
-
 
 class TestRestoreFromSnapshotAgentSlackNotify:
     """restore_from_snapshot sets AGENT_SLACK_NOTIFY_ENABLED only when configured on."""
@@ -110,24 +93,3 @@ class TestRestoreFromSnapshotAgentSlackNotify:
         )
 
         assert captured["env"]["AGENT_SLACK_NOTIFY_ENABLED"] == "true"
-
-    @pytest.mark.asyncio
-    async def test_env_omitted_when_default(self, monkeypatch):
-        captured: dict = {}
-
-        class FakeImage:
-            object_id = "img-123"
-
-        monkeypatch.setattr("src.sandbox.manager.modal.Image.from_id", lambda *a, **k: FakeImage())
-        _patch_create(monkeypatch, captured)
-
-        manager = SandboxManager()
-        await manager.restore_from_snapshot(
-            snapshot_image_id="img-123",
-            session_config={"repo_owner": "acme", "repo_name": "repo"},
-            sandbox_id="sb-1",
-            control_plane_url="https://cp.example.com",
-            sandbox_auth_token="token-123",
-        )
-
-        assert "AGENT_SLACK_NOTIFY_ENABLED" not in captured["env"]

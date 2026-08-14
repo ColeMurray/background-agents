@@ -9,12 +9,6 @@ const DropdownMenu = DropdownMenuPrimitive.Root;
 
 const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
 
-const DropdownMenuGroup = DropdownMenuPrimitive.Group;
-
-const DropdownMenuSub = DropdownMenuPrimitive.Sub;
-
-const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
-
 const DropdownMenuContent = React.forwardRef<
   React.ComponentRef<typeof DropdownMenuPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Content>
@@ -79,16 +73,6 @@ const DropdownMenuSeparator = React.forwardRef<
 ));
 DropdownMenuSeparator.displayName = DropdownMenuPrimitive.Separator.displayName;
 
-const DropdownMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
-  return (
-    <span
-      className={cn("ml-auto text-xs tracking-widest text-muted-foreground", className)}
-      {...props}
-    />
-  );
-};
-DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
-
 export {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -96,8 +80,4 @@ export {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuGroup,
-  DropdownMenuSub,
-  DropdownMenuRadioGroup,
 };

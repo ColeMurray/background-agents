@@ -6,8 +6,9 @@ import { z } from "zod";
 
 const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const OPENAI_TOKEN_REQUEST_TIMEOUT_MS = 10_000;
 
-export const openAITokenResponseSchema = z.object({
+const openAITokenResponseSchema = z.object({
   id_token: z.string(),
   access_token: z.string(),
   refresh_token: z.string(),
@@ -32,6 +33,7 @@ export class OpenAITokenRefreshError extends Error {
 export async function refreshOpenAIToken(refreshToken: string): Promise<OpenAITokenResponse> {
   const response = await fetch(OPENAI_TOKEN_URL, {
     method: "POST",
+    signal: AbortSignal.timeout(OPENAI_TOKEN_REQUEST_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
     },

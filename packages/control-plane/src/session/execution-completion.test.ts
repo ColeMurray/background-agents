@@ -31,6 +31,8 @@ function createHarness(): {
       processingMessage = null;
     }),
     getMessageTimestamps: vi.fn(() => ({ created_at: 1_000, started_at: 1_200 })),
+    clearMessageAwaitingStopConfirmation: vi.fn(),
+    listPendingMessagesWithCreatedAt: vi.fn(() => [] as Array<{ id: string; created_at: number }>),
   };
   const projection = { recordTerminalMessage: vi.fn(async () => {}) };
   const callbackService = { notifyComplete: vi.fn(async () => {}) };
@@ -53,6 +55,7 @@ function createHarness(): {
     { broadcast } as unknown as SessionMessenger,
     statusService as unknown as SessionStatusService,
     projection as unknown as SessionTerminalMessageProjection,
+    vi.fn(),
     () => COMPLETED_AT
   );
 
@@ -85,7 +88,7 @@ describe("SessionExecutionCompletionService", () => {
       timestamp: 2,
     };
 
-    const result = h.completion.completeFromSandbox(event, "msg-1", "msg-1", COMPLETED_AT);
+    const result = h.completion.completeFromSandbox(event, COMPLETED_AT);
 
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-1",
@@ -95,7 +98,8 @@ describe("SessionExecutionCompletionService", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
       "completed",
-      COMPLETED_AT
+      COMPLETED_AT,
+      null
     );
     expect(h.broadcast).not.toHaveBeenCalled();
 
@@ -127,8 +131,6 @@ describe("SessionExecutionCompletionService", () => {
         sandboxId: "sandbox-1",
         timestamp: 2,
       },
-      "msg-old",
-      "msg-new",
       COMPLETED_AT
     );
 
@@ -151,12 +153,13 @@ describe("SessionExecutionCompletionService", () => {
       timestamp: 2,
     };
 
-    await h.completion.completeFromSandbox(event, "msg-1", "msg-1", COMPLETED_AT);
+    await h.completion.completeFromSandbox(event, COMPLETED_AT);
 
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
       "failed",
-      COMPLETED_AT
+      COMPLETED_AT,
+      "Agent failed"
     );
     expect(h.callbackService.notifyComplete).toHaveBeenCalledWith("msg-1", false, "Agent failed");
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(false);
@@ -178,7 +181,8 @@ describe("SessionExecutionCompletionService", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
       "failed",
-      COMPLETED_AT
+      COMPLETED_AT,
+      "Execution was stopped"
     );
     expect(h.repository.upsertExecutionCompleteEvent).toHaveBeenCalledWith(
       "msg-1",
@@ -197,38 +201,54 @@ describe("SessionExecutionCompletionService", () => {
       "Execution was stopped"
     );
     expect(h.waitUntil).toHaveBeenCalledTimes(2);
-    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(false);
-  });
-
-  it("suppresses failed status reconciliation while cancellation takes ownership", async () => {
-    const h = createHarness();
-
-    await h.completion.stopProcessingMessage({ suppressStatusReconcile: true });
-
     expect(h.statusService.reconcileAfterExecution).not.toHaveBeenCalled();
   });
 
-  it("finalizes a stuck message and reconciles failure without awaiting projection", async () => {
+  it("finalizes a stuck message without awaiting projection", async () => {
     const h = createHarness();
     h.projection.recordTerminalMessage.mockReturnValue(new Promise<void>(() => {}));
 
     await h.completion.failStuckProcessingMessage();
 
-    expect(h.broadcast.mock.calls).toEqual([
-      [
-        {
-          type: "sandbox_event",
-          event: expect.objectContaining({
-            type: "execution_complete",
-            messageId: "msg-1",
-            success: false,
-            error: "Execution timed out (stuck processing)",
-          }),
-        },
-      ],
-      [{ type: "processing_status", isProcessing: false }],
-    ]);
+    expect(h.broadcast).toHaveBeenCalledWith({
+      type: "sandbox_event",
+      event: expect.objectContaining({
+        type: "execution_complete",
+        messageId: "msg-1",
+        success: false,
+        error: "Execution timed out (stuck processing)",
+      }),
+    });
     expect(h.waitUntil).toHaveBeenCalledTimes(2);
-    expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(false);
+    expect(h.statusService.reconcileAfterExecution).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when no message is processing", async () => {
+    const h = createHarness();
+    h.repository.getProcessingMessageWithCreatedAt.mockReturnValue(null);
+
+    await h.completion.stopProcessingMessage();
+    await h.completion.failStuckProcessingMessage();
+
+    expect(h.repository.updateMessageCompletion).not.toHaveBeenCalled();
+    expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
+    expect(h.broadcast).not.toHaveBeenCalled();
+    expect(h.waitUntil).not.toHaveBeenCalled();
+    expect(h.statusService.reconcileAfterExecution).not.toHaveBeenCalled();
+  });
+
+  it("absorbs callback failures after logging the background error", async () => {
+    const h = createHarness();
+    const callbackError = new Error("callback failed");
+    h.callbackService.notifyComplete.mockRejectedValue(callbackError);
+
+    await h.completion.failStuckProcessingMessage();
+    const results = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+
+    expect(results.every(({ status }) => status === "fulfilled")).toBe(true);
+    expect(h.log.error).toHaveBeenCalledWith("callback.complete.background_error", {
+      message_id: "msg-1",
+      error: callbackError,
+    });
   });
 });

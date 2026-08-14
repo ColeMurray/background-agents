@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { normalizeSlackEvent, SLACK_TEXT_MAX_LENGTH } from "./normalizer";
+import {
+  normalizeSlackEvent,
+  buildSlackContextBlock,
+  slackChannelLabel,
+  SLACK_TEXT_MAX_LENGTH,
+} from "./normalizer";
 
 const baseInput = {
   channel: "C123",
@@ -19,6 +24,7 @@ describe("normalizeSlackEvent", () => {
     expect(event!.eventType).toBe("message.posted");
     expect(event!.channelId).toBe("C123");
     expect(event!.channelName).toBe("ops");
+    expect(event!.permalink).toBe("https://example.slack.com/archives/C123/p1700000000000100");
     expect(event!.actorUserId).toBe("U999");
     expect(event!.ts).toBe("1700000000.000100");
     expect(event!.text).toBe("please deploy the api");
@@ -78,5 +84,38 @@ describe("normalizeSlackEvent", () => {
     const event = normalizeSlackEvent(baseInput, "UBOT");
     expect(event!.channelName).toBeUndefined();
     expect(event!.contextBlock).toContain("C123");
+  });
+
+  describe("context block composition", () => {
+    it("omits thread history at ingress", () => {
+      // History is fetched lazily, after a run is admitted — never here.
+      const event = normalizeSlackEvent({ ...baseInput, thread_ts: "1699999999.000001" }, "UBOT");
+      expect(event!.contextBlock).not.toContain("thread_context");
+    });
+
+    it("places supplied thread context ahead of the triggering message", () => {
+      const block = buildSlackContextBlock({
+        channelLabel: "#ops",
+        actorUserId: "U999",
+        text: "can we do it?",
+        threadContext: "<thread_context>[]</thread_context>",
+      });
+      const threadContextIndex = block.indexOf("<thread_context>");
+      const userContentIndex = block.indexOf("<user_content>");
+      expect(threadContextIndex).toBeGreaterThanOrEqual(0);
+      expect(userContentIndex).toBeGreaterThanOrEqual(0);
+      expect(threadContextIndex).toBeLessThan(userContentIndex);
+    });
+
+    it("reproduces the ingress layout when no thread context is supplied", () => {
+      const event = normalizeSlackEvent(baseInput, "UBOT", { channelName: "ops" });
+      const recomposed = buildSlackContextBlock({
+        channelLabel: slackChannelLabel("C123", "ops"),
+        actorUserId: "U999",
+        text: "please deploy the api",
+      });
+      // The scheduler rebuilds the block from event fields; the two must agree.
+      expect(recomposed).toBe(event!.contextBlock);
+    });
   });
 });

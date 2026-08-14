@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { SECTION_TEXT_MAX_CHARS } from "@open-inspect/shared/slack";
 import { handleSlackNotify } from "./slack-notify";
 import type { RequestContext } from "./shared";
@@ -321,7 +321,7 @@ describe("handleSlackNotify", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("splits a message longer than one section instead of truncating it", async () => {
+  it("splits a long message and lets Slack derive accessible fallback text", async () => {
     seedActiveSession();
     integrationStoreMock.getResolvedConfig.mockResolvedValue({
       enabledRepos: null,
@@ -347,6 +347,7 @@ describe("handleSlackNotify", () => {
     const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body)) as {
       blocks: Array<{ type: string; text?: { text: string } }>;
     };
+    expect(body).not.toHaveProperty("text");
     const sections = body.blocks.filter((b) => b.type === "section");
     expect(sections.length).toBeGreaterThan(1);
     for (const section of sections) {
@@ -397,13 +398,14 @@ describe("handleSlackNotify", () => {
     expect(slackUrl).toContain("chat.postMessage");
     const sentBody = JSON.parse(slackCall[1].body as string) as {
       channel: string;
-      text: string;
+      blocks: Array<{ type: string; text?: { text: string } }>;
     };
     expect(sentBody.channel).toBe("#ops");
-    expect(sentBody.text).not.toContain("<!here>");
-    expect(sentBody.text).not.toContain("<@U999>");
-    expect(sentBody.text).toContain("https://evil");
-    expect(sentBody.text).not.toContain("|github.com>");
+    const sentText = sentBody.blocks.find((block) => block.type === "section")?.text?.text ?? "";
+    expect(sentText).not.toContain("<!here>");
+    expect(sentText).not.toContain("<@U999>");
+    expect(sentText).toContain("https://evil");
+    expect(sentText).not.toContain("|github.com>");
   });
 
   it("returns the success envelope (no events emitted) and logs attribution on success", async () => {
@@ -542,7 +544,7 @@ describe("handleSlackNotify", () => {
       settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
     });
     mockSlackResponse({ body: { ok: true, channel: "C01ABC", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
 
     await callHandler({ channel: "C01ABC", text: "hi" });
 
@@ -559,7 +561,7 @@ describe("handleSlackNotify", () => {
       settings: { agentNotificationsEnabled: true, mentionsPolicy: "allow" },
     });
     mockSlackResponse({ body: { ok: true, channel: "C123", ts: "1.2" } });
-    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p" } });
+    mockSlackResponse({ body: { ok: true, permalink: "https://x.slack.com/p", channel: "C1" } });
 
     await callHandler({ channel: "#ops", text: "hi" });
 

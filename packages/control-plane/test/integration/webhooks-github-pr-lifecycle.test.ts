@@ -4,10 +4,10 @@ import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionPullRequestStore } from "../../src/db/session-pull-request-store";
 import type { SessionPullRequestRecord } from "../../src/db/session-pull-request-store";
 import { cleanD1Tables } from "./cleanup";
-import { initNamedSession, queryDO, serviceFetch } from "./helpers";
+import { initNamedSessionDO, queryDO, serviceFetch } from "./helpers";
 
 async function createIndexedSession(sessionName: string) {
-  const { stub } = await initNamedSession(sessionName);
+  const { stub } = await initNamedSessionDO(sessionName);
   await new SessionIndexStore(env.DB).create({
     id: sessionName,
     title: null,

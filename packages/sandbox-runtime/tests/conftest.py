@@ -28,11 +28,12 @@ def isolate_runtime_file_paths(tmp_path, monkeypatch):
     manifest_path = str(tmp_path / "oi-repo-manifest.json")
     boot_warnings_path = str(tmp_path / "oi-boot-warnings.jsonl")
     tunnel_env_path = str(tmp_path / ".tunnels.env")
-    monkeypatch.setattr("sandbox_runtime.entrypoint.REPO_MANIFEST_FILE_PATH", manifest_path)
+    monkeypatch.setattr("sandbox_runtime.repository_boot.REPO_MANIFEST_FILE_PATH", manifest_path)
     monkeypatch.setattr("sandbox_runtime.bridge.REPO_MANIFEST_FILE_PATH", manifest_path)
-    monkeypatch.setattr("sandbox_runtime.entrypoint.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
+    monkeypatch.setattr("sandbox_runtime.boot_warnings.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
+    monkeypatch.setattr("sandbox_runtime.supervisor.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
     monkeypatch.setattr("sandbox_runtime.bridge.BOOT_WARNINGS_FILE_PATH", boot_warnings_path)
-    monkeypatch.setattr("sandbox_runtime.entrypoint.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
+    monkeypatch.setattr("sandbox_runtime.tunnel_environment.TUNNEL_ENV_FILE_PATH", tunnel_env_path)
 
 
 def wire_opencode_transport(bridge: "AgentBridge", http_client: Any) -> Any:
@@ -71,3 +72,16 @@ class MockResponse:
                 request=httpx.Request("GET", "http://test"),
                 response=httpx.Response(self.status_code),
             )
+
+
+def oc_message_id(timestamp_ms: int, counter: int, suffix: str = "a") -> str:
+    """Build a valid OpenCode ascending message ID at a chosen creation point.
+
+    Mirrors OpenCodeIdentifier's format: ``msg_`` + 12 hex chars encoding
+    ``timestamp_ms * 0x1000 + counter`` + 14 base62 chars. Deterministic
+    inputs let boundary tests place IDs immediately before, at, or after a
+    prompt's user message instead of relying on ad-hoc strings that happen
+    to compare in the desired order.
+    """
+    encoded = (timestamp_ms * 0x1000 + counter) & 0xFFFFFFFFFFFF
+    return "msg_" + encoded.to_bytes(6, byteorder="big").hex() + (suffix * 14)[:14]

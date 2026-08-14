@@ -3,7 +3,7 @@ import type { Env } from "../types";
 import { createSourceControlProviderFromEnv, type SourceControlProvider } from "../source-control";
 
 /** A repository resolved for one firing: access checked, branch defaulted. */
-export interface ResolvedAutomationRepository {
+interface ResolvedAutomationRepository {
   repoOwner: string;
   repoName: string;
   // Access-checked at resolution, so always present (unlike the stored

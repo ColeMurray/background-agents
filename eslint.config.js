@@ -75,7 +75,6 @@ export default tseslint.config(
                 "generateInternalToken",
                 "verifyCallbackSignature",
                 "verifyCallbackFromControlPlane",
-                "verifyInternalToken",
               ],
               message: "Import auth-owned names from @open-inspect/shared/auth.",
             },

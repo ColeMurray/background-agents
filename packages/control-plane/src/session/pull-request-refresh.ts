@@ -10,7 +10,7 @@
  * and per-artifact failures — and the caller broadcasts and logs them.
  */
 
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import type { SessionPullRequestStore } from "../db/session-pull-request-store";
 import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
 import {
@@ -29,7 +29,7 @@ export interface PullRequestRefreshRepository {
 }
 
 /** A per-artifact problem from a refresh pass; the caller decides logging. */
-export interface PullRequestRefreshFailure {
+interface PullRequestRefreshFailure {
   artifactId: string;
   reason: "not_refreshable" | "provider_read_failed" | "record_write_failed";
   prNumber?: number;

@@ -1,8 +1,8 @@
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
-import type { SandboxEvent } from "../types";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -137,6 +137,19 @@ export class SessionSandboxEventProcessor {
       return;
     }
 
+    if (event.type === "context_compacted") {
+      const eventId = generateId();
+      this.repository.createContextCompactionEvent({
+        id: eventId,
+        type: event.type,
+        data: JSON.stringify(event),
+        messageId: event.messageId,
+        createdAt: now,
+      });
+      this.messenger.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
     if (event.type === "step_start" || event.type === "step_finish") {
       this.updateLastActivity(now);
       if (
@@ -184,15 +197,16 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "execution_complete") {
-      const completionMessageId = messageId;
-      await this.executionCompletion.completeFromSandbox(
-        event,
-        completionMessageId,
-        processingMessage?.id ?? null,
-        now
-      );
+      await this.executionCompletion.completeFromSandbox(event, now);
 
-      this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
+      this.ctx.waitUntil(
+        this.triggerSnapshot("execution_complete").catch((error) => {
+          this.log.error("snapshot.trigger.background_error", {
+            reason: "execution_complete",
+            error,
+          });
+        })
+      );
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();

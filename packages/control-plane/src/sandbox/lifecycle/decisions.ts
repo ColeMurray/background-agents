@@ -9,7 +9,7 @@
  * then executes the appropriate side effects (API calls, broadcasts, etc.)
  */
 
-import type { SandboxStatus } from "../../types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
 // ==================== Dead-Sandbox Policy ====================
 
@@ -20,11 +20,7 @@ import type { SandboxStatus } from "../../types";
  * through to their own checks (e.g. token comparison) instead of locking out
  * every sandbox.
  */
-export const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set([
-  "stopped",
-  "stale",
-  "failed",
-]);
+const DEAD_SANDBOX_STATUSES: ReadonlySet<SandboxStatus> = new Set(["stopped", "stale", "failed"]);
 
 export function isDeadSandboxStatus(status: SandboxStatus): boolean {
   return DEAD_SANDBOX_STATUSES.has(status);

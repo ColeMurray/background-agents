@@ -87,6 +87,7 @@ describe("unified route consumption", () => {
       scope_id: "env-1",
       provider: "modal",
       status: "ready",
+      repositories_fingerprint: "fp-env",
       repository_shas: "[]",
       runtime_version: "60",
       build_duration_seconds: 10,
@@ -103,6 +104,17 @@ describe("unified route consumption", () => {
       "/image-builds/status?scope_kind=environment&scope_id=env-1"
     );
     await expect(response.json()).resolves.toEqual({ images: [readyRow] });
+  });
+
+  it("returns 502 when the unified status response omits images", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(Response.json({}));
+
+    const response = await getEnvironmentStatus(request, params);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({
+      error: "Failed to fetch environment image status",
+    });
   });
 
   it("trigger posts to the unified environment trigger route", async () => {
