@@ -31,7 +31,6 @@ async function parseGitHubTokenResponse(response: Response): Promise<GitHubToken
 export interface GitHubOAuthConfig {
   clientId: string;
   clientSecret: string;
-  encryptionKey: string;
 }
 
 /**
