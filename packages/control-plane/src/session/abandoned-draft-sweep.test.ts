@@ -144,12 +144,33 @@ describe("AbandonedDraftSweep", () => {
 });
 
 describe("SessionDraftExpiryClient", () => {
+  const fetches: Array<{ url: string; init: RequestInit }> = [];
+
   function createSessions(response: Response): DurableObjectNamespace {
+    fetches.length = 0;
     return {
       idFromName: vi.fn(() => "do-id"),
-      get: vi.fn(() => ({ fetch: vi.fn(async () => response) })),
+      get: vi.fn(() => ({
+        fetch: vi.fn(async (url: string, init: RequestInit) => {
+          fetches.push({ url, init });
+          return response;
+        }),
+      })),
     } as unknown as DurableObjectNamespace;
   }
+
+  it("bounds each request so one stalled session cannot hold up the sweep", async () => {
+    const client = new SessionDraftExpiryClient(
+      createSessions(Response.json({ outcome: "archived" }))
+    );
+
+    await client.expireDraft("session-1");
+
+    expect(fetches[0].init).toMatchObject({
+      method: "POST",
+      signal: expect.any(AbortSignal),
+    });
+  });
 
   it("returns the outcome the session reported", async () => {
     const client = new SessionDraftExpiryClient(

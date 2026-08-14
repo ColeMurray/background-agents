@@ -34,6 +34,14 @@ export const ABANDONED_DRAFT_TTL_MS = 8 * 60 * 60 * 1000;
 export const ABANDONED_DRAFT_SWEEP_LIMIT = 50;
 
 /**
+ * Bound on a single expiry request. The sweep awaits the whole batch, so one
+ * stalled session would otherwise hold up everything the caller does next. An
+ * abort arrives through the same rejection path as any other failure and is
+ * counted as errored, leaving the session for a later sweep.
+ */
+export const ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS = 10_000;
+
+/**
  * The full outcome set of `/internal/expire-draft`. Validated at the boundary so
  * protocol drift surfaces as an error rather than being miscounted as routine
  * maintenance.
@@ -70,6 +78,7 @@ export class SessionDraftExpiryClient implements DraftExpiryClient {
     const stub = this.sessions.get(this.sessions.idFromName(sessionId));
     const response = await stub.fetch(buildSessionInternalUrl(SessionInternalPaths.expireDraft), {
       method: "POST",
+      signal: AbortSignal.timeout(ABANDONED_DRAFT_EXPIRY_TIMEOUT_MS),
     });
 
     if (!response.ok) {
