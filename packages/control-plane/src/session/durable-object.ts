@@ -1291,13 +1291,14 @@ export class SessionDO extends DurableObject<Env> {
     try {
       const data = this.parseWebSocketMessage(message, "client", clientMessageSchema);
       if (!data) {
-        const invalidPrompt = this.readInvalidPrompt(message);
+        const invalidRequest = this.readInvalidCorrelatedRequest(message);
         this.safeSend(ws, {
           type: "error",
-          code: invalidPrompt ? "INVALID_PROMPT" : "INVALID_MESSAGE",
-          message: invalidPrompt ? "Invalid prompt" : "Failed to process message",
-          ...(invalidPrompt?.clientRequestId
-            ? { clientRequestId: invalidPrompt.clientRequestId }
+          code: invalidRequest?.type === "prompt" ? "INVALID_PROMPT" : "INVALID_MESSAGE",
+          message:
+            invalidRequest?.type === "prompt" ? "Invalid prompt" : "Failed to process message",
+          ...(invalidRequest?.clientRequestId
+            ? { clientRequestId: invalidRequest.clientRequestId }
             : {}),
         });
         return;
@@ -1319,6 +1320,10 @@ export class SessionDO extends DurableObject<Env> {
       switch (data.type) {
         case "prompt":
           await this.handlePromptMessage(ws, client, data);
+          break;
+
+        case "cancel_prompt":
+          await this.messageQueue.cancelQueuedPrompt(ws, data);
           break;
 
         case "stop":
@@ -1377,14 +1382,18 @@ export class SessionDO extends DurableObject<Env> {
     return result.data;
   }
 
-  private readInvalidPrompt(message: string): { clientRequestId?: string } | null {
+  private readInvalidCorrelatedRequest(
+    message: string
+  ): { type: "prompt" | "cancel_prompt"; clientRequestId?: string } | null {
     try {
       const raw = JSON.parse(message) as unknown;
       if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
       const candidate = raw as Record<string, unknown>;
-      if (candidate.type !== "prompt") return null;
+      if (candidate.type !== "prompt" && candidate.type !== "cancel_prompt") return null;
       const clientRequestId = clientRequestIdSchema.safeParse(candidate.clientRequestId);
-      return clientRequestId.success ? { clientRequestId: clientRequestId.data } : {};
+      return clientRequestId.success
+        ? { type: candidate.type, clientRequestId: clientRequestId.data }
+        : { type: candidate.type };
     } catch {
       return null;
     }

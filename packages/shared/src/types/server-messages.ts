@@ -11,6 +11,7 @@ export const promptQueueItemSchema = z.object({
   messageId: z.string(),
   content: z.string(),
   status: z.enum(["pending", "processing"]),
+  canCancel: z.boolean().optional(),
 });
 export type PromptQueueItem = z.infer<typeof promptQueueItemSchema>;
 
@@ -130,6 +131,11 @@ const serverMessageUnionSchema = z.discriminatedUnion("type", [
     clientRequestId: clientRequestIdSchema,
     messageId: z.string(),
     position: z.number().int().positive().nullable(),
+  }),
+  z.object({
+    type: z.literal("prompt_cancelled"),
+    clientRequestId: clientRequestIdSchema,
+    messageId: z.string(),
   }),
   z.object({
     type: z.literal("prompt_queue_updated"),

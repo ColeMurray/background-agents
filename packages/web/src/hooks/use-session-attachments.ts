@@ -143,6 +143,8 @@ export function useSessionAttachments() {
     setAttachments([]);
   }, []);
 
+  const hasAttachments = useCallback(() => attachmentsRef.current.length > 0, []);
+
   /**
    * Upload all pending attachments and return the references to send with the
    * prompt. Throws (with a user-readable message) if any upload fails; the
@@ -250,6 +252,7 @@ export function useSessionAttachments() {
     addFiles,
     removeAttachment,
     clearAttachments,
+    hasAttachments,
     uploadAll,
   };
 }

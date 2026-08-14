@@ -64,6 +64,7 @@ import {
   reconcileSessionReadState,
   SessionReadRequestError,
 } from "@/lib/session-read-state";
+import { restoreQueuedPrompt } from "@/lib/restore-queued-prompt";
 import { useSessionSnapshot } from "./session-snapshot-provider";
 
 type SessionState = ReturnType<typeof useSessionSocket>["sessionState"];
@@ -89,6 +90,7 @@ export default function SessionPage() {
     promptQueue,
     loadingHistory,
     sendPrompt,
+    cancelPrompt,
     stopExecution,
     sendTyping,
     reconnect,
@@ -121,9 +123,11 @@ export default function SessionPage() {
     inputRef,
     isSubmitting,
     submitError,
+    setSubmitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
+    restorePrompt,
   } = usePromptInput(
     sessionId,
     sendPrompt,
@@ -132,6 +136,37 @@ export default function SessionPage() {
     reasoningEffort,
     loadingEnabledModels,
     sessionState?.status ?? "created"
+  );
+  const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
+  const cancellingPromptIdsRef = useRef(new Set<string>());
+  const handleRemoveQueuedPrompt = useCallback(
+    async (messageId: string) => {
+      if (cancellingPromptIdsRef.current.has(messageId)) return;
+      const queuedPrompt = promptQueue.find((item) => item.messageId === messageId);
+      if (!queuedPrompt || queuedPrompt.status !== "pending") return;
+
+      cancellingPromptIdsRef.current.add(messageId);
+      setCancellingPromptIds(new Set(cancellingPromptIdsRef.current));
+      try {
+        const result = await cancelPrompt(messageId);
+        if (!result.ok) {
+          const message =
+            result.message ??
+            (result.reason === "timeout"
+              ? "Removing the queued prompt timed out"
+              : result.reason === "disconnected"
+                ? "Reconnect before removing a queued prompt"
+                : "The queued prompt could not be removed");
+          setSubmitError(message);
+          return;
+        }
+        restorePrompt(queuedPrompt.content);
+      } finally {
+        cancellingPromptIdsRef.current.delete(messageId);
+        setCancellingPromptIds(new Set(cancellingPromptIdsRef.current));
+      }
+    },
+    [cancelPrompt, promptQueue, restorePrompt, setSubmitError]
   );
 
   const [selectedMediaArtifactId, setSelectedMediaArtifactId] = useState<string | null>(null);
@@ -307,7 +342,11 @@ export default function SessionPage() {
           )}
         </PanelGroup>
       </div>
-      <QueuedPromptStack promptQueue={promptQueue} />
+      <QueuedPromptStack
+        promptQueue={promptQueue}
+        cancellingPromptIds={cancellingPromptIds}
+        onRemove={handleRemoveQueuedPrompt}
+      />
       <SessionPromptComposer
         session={{
           id: sessionId,
@@ -667,6 +706,7 @@ function usePromptInput(
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
+  const hasAttachments = sessionAttachments.hasAttachments;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
@@ -674,6 +714,8 @@ function usePromptInput(
   const attachmentDraftSignature = sessionAttachments.attachments
     .map((attachment) => attachment.id)
     .join("\u0000");
+  const promptRef = useRef(prompt);
+  promptRef.current = prompt;
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
@@ -746,6 +788,7 @@ function usePromptInput(
       }
 
       retryRequestRef.current = null;
+      promptRef.current = "";
       setPrompt("");
       sessionAttachments.clearAttachments();
       // Revalidate sidebar so this session bubbles to the top
@@ -766,6 +809,7 @@ function usePromptInput(
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    promptRef.current = e.target.value;
     setPrompt(e.target.value);
     setSubmitError(null);
     retryRequestRef.current = null;
@@ -777,14 +821,31 @@ function usePromptInput(
     }, 300);
   };
 
+  const restorePrompt = useCallback(
+    (content: string) => {
+      const restored = restoreQueuedPrompt({
+        content,
+        currentPrompt: promptRef.current,
+        hasAttachments: hasAttachments(),
+        setPrompt,
+        input: inputRef.current,
+      });
+      if (restored) promptRef.current = content;
+      return restored;
+    },
+    [hasAttachments]
+  );
+
   return {
     prompt,
     sessionAttachments,
     inputRef,
     isSubmitting,
     submitError,
+    setSubmitError,
     handleSubmit,
     handleInputChange,
     handleKeyDown,
+    restorePrompt,
   };
 }

@@ -277,7 +277,10 @@ export class SessionRepository {
   constructor(
     private readonly sql: SqlStorage,
     private readonly transactionSync: TransactionSync,
-    private readonly attachments: Pick<SessionAttachmentRepository, "claimForMessage">
+    private readonly attachments: Pick<
+      SessionAttachmentRepository,
+      "claimForMessage" | "releaseForMessage"
+    >
   ) {}
 
   private rows<T>(result: SqlResult): T[] {
@@ -877,7 +880,39 @@ export class SessionRepository {
       messageId: message.id,
       content: message.content,
       status: message.status as "pending" | "processing",
+      canCancel: message.source === "web" && message.callback_context === null,
     }));
+  }
+
+  cancelPendingMessage(messageId: string): boolean {
+    return this.transactionSync(() => {
+      const result = this.sql.exec(
+        `SELECT status, source, callback_context FROM messages WHERE id = ?`,
+        messageId
+      );
+      const message = (
+        result.toArray() as Array<{
+          status: MessageStatus;
+          source: string;
+          callback_context: string | null;
+        }>
+      )[0];
+      if (
+        message?.status !== "pending" ||
+        message.source !== "web" ||
+        message.callback_context !== null
+      ) {
+        return false;
+      }
+
+      this.attachments.releaseForMessage(messageId);
+      const deleted = this.sql.exec(
+        `DELETE FROM messages WHERE id = ? AND status = 'pending'`,
+        messageId
+      );
+      deleted.toArray();
+      return deleted.rowsWritten === 1;
+    });
   }
 
   getMessageCallbackContext(

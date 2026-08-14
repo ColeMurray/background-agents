@@ -607,6 +607,190 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
+  it("cancels a pending prompt, releases attachments, broadcasts, and frees its slot", async () => {
+    const name = `ws-client-cancel-prompt-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const [{ id: participantId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    const now = Date.now();
+    for (let index = 0; index < MAX_UNFINISHED_PROMPTS; index++) {
+      await seedMessage(stub, {
+        id: `message-${index}`,
+        authorId: participantId,
+        content: `Prompt ${index}`,
+        source: "web",
+        status: "pending",
+        createdAt: now + index,
+      });
+    }
+    await queryDO(
+      stub,
+      `INSERT INTO attachments
+         (id, mime_type, size_bytes, object_key, message_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      "attachment-1",
+      "image/png",
+      100,
+      "sessions/test/attachment-1",
+      "message-0",
+      now
+    );
+
+    const watcher = await openClientWs(name, { subscribe: true, userId: "watcher" });
+    const requester = await openClientWs(name, { subscribe: true, userId: "requester" });
+    const clientRequestId = crypto.randomUUID();
+    const requesterMessages = collectMessages(requester.ws, {
+      until: (message) => message.type === "prompt_cancelled",
+      timeoutMs: 2000,
+    });
+    const watcherMessages = collectMessages(watcher.ws, {
+      until: (message) =>
+        message.type === "prompt_queue_updated" &&
+        !(message.promptQueue as Array<{ messageId: string }>).some(
+          (item) => item.messageId === "message-0"
+        ),
+      timeoutMs: 2000,
+    });
+
+    requester.ws.send(
+      JSON.stringify({ type: "cancel_prompt", messageId: "message-0", clientRequestId })
+    );
+
+    expect(
+      (await requesterMessages).find((message) => message.type === "prompt_cancelled")
+    ).toMatchObject({ clientRequestId, messageId: "message-0" });
+    const queueUpdate = (await watcherMessages).find(
+      (message) => message.type === "prompt_queue_updated"
+    ) as { promptQueue: Array<{ messageId: string }> };
+    expect(queueUpdate.promptQueue.map((item) => item.messageId)).not.toContain("message-0");
+    expect(await queryDO(stub, "SELECT id FROM messages WHERE id = ?", "message-0")).toEqual([]);
+    expect(
+      await queryDO(stub, "SELECT message_id FROM attachments WHERE id = ?", "attachment-1")
+    ).toEqual([{ message_id: null }]);
+
+    const enqueueRequestId = crypto.randomUUID();
+    const enqueued = collectMessages(requester.ws, {
+      until: (message) => message.type === "prompt_queued",
+      timeoutMs: 2000,
+    });
+    requester.ws.send(
+      JSON.stringify({
+        type: "prompt",
+        clientRequestId: enqueueRequestId,
+        content: "Replacement prompt",
+      })
+    );
+    expect((await enqueued).find((message) => message.type === "prompt_queued")).toMatchObject({
+      clientRequestId: enqueueRequestId,
+    });
+
+    requester.ws.close();
+    watcher.ws.close();
+  });
+
+  it("rejects cancellation when the prompt is already processing", async () => {
+    const name = `ws-client-cancel-processing-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const [{ id: participantId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "message-processing",
+      authorId: participantId,
+      content: "Already running",
+      source: "web",
+      status: "processing",
+      createdAt: Date.now(),
+      startedAt: Date.now(),
+    });
+    const { ws } = await openClientWs(name, { subscribe: true });
+    const clientRequestId = crypto.randomUUID();
+    const rejected = collectMessages(ws, {
+      until: (message) => message.type === "error",
+      timeoutMs: 2000,
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "cancel_prompt",
+        messageId: "message-processing",
+        clientRequestId,
+      })
+    );
+
+    expect((await rejected).find((message) => message.type === "error")).toMatchObject({
+      code: "PROMPT_NOT_CANCELLABLE",
+      clientRequestId,
+    });
+    expect(
+      await queryDO<{ status: string }>(
+        stub,
+        "SELECT status FROM messages WHERE id = ?",
+        "message-processing"
+      )
+    ).toEqual([{ status: "processing" }]);
+    ws.close();
+  });
+
+  it("does not allow web clients to cancel integration-owned prompts", async () => {
+    const name = `ws-client-cancel-integration-${Date.now()}`;
+    const { stub } = await initNamedSession(name);
+    const [{ id: participantId }] = await queryDO<{ id: string }>(
+      stub,
+      "SELECT id FROM participants LIMIT 1"
+    );
+    await seedMessage(stub, {
+      id: "message-linear",
+      authorId: participantId,
+      content: "Reply in Linear",
+      source: "linear",
+      status: "pending",
+      createdAt: Date.now(),
+    });
+    await queryDO(
+      stub,
+      "UPDATE messages SET source = 'web', callback_context = ? WHERE id = ?",
+      JSON.stringify({ channel: "C1", threadTs: "1.0" }),
+      "message-linear"
+    );
+    const { ws, messages } = await openClientWs(name, { subscribe: true });
+    const subscribed = messages.find((message) => message.type === "subscribed") as {
+      promptQueue: Array<{ messageId: string; canCancel?: boolean }>;
+    };
+    expect(subscribed.promptQueue).toContainEqual(
+      expect.objectContaining({ messageId: "message-linear", canCancel: false })
+    );
+    const clientRequestId = crypto.randomUUID();
+    const rejected = collectMessages(ws, {
+      until: (message) => message.type === "error",
+      timeoutMs: 2000,
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "cancel_prompt",
+        messageId: "message-linear",
+        clientRequestId,
+      })
+    );
+
+    expect((await rejected).find((message) => message.type === "error")).toMatchObject({
+      code: "PROMPT_NOT_CANCELLABLE",
+      clientRequestId,
+    });
+    expect(
+      await queryDO<{ status: string }>(
+        stub,
+        "SELECT status FROM messages WHERE id = ?",
+        "message-linear"
+      )
+    ).toEqual([{ status: "pending" }]);
+    ws.close();
+  });
+
   it.each([
     ["blank", "  \n"],
     ["oversized", "x".repeat(64_001)],

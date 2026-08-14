@@ -177,6 +177,13 @@ describe("session view contracts", () => {
       })
     ).toMatchObject({ position: null });
     expect(
+      serverMessageSchema.parse({
+        type: "prompt_cancelled",
+        clientRequestId: "request-cancel",
+        messageId: "message-1",
+      })
+    ).toMatchObject({ clientRequestId: "request-cancel", messageId: "message-1" });
+    expect(
       serverMessageSchema.safeParse({
         type: "prompt_queued",
         messageId: "message-1",

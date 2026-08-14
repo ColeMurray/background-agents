@@ -620,6 +620,23 @@ describe("boundary schemas", () => {
       );
     });
 
+    it("parses correlated queued prompt cancellation", () => {
+      expect(
+        clientMessageSchema.parse({
+          type: "cancel_prompt",
+          messageId: "message-1",
+          clientRequestId: "request-1",
+        })
+      ).toMatchObject({ messageId: "message-1", clientRequestId: "request-1" });
+      expect(
+        clientMessageSchema.safeParse({
+          type: "cancel_prompt",
+          messageId: "",
+          clientRequestId: "request-1",
+        }).success
+      ).toBe(false);
+    });
+
     it("rejects invalid prompt request correlation identifiers", () => {
       expect(
         clientMessageSchema.safeParse({ type: "prompt", content: "Continue", clientRequestId: "" })

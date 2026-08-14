@@ -62,6 +62,7 @@ interface UseSessionSocketReturn {
     attachments?: SessionAttachmentReference[],
     clientRequestId?: string
   ) => Promise<QueuePromptResult>;
+  cancelPrompt: (messageId: string) => Promise<CancelPromptResult>;
   stopExecution: () => void;
   sendTyping: () => void;
   reconnect: () => void;
@@ -75,6 +76,10 @@ type QueuePromptResult =
       reason: "rejected" | "disconnected" | "timeout";
       message?: string;
     };
+
+type CancelPromptResult =
+  | { ok: true; messageId: string }
+  | { ok: false; reason: "rejected" | "disconnected" | "timeout"; message?: string };
 
 /**
  * Session view over a WebSocket connection, composed from four layers:
@@ -104,6 +109,16 @@ export function useSessionSocket(
     resolve: (result: QueuePromptResult) => void;
     timeout: ReturnType<typeof setTimeout>;
   } | null>(null);
+  const pendingCancellationsRef = useRef(
+    new Map<
+      string,
+      {
+        messageId: string;
+        resolve: (result: CancelPromptResult) => void;
+        timeout: ReturnType<typeof setTimeout>;
+      }
+    >()
+  );
   const {
     sandboxAccess,
     clear: clearSandboxAccess,
@@ -125,6 +140,23 @@ export function useSessionSocket(
     pendingPromptRef.current = null;
     pending.resolve(result);
   }, []);
+
+  const settleCancellation = useCallback((clientRequestId: string, result: CancelPromptResult) => {
+    const pending = pendingCancellationsRef.current.get(clientRequestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    pendingCancellationsRef.current.delete(clientRequestId);
+    pending.resolve(result);
+  }, []);
+
+  const settleAllCancellations = useCallback(
+    (result: CancelPromptResult) => {
+      for (const [clientRequestId] of pendingCancellationsRef.current) {
+        settleCancellation(clientRequestId, result);
+      }
+    },
+    [settleCancellation]
+  );
 
   useEffect(() => {
     subscribedRef.current = state.ready;
@@ -162,6 +194,13 @@ export function useSessionSocket(
         if (pending && message.clientRequestId === pending.clientRequestId) {
           settlePendingPrompt({ ok: false, reason: "rejected", message: message.message });
         }
+        if (message.clientRequestId) {
+          settleCancellation(message.clientRequestId, {
+            ok: false,
+            reason: "rejected",
+            message: message.message,
+          });
+        }
       } else if (message.type === "prompt_queued") {
         const pending = pendingPromptRef.current;
         if (pending && message.clientRequestId === pending.clientRequestId) {
@@ -170,6 +209,14 @@ export function useSessionSocket(
             clientRequestId: pending.clientRequestId,
             messageId: message.messageId,
             position: message.position,
+          });
+        }
+      } else if (message.type === "prompt_cancelled") {
+        const pendingCancellation = pendingCancellationsRef.current.get(message.clientRequestId);
+        if (pendingCancellation?.messageId === message.messageId) {
+          settleCancellation(message.clientRequestId, {
+            ok: true,
+            messageId: message.messageId,
           });
         }
       }
@@ -186,15 +233,16 @@ export function useSessionSocket(
         mutate(key);
       }
     },
-    [clearSandboxAccess, refreshSandboxAccess, sessionId, settlePendingPrompt]
+    [clearSandboxAccess, refreshSandboxAccess, sessionId, settleCancellation, settlePendingPrompt]
   );
 
   const handleClose = useCallback(() => {
     subscribedRef.current = false;
     settleSubscriptionWaiters(false);
     settlePendingPrompt({ ok: false, reason: "disconnected" });
+    settleAllCancellations({ ok: false, reason: "disconnected" });
     dispatch({ type: "socket_closed" });
-  }, [settlePendingPrompt, settleSubscriptionWaiters]);
+  }, [settleAllCancellations, settlePendingPrompt, settleSubscriptionWaiters]);
 
   const transport = useSessionTransport(sessionId, {
     onMessage: handleMessage,
@@ -211,8 +259,9 @@ export function useSessionSocket(
     () => () => {
       settleSubscriptionWaiters(false);
       settlePendingPrompt({ ok: false, reason: "disconnected" });
+      settleAllCancellations({ ok: false, reason: "disconnected" });
     },
-    [settlePendingPrompt, settleSubscriptionWaiters]
+    [settleAllCancellations, settlePendingPrompt, settleSubscriptionWaiters]
   );
 
   const waitForSubscription = useCallback((): Promise<boolean> => {
@@ -305,6 +354,24 @@ export function useSessionSocket(
     send({ type: "stop" });
   }, [isOpen, send]);
 
+  const cancelPrompt = useCallback(
+    async (messageId: string): Promise<CancelPromptResult> => {
+      if (!isOpen() || !(await waitForSubscription()) || !isOpen()) {
+        return { ok: false, reason: "disconnected" };
+      }
+
+      const clientRequestId = crypto.randomUUID();
+      return new Promise<CancelPromptResult>((resolve) => {
+        const timeout = setTimeout(() => {
+          settleCancellation(clientRequestId, { ok: false, reason: "timeout" });
+        }, PROMPT_ACK_TIMEOUT_MS);
+        pendingCancellationsRef.current.set(clientRequestId, { messageId, resolve, timeout });
+        send({ type: "cancel_prompt", messageId, clientRequestId });
+      });
+    },
+    [isOpen, send, settleCancellation, waitForSubscription]
+  );
+
   const sendTyping = useCallback(() => {
     if (!isOpen() || !subscribedRef.current) {
       return;
@@ -350,6 +417,7 @@ export function useSessionSocket(
     hasMoreHistory,
     loadingHistory,
     sendPrompt,
+    cancelPrompt,
     stopExecution,
     sendTyping,
     reconnect,

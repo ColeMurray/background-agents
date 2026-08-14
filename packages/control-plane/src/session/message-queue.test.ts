@@ -130,6 +130,7 @@ function buildQueue() {
     createEvent: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 1),
     getMessageByClientRequestId: vi.fn(() => null as MessageRow | null),
+    cancelPendingMessage: vi.fn(() => false),
     getUnfinishedMessagePosition: vi.fn((): number | null => 1),
     listUnfinishedMessages: vi.fn((): MessageRow[] => []),
     listPromptQueue: vi.fn(() => []),
@@ -183,6 +184,7 @@ function buildQueue() {
   const sessionStatus = {
     transition: vi.fn(async (_status: string) => true),
     reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
+    reconcileAfterQueueRemoval: vi.fn(async () => {}),
   };
   const sandboxLifecycle = {
     spawnSandbox: vi.fn(async () => {}),
@@ -231,6 +233,56 @@ function buildQueue() {
 }
 
 describe("SessionMessageQueue", () => {
+  it("cancels a pending prompt and confirms it to the requester", async () => {
+    const h = buildQueue();
+    h.repository.cancelPendingMessage.mockReturnValue(true);
+    const ws = {} as WebSocket;
+
+    await h.queue.cancelQueuedPrompt(ws, {
+      messageId: "msg-1",
+      clientRequestId: "request-1",
+    });
+
+    expect(h.repository.cancelPendingMessage).toHaveBeenCalledWith("msg-1");
+    expect(h.wsManager.send).toHaveBeenCalledWith(ws, {
+      type: "prompt_cancelled",
+      clientRequestId: "request-1",
+      messageId: "msg-1",
+    });
+    expect(h.broadcast).toHaveBeenCalledWith({ type: "prompt_queue_updated", promptQueue: [] });
+    expect(h.sessionStatus.reconcileAfterQueueRemoval).toHaveBeenCalledOnce();
+  });
+
+  it("rejects cancellation after a prompt leaves pending state", async () => {
+    const h = buildQueue();
+    const ws = {} as WebSocket;
+
+    await h.queue.cancelQueuedPrompt(ws, {
+      messageId: "msg-1",
+      clientRequestId: "request-1",
+    });
+
+    expect(h.wsManager.send).toHaveBeenCalledWith(ws, {
+      type: "error",
+      code: "PROMPT_NOT_CANCELLABLE",
+      message: "This prompt is no longer pending and cannot be removed",
+      clientRequestId: "request-1",
+    });
+    expect(h.broadcast).not.toHaveBeenCalled();
+  });
+
+  it("reconciles session status after removing a prompt", async () => {
+    const h = buildQueue();
+    h.repository.cancelPendingMessage.mockReturnValue(true);
+
+    await h.queue.cancelQueuedPrompt({} as WebSocket, {
+      messageId: "msg-1",
+      clientRequestId: "request-1",
+    });
+
+    expect(h.sessionStatus.reconcileAfterQueueRemoval).toHaveBeenCalledOnce();
+  });
+
   it("spawns sandbox when queue has work but no sandbox socket", async () => {
     const h = buildQueue();
     h.repository.getNextPendingMessage.mockReturnValue(createMessage());

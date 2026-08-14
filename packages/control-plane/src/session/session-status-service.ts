@@ -110,6 +110,12 @@ export class SessionStatusService {
     await this.transition(nextStatus);
   }
 
+  async reconcileAfterQueueRemoval(): Promise<void> {
+    if (this.repository.getPendingOrProcessingCount() > 0) return;
+    const latestMessage = this.repository.getLatestTerminalMessage();
+    await this.transition(latestMessage?.status === "failed" ? "failed" : "completed");
+  }
+
   /**
    * Fire-and-forget notification to the parent session so its connected
    * clients can refresh the child-sessions list in real time.

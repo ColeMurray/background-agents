@@ -250,6 +250,34 @@ export class SessionMessageQueue {
     await this.processMessageQueue();
   }
 
+  async cancelQueuedPrompt(
+    ws: WebSocket,
+    data: { messageId: string; clientRequestId: string }
+  ): Promise<void> {
+    if (!this.repository.cancelPendingMessage(data.messageId)) {
+      this.wsManager.send(ws, {
+        type: "error",
+        code: "PROMPT_NOT_CANCELLABLE",
+        message: "This prompt is no longer pending and cannot be removed",
+        clientRequestId: data.clientRequestId,
+      });
+      return;
+    }
+
+    this.wsManager.send(ws, {
+      type: "prompt_cancelled",
+      clientRequestId: data.clientRequestId,
+      messageId: data.messageId,
+    });
+    this.broadcastPromptQueue();
+    this.log.info("prompt.cancelled", {
+      event: "prompt.cancelled",
+      message_id: data.messageId,
+    });
+
+    await this.sessionStatus.reconcileAfterQueueRemoval();
+  }
+
   async processMessageQueue(): Promise<void> {
     const currentSession = this.repository.getSession();
     if (!currentSession || !isPromptableSessionStatus(currentSession.status)) {
