@@ -26,6 +26,57 @@ const actions: SessionActionProps = {
 };
 
 describe("SessionHeader", () => {
+  it("lets desktop users hide and show the session details sidebar", () => {
+    const onToggleDesktopDetails = vi.fn();
+    const { rerender } = render(
+      <SessionHeader
+        sessionState={null}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Desktop details" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={onToggleDesktopDetails}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    const hideButton = screen.getByRole("button", { name: "Hide session details" });
+    expect(hideButton).toHaveClass("hidden", "lg:block");
+    expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
+    expect(hideButton).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(hideButton);
+    expect(onToggleDesktopDetails).toHaveBeenCalledOnce();
+
+    rerender(
+      <SessionHeader
+        sessionState={null}
+        fallbackSessionInfo={{ repoOwner: "acme", repoName: "web", title: "Desktop details" }}
+        connected
+        connecting={false}
+        isDetailsOpen={false}
+        isDesktopDetailsOpen={false}
+        detailsButtonRef={createRef<HTMLButtonElement>()}
+        actionsButtonRef={createRef<HTMLButtonElement>()}
+        onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={onToggleDesktopDetails}
+        onOpenMobileDetails={vi.fn()}
+        actions={actions}
+        renameSession={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Show session details" })).toHaveAttribute(
+      "aria-expanded",
+      "false"
+    );
+  });
+
   it("renders no-repository fallback data as loaded while socket state is absent", () => {
     render(
       <SessionHeader
@@ -34,9 +85,11 @@ describe("SessionHeader", () => {
         connected={false}
         connecting={true}
         isDetailsOpen={false}
+        isDesktopDetailsOpen
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={vi.fn()}
+        onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={vi.fn()}
         actions={actions}
         renameSession={vi.fn()}
@@ -58,9 +111,11 @@ describe("SessionHeader", () => {
         connected
         connecting={false}
         isDetailsOpen={false}
+        isDesktopDetailsOpen
         detailsButtonRef={createRef<HTMLButtonElement>()}
         actionsButtonRef={createRef<HTMLButtonElement>()}
         onToggleDetails={onToggleDetails}
+        onToggleDesktopDetails={vi.fn()}
         onOpenMobileDetails={onOpenMobileDetails}
         actions={actions}
         renameSession={vi.fn()}

@@ -6,6 +6,7 @@ import { MobileSessionActions } from "@/components/mobile-session-actions";
 import type { SessionActionProps } from "@/components/session-actions";
 import type { useSessionSocket } from "@/hooks/use-session-socket";
 import { formatRepoLabel } from "@/lib/repo-label";
+import { SidebarIcon } from "@/components/ui/icons";
 
 type SessionSocketState = ReturnType<typeof useSessionSocket>;
 
@@ -31,9 +32,11 @@ export type SessionHeaderProps = {
   connected: boolean;
   connecting: boolean;
   isDetailsOpen: boolean;
+  isDesktopDetailsOpen: boolean;
   detailsButtonRef: RefObject<HTMLButtonElement | null>;
   actionsButtonRef: RefObject<HTMLButtonElement | null>;
   onToggleDetails: () => void;
+  onToggleDesktopDetails: () => void;
   onOpenMobileDetails: () => void;
   actions: SessionActionProps;
   renameSession: (title: string) => Promise<boolean | undefined>;
@@ -45,9 +48,11 @@ export function SessionHeader({
   connected,
   connecting,
   isDetailsOpen,
+  isDesktopDetailsOpen,
   detailsButtonRef,
   actionsButtonRef,
   onToggleDetails,
+  onToggleDesktopDetails,
   onOpenMobileDetails,
   actions,
   renameSession,
@@ -153,6 +158,16 @@ export function SessionHeader({
           </div>
         </div>
         <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={onToggleDesktopDetails}
+            className="hidden rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground lg:block"
+            aria-label={isDesktopDetailsOpen ? "Hide session details" : "Show session details"}
+            aria-controls="session-details-sidebar"
+            aria-expanded={isDesktopDetailsOpen}
+          >
+            <SidebarIcon className="h-4 w-4" />
+          </button>
           <button
             ref={detailsButtonRef}
             type="button"
