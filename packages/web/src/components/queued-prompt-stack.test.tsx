@@ -18,8 +18,8 @@ describe("QueuedPromptStack", () => {
         onRemove={vi.fn()}
         promptQueue={[
           { messageId: "running", content: "Already running", status: "processing" },
-          { messageId: "next", content: "Run next", status: "pending", canCancel: true },
-          { messageId: "later", content: "Run after that", status: "pending", canCancel: true },
+          { messageId: "next", content: "Run next", status: "pending" },
+          { messageId: "later", content: "Run after that", status: "pending" },
         ]}
       />
     );
@@ -48,9 +48,7 @@ describe("QueuedPromptStack", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
-        promptQueue={[
-          { messageId: "next", content: "Run next", status: "pending", canCancel: true },
-        ]}
+        promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
         cancellingPromptIds={new Set(["next"])}
         onRemove={onRemove}
       />
@@ -66,9 +64,7 @@ describe("QueuedPromptStack", () => {
     const onRemove = vi.fn();
     render(
       <QueuedPromptStack
-        promptQueue={[
-          { messageId: "next", content: "Run next", status: "pending", canCancel: true },
-        ]}
+        promptQueue={[{ messageId: "next", content: "Run next", status: "pending" }]}
         cancellingPromptIds={new Set()}
         onRemove={onRemove}
       />
@@ -78,7 +74,8 @@ describe("QueuedPromptStack", () => {
     expect(onRemove).toHaveBeenCalledWith("next");
   });
 
-  it("does not offer removal for prompts owned by callback integrations", () => {
+  it("offers removal for pending prompts whose eligibility is server-owned", () => {
+    const onRemove = vi.fn();
     render(
       <QueuedPromptStack
         promptQueue={[
@@ -86,28 +83,14 @@ describe("QueuedPromptStack", () => {
             messageId: "linear-prompt",
             content: "Reply in Linear",
             status: "pending",
-            canCancel: false,
           },
         ]}
         cancellingPromptIds={new Set()}
-        onRemove={vi.fn()}
+        onRemove={onRemove}
       />
     );
 
-    expect(screen.getByText("Reply in Linear")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Remove queued prompt/ })).not.toBeInTheDocument();
-  });
-
-  it("defaults missing cancellation capability closed", () => {
-    render(
-      <QueuedPromptStack
-        promptQueue={[{ messageId: "legacy", content: "Legacy prompt", status: "pending" }]}
-        cancellingPromptIds={new Set()}
-        onRemove={vi.fn()}
-      />
-    );
-
-    expect(screen.getByText("Legacy prompt")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Remove queued prompt/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove queued prompt: Reply in Linear" }));
+    expect(onRemove).toHaveBeenCalledWith("linear-prompt");
   });
 });

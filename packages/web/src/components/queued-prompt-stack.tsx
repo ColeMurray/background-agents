@@ -28,18 +28,16 @@ export function QueuedPromptStack({
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-secondary-foreground">
                 {prompt.content}
               </p>
-              {prompt.canCancel === true && (
-                <button
-                  type="button"
-                  onClick={() => onRemove(prompt.messageId)}
-                  disabled={cancellingPromptIds.has(prompt.messageId)}
-                  className="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-wait disabled:opacity-50"
-                  aria-label={`Remove queued prompt: ${prompt.content}`}
-                  title="Remove queued prompt"
-                >
-                  <XIcon className="h-4 w-4" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => onRemove(prompt.messageId)}
+                disabled={cancellingPromptIds.has(prompt.messageId)}
+                className="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:cursor-wait disabled:opacity-50"
+                aria-label={`Remove queued prompt: ${prompt.content}`}
+                title="Remove queued prompt"
+              >
+                <XIcon className="h-4 w-4" />
+              </button>
             </li>
           ))}
         </ol>

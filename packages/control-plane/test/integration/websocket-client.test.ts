@@ -798,10 +798,10 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     );
     const { ws, messages } = await openClientWs(name, { subscribe: true });
     const subscribed = messages.find((message) => message.type === "subscribed") as {
-      promptQueue: Array<{ messageId: string; canCancel?: boolean }>;
+      promptQueue: Array<{ messageId: string }>;
     };
     expect(subscribed.promptQueue).toContainEqual(
-      expect.objectContaining({ messageId: "message-linear", canCancel: false })
+      expect.objectContaining({ messageId: "message-linear" })
     );
     const clientRequestId = crypto.randomUUID();
     const rejected = collectMessages(ws, {
