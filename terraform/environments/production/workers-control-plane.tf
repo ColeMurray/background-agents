@@ -209,8 +209,9 @@ module "control_plane_worker" {
   migration_old_tag   = var.control_plane_migration_old_tag
   new_sqlite_classes  = var.control_plane_new_sqlite_classes
 
-  # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts.
-  cron_triggers = ["* * * * *", "7,37 * * * *"]
+  # The image-build schedule must match IMAGE_BUILD_SCHEDULER_CRON in scheduler.ts,
+  # and the draft sweep ABANDONED_DRAFT_SWEEP_CRON in abandoned-draft-sweep.ts.
+  cron_triggers = ["* * * * *", "7,37 * * * *", "23 * * * *"]
 
   depends_on = [
     null_resource.control_plane_build,

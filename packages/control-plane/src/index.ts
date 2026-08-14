@@ -9,6 +9,11 @@ import { createLogger } from "./logger";
 import type { Env } from "./types";
 import { consumeImageBuildFinalizations } from "./image-builds/finalization-consumer";
 import { IMAGE_BUILD_SCHEDULER_CRON, runImageBuildScheduler } from "./image-builds/scheduler";
+import {
+  ABANDONED_DRAFT_SWEEP_CRON,
+  AbandonedDraftSweep,
+  SessionDraftExpiryClient,
+} from "./session/abandoned-draft-sweep";
 import { createRequestMetrics, instrumentD1, type RequestMetrics } from "./db/instrumented-d1";
 import { SessionIndexStore } from "./db/session-index";
 import type { SqlDatabase } from "./db/sql-database";
@@ -50,6 +55,15 @@ export default {
         request_id: requestId,
         trace_id: requestId,
       });
+      return;
+    }
+    if (event.cron === ABANDONED_DRAFT_SWEEP_CRON) {
+      await new AbandonedDraftSweep(
+        // eslint-disable-next-line no-restricted-syntax -- scheduled composition root: the one cron env.DB read
+        new SessionIndexStore(env.DB),
+        new SessionDraftExpiryClient(env.SESSION),
+        logger
+      ).run(Date.now());
       return;
     }
     if (event.cron !== "* * * * *") {

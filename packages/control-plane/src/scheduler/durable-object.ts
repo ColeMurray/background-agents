@@ -48,8 +48,6 @@ import {
   type SlackCompletionContext,
 } from "./slack-completion";
 import { UserStore } from "../db/user-store";
-import { SessionIndexStore } from "../db/session-index";
-import { AbandonedDraftSweep, SessionDraftExpiryClient } from "../session/abandoned-draft-sweep";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -571,14 +569,7 @@ export class SchedulerDO extends DurableObject<Env> {
     // 1. Recovery sweep
     await this.recoverySweep(store);
 
-    // 2. Retire warm sessions that were never prompted.
-    await new AbandonedDraftSweep(
-      new SessionIndexStore(this.db),
-      new SessionDraftExpiryClient(this.env.SESSION),
-      this.log
-    ).run(now);
-
-    // 3. Process overdue automations, bounded by the per-tick child budget.
+    // 2. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
     const [repositoriesByAutomation, environmentsByAutomation] = await Promise.all([
       store.getRepositoriesForAutomationIds(overdue.map((automation) => automation.id)),

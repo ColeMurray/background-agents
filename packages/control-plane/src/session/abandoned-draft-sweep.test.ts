@@ -65,13 +65,14 @@ describe("AbandonedDraftSweep", () => {
     expect(result).toEqual({
       candidates: 2,
       archived: 2,
-      retained: 0,
+      notDraft: 0,
+      hasWork: 0,
       errored: 0,
       truncated: false,
     });
   });
 
-  it("counts sessions the durable object declines to expire", async () => {
+  it("separates the two reasons a session declines to expire", async () => {
     const sweep = new AbandonedDraftSweep(
       createIndex(["archived-one", "started-work", "queued-work"]),
       createClient({ "started-work": "not_draft", "queued-work": "has_work" }),
@@ -82,7 +83,15 @@ describe("AbandonedDraftSweep", () => {
 
     const result = await sweep.run(NOW);
 
-    expect(result).toMatchObject({ candidates: 3, archived: 1, retained: 2, errored: 0 });
+    // The split is the whole point: `not_draft` means a stale index that has now
+    // been repaired, `has_work` means a prompt that never dispatched.
+    expect(result).toMatchObject({
+      candidates: 3,
+      archived: 1,
+      notDraft: 1,
+      hasWork: 1,
+      errored: 0,
+    });
   });
 
   it("isolates a failing session from the rest of the batch", async () => {
@@ -134,7 +143,8 @@ describe("AbandonedDraftSweep", () => {
     expect(result).toEqual({
       candidates: 0,
       archived: 0,
-      retained: 0,
+      notDraft: 0,
+      hasWork: 0,
       errored: 0,
       truncated: false,
     });

@@ -61,10 +61,21 @@ export interface DraftExpiryClient {
   expireDraft(sessionId: string): Promise<DraftExpiryOutcome>;
 }
 
+/**
+ * Own cron rather than the automation tick. Retention is measured in hours, so
+ * riding a per-minute tick meant ~1,440 queries a day to action a handful of
+ * rows — and shared that tick's subrequest budget with automation launches.
+ * Offset from IMAGE_BUILD_SCHEDULER_CRON so the two never fire together.
+ */
+export const ABANDONED_DRAFT_SWEEP_CRON = "23 * * * *";
+
 export interface AbandonedDraftSweepResult {
   candidates: number;
   archived: number;
-  retained: number;
+  /** Session had already left `created`; the index was stale and was repaired. */
+  notDraft: number;
+  /** Session still `created` but holds messages — a prompt that never dispatched. */
+  hasWork: number;
   errored: number;
   /** The query is capped, so a full batch means more remain for the next sweep. */
   truncated: boolean;
@@ -112,7 +123,8 @@ export class AbandonedDraftSweep {
     const empty: AbandonedDraftSweepResult = {
       candidates: 0,
       archived: 0,
-      retained: 0,
+      notDraft: 0,
+      hasWork: 0,
       errored: 0,
       truncated: false,
     };
@@ -137,7 +149,8 @@ export class AbandonedDraftSweep {
     const result: AbandonedDraftSweepResult = {
       candidates: candidates.length,
       archived: 0,
-      retained: 0,
+      notDraft: 0,
+      hasWork: 0,
       errored: 0,
       truncated: candidates.length === this.limit,
     };
@@ -152,8 +165,10 @@ export class AbandonedDraftSweep {
         });
       } else if (outcome.value === "archived") {
         result.archived += 1;
+      } else if (outcome.value === "not_draft") {
+        result.notDraft += 1;
       } else {
-        result.retained += 1;
+        result.hasWork += 1;
       }
     }
 
