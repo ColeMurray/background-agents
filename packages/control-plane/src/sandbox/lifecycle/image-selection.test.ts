@@ -84,8 +84,17 @@ describe("evaluateImageBuildForSpawn", () => {
     });
   });
 
-  it("misses below the runtime floor and fails closed on an unparseable version", async () => {
-    for (const runtimeVersion of ["v55-pre-managed-provider-runtime", "dev", ""]) {
+  it("preserves the v56 compatibility floor", async () => {
+    expect(
+      (
+        await evaluateImageBuildForSpawn(
+          await readyImage({ runtime_version: "v56-managed-provider-runtime" }),
+          SESSION_REPOSITORIES
+        )
+      ).outcome
+    ).toBe("selected");
+
+    for (const runtimeVersion of ["v55-legacy-runtime", "dev", ""]) {
       const image = await readyImage({ runtime_version: runtimeVersion });
 
       expect(await evaluateImageBuildForSpawn(image, SESSION_REPOSITORIES)).toEqual({

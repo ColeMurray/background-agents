@@ -2,12 +2,9 @@
 
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import type { SessionReadAttemptDisposition } from "@/lib/session-read-state";
-import {
-  SESSION_READ_MAX_ATTEMPTS,
-  shouldAttemptMarkMessageRead,
-} from "./terminal-message-read-state";
 
 const SESSION_READ_RETRY_MS = 2_000;
+const SESSION_READ_MAX_ATTEMPTS = 4;
 const MEANINGFUL_VISIBLE_HEIGHT_PX = 48;
 
 export function TerminalMessageReadObserver({
@@ -32,15 +29,13 @@ export function TerminalMessageReadObserver({
 
   const attemptMarkMessageRead = useCallback(async () => {
     if (
-      !shouldAttemptMarkMessageRead({
-        enabled: enabledRef.current,
-        attemptsComplete: attemptsCompleteRef.current,
-        requestInFlight: requestInFlightRef.current,
-        attemptCount: attemptCountRef.current,
-        intersecting: intersectingRef.current,
-        documentVisible: document.visibilityState === "visible",
-        documentFocused: document.hasFocus(),
-      })
+      !enabledRef.current ||
+      attemptsCompleteRef.current ||
+      requestInFlightRef.current ||
+      attemptCountRef.current >= SESSION_READ_MAX_ATTEMPTS ||
+      !intersectingRef.current ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
     ) {
       return;
     }

@@ -5,28 +5,45 @@
  * build-provenance accessor shared by both settings surfaces.
  */
 
-import type {
-  ImageBuildRecordView,
-  ImageBuildScopeKind,
-  ImageBuildStatus,
+import {
+  imageBuildScopeKindSchema,
+  imageBuildStatusResponseSchema,
+  type ImageBuildRecordView,
+  type ImageBuildScopeKind,
+  type ImageBuildStatus,
 } from "@open-inspect/shared/types/image-builds";
+import { z } from "zod";
 
 /** SWR key for the unified image-build feed. */
 export const IMAGE_BUILDS_KEY = "/api/image-builds";
 
 /** One prebuild-enabled scope as served by GET /api/image-builds. */
-export interface ImageBuildUnitView {
-  scopeKind: ImageBuildScopeKind;
-  scopeId: string;
+export const imageBuildUnitViewSchema = z.object({
+  scopeKind: imageBuildScopeKindSchema,
+  scopeId: z.string(),
   /** The scope's current repo-set fingerprint — build rows with any other fingerprint are stale. */
-  repositoriesFingerprint: string;
-}
+  repositoriesFingerprint: z.string(),
+});
+
+export type ImageBuildUnitView = z.infer<typeof imageBuildUnitViewSchema>;
 
 /** One persisted repo prebuild flag as served by GET /api/image-builds. */
-export interface ImageBuildEnabledRepoView {
-  repoOwner: string;
-  repoName: string;
-}
+export const imageBuildEnabledRepoViewSchema = z.object({
+  repoOwner: z.string(),
+  repoName: z.string(),
+});
+
+export type ImageBuildEnabledRepoView = z.infer<typeof imageBuildEnabledRepoViewSchema>;
+
+export const imageBuildsEnabledResponseSchema = z.object({
+  units: z.array(imageBuildUnitViewSchema),
+});
+
+export const imageBuildsEnabledReposResponseSchema = z.object({
+  repos: z.array(imageBuildEnabledRepoViewSchema),
+});
+
+export const imageBuildsStatusResponseSchema = imageBuildStatusResponseSchema;
 
 /**
  * Response shape of GET /api/image-builds.

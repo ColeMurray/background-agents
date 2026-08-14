@@ -14,7 +14,6 @@ function createProvider(): VercelSandboxProvider {
 
 function createPlan(buildTimeoutMs = 1_800_001): ImageBuildPlan {
   return {
-    provider: "vercel",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],

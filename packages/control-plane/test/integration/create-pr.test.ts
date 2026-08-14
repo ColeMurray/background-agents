@@ -451,16 +451,13 @@ describe("POST /internal/create-pr", () => {
       expect(memberRows[0]?.branch_name).not.toBeNull();
       expect(memberRows[1]?.branch_name).toBe(memberRows[0]?.branch_name);
 
-      // The WebSocket session state surfaces each member's own PR URL.
-      const state = await runInDurableObject(stub, (instance: SessionDO) =>
-        (
-          instance as unknown as {
-            getSessionState(): Promise<{
-              repositories: Array<{ repoName: string; prUrl: string | null }>;
-            }>;
-          }
-        ).getSessionState()
-      );
+      // The canonical session snapshot surfaces each member's own PR URL.
+      const snapshot = await (
+        await stub.fetch("http://internal/internal/snapshot")
+      ).json<{
+        session: { repositories: Array<{ repoName: string; prUrl: string | null }> };
+      }>();
+      const state = snapshot.session;
       expect(state.repositories.map((repo) => repo.prUrl)).toEqual([
         "https://github.com/acme/web-app/pull/1",
         "https://github.com/acme/backend/pull/2",

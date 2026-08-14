@@ -14,7 +14,6 @@ function createProvider(): OpenComputerSandboxProvider {
 
 function createPlan(): ImageBuildPlan {
   return {
-    provider: "opencomputer",
     buildId: "build-1",
     scope: { kind: "repo", id: "acme/repo" },
     repositories: [{ repoOwner: "acme", repoName: "repo", baseBranch: "develop" }],

@@ -2,7 +2,7 @@ import {
   callbackContextSchema,
   sendPromptRequestSchema,
   type CallbackContext,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/session-api";
 import {
   MAX_SESSION_ATTACHMENTS_PER_MESSAGE,
   sessionAttachmentReferencesSchema,

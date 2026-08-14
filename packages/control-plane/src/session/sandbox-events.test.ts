@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { SessionSandboxEventProcessor } from "./sandbox-events";
 import type { GitPushSpec } from "../source-control";
-import type { SandboxEvent, ServerMessage } from "../types";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionRepository } from "./repository";
@@ -26,6 +27,7 @@ function createProcessor() {
     updateSandboxHeartbeat: vi.fn(),
     getProcessingMessage,
     upsertTokenEvent: vi.fn(),
+    createContextCompactionEvent: vi.fn(),
     upsertToolCallEvent: vi.fn(),
     createArtifact: vi.fn(),
     createEvent: vi.fn(),
@@ -36,6 +38,7 @@ function createProcessor() {
     updateMessageCompletion: vi.fn(() => {
       getProcessingMessage.mockReturnValue(null);
     }),
+    clearMessageAwaitingStopConfirmation: vi.fn(),
     getMessageTimestamps: vi.fn(
       () => null as { created_at: number; started_at: number | null } | null
     ),
@@ -60,6 +63,7 @@ function createProcessor() {
   const statusService = { reconcileAfterExecution: vi.fn(async (_success: boolean) => {}) };
   const scheduleInactivityCheck = vi.fn(async () => {});
   const processMessageQueue = vi.fn(async () => {});
+  const broadcastPromptQueue = vi.fn();
   const updateLastActivity = vi.fn();
   const recordTerminalMessage = vi.fn(async () => {});
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
@@ -86,6 +90,7 @@ function createProcessor() {
     updateLastActivity,
     scheduleInactivityCheck,
     processMessageQueue,
+    broadcastPromptQueue,
     recordTerminalMessage
   );
 
@@ -100,10 +105,12 @@ function createProcessor() {
     statusService,
     scheduleInactivityCheck,
     processMessageQueue,
+    broadcastPromptQueue,
     updateLastActivity,
     applySessionTitleUpdate,
     waitUntil,
     recordTerminalMessage,
+    log,
   };
 }
 
@@ -123,6 +130,28 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.processMessageQueue).toHaveBeenCalledOnce();
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
+  });
+
+  it("logs when the post-completion snapshot fails", async () => {
+    const h = createProcessor();
+    h.repository.getProcessingMessage.mockReturnValue({ id: "msg-1" });
+    h.repository.getMessageTimestamps.mockReturnValue({ created_at: 1000, started_at: 1100 });
+    h.triggerSnapshot.mockRejectedValue(new Error("snapshot backend down"));
+
+    await h.processor.processSandboxEvent({
+      type: "execution_complete",
+      messageId: "msg-1",
+      success: true,
+      sandboxId: "sb-1",
+      timestamp: 2000,
+    });
+
+    const settled = await Promise.allSettled(h.waitUntil.mock.calls.map(([promise]) => promise));
+    expect(settled.every(({ status }) => status === "fulfilled")).toBe(true);
+    expect(h.log.error).toHaveBeenCalledWith("snapshot.trigger.background_error", {
+      reason: "execution_complete",
+      error: expect.any(Error),
+    });
   });
 
   it("updates heartbeat without broadcasting", async () => {
@@ -186,6 +215,41 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.repository.upsertTokenEvent).toHaveBeenCalledWith("msg-1", event, expect.any(Number));
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
+  });
+
+  it("persists each context compaction marker and broadcasts it", async () => {
+    const h = createProcessor();
+    const event: SandboxEvent = {
+      type: "context_compacted",
+      messageId: "msg-1",
+      sandboxId: "sb-1",
+      timestamp: 1000,
+    };
+
+    await h.processor.processSandboxEvent(event);
+    await h.processor.processSandboxEvent({ ...event, timestamp: 1001 });
+
+    expect(h.repository.createContextCompactionEvent).toHaveBeenCalledTimes(2);
+    expect(h.repository.createContextCompactionEvent).toHaveBeenNthCalledWith(1, {
+      id: expect.any(String),
+      type: "context_compacted",
+      data: JSON.stringify(event),
+      messageId: "msg-1",
+      createdAt: expect.any(Number),
+    });
+    expect(h.repository.createContextCompactionEvent).toHaveBeenNthCalledWith(2, {
+      id: expect.any(String),
+      type: "context_compacted",
+      data: JSON.stringify({ ...event, timestamp: 1001 }),
+      messageId: "msg-1",
+      createdAt: expect.any(Number),
+    });
+    expect(h.broadcast).toHaveBeenNthCalledWith(1, { type: "sandbox_event", event });
+    expect(h.broadcast).toHaveBeenNthCalledWith(2, {
+      type: "sandbox_event",
+      event: { ...event, timestamp: 1001 },
+    });
+    expect(h.updateLastActivity).not.toHaveBeenCalled();
   });
 
   it("persists artifact events into artifacts and broadcasts both channels", async () => {
@@ -341,7 +405,8 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-1",
       "completed",
-      expect.any(Number)
+      expect.any(Number),
+      null
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-1",
@@ -350,6 +415,7 @@ describe("SessionSandboxEventProcessor", () => {
     });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
+    expect(h.broadcastPromptQueue).toHaveBeenCalledOnce();
     expect(h.statusService.reconcileAfterExecution).toHaveBeenCalledWith(true);
     expect(h.triggerSnapshot).toHaveBeenCalledWith("execution_complete");
     expect(h.scheduleInactivityCheck).toHaveBeenCalledTimes(1);
@@ -370,6 +436,7 @@ describe("SessionSandboxEventProcessor", () => {
 
     expect(h.recordTerminalMessage).not.toHaveBeenCalled();
     expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
+    expect(h.repository.clearMessageAwaitingStopConfirmation).toHaveBeenCalledWith("msg-1");
   });
 
   it("projects a failed sandbox completion", async () => {
@@ -389,7 +456,8 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.repository.updateMessageCompletion).toHaveBeenCalledWith(
       "msg-failed",
       "failed",
-      expect.any(Number)
+      expect.any(Number),
+      "Agent failed"
     );
     expect(h.recordTerminalMessage).toHaveBeenCalledWith({
       messageId: "msg-failed",
@@ -775,6 +843,7 @@ describe("SessionSandboxEventProcessor", () => {
         type: "ack",
         ackId: "execution_complete:msg-1",
       });
+      expect(h.repository.upsertExecutionCompleteEvent).not.toHaveBeenCalled();
     });
 
     it("does not send ACK for non-critical events even with ackId", async () => {

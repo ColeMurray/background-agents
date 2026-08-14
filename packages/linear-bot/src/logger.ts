@@ -9,7 +9,6 @@ import { createLogger as _createLogger, type LogLevel } from "@open-inspect/shar
 import type { Logger } from "@open-inspect/shared/logger";
 export type { Logger } from "@open-inspect/shared/logger";
 export type { LogLevel } from "@open-inspect/shared/logger";
-export { parseLogLevel } from "@open-inspect/shared/logger";
 
 const SERVICE_NAME = "linear-bot";
 

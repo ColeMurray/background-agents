@@ -57,7 +57,7 @@ export interface UserMergeOptions {
   readonly dryRun?: boolean;
 }
 
-export interface UserMergeCounts {
+interface UserMergeCounts {
   identitiesDeduped: number;
   identitiesRepointed: number;
   readStatesDeduped: number;

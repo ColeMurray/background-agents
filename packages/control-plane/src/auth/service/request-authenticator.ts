@@ -7,7 +7,7 @@ import {
   verifyServiceSignature,
   type ServiceName,
 } from "@open-inspect/shared/service-auth";
-import { readBodyCapped } from "@open-inspect/shared";
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import { TOKEN_VALIDITY_MS } from "@open-inspect/shared/auth";
 import { UserStore } from "../../db/user-store";
 import { createLogger } from "../../logger";

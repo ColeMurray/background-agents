@@ -1,8 +1,8 @@
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { generateId } from "../auth/crypto";
 import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
-import type { SandboxEvent } from "../types";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -52,6 +52,7 @@ export class SessionSandboxEventProcessor {
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
     private readonly processMessageQueue: () => Promise<void>,
+    private readonly broadcastPromptQueue: () => void,
     private readonly recordTerminalMessage: (input: TerminalMessageProjectionInput) => Promise<void>
   ) {}
 
@@ -139,6 +140,19 @@ export class SessionSandboxEventProcessor {
       return;
     }
 
+    if (event.type === "context_compacted") {
+      const eventId = generateId();
+      this.repository.createContextCompactionEvent({
+        id: eventId,
+        type: event.type,
+        data: JSON.stringify(event),
+        messageId: event.messageId,
+        createdAt: now,
+      });
+      this.messenger.broadcast({ type: "sandbox_event", event });
+      return;
+    }
+
     if (event.type === "step_start" || event.type === "step_finish") {
       this.updateLastActivity(now);
       if (
@@ -193,7 +207,12 @@ export class SessionSandboxEventProcessor {
       if (isStillProcessing) {
         this.repository.upsertExecutionCompleteEvent(completionMessageId, event, now);
         const status = event.success ? "completed" : "failed";
-        this.repository.updateMessageCompletion(completionMessageId, status, now);
+        this.repository.updateMessageCompletion(
+          completionMessageId,
+          status,
+          now,
+          event.success ? null : (event.error ?? null)
+        );
 
         const timestamps = this.repository.getMessageTimestamps(completionMessageId);
         if (timestamps) {
@@ -226,12 +245,16 @@ export class SessionSandboxEventProcessor {
           type: "processing_status",
           isProcessing: this.repository.getProcessingMessage() !== null,
         });
+        this.broadcastPromptQueue();
         this.ctx.waitUntil(
           this.callbackService.notifyComplete(completionMessageId, event.success, event.error)
         );
 
         await this.statusService.reconcileAfterExecution(event.success);
       } else {
+        if (completionMessageId) {
+          this.repository.clearMessageAwaitingStopConfirmation(completionMessageId);
+        }
         this.log.info("prompt.complete", {
           event: "prompt.complete",
           message_id: completionMessageId,
@@ -239,7 +262,14 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.ctx.waitUntil(this.triggerSnapshot("execution_complete"));
+      this.ctx.waitUntil(
+        this.triggerSnapshot("execution_complete").catch((error) => {
+          this.log.error("snapshot.trigger.background_error", {
+            reason: "execution_complete",
+            error,
+          });
+        })
+      );
       this.updateLastActivity(now);
       await this.scheduleInactivityCheck();
       await this.processMessageQueue();

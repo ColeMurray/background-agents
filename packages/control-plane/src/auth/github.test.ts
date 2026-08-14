@@ -8,7 +8,6 @@ describe("github auth", () => {
   const config: GitHubOAuthConfig = {
     clientId: "client-id",
     clientSecret: "client-secret",
-    encryptionKey: "unused",
   };
 
   afterEach(() => {

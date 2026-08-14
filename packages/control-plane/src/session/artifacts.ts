@@ -1,4 +1,8 @@
-import type { ArtifactType } from "../types";
+import type { ArtifactResponse, ArtifactType } from "@open-inspect/shared/types/artifacts";
+
+export type NormalizedArtifactResponse = Omit<ArtifactResponse, "updatedAt"> & {
+  updatedAt: number;
+};
 
 const VALID_ARTIFACT_TYPES = [
   "pr",

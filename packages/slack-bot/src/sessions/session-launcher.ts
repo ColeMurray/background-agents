@@ -1,5 +1,5 @@
-import { getUserInfo, postMessage } from "@open-inspect/shared/slack";
-import type { CallbackContext } from "@open-inspect/shared";
+import { postMessage } from "@open-inspect/shared/slack";
+import type { CallbackContext } from "@open-inspect/shared/types/session-api";
 import { getAvailableModels } from "../app-home/models";
 import {
   notifyDroppedAttachments,
@@ -10,6 +10,7 @@ import { getUserRepoBranchPreference } from "../branch-preferences";
 import { formatChannelContext, formatThreadContext } from "../messages/context";
 import { branchPreferenceRepo, targetLabel, type SlackSessionTarget } from "../targets";
 import type { Env } from "../types";
+import type { SlackActorIdentity } from "../user-identity";
 import { getResolvedUserPreferences } from "../user-preferences";
 import { createSession } from "./control-plane-client";
 import { getSlackSettings } from "../slack-settings";
@@ -21,7 +22,7 @@ export interface StartSessionOptions {
   channel: string;
   threadTs: string;
   messageText: string;
-  userId: string;
+  actor: SlackActorIdentity;
   /**
    * Slack ts of the triggering message. Persisted on the thread mapping so
    * follow-ups can scope interim thread context to newer messages.
@@ -46,7 +47,7 @@ export async function startSessionAndSendPrompt(
     channel,
     threadTs,
     messageText,
-    userId,
+    actor,
     messageTs,
     previousMessages,
     channelName,
@@ -72,7 +73,7 @@ export async function startSessionAndSendPrompt(
     getAvailableModels(env, traceId),
     getSlackSettings(env, traceId),
   ]);
-  const userPrefs = await getResolvedUserPreferences(env, userId, {
+  const userPrefs = await getResolvedUserPreferences(env, actor.userId, {
     defaultModel: slackConfig.defaultModel ?? env.DEFAULT_MODEL,
     enabledModels: availableModels.map((modelOption) => modelOption.value),
   });
@@ -81,24 +82,8 @@ export async function startSessionAndSendPrompt(
   const preferenceRepo = branchPreferenceRepo(target);
   let branch: string | undefined;
   if (preferenceRepo) {
-    const repoBranch = await getUserRepoBranchPreference(env, userId, preferenceRepo.id);
+    const repoBranch = await getUserRepoBranchPreference(env, actor.userId, preferenceRepo.id);
     branch = repoBranch ?? userPrefs.branch;
-  }
-
-  let displayName: string | undefined;
-  let email: string | undefined;
-  try {
-    const userInfo = await getUserInfo(env.SLACK_BOT_TOKEN, userId);
-    if (userInfo.ok) {
-      displayName =
-        userInfo.user.profile?.display_name ||
-        userInfo.user.real_name ||
-        userInfo.user.name ||
-        undefined;
-      email = userInfo.user.profile?.email || undefined;
-    }
-  } catch {
-    // Identity linking is best effort.
   }
 
   const session = await createSession(env, {
@@ -107,9 +92,9 @@ export async function startSessionAndSendPrompt(
     reasoningEffort,
     branch,
     traceId,
-    slackUserId: userId,
-    actorDisplayName: displayName,
-    actorEmail: email,
+    slackUserId: actor.userId,
+    actorDisplayName: actor.displayName,
+    actorEmail: actor.email,
   });
   if (!session) {
     await postMessage(
@@ -138,7 +123,7 @@ export async function startSessionAndSendPrompt(
   const delivery = await deliverPrompt(env, {
     sessionId: session.sessionId,
     content,
-    authorId: `slack:${userId}`,
+    authorId: `slack:${actor.userId}`,
     attachments: preparedImages,
     imageOnly: Boolean(imageOnly),
     callbackContext,

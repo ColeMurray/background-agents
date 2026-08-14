@@ -16,13 +16,13 @@ import {
   DEFAULT_MODEL,
   getReasoningConfig,
   isValidReasoningEffort,
+  resolveEnabledModel,
 } from "@open-inspect/shared/models";
 import { useRepos } from "@/hooks/use-repos";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useBranches } from "@/hooks/use-branches";
 import { useEnabledModels } from "@/hooks/use-enabled-models";
 import { formatModelNameLower } from "@/lib/format";
-import { resolveEnabledModel } from "@/lib/model-selection";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -209,7 +209,10 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
   // is blocked — keeping display, reasoning, and the payload in agreement
   // without relying on a post-load effect.
   const resolvedModel = useMemo(
-    () => (loadingModels ? model : resolveEnabledModel(model, enabledModels)),
+    () =>
+      loadingModels
+        ? model
+        : resolveEnabledModel({ model, enabledModels, fallbackModel: DEFAULT_MODEL }),
     [loadingModels, model, enabledModels]
   );
 
@@ -642,6 +645,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {usesSingleRepository && (
         <div>
           <label
+            id="automation-branch-label"
             htmlFor="automation-branch"
             className="block text-sm font-medium text-foreground mb-1.5"
           >
@@ -649,6 +653,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           </label>
           <Combobox
             id="automation-branch"
+            labelId="automation-branch-label"
             value={baseBranch}
             onChange={setBaseBranch}
             items={branches.map((b) => ({
@@ -679,6 +684,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Model */}
       <div>
         <label
+          id="automation-model-label"
           htmlFor="automation-model"
           className="block text-sm font-medium text-foreground mb-1.5"
         >
@@ -686,6 +692,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
         </label>
         <Combobox
           id="automation-model"
+          labelId="automation-model-label"
           value={resolvedModel}
           onChange={(nextModel) => {
             setModel(nextModel);
@@ -716,7 +723,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-foreground mb-1.5">Reasoning Effort</label>
+        <label
+          htmlFor="automation-reasoning-effort"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Reasoning Effort
+        </label>
         <Select
           value={reasoningConfig ? reasoningEffort || DEFAULT_REASONING_VALUE : ""}
           onValueChange={(value) =>
@@ -724,7 +736,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
           }
           disabled={!reasoningConfig}
         >
-          <SelectTrigger className="w-full">
+          <SelectTrigger id="automation-reasoning-effort" className="w-full">
             <SelectValue
               placeholder={reasoningConfig ? "Use model default" : "Not supported for this model"}
             />
@@ -747,17 +759,25 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Schedule fields (only for schedule type) */}
       {isSchedule && (
         <>
-          <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Schedule</label>
+          <fieldset>
+            <legend className="block text-sm font-medium text-foreground mb-1.5">Schedule</legend>
             <CronPicker value={scheduleCron} onChange={setScheduleCron} timezone={scheduleTz} />
             <FieldDescription>
               How often this automation runs. Use a preset or a five-field cron expression (minute,
               hour, day of month, month, day of week).
             </FieldDescription>
-          </div>
+          </fieldset>
           <div>
-            <label className="block text-sm font-medium text-foreground mb-1.5">Timezone</label>
+            <label
+              id="automation-timezone-label"
+              htmlFor="automation-timezone"
+              className="block text-sm font-medium text-foreground mb-1.5"
+            >
+              Timezone
+            </label>
             <Combobox
+              id="automation-timezone"
+              labelId="automation-timezone-label"
               value={scheduleTz}
               onChange={setScheduleTz}
               items={TIMEZONE_GROUPS}
@@ -785,7 +805,12 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
       {/* Event type selector (for trigger sources with event type support) */}
       {showEventTypeSelector && (
         <div>
-          <label className="block text-sm font-medium text-foreground mb-1.5">Event Type</label>
+          <label
+            htmlFor="automation-event-type"
+            className="block text-sm font-medium text-foreground mb-1.5"
+          >
+            Event Type
+          </label>
           <Select
             value={eventType}
             onValueChange={(value) => {
@@ -793,7 +818,7 @@ export function AutomationForm({ mode, initialValues, onSubmit, submitting }: Au
               if (eventTypeError) setEventTypeError("");
             }}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger id="automation-event-type" className="w-full">
               <SelectValue placeholder={eventTypePlaceholder} />
             </SelectTrigger>
             <SelectContent>

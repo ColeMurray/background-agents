@@ -11,7 +11,7 @@
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
-import type { SessionStatus } from "../types";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
 import type { SessionMessenger } from "./messenger";
@@ -41,9 +41,12 @@ export class SessionStatusService {
 
     const publicSessionId = this.getPublicSessionId(session);
     if (session.status === status) {
-      await this.syncSessionIndexStatus(publicSessionId, status, session.updated_at).catch(
-        (error) =>
-          this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
+      await this.syncSessionIndexStatusAndAdmission(
+        publicSessionId,
+        status,
+        session.updated_at
+      ).catch((error) =>
+        this.logSessionIndexStatusSyncError(publicSessionId, status, session.updated_at, error)
       );
       if (TERMINAL_STATUSES.includes(status)) {
         this.syncSessionMetrics(publicSessionId);
@@ -53,8 +56,37 @@ export class SessionStatusService {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     this.repository.updateSessionStatus(session.id, status, updatedAt);
-    await this.syncSessionIndexStatus(publicSessionId, status, updatedAt).catch((error) =>
-      this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
+    await this.projectTransition(session, publicSessionId, status, updatedAt);
+
+    return true;
+  }
+
+  /**
+   * Atomically close the local aggregate before publishing cancellation.
+   * The callback must be synchronous: no request may observe cancelled status
+   * with unfinished messages, or accept work between those two mutations.
+   */
+  async cancel(terminalizeUnfinishedMessages: () => void): Promise<boolean> {
+    const session = this.repository.getSession();
+    if (!session) return false;
+
+    const publicSessionId = this.getPublicSessionId(session);
+    const updatedAt = Math.max(Date.now(), session.updated_at + 1);
+    this.repository.updateSessionStatus(session.id, "cancelled", updatedAt);
+    terminalizeUnfinishedMessages();
+    await this.projectTransition(session, publicSessionId, "cancelled", updatedAt);
+
+    return true;
+  }
+
+  private async projectTransition(
+    session: SessionRow,
+    publicSessionId: string,
+    status: SessionStatus,
+    updatedAt: number
+  ): Promise<void> {
+    await this.syncSessionIndexStatusAndAdmission(publicSessionId, status, updatedAt).catch(
+      (error) => this.logSessionIndexStatusSyncError(publicSessionId, status, updatedAt, error)
     );
 
     this.messenger.broadcast({ type: "session_status", status });
@@ -65,8 +97,6 @@ export class SessionStatusService {
 
     // Notify parent session (if this is a child) so its UI can refresh
     this.notifyParentOfStatusChange(session, publicSessionId, status);
-
-    return true;
   }
 
   /**
@@ -134,13 +164,16 @@ export class SessionStatusService {
     return session.session_name || session.id || this.ctx.id.toString();
   }
 
-  private async syncSessionIndexStatus(
+  private async syncSessionIndexStatusAndAdmission(
     sessionId: string,
     status: SessionStatus,
     updatedAt: number
   ): Promise<void> {
     if (!this.sessionIndex) return;
-    await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
+    const projected = await this.sessionIndex.updateStatus(sessionId, status, updatedAt);
+    if (projected && status === "active") {
+      await this.sessionIndex.finalizeChildAdmission(sessionId);
+    }
   }
 
   private logSessionIndexStatusSyncError(

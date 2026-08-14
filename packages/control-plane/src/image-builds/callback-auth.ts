@@ -13,7 +13,7 @@ import { computeHmacHex } from "@open-inspect/shared/auth";
 import type { Env } from "../types";
 
 export const IMAGE_BUILD_CALLBACK_TOKEN_TTL_MS = 2 * 60 * 60 * 1000;
-export const IMAGE_BUILD_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const IMAGE_BUILD_CALLBACK_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 
 export function generateImageBuildCallbackToken(): string {
   const bytes = new Uint8Array(32);

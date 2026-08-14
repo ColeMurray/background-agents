@@ -5,6 +5,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useAuthSession } from "@/lib/auth-session";
 import useSWR, { mutate } from "swr";
 import useSWRInfinite from "swr/infinite";
+import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
 import { isInactiveSession } from "@/lib/time";
 import {
   applyTitleUpdate,
@@ -17,7 +18,7 @@ import {
   SESSIONS_PAGE_SIZE,
   type SessionListResponse,
 } from "@/lib/session-list";
-import type { Session } from "@open-inspect/shared";
+import type { Session } from "@open-inspect/shared/types/sessions";
 import {
   markLatestMessageRead,
   reconcileSessionReadState,
@@ -65,7 +66,7 @@ export function useSidebarSessions(currentSessionId: string | null) {
     }
   }, []);
 
-  const sidebarSessionListOptions = useMemo(
+  const sidebarSessionListOptions = useMemo<SessionListQuery>(
     () => ({
       excludeStatus: "archived",
       ...(sessionCreatorFilter === "mine"

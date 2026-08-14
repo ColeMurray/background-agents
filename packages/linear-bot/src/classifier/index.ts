@@ -3,7 +3,11 @@
  * Uses raw Anthropic API (no SDK) to classify which repo an issue belongs to.
  */
 
-import type { Env, RepoConfig, ClassificationResult } from "../types";
+import type {
+  ClassificationResult,
+  RepoConfig,
+} from "@open-inspect/shared/types/repository-catalog";
+import type { Env } from "../types";
 import { z } from "zod";
 import { getAvailableRepos, buildRepoDescriptions } from "./repos";
 import { createLogger } from "../logger";
@@ -19,7 +23,7 @@ export const classifyToolInputSchema = z.object({
   alternatives: z.array(z.string()),
 });
 
-export type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
+type ClassifyToolInput = z.infer<typeof classifyToolInputSchema>;
 
 export const anthropicMessagesResponseSchema = z.object({
   content: z.array(

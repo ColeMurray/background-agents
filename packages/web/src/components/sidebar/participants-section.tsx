@@ -1,12 +1,26 @@
 "use client";
 
-import type { ParticipantPresence } from "@open-inspect/shared";
+import type { ParticipantPresence } from "@open-inspect/shared/types/server-messages";
 
 interface ParticipantsSectionProps {
   participants: ParticipantPresence[];
+  presenceSynced: boolean;
 }
 
-export function ParticipantsSection({ participants }: ParticipantsSectionProps) {
+export function ParticipantsSection({ participants, presenceSynced }: ParticipantsSectionProps) {
+  if (!presenceSynced) {
+    return (
+      <div
+        aria-hidden="true"
+        className="flex h-6 items-center gap-2 animate-pulse"
+        data-testid="participants-skeleton"
+      >
+        <div className="h-6 w-6 rounded-full bg-muted" />
+        <div className="h-4 w-28 rounded bg-muted" />
+      </div>
+    );
+  }
+
   if (participants.length === 0) return null;
 
   const count = participants.length;

@@ -40,7 +40,11 @@ describe("evaluateImageBuildRebuildPolicy", () => {
       reason: "missing_image",
     });
     expect(
-      evaluateImageBuildRebuildPolicy(unit, [row({ runtime_version: "v55-runtime" })], "modal")
+      evaluateImageBuildRebuildPolicy(
+        unit,
+        [row({ runtime_version: "v56-managed-provider-runtime" })],
+        "modal"
+      )
     ).toMatchObject({ type: "rebuild", reason: "runtime_incompatible" });
     expect(
       evaluateImageBuildRebuildPolicy(unit, [row({ repository_shas: "not-json" })], "modal")

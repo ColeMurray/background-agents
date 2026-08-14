@@ -9,7 +9,11 @@
  */
 
 import type { Logger } from "../logger";
-import type { ClientInfo, ServerMessage, ParticipantPresence } from "../types";
+import type {
+  ParticipantPresence,
+  ServerMessage,
+} from "@open-inspect/shared/types/server-messages";
+import type { ClientInfo } from "../types";
 import type { SessionMessenger } from "./messenger";
 
 /**

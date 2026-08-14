@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sandbox_runtime.bridge import FALLBACK_GIT_USER, AgentBridge
+from sandbox_runtime.bridge import AgentBridge
 from sandbox_runtime.git_signing import GitSigningError
 from sandbox_runtime.types import GitUser
 
@@ -158,15 +158,6 @@ class TestGitIdentityConfiguration:
                 "error": "Invalid prompt Git identity",
             }
         )
-
-
-class TestFallbackGitUserConstant:
-    """Tests for the FALLBACK_GIT_USER constant."""
-
-    def test_fallback_identity_values(self):
-        """Fallback should use Open-Inspect noreply identity."""
-        assert FALLBACK_GIT_USER.name == "OpenInspect"
-        assert FALLBACK_GIT_USER.email == "open-inspect@noreply.github.com"
 
 
 class TestConfigureGitIdentity:

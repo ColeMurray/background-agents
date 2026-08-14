@@ -33,8 +33,14 @@ export function SessionDesktopLayout({
         id={SESSION_CHANGES_LAYOUT_ID}
         defaultLayout={defaultLayout}
         onLayoutChanged={onLayoutChanged}
+        style={{ overflow: "clip" }}
       >
-        <Panel id="session-main" defaultSize={changes ? "45%" : "100%"} minSize="25%">
+        <Panel
+          id="session-main"
+          defaultSize={changes ? "45%" : "100%"}
+          minSize="25%"
+          style={{ minWidth: 0, minHeight: 0, overflow: "clip" }}
+        >
           {workspace}
         </Panel>
         {changes && (
@@ -46,7 +52,7 @@ export function SessionDesktopLayout({
           </>
         )}
       </PanelGroup>
-      {!changes && sidebar}
+      {sidebar}
     </>
   );
 }

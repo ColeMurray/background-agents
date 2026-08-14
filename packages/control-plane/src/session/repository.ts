@@ -15,18 +15,18 @@ import type {
   SandboxRow,
   SessionRepositoryRow,
 } from "./types";
-import { toolCallIdentityKey } from "@open-inspect/shared";
+import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SessionStatus,
   SandboxStatus,
-  GitSyncStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
-  ArtifactType,
-  SandboxEvent,
-} from "../types";
+} from "@open-inspect/shared/types/sessions";
+import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
+import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
 import {
   eventTimelineCursorFromRow,
   type EventListCursor,
@@ -41,6 +41,7 @@ type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
+export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
 
 /**
  * WS client mapping result for hibernation recovery.
@@ -87,6 +88,7 @@ export interface UpsertSessionData {
   spawnSource?: SpawnSource;
   spawnDepth?: number;
   codeServerEnabled?: boolean;
+  vncEnabled?: boolean;
   sandboxSettings?: string | null;
   /** Launch environment provenance; null for repo-launched/ad-hoc sessions. */
   environmentId?: string | null;
@@ -161,6 +163,8 @@ export interface CreateMessageData {
   reasoningEffort?: string | null;
   attachments?: string | null;
   callbackContext?: string | null;
+  clientRequestId?: string | null;
+  requestFingerprint?: string | null;
   status: MessageStatus;
   createdAt: number;
 }
@@ -291,8 +295,8 @@ export class SessionRepository {
     }
 
     this.sql.exec(
-      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, sandbox_settings, environment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO session (id, session_name, title, repo_owner, repo_name, repo_id, base_branch, model, reasoning_effort, status, parent_session_id, spawn_source, spawn_depth, code_server_enabled, vnc_enabled, sandbox_settings, environment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.sessionName,
       data.title,
@@ -307,6 +311,7 @@ export class SessionRepository {
       data.spawnSource ?? "user",
       data.spawnDepth ?? 0,
       data.codeServerEnabled ? 1 : 0,
+      data.vncEnabled ? 1 : 0,
       data.sandboxSettings ?? null,
       data.environmentId ?? null,
       data.createdAt,
@@ -511,7 +516,14 @@ export class SessionRepository {
          auth_token_hash = ?,
          auth_token = NULL,
          modal_sandbox_id = ?,
-         modal_object_id = NULL
+         modal_object_id = NULL,
+         code_server_url = NULL,
+         code_server_password = NULL,
+         vnc_url = NULL,
+         vnc_password = NULL,
+         tunnel_urls = NULL,
+         ttyd_url = NULL,
+         ttyd_token = NULL
        WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
       data.status,
       data.createdAt,
@@ -590,6 +602,24 @@ export class SessionRepository {
     this.sql.exec(
       `UPDATE sandbox SET code_server_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
     );
+  }
+
+  updateSandboxVnc(url: string, password: string): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = ?, vnc_password = ? WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
+      url,
+      password
+    );
+  }
+
+  clearSandboxVnc(): void {
+    this.sql.exec(
+      `UPDATE sandbox SET vnc_url = NULL, vnc_password = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`
+    );
+  }
+
+  clearSandboxVncUrl(): void {
+    this.sql.exec(`UPDATE sandbox SET vnc_url = NULL WHERE id = (SELECT id FROM sandbox LIMIT 1)`);
   }
 
   updateSandboxTunnelUrls(urls: Record<string, string>): void {
@@ -762,6 +792,27 @@ export class SessionRepository {
     return rows[0] ?? null;
   }
 
+  getMessageAwaitingStopConfirmation(): { id: string; deadline: number } | null {
+    const result = this.sql.exec(
+      `SELECT id, stop_confirmation_deadline FROM messages
+       WHERE stop_confirmation_deadline IS NOT NULL LIMIT 1`
+    );
+    const row = (result.toArray() as Array<{ id: string; stop_confirmation_deadline: number }>)[0];
+    return row ? { id: row.id, deadline: row.stop_confirmation_deadline } : null;
+  }
+
+  markMessageAwaitingStopConfirmation(messageId: string, deadline: number): void {
+    this.sql.exec(
+      `UPDATE messages SET stop_confirmation_deadline = ? WHERE id = ?`,
+      deadline,
+      messageId
+    );
+  }
+
+  clearMessageAwaitingStopConfirmation(messageId: string): void {
+    this.sql.exec(`UPDATE messages SET stop_confirmation_deadline = NULL WHERE id = ?`, messageId);
+  }
+
   getProcessingMessageWithCreatedAt(): { id: string; created_at: number } | null {
     const result = this.sql.exec(
       `SELECT id, created_at FROM messages WHERE status = 'processing' LIMIT 1`
@@ -780,10 +831,45 @@ export class SessionRepository {
 
   getNextPendingMessage(): MessageRow | null {
     const result = this.sql.exec(
-      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT 1`
+      `SELECT * FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC LIMIT 1`
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
+  }
+
+  getMessageByClientRequestId(clientRequestId: string): MessageRow | null {
+    const result = this.sql.exec(
+      `SELECT * FROM messages WHERE client_request_id = ? LIMIT 1`,
+      clientRequestId
+    );
+    return this.rows<MessageRow>(result)[0] ?? null;
+  }
+
+  getUnfinishedMessagePosition(messageId: string): number | null {
+    const result = this.sql.exec(
+      `SELECT id FROM messages WHERE status IN ('pending', 'processing')
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`
+    );
+    const index = (result.toArray() as Array<{ id: string }>).findIndex(
+      (row) => row.id === messageId
+    );
+    return index < 0 ? null : index + 1;
+  }
+
+  listUnfinishedMessages(): MessageRow[] {
+    const result = this.sql.exec(
+      `SELECT * FROM messages WHERE status IN ('pending', 'processing')
+       ORDER BY CASE status WHEN 'processing' THEN 0 ELSE 1 END, created_at ASC, rowid ASC`
+    );
+    return this.rows<MessageRow>(result);
+  }
+
+  listPromptQueue(): PromptQueueItem[] {
+    return this.listUnfinishedMessages().map((message) => ({
+      messageId: message.id,
+      content: message.content,
+      status: message.status as "pending" | "processing",
+    }));
   }
 
   getMessageCallbackContext(
@@ -802,8 +888,8 @@ export class SessionRepository {
 
   createMessage(data: CreateMessageData): void {
     this.sql.exec(
-      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, author_id, content, source, model, reasoning_effort, attachments, callback_context, client_request_id, request_fingerprint, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       data.id,
       data.authorId,
       data.content,
@@ -812,34 +898,74 @@ export class SessionRepository {
       data.reasoningEffort ?? null,
       data.attachments ?? null,
       data.callbackContext ?? null,
+      data.clientRequestId ?? null,
+      data.requestFingerprint ?? null,
       data.status,
       data.createdAt
     );
   }
 
-  /** Persist a message and claim all referenced attachments in one SQLite transaction. */
-  createMessageWithAttachments(data: CreateMessageData, attachmentIds: string[]): void {
+  /** Persist a message, its attachments, and canonical timeline event atomically. */
+  createMessageWithAttachments(
+    data: CreateMessageData,
+    attachmentIds: string[],
+    event?: CreateEventData
+  ): void {
     this.transactionSync(() => {
       this.attachments.claimForMessage(data.id, attachmentIds);
       this.createMessage(data);
+      if (event) this.createEvent(event);
     });
   }
 
-  updateMessageToProcessing(messageId: string, startedAt: number): void {
+  startMessageProcessing(
+    messageId: string,
+    startedAt: number,
+    userMessageEvent: Extract<SandboxEvent, { type: "user_message" }>
+  ): void {
+    this.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?`,
+        startedAt,
+        messageId
+      );
+      this.createEvent({
+        id: `user_message:${messageId}`,
+        type: "user_message",
+        data: JSON.stringify(userMessageEvent),
+        messageId,
+        createdAt: startedAt,
+      });
+    });
+  }
+
+  updateMessageToPending(messageId: string): void {
     this.sql.exec(
-      `UPDATE messages SET status = 'processing', started_at = ? WHERE id = ?`,
-      startedAt,
+      `UPDATE messages SET status = 'pending', started_at = NULL WHERE id = ? AND status = 'processing'`,
       messageId
     );
   }
 
-  updateMessageCompletion(messageId: string, status: MessageStatus, completedAt: number): void {
+  updateMessageCompletion(
+    messageId: string,
+    status: MessageStatus,
+    completedAt: number,
+    errorMessage: string | null = null
+  ): void {
     this.sql.exec(
-      `UPDATE messages SET status = ?, completed_at = ? WHERE id = ?`,
+      `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
       status,
       completedAt,
+      errorMessage,
       messageId
     );
+  }
+
+  listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
+    const result = this.sql.exec(
+      `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
+    );
+    return result.toArray() as Array<{ id: string; created_at: number }>;
   }
 
   getMessageTimestamps(
@@ -898,6 +1024,17 @@ export class SessionRepository {
       data.messageId,
       data.createdAt
     );
+  }
+
+  createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
+    this.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE events SET id = ? WHERE id = ?`,
+        `token:${data.messageId}:${data.id}`,
+        `token:${data.messageId}`
+      );
+      this.createEvent(data);
+    });
   }
 
   private upsertEventByMessageId<TType extends UpsertableEventType>(
@@ -1014,17 +1151,6 @@ export class SessionRepository {
     return { events: pageEvents, hasMore, nextCursor };
   }
 
-  getEventsForReplay(limit: number): EventRow[] {
-    const result = this.sql.exec(
-      `SELECT * FROM (
-         SELECT * FROM events WHERE type != 'heartbeat'
-         ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?
-       ) sub ORDER BY created_at ASC, timeline_sequence ASC`,
-      limit
-    );
-    return this.rows<EventRow>(result);
-  }
-
   // === ARTIFACTS ===
 
   createArtifact(data: CreateArtifactData): void {
@@ -1083,8 +1209,7 @@ export class SessionRepository {
        WHERE m.ws_id = ?`,
       wsId
     );
-    const rows = this.rows<WsClientMappingResult>(result);
-    return rows[0] ?? null;
+    return this.rows<WsClientMappingResult>(result)[0] ?? null;
   }
 
   hasWsClientMapping(wsId: string): boolean {
