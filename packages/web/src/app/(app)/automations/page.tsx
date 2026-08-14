@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { CollapsedSidebarControls, useSidebarContext } from "@/components/sidebar-layout";
@@ -14,7 +14,7 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
-export default function AutomationsPage() {
+function AutomationsContent() {
   const { isOpen } = useSidebarContext();
   const pathname = usePathname();
   const router = useRouter();
@@ -164,5 +164,19 @@ export default function AutomationsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function AutomationsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="h-full flex items-center justify-center">
+          <div className="animate-spin rounded-full h-6 w-6 border-2 border-current border-t-transparent text-muted-foreground" />
+        </div>
+      }
+    >
+      <AutomationsContent />
+    </Suspense>
   );
 }
