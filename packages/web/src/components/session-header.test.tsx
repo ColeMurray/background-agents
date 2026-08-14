@@ -65,7 +65,7 @@ describe("SessionHeader", () => {
     );
 
     const hideButton = screen.getByRole("button", { name: "Hide session details" });
-    const connectedStatus = screen.getByText("Connected");
+    const connectedStatus = screen.getByRole("status", { name: "Connection status: Connected" });
     expect(hideButton).toHaveClass("hidden", "lg:block");
     expect(hideButton).toHaveAttribute("aria-controls", "session-details-sidebar");
     expect(hideButton).toHaveAttribute("aria-expanded", "true");
@@ -185,7 +185,7 @@ describe("SessionHeader", () => {
     expect(onToggleDetails).not.toHaveBeenCalled();
   });
 
-  it("renders separate mobile status icons and reveals the connection label on hover", async () => {
+  it("renders separate status icons and reveals the connection label on hover", async () => {
     render(
       <SessionHeader
         sessionState={createSessionState()}
@@ -206,7 +206,7 @@ describe("SessionHeader", () => {
     );
 
     const connection = screen.getByRole("status", { name: "Connection status: Connected" });
-    expect(connection.parentElement).toHaveClass("md:hidden");
+    expect(connection.parentElement).not.toHaveClass("md:hidden");
     expect(connection).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("button", { name: "Sandbox status: Ready" })).toBeInTheDocument();
 

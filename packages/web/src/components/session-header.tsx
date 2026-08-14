@@ -246,16 +246,9 @@ export function SessionHeader({
             onOpenDetails={onOpenMobileDetails}
             onOpenMedia={onOpenMobileDetails}
           />
-          <div className="flex items-center gap-1 md:hidden">
-            <MobileConnectionStatus connected={connected} connecting={connecting} />
-            <MobileSandboxStatus
-              status={sessionState?.sandboxStatus}
-              dashboardUrl={sessionState?.sandboxDashboardUrl}
-            />
-          </div>
-          <div className="hidden md:contents">
-            <ConnectionStatus connected={connected} connecting={connecting} />
-            <SandboxStatus
+          <div className="flex items-center gap-1">
+            <ConnectionStatusIcon connected={connected} connecting={connecting} />
+            <SandboxStatusIcon
               status={sessionState?.sandboxStatus}
               dashboardUrl={sessionState?.sandboxDashboardUrl}
             />
@@ -278,68 +271,7 @@ export function SessionHeader({
   );
 }
 
-function ConnectionStatus({ connected, connecting }: { connected: boolean; connecting: boolean }) {
-  if (connecting) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-warning">
-        <span className="w-2 h-2 rounded-full bg-warning animate-pulse" />
-        Connecting...
-      </span>
-    );
-  }
-
-  if (connected) {
-    return (
-      <span className="flex items-center gap-1 text-xs text-success">
-        <span className="w-2 h-2 rounded-full bg-success" />
-        Connected
-      </span>
-    );
-  }
-
-  return (
-    <span className="flex items-center gap-1 text-xs text-destructive">
-      <span className="w-2 h-2 rounded-full bg-destructive" />
-      Disconnected
-    </span>
-  );
-}
-
-function SandboxStatus({
-  status,
-  dashboardUrl,
-}: {
-  status?: SandboxStatusValue;
-  dashboardUrl?: string | null;
-}) {
-  if (!status) return null;
-
-  const presentation = SANDBOX_STATUS_PRESENTATION[status];
-  const className = `text-xs ${presentation.color}`;
-  const label = `Sandbox: ${status}`;
-  const safeDashboardUrl = getSafeExternalUrl(dashboardUrl);
-
-  if (safeDashboardUrl) {
-    return (
-      <a
-        href={safeDashboardUrl}
-        target="_blank"
-        rel="noreferrer noopener"
-        title="Open sandbox in provider dashboard"
-        className={`${className} hover:underline`}
-      >
-        {label}
-        <span aria-hidden="true" className="ml-0.5">
-          {"\u2197"}
-        </span>
-      </a>
-    );
-  }
-
-  return <span className={className}>{label}</span>;
-}
-
-function MobileConnectionStatus({
+function ConnectionStatusIcon({
   connected,
   connecting,
 }: {
@@ -371,7 +303,7 @@ function MobileConnectionStatus({
   );
 }
 
-function MobileSandboxStatus({
+function SandboxStatusIcon({
   status,
   dashboardUrl,
 }: {
