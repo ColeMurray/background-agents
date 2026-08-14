@@ -1,0 +1,177 @@
+import { describe, expect, it, vi } from "vitest";
+import {
+  AbandonedDraftSweep,
+  SessionDraftExpiryClient,
+  type AbandonedDraftIndex,
+  type DraftExpiryClient,
+  type DraftExpiryOutcome,
+} from "./abandoned-draft-sweep";
+import type { Logger } from "../logger";
+
+const NOW = 1_000_000_000;
+const TTL_MS = 8 * 60 * 60 * 1000;
+
+function createLog(): Logger {
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as unknown as Logger;
+}
+
+function createIndex(ids: string[] | Error): AbandonedDraftIndex {
+  return {
+    listAbandonedDraftSessionIds: vi.fn(async () => {
+      if (ids instanceof Error) throw ids;
+      return ids;
+    }),
+  };
+}
+
+function createClient(
+  outcomes: Record<string, DraftExpiryOutcome | Error> = {}
+): DraftExpiryClient {
+  return {
+    expireDraft: vi.fn(async (sessionId: string) => {
+      const outcome = outcomes[sessionId] ?? "archived";
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    }),
+  };
+}
+
+describe("AbandonedDraftSweep", () => {
+  it("queries candidates against the ttl cutoff", async () => {
+    const index = createIndex([]);
+    const sweep = new AbandonedDraftSweep(index, createClient(), createLog(), TTL_MS, 50);
+
+    await sweep.run(NOW);
+
+    expect(index.listAbandonedDraftSessionIds).toHaveBeenCalledWith(NOW - TTL_MS, 50);
+  });
+
+  it("archives every candidate the session confirms", async () => {
+    const sweep = new AbandonedDraftSweep(
+      createIndex(["a", "b"]),
+      createClient(),
+      createLog(),
+      TTL_MS,
+      50
+    );
+
+    const result = await sweep.run(NOW);
+
+    expect(result).toEqual({
+      candidates: 2,
+      archived: 2,
+      retained: 0,
+      errored: 0,
+      truncated: false,
+    });
+  });
+
+  it("counts sessions the durable object declines to expire", async () => {
+    const sweep = new AbandonedDraftSweep(
+      createIndex(["archived-one", "started-work", "queued-work"]),
+      createClient({ "started-work": "not_draft", "queued-work": "has_work" }),
+      createLog(),
+      TTL_MS,
+      50
+    );
+
+    const result = await sweep.run(NOW);
+
+    expect(result).toMatchObject({ candidates: 3, archived: 1, retained: 2, errored: 0 });
+  });
+
+  it("isolates a failing session from the rest of the batch", async () => {
+    const log = createLog();
+    const sweep = new AbandonedDraftSweep(
+      createIndex(["healthy", "broken"]),
+      createClient({ broken: new Error("unreachable") }),
+      log,
+      TTL_MS,
+      50
+    );
+
+    const result = await sweep.run(NOW);
+
+    expect(result).toMatchObject({ candidates: 2, archived: 1, errored: 1 });
+    expect(log.warn).toHaveBeenCalledWith(
+      "Abandoned draft expiry failed",
+      expect.objectContaining({ session_id: "broken" })
+    );
+  });
+
+  it("reports truncation when the batch fills, so a backlog is visible", async () => {
+    const sweep = new AbandonedDraftSweep(
+      createIndex(["a", "b"]),
+      createClient(),
+      createLog(),
+      TTL_MS,
+      2
+    );
+
+    const result = await sweep.run(NOW);
+
+    expect(result.truncated).toBe(true);
+  });
+
+  it("gives up the sweep without touching sessions when the query fails", async () => {
+    const log = createLog();
+    const client = createClient();
+    const sweep = new AbandonedDraftSweep(
+      createIndex(new Error("d1 unavailable")),
+      client,
+      log,
+      TTL_MS,
+      50
+    );
+
+    const result = await sweep.run(NOW);
+
+    expect(result).toEqual({
+      candidates: 0,
+      archived: 0,
+      retained: 0,
+      errored: 0,
+      truncated: false,
+    });
+    expect(client.expireDraft).not.toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalled();
+  });
+});
+
+describe("SessionDraftExpiryClient", () => {
+  function createSessions(response: Response): DurableObjectNamespace {
+    return {
+      idFromName: vi.fn(() => "do-id"),
+      get: vi.fn(() => ({ fetch: vi.fn(async () => response) })),
+    } as unknown as DurableObjectNamespace;
+  }
+
+  it("returns the outcome the session reported", async () => {
+    const client = new SessionDraftExpiryClient(
+      createSessions(Response.json({ outcome: "has_work", status: "created" }))
+    );
+
+    await expect(client.expireDraft("session-1")).resolves.toBe("has_work");
+  });
+
+  it("rejects an outcome outside the documented contract", async () => {
+    const client = new SessionDraftExpiryClient(
+      createSessions(Response.json({ outcome: "deleted" }))
+    );
+
+    await expect(client.expireDraft("session-1")).rejects.toThrow(/unrecognized outcome/);
+  });
+
+  it("rejects a non-ok response", async () => {
+    const client = new SessionDraftExpiryClient(
+      createSessions(new Response("nope", { status: 500 }))
+    );
+
+    await expect(client.expireDraft("session-1")).rejects.toThrow(/status 500/);
+  });
+});

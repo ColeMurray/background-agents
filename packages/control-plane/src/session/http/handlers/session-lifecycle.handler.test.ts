@@ -891,7 +891,20 @@ describe("createSessionLifecycleHandler", () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ outcome: "not_draft", status: "active" });
-    expect(transition).not.toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalledWith("archived");
+  });
+
+  it("repairs a stale index rather than re-selecting the session forever", async () => {
+    // A session reaches this branch when the index still reads `created` while
+    // the durable object has moved on — the shape left behind by a swallowed D1
+    // projection failure. Re-projecting is what stops the sweep looping on it.
+    const { handler, getSession, transition } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "archived" }));
+
+    const response = await handler.expireDraft();
+
+    expect(await response.json()).toEqual({ outcome: "not_draft", status: "archived" });
+    expect(transition).toHaveBeenCalledWith("archived");
   });
 
   it("returns 404 when expiring a missing session", async () => {

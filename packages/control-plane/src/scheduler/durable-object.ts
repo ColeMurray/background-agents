@@ -49,7 +49,7 @@ import {
 } from "./slack-completion";
 import { UserStore } from "../db/user-store";
 import { SessionIndexStore } from "../db/session-index";
-import { buildSessionInternalUrl, SessionInternalPaths } from "../session/contracts";
+import { AbandonedDraftSweep, SessionDraftExpiryClient } from "../session/abandoned-draft-sweep";
 import { createRequestMetrics } from "../db/instrumented-d1";
 import { generateId } from "../auth/crypto";
 import { createLogger, parseLogLevel } from "../logger";
@@ -92,21 +92,6 @@ const AUTO_PAUSE_THRESHOLD = 3;
 
 /** Max runs to recover per sweep type per tick (backpressure). */
 const RECOVERY_SWEEP_LIMIT = 50;
-
-/**
- * How long a warm session may sit unprompted before the sweep archives it.
- * Long enough that an author still composing is implausible — the sandbox's
- * own inactivity timeout is minutes, and it is recoverable where this is not.
- */
-const ABANDONED_DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Max drafts to expire per tick (backpressure); a backlog drains over ticks.
- * Each one costs a single subrequest to its Durable Object, so a full batch sits
- * well inside the per-invocation budget alongside TICK_CHILD_LAUNCH_BUDGET.
- * Steady state is a handful per day — the cap only matters for an initial backlog.
- */
-const ABANDONED_DRAFT_SWEEP_LIMIT = 50;
 
 /**
  * How far back the finalization sweep scans invocations for missed failure
@@ -587,7 +572,11 @@ export class SchedulerDO extends DurableObject<Env> {
     await this.recoverySweep(store);
 
     // 2. Retire warm sessions that were never prompted.
-    await this.expireAbandonedDrafts(now);
+    await new AbandonedDraftSweep(
+      new SessionIndexStore(this.db),
+      new SessionDraftExpiryClient(this.env.SESSION),
+      this.log
+    ).run(now);
 
     // 3. Process overdue automations, bounded by the per-tick child budget.
     const overdue = await store.getOverdueAutomations(now, MAX_PER_TICK);
@@ -669,82 +658,6 @@ export class SchedulerDO extends DurableObject<Env> {
     return new Response(JSON.stringify({ processed, skipped, failed }), {
       headers: { "Content-Type": "application/json" },
     });
-  }
-
-  // ─── Abandoned draft sweep ───────────────────────────────────────────────
-
-  /**
-   * Archive warm sessions that were never prompted.
-   *
-   * The web client already archives an abandoned draft when the composer's
-   * target changes or its tab is closed; it cannot cover the case where the
-   * page is simply navigated away from or the browser is closed. Those rows
-   * would otherwise stay `created` forever, since only an enqueued prompt
-   * advances that status and only a finished execution reaches a terminal one.
-   *
-   * Deliberately not hung off sandbox termination: the sandbox's inactivity
-   * timeout can fire while an author is still composing (the composer holds no
-   * socket to the warm session), and stopping the sandbox is recoverable where
-   * a terminal status is not. This clock is measured in hours instead.
-   *
-   * Each candidate is confirmed inside its own Durable Object before the
-   * transition — see the `expireDraft` handler.
-   */
-  private async expireAbandonedDrafts(now: number): Promise<void> {
-    const sessionStore = new SessionIndexStore(this.db);
-    let candidates: string[];
-    try {
-      candidates = await sessionStore.listAbandonedDraftSessionIds(
-        now - ABANDONED_DRAFT_TTL_MS,
-        ABANDONED_DRAFT_SWEEP_LIMIT
-      );
-    } catch (error) {
-      this.log.error("Abandoned draft sweep failed to query candidates", {
-        event: "scheduler.abandoned_draft_sweep_query_failed",
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
-
-    if (candidates.length === 0) return;
-
-    const outcomes = await Promise.allSettled(
-      candidates.map((sessionId) => this.expireDraftSession(sessionId))
-    );
-
-    let archived = 0;
-    let retained = 0;
-    let errored = 0;
-    for (const outcome of outcomes) {
-      if (outcome.status === "rejected") errored += 1;
-      else if (outcome.value === "archived") archived += 1;
-      else retained += 1;
-    }
-
-    this.log.info("Abandoned draft sweep completed", {
-      event: "scheduler.abandoned_draft_sweep",
-      candidates: candidates.length,
-      archived,
-      retained,
-      errored,
-      // The query is capped, so a full batch means more remain for the next tick.
-      truncated: candidates.length === ABANDONED_DRAFT_SWEEP_LIMIT,
-    });
-  }
-
-  /** Ask a session's DO to retire itself; it re-checks the draft invariant. */
-  private async expireDraftSession(sessionId: string): Promise<"archived" | "retained"> {
-    const stub = this.env.SESSION.get(this.env.SESSION.idFromName(sessionId));
-    const response = await stub.fetch(buildSessionInternalUrl(SessionInternalPaths.expireDraft), {
-      method: "POST",
-    });
-
-    if (!response.ok) {
-      throw new Error(`Draft expiry failed with status ${response.status}`);
-    }
-
-    const body = (await response.json()) as { outcome?: string };
-    return body.outcome === "archived" ? "archived" : "retained";
   }
 
   // ─── Recovery sweep ──────────────────────────────────────────────────────

@@ -455,6 +455,12 @@ export function createSessionLifecycleHandler(
       }
 
       if (session.status !== "created") {
+        // Reaching here means the index still reads `created` while this session
+        // has moved on — which is exactly what happens when an earlier
+        // transition's D1 projection failed (they are logged and swallowed).
+        // Re-projecting the current status repairs the mirror, so the row stops
+        // being selected instead of being retried every sweep forever.
+        await deps.statusService.transition(session.status);
         return Response.json({ outcome: "not_draft", status: session.status });
       }
 
