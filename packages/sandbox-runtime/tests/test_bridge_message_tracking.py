@@ -311,14 +311,24 @@ class TestOpenCodeIdentifier:
         ids = [OpenCodeIdentifier.ascending("message") for _ in range(100)]
         assert len(set(ids)) == 100  # All unique
 
-    def test_ascending_ids_increase_within_one_rollover_window(self):
+    def test_ascending_ids_increase_within_one_rollover_window(self, monkeypatch):
         """Consecutive IDs increase — but only inside a rollover window.
 
         The encoded value is truncated to 48 bits and wraps roughly every 795
         days, so this is not an ordering guarantee callers may rely on: nothing
-        may compare these IDs to order messages. It holds here because all
-        three are generated back to back.
+        may compare these IDs to order messages. The clock is pinned inside one
+        window so the assertion cannot straddle a rollover, and it ticks once so
+        both the same-millisecond counter and the millisecond advance are
+        covered.
         """
+        pinned_epoch_seconds = 1_754_000_000.0
+        next_millisecond = pinned_epoch_seconds + 0.5
+        ticks = iter([pinned_epoch_seconds, pinned_epoch_seconds, next_millisecond])
+        monkeypatch.setattr(
+            "sandbox_runtime.opencode_identifier.time.time",
+            lambda: next(ticks, next_millisecond),
+        )
+
         id1 = OpenCodeIdentifier.ascending("message")
         id2 = OpenCodeIdentifier.ascending("message")
         id3 = OpenCodeIdentifier.ascending("message")
