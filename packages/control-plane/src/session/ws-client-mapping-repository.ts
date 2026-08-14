@@ -3,13 +3,45 @@ import type { SqlStorage } from "./sql-storage";
 /** WS client mapping result for hibernation recovery. */
 export interface WsClientMappingResult {
   participant_id: string;
-  client_id: string;
+  client_id: string | null;
   user_id: string;
-  canonical_user_id?: string | null;
+  canonical_user_id: string | null;
   scm_name: string | null;
   scm_login: string | null;
-  /** Dormant legacy column may still be present on older mapping fixtures. */
-  auth_name?: string | null;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function parseWsClientMapping(row: unknown): WsClientMappingResult {
+  if (
+    row === null ||
+    typeof row !== "object" ||
+    !("participant_id" in row) ||
+    typeof row.participant_id !== "string" ||
+    !("client_id" in row) ||
+    !isNullableString(row.client_id) ||
+    !("user_id" in row) ||
+    typeof row.user_id !== "string" ||
+    !("canonical_user_id" in row) ||
+    !isNullableString(row.canonical_user_id) ||
+    !("scm_name" in row) ||
+    !isNullableString(row.scm_name) ||
+    !("scm_login" in row) ||
+    !isNullableString(row.scm_login)
+  ) {
+    throw new Error("Invalid WebSocket client mapping row");
+  }
+
+  return {
+    participant_id: row.participant_id,
+    client_id: row.client_id,
+    user_id: row.user_id,
+    canonical_user_id: row.canonical_user_id,
+    scm_name: row.scm_name,
+    scm_login: row.scm_login,
+  };
 }
 
 /** Data for a WS client mapping. */
@@ -45,7 +77,8 @@ export class WsClientMappingRepository {
        WHERE m.ws_id = ?`,
       wsId
     );
-    return (result.toArray() as WsClientMappingResult[])[0] ?? null;
+    const row = result.toArray()[0];
+    return row === undefined ? null : parseWsClientMapping(row);
   }
 
   hasWsClientMapping(wsId: string): boolean {

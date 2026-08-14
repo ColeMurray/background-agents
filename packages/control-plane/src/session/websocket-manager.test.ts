@@ -119,8 +119,8 @@ function createMockRepository() {
         participant_id: data.participantId,
         client_id: data.clientId,
         user_id: `user-${data.participantId}`,
+        canonical_user_id: null,
         scm_name: null,
-        auth_name: null,
         scm_login: null,
       });
     },
@@ -526,8 +526,8 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "part-1",
         client_id: "client-1",
         user_id: "user-1",
+        canonical_user_id: null,
         scm_name: "Test",
-        auth_name: null,
         scm_login: "testuser",
       };
       mockRepo.addMapping("ws-42", mapping);
@@ -585,8 +585,8 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-1",
         client_id: "c-1",
         user_id: "u-1",
+        canonical_user_id: null,
         scm_name: null,
-        auth_name: null,
         scm_login: null,
       });
 
@@ -706,8 +706,8 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-1",
         client_id: "c-1",
         user_id: "u-1",
+        canonical_user_id: null,
         scm_name: null,
-        auth_name: null,
         scm_login: null,
       });
 
@@ -744,8 +744,8 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-2",
         client_id: "c-2",
         user_id: "u-2",
+        canonical_user_id: null,
         scm_name: null,
-        auth_name: null,
         scm_login: null,
       });
 
@@ -807,8 +807,8 @@ describe("SessionWebSocketManagerImpl", () => {
         participant_id: "p-1",
         client_id: "c-1",
         user_id: "u-1",
+        canonical_user_id: null,
         scm_name: null,
-        auth_name: null,
         scm_login: null,
       });
 
