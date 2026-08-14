@@ -19,6 +19,7 @@ import type { SourceControlProviderName } from "../source-control";
 import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
+import type { ParticipantRepository } from "./participant-repository";
 import { STOP_CONFIRMATION_TIMEOUT_MS } from "./repository";
 import {
   AttachmentClaimConflictError,
@@ -142,6 +143,7 @@ export class SessionMessageQueue {
     private readonly ctx: DurableObjectState,
     private readonly log: Logger,
     private readonly repository: SessionRepository,
+    private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
     private readonly wsManager: SessionWebSocketManager,
     private readonly messenger: SessionMessenger,
@@ -168,7 +170,7 @@ export class SessionMessageQueue {
     let enqueued: EnqueuedPrompt;
     try {
       this.assertPromptableSession();
-      let participant = this.repository.getParticipantById(client.participantId);
+      let participant = this.participantRepository.getParticipantById(client.participantId);
       participant ??= this.participantService.getByUserId(client.userId);
       if (!participant) {
         this.assertQueueCapacity();
@@ -308,7 +310,7 @@ export class SessionMessageQueue {
       return;
     }
 
-    const author = this.repository.getParticipantById(message.author_id);
+    const author = this.participantRepository.getParticipantById(message.author_id);
     if (!author) {
       throw new Error(`Missing prompt author ${message.author_id}`);
     }
@@ -549,10 +551,10 @@ export class SessionMessageQueue {
     }
 
     if (data.canonicalUserId) {
-      this.repository.updateParticipantCoalesce(participant.id, {
+      this.participantRepository.updateParticipantCoalesce(participant.id, {
         canonicalUserId: data.canonicalUserId,
       });
-      participant = this.repository.getParticipantById(participant.id) ?? {
+      participant = this.participantRepository.getParticipantById(participant.id) ?? {
         ...participant,
         canonical_user_id: data.canonicalUserId,
       };
@@ -560,7 +562,7 @@ export class SessionMessageQueue {
 
     if (data.scmEnrichment !== undefined) {
       const enrichment = data.scmEnrichment;
-      this.repository.updateParticipantCoalesce(participant.id, {
+      this.participantRepository.updateParticipantCoalesce(participant.id, {
         scmName: enrichment.name,
         scmEmail: enrichment.email,
         scmLogin: enrichment.login,
@@ -569,7 +571,7 @@ export class SessionMessageQueue {
         scmRefreshTokenEncrypted: enrichment.refreshTokenEncrypted,
         scmTokenExpiresAt: enrichment.tokenExpiresAt,
       });
-      participant = this.repository.getParticipantById(participant.id) ?? participant;
+      participant = this.participantRepository.getParticipantById(participant.id) ?? participant;
     }
 
     const enqueued = await this.enqueuePromptCore({

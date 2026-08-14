@@ -9,6 +9,7 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import type { SessionRepository } from "../../repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionStatusService } from "../../session-status-service";
 import {
   normalizeSessionTitle,
@@ -25,10 +26,10 @@ export interface SessionLifecycleHandlerDeps {
     | "upsertSession"
     | "replaceSessionRepositories"
     | "createSandbox"
-    | "createParticipant"
     | "getPendingOrProcessingCount"
     | "getMessageCount"
   >;
+  participantRepository: ParticipantRepository;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
   encryptToken: (token: string, encryptionKey: string) => Promise<string>;
@@ -291,7 +292,7 @@ export function createSessionLifecycleHandler(
       });
 
       const participantId = deps.generateId();
-      deps.repository.createParticipant({
+      deps.participantRepository.createParticipant({
         id: participantId,
         userId: body.userId,
         ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),

@@ -6,14 +6,7 @@
  * coordinated here when they also create or update core session records.
  */
 
-import type {
-  SessionRow,
-  ParticipantRow,
-  MessageRow,
-  EventRow,
-  SandboxRow,
-  SessionRepositoryRow,
-} from "./types";
+import type { SessionRow, MessageRow, EventRow, SandboxRow, SessionRepositoryRow } from "./types";
 import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
 import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
@@ -21,7 +14,6 @@ import type {
   SandboxStatus,
   MessageStatus,
   MessageSource,
-  ParticipantRole,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
@@ -40,20 +32,6 @@ type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete"
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
-
-/**
- * WS client mapping result for hibernation recovery.
- */
-export interface WsClientMappingResult {
-  participant_id: string;
-  client_id: string;
-  user_id: string;
-  canonical_user_id?: string | null;
-  scm_name: string | null;
-  scm_login: string | null;
-  /** Dormant legacy column may still be present on older mapping fixtures. */
-  auth_name?: string | null;
-}
 
 /**
  * Minimal sandbox state for circuit breaker checks.
@@ -126,38 +104,6 @@ export interface CreateSandboxData {
 }
 
 /**
- * Data for creating a participant.
- */
-export interface CreateParticipantData {
-  id: string;
-  userId: string;
-  canonicalUserId?: string | null;
-  scmUserId?: string | null;
-  scmLogin?: string | null;
-  scmName?: string | null;
-  scmEmail?: string | null;
-  scmAccessTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
-  role: ParticipantRole;
-  joinedAt: number;
-}
-
-/**
- * Data for updating a participant with COALESCE (only non-null values update).
- */
-export interface UpdateParticipantData {
-  canonicalUserId?: string | null;
-  scmUserId?: string | null;
-  scmLogin?: string | null;
-  scmName?: string | null;
-  scmEmail?: string | null;
-  scmAccessTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
-}
-
-/**
  * Data for creating a message.
  */
 export interface CreateMessageData {
@@ -221,16 +167,6 @@ export interface ListMessagesOptions {
   cursor?: string | null;
   limit: number;
   status?: string | null;
-}
-
-/**
- * Data for WS client mapping.
- */
-export interface WsClientMappingData {
-  wsId: string;
-  participantId: string;
-  clientId: string;
-  createdAt: number;
 }
 
 /**
@@ -651,104 +587,6 @@ export class SessionRepository {
     );
   }
 
-  // === PARTICIPANTS ===
-
-  getParticipantByUserId(userId: string): ParticipantRow | null {
-    const result = this.sql.exec(`SELECT * FROM participants WHERE user_id = ?`, userId);
-    const rows = this.rows<ParticipantRow>(result);
-    return rows[0] ?? null;
-  }
-
-  getParticipantByWsTokenHash(tokenHash: string): ParticipantRow | null {
-    const result = this.sql.exec(`SELECT * FROM participants WHERE ws_auth_token = ?`, tokenHash);
-    const rows = this.rows<ParticipantRow>(result);
-    return rows[0] ?? null;
-  }
-
-  getParticipantById(participantId: string): ParticipantRow | null {
-    const result = this.sql.exec(`SELECT * FROM participants WHERE id = ?`, participantId);
-    const rows = this.rows<ParticipantRow>(result);
-    return rows[0] ?? null;
-  }
-
-  createParticipant(data: CreateParticipantData): void {
-    this.sql.exec(
-      `INSERT INTO participants (id, user_id, canonical_user_id, scm_user_id, scm_login, scm_name, scm_email, scm_access_token_encrypted, scm_refresh_token_encrypted, scm_token_expires_at, role, joined_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      data.id,
-      data.userId,
-      data.canonicalUserId ?? null,
-      data.scmUserId ?? null,
-      data.scmLogin ?? null,
-      data.scmName ?? null,
-      data.scmEmail ?? null,
-      data.scmAccessTokenEncrypted ?? null,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt ?? null,
-      data.role,
-      data.joinedAt
-    );
-  }
-
-  updateParticipantCoalesce(participantId: string, data: UpdateParticipantData): void {
-    this.sql.exec(
-      `UPDATE participants SET
-         canonical_user_id = COALESCE(?, canonical_user_id),
-         scm_user_id = COALESCE(?, scm_user_id),
-         scm_login = COALESCE(?, scm_login),
-         scm_name = COALESCE(?, scm_name),
-         scm_email = COALESCE(?, scm_email),
-         scm_access_token_encrypted = COALESCE(?, scm_access_token_encrypted),
-         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
-         scm_token_expires_at = COALESCE(?, scm_token_expires_at)
-       WHERE id = ?`,
-      data.canonicalUserId ?? null,
-      data.scmUserId ?? null,
-      data.scmLogin ?? null,
-      data.scmName ?? null,
-      data.scmEmail ?? null,
-      data.scmAccessTokenEncrypted ?? null,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt ?? null,
-      participantId
-    );
-  }
-
-  updateParticipantTokens(
-    participantId: string,
-    data: {
-      scmAccessTokenEncrypted: string;
-      scmRefreshTokenEncrypted?: string | null;
-      scmTokenExpiresAt: number;
-    }
-  ): void {
-    this.sql.exec(
-      `UPDATE participants SET
-         scm_access_token_encrypted = ?,
-         scm_refresh_token_encrypted = COALESCE(?, scm_refresh_token_encrypted),
-         scm_token_expires_at = ?
-       WHERE id = ?`,
-      data.scmAccessTokenEncrypted,
-      data.scmRefreshTokenEncrypted ?? null,
-      data.scmTokenExpiresAt,
-      participantId
-    );
-  }
-
-  updateParticipantWsToken(participantId: string, tokenHash: string, createdAt: number): void {
-    this.sql.exec(
-      `UPDATE participants SET ws_auth_token = ?, ws_token_created_at = ? WHERE id = ?`,
-      tokenHash,
-      createdAt,
-      participantId
-    );
-  }
-
-  listParticipants(): ParticipantRow[] {
-    const result = this.sql.exec(`SELECT * FROM participants ORDER BY joined_at`);
-    return this.rows<ParticipantRow>(result);
-  }
-
   // === MESSAGES ===
 
   getActiveDurationMs(): number {
@@ -1140,38 +978,6 @@ export class SessionRepository {
     const nextCursor =
       pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
     return { events: pageEvents, hasMore, nextCursor };
-  }
-
-  // === WS CLIENT MAPPING ===
-
-  upsertWsClientMapping(data: WsClientMappingData): void {
-    this.sql.exec(
-      `INSERT OR REPLACE INTO ws_client_mapping (ws_id, participant_id, client_id, created_at)
-       VALUES (?, ?, ?, ?)`,
-      data.wsId,
-      data.participantId,
-      data.clientId,
-      data.createdAt
-    );
-  }
-
-  getWsClientMapping(wsId: string): WsClientMappingResult | null {
-    const result = this.sql.exec(
-      `SELECT m.participant_id, m.client_id, p.user_id, p.canonical_user_id, p.scm_name, p.scm_login
-       FROM ws_client_mapping m
-       JOIN participants p ON m.participant_id = p.id
-       WHERE m.ws_id = ?`,
-      wsId
-    );
-    return this.rows<WsClientMappingResult>(result)[0] ?? null;
-  }
-
-  hasWsClientMapping(wsId: string): boolean {
-    const result = this.sql.exec(
-      `SELECT participant_id FROM ws_client_mapping WHERE ws_id = ?`,
-      wsId
-    );
-    return result.toArray().length > 0;
   }
 
   // === PR HELPERS ===

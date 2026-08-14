@@ -63,6 +63,8 @@ import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
+import { ParticipantRepository } from "./participant-repository";
+import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { resolveParticipantName } from "./participant-name";
 import { validateReasoningEffort } from "./reasoning-effort";
 import { parseTunnelUrls } from "./tunnel-urls";
@@ -168,6 +170,8 @@ export class SessionDO extends DurableObject<Env> {
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private artifactRepository: ArtifactRepository;
+  private participantRepository: ParticipantRepository;
+  private wsClientMappingRepository: WsClientMappingRepository;
   private initialized = false;
   // Session-scoped logger. Assigned during initialization only — never
   // per-request. Request-serving code receives a request-scoped child
@@ -279,6 +283,8 @@ export class SessionDO extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);
     this.artifactRepository = new ArtifactRepository(this.sql);
+    this.participantRepository = new ParticipantRepository(this.sql);
+    this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
     this.repository = new SessionRepository(
       this.sql,
       (closure) => ctx.storage.transactionSync(closure),
@@ -319,7 +325,8 @@ export class SessionDO extends DurableObject<Env> {
           ? new UserScmTokenStore(this.db, this.env.TOKEN_ENCRYPTION_KEY)
           : null;
       this._participantService = new ParticipantService({
-        repository: this.repository,
+        repository: this.participantRepository,
+        getProcessingMessageAuthor: () => this.repository.getProcessingMessageAuthor(),
         env: this.env,
         log: this.log,
         generateId: () => generateId(),
@@ -380,9 +387,13 @@ export class SessionDO extends DurableObject<Env> {
    */
   private get wsManager(): SessionWebSocketManager {
     if (!this._wsManager) {
-      this._wsManager = new SessionWebSocketManagerImpl(this.ctx, this.repository, this.log, {
-        authTimeoutMs: WS_AUTH_TIMEOUT_MS,
-      });
+      this._wsManager = new SessionWebSocketManagerImpl(
+        this.ctx,
+        this.repository,
+        this.wsClientMappingRepository,
+        this.log,
+        { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
+      );
     }
     return this._wsManager;
   }
@@ -417,6 +428,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         this.log,
         this.repository,
+        this.participantRepository,
         this.attachmentRepository,
         this.wsManager,
         this.messenger,
@@ -490,6 +502,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._childSessionsHandler) {
       this._childSessionsHandler = createChildSessionsHandler({
         repository: this.repository,
+        participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
         getSession: () => this.getSession(),
         getSandbox: () => this.getSandbox(),
@@ -507,6 +520,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._sandboxHandler) {
       this._sandboxHandler = createSandboxHandler({
         repository: this.repository,
+        participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
         processSandboxEvent: (event) => this.processSandboxEvent(event),
         getSandbox: () => this.getSandbox(),
@@ -553,7 +567,7 @@ export class SessionDO extends DurableObject<Env> {
   private get wsTokenHandler(): WsTokenHandler {
     if (!this._wsTokenHandler) {
       this._wsTokenHandler = createWsTokenHandler({
-        repository: this.repository,
+        repository: this.participantRepository,
         getParticipantByUserId: (userId) => this.participantService.getByUserId(userId),
         generateId: (bytes) => generateId(bytes),
         hashToken: (token) => hashToken(token),
@@ -568,6 +582,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
         repository: this.repository,
+        participantRepository: this.participantRepository,
         getDurableObjectId: () => this.ctx.id.toString(),
         tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
         encryptToken: (token, encryptionKey) => encryptToken(token, encryptionKey),
@@ -672,7 +687,7 @@ export class SessionDO extends DurableObject<Env> {
   private get participantsHandler(): ParticipantsHandler {
     if (!this._participantsHandler) {
       this._participantsHandler = createParticipantsHandler({
-        repository: this.repository,
+        repository: this.participantRepository,
       });
     }
 

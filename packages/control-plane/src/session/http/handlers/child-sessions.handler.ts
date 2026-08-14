@@ -10,6 +10,7 @@ import {
 } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRepository } from "../../artifact-repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
 import { activePromptAuthorSchema, type ActivePromptAuthor } from "../../active-prompt-author";
@@ -26,14 +27,13 @@ import {
 export interface ChildSessionsHandlerDeps {
   repository: Pick<
     SessionRepository,
-    | "listParticipants"
     | "listEventPage"
     | "getLatestTerminalMessage"
     | "getEventTimelinePage"
     | "getPendingOrProcessingCount"
     | "getProcessingMessageAuthor"
-    | "getParticipantById"
   >;
+  participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;
   getSession: () => SessionRow | null;
   getSandbox: () => SandboxRow | null;
@@ -65,7 +65,8 @@ const childSessionUpdateBodySchema = z.object({
 });
 
 function resolvePromptAuthorParticipant(
-  repository: ChildSessionsHandlerDeps["repository"]
+  repository: ChildSessionsHandlerDeps["repository"],
+  participantRepository: ParticipantRepository
 ): ParticipantRow | Response {
   const processingMessage = repository.getProcessingMessageAuthor();
   if (!processingMessage) {
@@ -74,7 +75,7 @@ function resolvePromptAuthorParticipant(
       { status: 400 }
     );
   }
-  const participant = repository.getParticipantById(processingMessage.author_id);
+  const participant = participantRepository.getParticipantById(processingMessage.author_id);
   if (!participant) return Response.json({ error: "Prompt author not found" }, { status: 401 });
   return participant;
 }
@@ -97,7 +98,10 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
         return Response.json({ error: "Session not found" }, { status: 404 });
       }
 
-      const promptAuthor = resolvePromptAuthorParticipant(deps.repository);
+      const promptAuthor = resolvePromptAuthorParticipant(
+        deps.repository,
+        deps.participantRepository
+      );
       if (promptAuthor instanceof Response) return promptAuthor;
       let sandboxTimeoutMs: number | undefined;
       try {
@@ -133,7 +137,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
 
     getActivePromptAuthor(): Response {
       if (!deps.getSession()) return Response.json({ error: "Session not found" }, { status: 404 });
-      const author = resolvePromptAuthorParticipant(deps.repository);
+      const author = resolvePromptAuthorParticipant(deps.repository, deps.participantRepository);
       return author instanceof Response ? author : Response.json(toActivePromptAuthor(author));
     },
 

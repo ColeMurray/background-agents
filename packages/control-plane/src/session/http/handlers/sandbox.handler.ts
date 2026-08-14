@@ -19,6 +19,7 @@ import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRepository } from "../../artifact-repository";
+import type { ParticipantRepository } from "../../participant-repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
 import { parseTunnelUrls } from "../../tunnel-urls";
@@ -35,7 +36,8 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: Pick<SessionRepository, "createParticipant" | "createEvent" | "getProcessingMessage">;
+  repository: Pick<SessionRepository, "createEvent" | "getProcessingMessage">;
+  participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
   getSandbox: () => SandboxRow | null;
@@ -173,7 +175,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
       const id = deps.generateId();
       const now = deps.now();
 
-      deps.repository.createParticipant({
+      deps.participantRepository.createParticipant({
         id,
         userId: body.userId,
         scmLogin: body.scmLogin ?? null,

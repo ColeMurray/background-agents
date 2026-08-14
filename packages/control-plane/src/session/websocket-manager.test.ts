@@ -10,7 +10,11 @@ import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { SessionRepository, WsClientMappingResult } from "./repository";
+import type { SessionRepository } from "./repository";
+import type {
+  WsClientMappingRepository,
+  WsClientMappingResult,
+} from "./ws-client-mapping-repository";
 import type { SandboxRow } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -184,7 +188,13 @@ function createManager() {
   const mockRepo = createMockRepository();
   const log = createMockLogger();
 
-  const manager = new SessionWebSocketManagerImpl(fakeCtx.state, mockRepo.repo, log, TEST_CONFIG);
+  const manager = new SessionWebSocketManagerImpl(
+    fakeCtx.state,
+    mockRepo.repo,
+    mockRepo.repo as unknown as WsClientMappingRepository,
+    log,
+    TEST_CONFIG
+  );
 
   return { manager, sockets: fakeCtx.sockets, state: fakeCtx.state, mockRepo, log };
 }

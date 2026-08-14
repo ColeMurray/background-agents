@@ -8,7 +8,11 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { SessionRepository, WsClientMappingResult } from "./repository";
+import type { SessionRepository } from "./repository";
+import type {
+  WsClientMappingRepository,
+  WsClientMappingResult,
+} from "./ws-client-mapping-repository";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,6 +103,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly repository: SessionRepository,
+    private readonly wsClientMappingRepository: WsClientMappingRepository,
     private readonly log: Logger,
     private readonly config: WebSocketManagerConfig
   ) {}
@@ -245,11 +250,11 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   recoverClientMapping(ws: WebSocket): WsClientMappingResult | null {
     const parsed = this.classify(ws);
     if (parsed.kind !== "client" || !parsed.wsId) return null;
-    return this.repository.getWsClientMapping(parsed.wsId);
+    return this.wsClientMappingRepository.getWsClientMapping(parsed.wsId);
   }
 
   persistClientMapping(wsId: string, participantId: string, clientId: string): void {
-    this.repository.upsertWsClientMapping({
+    this.wsClientMappingRepository.upsertWsClientMapping({
       wsId,
       participantId,
       clientId,
@@ -271,7 +276,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   }
 
   hasPersistedMapping(wsId: string): boolean {
-    return this.repository.hasWsClientMapping(wsId);
+    return this.wsClientMappingRepository.hasWsClientMapping(wsId);
   }
 
   // -------------------------------------------------------------------------
@@ -328,7 +333,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   private isAuthenticated(ws: WebSocket, parsed: ParsedTags): boolean {
     if (this.clients.has(ws)) return true;
     if (parsed.kind === "client" && parsed.wsId) {
-      return this.repository.hasWsClientMapping(parsed.wsId);
+      return this.wsClientMappingRepository.hasWsClientMapping(parsed.wsId);
     }
     return false;
   }
