@@ -34,7 +34,7 @@ import { getAvatarUrl } from "./participant-service";
 import { resolveParticipantName } from "./participant-name";
 import { resolveGitAuthorIdentity } from "./identity";
 import { validateReasoningEffort } from "./reasoning-effort";
-import type { SessionMessageFinalizer } from "./message-finalizer";
+import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import {
   parseStoredSessionAttachments,
   SessionAttachmentError,
@@ -149,7 +149,7 @@ export class SessionMessageQueue {
     private readonly participantService: ParticipantService,
     private readonly callbackService: CallbackNotificationService,
     private readonly sessionStatus: SessionStatusService,
-    private readonly messageFinalizer: SessionMessageFinalizer,
+    private readonly terminalMessageProjection: SessionTerminalMessageProjection,
     private readonly sandboxLifecycle: SandboxLifecycle,
     private readonly sessionIndex: SessionIndexStore | null,
     private readonly scmProvider: SourceControlProviderName,
@@ -387,14 +387,13 @@ export class SessionMessageQueue {
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
     const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
+    let stoppedMessageId: string | null = null;
 
-    if (processingMessage) {
-      this.messageFinalizer.finalizeSyntheticFailure(
-        { id: processingMessage.id, createdAt: processingMessage.created_at },
-        "Execution was stopped",
-        now
-      );
-      this.scheduleCompletionCallback(processingMessage.id, false, "Execution was stopped");
+    if (
+      processingMessage &&
+      this.failMessage(processingMessage, "Execution was stopped", now, "processing")
+    ) {
+      stoppedMessageId = processingMessage.id;
       const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
       this.repository.markMessageAwaitingStopConfirmation(
         processingMessage.id,
@@ -414,7 +413,7 @@ export class SessionMessageQueue {
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
 
     const sandboxWs = this.wsManager.getSandboxSocket();
-    if (processingMessage && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
+    if (stoppedMessageId && (!sandboxWs || !this.wsManager.send(sandboxWs, { type: "stop" }))) {
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("stop_send_failed");
     }
   }
@@ -441,26 +440,12 @@ export class SessionMessageQueue {
   cancelExecution(): void {
     const now = Date.now();
     for (const message of this.repository.listPendingMessagesWithCreatedAt()) {
-      this.messageFinalizer.finalizeSyntheticFailure(
-        { id: message.id, createdAt: message.created_at },
-        "Execution was cancelled before it started",
-        now
-      );
-      this.scheduleCompletionCallback(
-        message.id,
-        false,
-        "Execution was cancelled before it started"
-      );
+      this.failMessage(message, "Execution was cancelled before it started", now, "pending");
     }
 
     const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
     if (processingMessage) {
-      this.messageFinalizer.finalizeSyntheticFailure(
-        { id: processingMessage.id, createdAt: processingMessage.created_at },
-        "Execution was cancelled",
-        now
-      );
-      this.scheduleCompletionCallback(processingMessage.id, false, "Execution was cancelled");
+      this.failMessage(processingMessage, "Execution was cancelled", now, "processing");
     }
 
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
@@ -481,19 +466,42 @@ export class SessionMessageQueue {
     const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
-    this.messageFinalizer.finalizeSyntheticFailure(
-      { id: processingMessage.id, createdAt: processingMessage.created_at },
-      "Execution timed out (stuck processing)",
-      now
-    );
-    this.scheduleCompletionCallback(
-      processingMessage.id,
-      false,
-      "Execution timed out (stuck processing)"
-    );
+    if (
+      !this.failMessage(
+        processingMessage,
+        "Execution timed out (stuck processing)",
+        now,
+        "processing"
+      )
+    ) {
+      return;
+    }
     this.messenger.broadcast({ type: "processing_status", isProcessing: false });
     this.broadcastPromptQueue();
     await this.sessionStatus.reconcileAfterExecution(false);
+  }
+
+  private failMessage(
+    message: { id: string; created_at: number },
+    error: string,
+    completedAt: number,
+    expectedStatus: "pending" | "processing"
+  ): boolean {
+    const event: Extract<SandboxEvent, { type: "execution_complete" }> = {
+      type: "execution_complete",
+      messageId: message.id,
+      success: false,
+      error,
+      sandboxId: "",
+      timestamp: completedAt / 1000,
+    };
+    const completion = this.repository.recordMessageCompletion(event, completedAt, expectedStatus);
+    if (!completion) return false;
+
+    this.ctx.waitUntil(this.terminalMessageProjection.recordTerminalMessage(completion));
+    this.messenger.broadcast({ type: "sandbox_event", event });
+    this.scheduleCompletionCallback(message.id, false, error);
+    return true;
   }
 
   private scheduleCompletionCallback(messageId: string, success: boolean, error?: string): void {

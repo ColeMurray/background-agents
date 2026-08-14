@@ -860,21 +860,72 @@ describe("SessionRepository", () => {
     });
   });
 
-  describe("updateMessageCompletion", () => {
-    it("sets status and completedAt without an error for normal completion", () => {
-      repo.updateMessageCompletion("msg-1", "completed", 3000);
+  describe("recordMessageCompletion", () => {
+    const messageQuery = `SELECT status, created_at, started_at FROM messages WHERE id = ?`;
 
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("status = ?");
-      expect(mock.calls[0].query).toContain("completed_at");
-      expect(mock.calls[0].query).toContain("error_message = ?");
-      expect(mock.calls[0].params).toEqual(["completed", 3000, null, "msg-1"]);
+    it("atomically records message state and its canonical completion event", () => {
+      mock.setData(messageQuery, [{ status: "processing", created_at: 1000, started_at: 1200 }]);
+      const event = {
+        type: "execution_complete" as const,
+        messageId: "msg-1",
+        success: true,
+        sandboxId: "sb-1",
+        timestamp: 3,
+      };
+
+      expect(repo.recordMessageCompletion(event, 3000, "processing")).toEqual({
+        messageId: "msg-1",
+        messageCreatedAt: 1000,
+        messageStartedAt: 1200,
+        terminalMessageCompletedAt: 3000,
+        status: "completed",
+      });
+
+      expect(transactionSyncCalls).toBe(1);
+      expect(mock.calls[1].params).toEqual(["completed", 3000, null, "msg-1"]);
+      expect(mock.calls[2].params).toEqual([
+        "execution_complete:msg-1",
+        "execution_complete",
+        JSON.stringify(event),
+        "msg-1",
+        3000,
+      ]);
     });
 
-    it("persists a failed completion reason", () => {
-      repo.updateMessageCompletion("msg-1", "failed", 3000, "Agent failed");
+    it("persists a failed outcome and error", () => {
+      mock.setData(messageQuery, [{ status: "processing", created_at: 1000, started_at: 1200 }]);
+      const event = {
+        type: "execution_complete" as const,
+        messageId: "msg-1",
+        success: false,
+        error: "Agent failed",
+        sandboxId: "sb-1",
+        timestamp: 3,
+      };
 
-      expect(mock.calls[0].params).toEqual(["failed", 3000, "Agent failed", "msg-1"]);
+      const completion = repo.recordMessageCompletion(event, 3000, "processing");
+
+      expect(completion?.status).toBe("failed");
+      expect(mock.calls[1].params).toEqual(["failed", 3000, "Agent failed", "msg-1"]);
+    });
+
+    it("does not record an outcome for a message in another state", () => {
+      mock.setData(messageQuery, [{ status: "completed", created_at: 1000, started_at: 1200 }]);
+
+      const completion = repo.recordMessageCompletion(
+        {
+          type: "execution_complete",
+          messageId: "msg-1",
+          success: true,
+          sandboxId: "sb-1",
+          timestamp: 3,
+        },
+        3000,
+        "processing"
+      );
+
+      expect(completion).toBeNull();
+      expect(mock.calls).toHaveLength(1);
     });
   });
 
@@ -1094,57 +1145,6 @@ describe("SessionRepository", () => {
       repo.upsertToolCallEvent("msg-1", event, 1000);
 
       expect(mock.calls[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
-    });
-  });
-
-  describe("upsertExecutionCompleteEvent", () => {
-    it("upserts completion event by deterministic message key", () => {
-      const event = {
-        type: "execution_complete" as const,
-        messageId: "msg-1",
-        success: true,
-        sandboxId: "sb-1",
-        timestamp: 2,
-      };
-
-      repo.upsertExecutionCompleteEvent("msg-1", event, 2000);
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("timeline_sequence");
-      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
-      expect(mock.calls[0].params).toEqual([
-        "execution_complete:msg-1",
-        "execution_complete",
-        JSON.stringify(event),
-        "msg-1",
-        2000,
-      ]);
-    });
-
-    it("reuses the same deterministic completion ID across updates", () => {
-      const firstEvent = {
-        type: "execution_complete" as const,
-        messageId: "msg-1",
-        success: false,
-        sandboxId: "sb-1",
-        timestamp: 2,
-      };
-      const secondEvent = {
-        ...firstEvent,
-        success: true,
-        timestamp: 3,
-      };
-
-      repo.upsertExecutionCompleteEvent("msg-1", firstEvent, 2000);
-      repo.upsertExecutionCompleteEvent("msg-1", secondEvent, 3000);
-
-      expect(mock.calls.length).toBe(2);
-      expect(mock.calls[0].params[0]).toBe("execution_complete:msg-1");
-      expect(mock.calls[1].params[0]).toBe("execution_complete:msg-1");
-      expect(mock.calls[1].params[1]).toBe("execution_complete");
-      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
-      expect(mock.calls[1].params[4]).toBe(3000);
     });
   });
 

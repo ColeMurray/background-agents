@@ -7,9 +7,9 @@ import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
-import type { SessionMessageFinalizer } from "./message-finalizer";
 import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
+import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
 
@@ -48,7 +48,7 @@ export class SessionSandboxEventProcessor {
       options?: SessionTitleUpdateOptions
     ) => SessionTitleUpdateResult,
     private readonly triggerSnapshot: (reason: string) => Promise<void>,
-    private readonly messageFinalizer: SessionMessageFinalizer,
+    private readonly terminalMessageProjection: SessionTerminalMessageProjection,
     private readonly statusService: SessionStatusService,
     private readonly updateLastActivity: (timestamp: number) => void,
     private readonly scheduleInactivityCheck: () => Promise<void>,
@@ -200,8 +200,29 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "execution_complete") {
-      if (processingMessage?.id === event.messageId) {
-        await this.messageFinalizer.finalizeSandboxCompletion(event, now);
+      const completion =
+        processingMessage?.id === event.messageId
+          ? this.repository.recordMessageCompletion(event, now, "processing")
+          : null;
+      if (completion) {
+        await this.terminalMessageProjection.recordTerminalMessage(completion);
+        const totalDurationMs = now - completion.messageCreatedAt;
+        const processingDurationMs =
+          completion.messageStartedAt != null ? now - completion.messageStartedAt : undefined;
+        const queueDurationMs =
+          completion.messageStartedAt != null
+            ? completion.messageStartedAt - completion.messageCreatedAt
+            : undefined;
+        this.log.info("prompt.complete", {
+          event: "prompt.complete",
+          message_id: event.messageId,
+          outcome: event.success ? "success" : "failure",
+          message_status: completion.status,
+          total_duration_ms: totalDurationMs,
+          processing_duration_ms: processingDurationMs,
+          queue_duration_ms: queueDurationMs,
+        });
+        this.messenger.broadcast({ type: "sandbox_event", event });
         this.messenger.broadcast({
           type: "processing_status",
           isProcessing: this.repository.getProcessingMessage() !== null,

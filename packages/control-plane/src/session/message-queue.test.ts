@@ -12,7 +12,7 @@ import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import { createEarliestAlarmScheduler } from "./alarm/scheduler";
 import type { SessionStatusService } from "./session-status-service";
-import type { SessionMessageFinalizer } from "./message-finalizer";
+import type { SessionTerminalMessageProjection } from "./terminal-message-projection";
 
 function createParticipant(overrides: Partial<ParticipantRow> = {}): ParticipantRow {
   return {
@@ -149,10 +149,15 @@ function buildQueue() {
     getParticipantById: vi.fn(() => createParticipant()),
     getSession: vi.fn(() => createSession()),
     updateParticipantCoalesce: vi.fn(),
-    updateMessageCompletion: vi.fn(),
+    recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => ({
+      messageId: event.messageId,
+      messageCreatedAt: 1000,
+      messageStartedAt: 1100,
+      terminalMessageCompletedAt: completedAt,
+      status: "failed" as const,
+    })),
     markMessageAwaitingStopConfirmation: vi.fn(),
     listPendingMessagesWithCreatedAt: vi.fn((): Array<{ id: string; created_at: number }> => []),
-    upsertExecutionCompleteEvent: vi.fn(),
   };
 
   const attachmentRepository = {
@@ -188,10 +193,7 @@ function buildQueue() {
   const waitUntil = vi.fn();
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
-  const messageFinalizer = {
-    finalizeSandboxCompletion: vi.fn(async () => {}),
-    finalizeSyntheticFailure: vi.fn(),
-  };
+  const terminalMessageProjection = { recordTerminalMessage: vi.fn(async () => {}) };
 
   const queue = new SessionMessageQueue(
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
@@ -203,7 +205,7 @@ function buildQueue() {
     participantService as unknown as ParticipantService,
     callbackService as unknown as CallbackNotificationService,
     sessionStatus as unknown as SessionStatusService,
-    messageFinalizer as unknown as SessionMessageFinalizer,
+    terminalMessageProjection as unknown as SessionTerminalMessageProjection,
     sandboxLifecycle,
     null,
     "github",
@@ -224,7 +226,7 @@ function buildQueue() {
     getAlarm,
     setAlarm,
     callbackService,
-    messageFinalizer,
+    terminalMessageProjection,
     log,
   };
 }
@@ -862,10 +864,15 @@ describe("SessionMessageQueue", () => {
 
     await h.queue.stopExecution();
 
-    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
-      { id: "msg-9", createdAt: 900 },
-      "Execution was stopped",
-      expect.any(Number)
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "execution_complete",
+        messageId: "msg-9",
+        success: false,
+        error: "Execution was stopped",
+      }),
+      expect.any(Number),
+      "processing"
     );
     expect(h.repository.markMessageAwaitingStopConfirmation).toHaveBeenCalledWith(
       "msg-9",
@@ -873,8 +880,11 @@ describe("SessionMessageQueue", () => {
     );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "processing_status", isProcessing: false });
     expect(h.wsManager.send).toHaveBeenCalledWith(sandboxWs, { type: "stop" });
-    expect(h.messageFinalizer.finalizeSyntheticFailure.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(h.repository.recordMessageCompletion.mock.invocationCallOrder[0]).toBeLessThan(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
+    );
+    expect(h.terminalMessageProjection.recordTerminalMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "msg-9" })
     );
     expect(
       h.repository.markMessageAwaitingStopConfirmation.mock.invocationCallOrder[0]
@@ -995,7 +1005,7 @@ describe("SessionMessageQueue", () => {
     await h.queue.stopExecution();
     await h.queue.failStuckProcessingMessage();
 
-    expect(h.messageFinalizer.finalizeSyntheticFailure).not.toHaveBeenCalled();
+    expect(h.repository.recordMessageCompletion).not.toHaveBeenCalled();
     expect(h.wsManager.send).not.toHaveBeenCalledWith(expect.anything(), { type: "stop" });
     expect(h.sessionStatus.reconcileAfterExecution).not.toHaveBeenCalled();
   });
@@ -1012,15 +1022,21 @@ describe("SessionMessageQueue", () => {
 
     h.queue.cancelExecution();
 
-    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
-      { id: "msg-pending", createdAt: 700 },
-      "Execution was cancelled before it started",
-      expect.any(Number)
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-pending",
+        error: "Execution was cancelled before it started",
+      }),
+      expect.any(Number),
+      "pending"
     );
-    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
-      { id: "msg-processing", createdAt: 800 },
-      "Execution was cancelled",
-      expect.any(Number)
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-processing",
+        error: "Execution was cancelled",
+      }),
+      expect.any(Number),
+      "processing"
     );
   });
 
@@ -1051,10 +1067,13 @@ describe("SessionMessageQueue", () => {
     });
     await h.queue.failStuckProcessingMessage();
 
-    expect(h.messageFinalizer.finalizeSyntheticFailure).toHaveBeenCalledWith(
-      { id: "msg-timeout", createdAt: 800 },
-      "Execution timed out (stuck processing)",
-      expect.any(Number)
+    expect(h.repository.recordMessageCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-timeout",
+        error: "Execution timed out (stuck processing)",
+      }),
+      expect.any(Number),
+      "processing"
     );
     expect(h.sessionStatus.reconcileAfterExecution).toHaveBeenCalledWith(false);
   });

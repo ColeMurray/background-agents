@@ -38,7 +38,7 @@ import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
 type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
 type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
-type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
+export type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
 type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
 const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
@@ -68,6 +68,14 @@ export interface SandboxCircuitBreakerState {
   snapshot_image_id: string | null;
   spawn_failure_count: number | null;
   last_spawn_failure: number | null;
+}
+
+export interface RecordedMessageCompletion {
+  messageId: string;
+  messageCreatedAt: number;
+  messageStartedAt: number | null;
+  terminalMessageCompletedAt: number;
+  status: "completed" | "failed";
 }
 
 /**
@@ -946,19 +954,43 @@ export class SessionRepository {
     );
   }
 
-  updateMessageCompletion(
-    messageId: string,
-    status: MessageStatus,
+  recordMessageCompletion(
+    event: ExecutionCompleteEvent,
     completedAt: number,
-    errorMessage: string | null = null
-  ): void {
-    this.sql.exec(
-      `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
-      status,
-      completedAt,
-      errorMessage,
-      messageId
-    );
+    expectedStatus: "pending" | "processing"
+  ): RecordedMessageCompletion | null {
+    return this.transactionSync(() => {
+      const result = this.sql.exec(
+        `SELECT status, created_at, started_at FROM messages WHERE id = ?`,
+        event.messageId
+      );
+      const message = (
+        result.toArray() as Array<{
+          status: MessageStatus;
+          created_at: number;
+          started_at: number | null;
+        }>
+      )[0];
+      if (!message || message.status !== expectedStatus) return null;
+
+      const status = event.success ? "completed" : "failed";
+      this.sql.exec(
+        `UPDATE messages SET status = ?, completed_at = ?, error_message = ? WHERE id = ?`,
+        status,
+        completedAt,
+        event.success ? null : (event.error ?? null),
+        event.messageId
+      );
+      this.upsertEventByMessageId("execution_complete", event.messageId, event, completedAt);
+
+      return {
+        messageId: event.messageId,
+        messageCreatedAt: message.created_at,
+        messageStartedAt: message.started_at,
+        terminalMessageCompletedAt: completedAt,
+        status,
+      };
+    });
   }
 
   listPendingMessagesWithCreatedAt(): Array<{ id: string; created_at: number }> {
@@ -966,17 +998,6 @@ export class SessionRepository {
       `SELECT id, created_at FROM messages WHERE status = 'pending' ORDER BY created_at ASC, rowid ASC`
     );
     return result.toArray() as Array<{ id: string; created_at: number }>;
-  }
-
-  getMessageTimestamps(
-    messageId: string
-  ): { created_at: number; started_at: number | null } | null {
-    const result = this.sql.exec(
-      `SELECT created_at, started_at FROM messages WHERE id = ?`,
-      messageId
-    );
-    const rows = result.toArray() as Array<{ created_at: number; started_at: number | null }>;
-    return rows[0] ?? null;
   }
 
   listMessages(options: ListMessagesOptions): MessageRow[] {
@@ -1077,14 +1098,6 @@ export class SessionRepository {
       messageId,
       createdAt
     );
-  }
-
-  upsertExecutionCompleteEvent(
-    messageId: string,
-    event: ExecutionCompleteEvent,
-    createdAt: number
-  ): void {
-    this.upsertEventByMessageId("execution_complete", messageId, event, createdAt);
   }
 
   listEventPage(options: ListEventPageOptions): EventPage {
