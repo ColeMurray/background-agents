@@ -26,6 +26,8 @@ export const githubSource: TriggerSourceDefinition = {
     "label",
     "path_glob",
     "actor",
+    "conclusion",
     "check_conclusion",
+    "workflow_name",
   ],
 };

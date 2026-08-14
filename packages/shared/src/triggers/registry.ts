@@ -9,14 +9,27 @@ import { webhookSource, webhookConditions } from "./webhook";
 import { githubSource } from "./github";
 import { slackSource, slackConditions } from "./slack";
 
-// GitHub and Linear condition handlers (stubs for Phase 2c).
-// These need to exist so that the ConditionRegistry is complete.
+// GitHub condition handlers and the reserved Linear handlers live here so the
+// ConditionRegistry remains complete across sources.
 import { matchGlob } from "./glob";
 import type { AutomationEvent } from "./types";
 
+export const GITHUB_CONCLUSIONS = [
+  "success",
+  "failure",
+  "neutral",
+  "cancelled",
+  "timed_out",
+] as const;
+
+const githubConclusionSet: ReadonlySet<string> = new Set(GITHUB_CONCLUSIONS);
+
+function validateGitHubConclusion(condition: { value: string }): string | null {
+  return githubConclusionSet.has(condition.value) ? null : `Invalid conclusion: ${condition.value}`;
+}
+
 /**
- * GitHub + Linear condition handlers defined here (cross-source).
- * Will move to source modules when those ship in Phase 2c.
+ * GitHub and Linear condition handlers defined here (cross-source).
  */
 const sharedConditions = {
   branch: {
@@ -84,16 +97,30 @@ const sharedConditions = {
         : c.value.every((v: string) => v.toLowerCase() !== lowerActor);
     },
   },
+  conclusion: {
+    appliesTo: ["github"] as const,
+    validate: validateGitHubConclusion,
+    evaluate(c: { value: string }, event: AutomationEvent) {
+      if (event.source !== "github") return true;
+      return event.conclusion === c.value;
+    },
+  },
   check_conclusion: {
     appliesTo: ["github"] as const,
-    validate(c: { value: string }) {
-      return ["success", "failure", "neutral", "cancelled", "timed_out"].includes(c.value)
-        ? null
-        : `Invalid conclusion: ${c.value}`;
-    },
+    validate: validateGitHubConclusion,
     evaluate(c: { value: string }, event: AutomationEvent) {
       if (event.source !== "github") return true;
       return event.checkConclusion === c.value;
+    },
+  },
+  workflow_name: {
+    appliesTo: ["github"] as const,
+    validate(c: { value: string }) {
+      return c.value.trim().length === 0 ? "Workflow name is required" : null;
+    },
+    evaluate(c: { value: string }, event: AutomationEvent) {
+      if (event.source !== "github") return true;
+      return event.workflowName === c.value;
     },
   },
   linear_status: {
@@ -120,7 +147,6 @@ export const conditionRegistry: ConditionRegistry = {
 
 /**
  * All registered trigger sources. The UI reads this for the trigger type selector.
- * Only Sentry and Webhook are active in Phase 2a/2b.
  */
 export const triggerSources: TriggerSourceDefinition[] = [
   sentrySource,

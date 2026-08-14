@@ -307,6 +307,7 @@ GitHub OAuth sign-in, but its client pair is optional when Google is the only si
    > identity for repository access.
 
 5. Set **Repository permissions**:
+   - Actions: **Read-only** _(required for GitHub workflow-run automations)_
    - Contents: **Read & Write**
    - Issues: **Read & Write** _(required if enabling GitHub bot)_
    - Pull requests: **Read & Write** _(also authorizes creating and applying labels to
@@ -778,6 +779,7 @@ Now that the GitHub bot worker is deployed, configure the GitHub App for webhook
    - **Pull requests**
    - **Issue comments**
    - **Pull request review comments**
+   - **Workflow runs** _(required for GitHub workflow-run automations)_
 5. Click **Save changes**
 
 ### Find Your Bot Username

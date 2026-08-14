@@ -22,9 +22,14 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-function renderBuilder(conditions: TriggerCondition[]) {
+function renderBuilder(
+  conditions: TriggerCondition[],
+  triggerSource: "slack" | "github" = "slack"
+) {
   const onChange = vi.fn();
-  render(<ConditionBuilder conditions={conditions} onChange={onChange} triggerSource="slack" />);
+  render(
+    <ConditionBuilder conditions={conditions} onChange={onChange} triggerSource={triggerSource} />
+  );
   return onChange;
 }
 
@@ -92,5 +97,29 @@ describe("ConditionBuilder — slack editors", () => {
     renderBuilder([{ type: "slack_actor", operator: "include", value: [] }]);
     expect(screen.getByText("Slack User")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Add Slack user ID/)).toBeInTheDocument();
+  });
+});
+
+describe("ConditionBuilder — GitHub workflow editors", () => {
+  it("stores the exact workflow name", () => {
+    const onChange = renderBuilder(
+      [{ type: "workflow_name", operator: "eq", value: "" }],
+      "github"
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/Exact workflow name/), {
+      target: { value: "CI" },
+    });
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { type: "workflow_name", operator: "eq", value: "CI" },
+    ]);
+  });
+
+  it("renders the workflow conclusion condition", () => {
+    renderBuilder([{ type: "conclusion", operator: "eq", value: "failure" }], "github");
+
+    expect(screen.getByText("Conclusion")).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")[0]).toHaveTextContent("failure");
   });
 });
