@@ -6,7 +6,10 @@ import type {
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import type { SessionListQuery } from "@open-inspect/shared/session-list-query";
+import {
+  DEFAULT_SESSION_LIST_LIMIT,
+  DEFAULT_SESSION_LIST_OFFSET,
+} from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
@@ -116,10 +119,15 @@ interface SessionRow {
   updated_at: number;
 }
 
-export interface ListSessionsOptions extends Omit<SessionListQuery, "createdBy"> {
+export interface ListSessionsOptions {
+  status?: SessionStatus;
+  excludeStatus?: SessionStatus;
+  excludeAutomationLineage?: boolean;
   repoOwner?: string;
   repoName?: string;
   createdByUserIds?: readonly string[];
+  limit?: number;
+  offset?: number;
   viewerUserId?: string;
 }
 
@@ -330,8 +338,8 @@ export class SessionIndexStore {
       repoOwner,
       repoName,
       createdByUserIds,
-      limit = 50,
-      offset = 0,
+      limit = DEFAULT_SESSION_LIST_LIMIT,
+      offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
     } = options;
 

@@ -1,4 +1,6 @@
 import {
+  DEFAULT_SESSION_LIST_LIMIT,
+  DEFAULT_SESSION_LIST_OFFSET,
   serializeSessionListQuery,
   SESSION_LIST_CURRENT_USER,
   type SessionListQuery,
@@ -7,7 +9,7 @@ import type { Session } from "@open-inspect/shared/types/sessions";
 import type { BrowserApiPath } from "./browser-api-fetch";
 import { formatRepoLabel } from "./repo-label";
 
-export const SESSIONS_PAGE_SIZE = 50;
+export const SESSIONS_PAGE_SIZE = DEFAULT_SESSION_LIST_LIMIT;
 const COMMAND_MENU_SESSIONS_LIMIT = 100;
 const SESSIONS_API_PATH = "/api/sessions";
 export const CURRENT_USER_CREATED_BY = SESSION_LIST_CURRENT_USER;
@@ -29,8 +31,8 @@ export interface SessionListResponse {
 export function buildSessionsPageKey(options: SessionListQuery = {}): BrowserApiPath {
   const searchParams = serializeSessionListQuery({
     ...options,
-    limit: options.limit ?? SESSIONS_PAGE_SIZE,
-    offset: options.offset ?? 0,
+    limit: options.limit ?? DEFAULT_SESSION_LIST_LIMIT,
+    offset: options.offset ?? DEFAULT_SESSION_LIST_OFFSET,
   });
 
   return `${SESSIONS_API_PATH}?${searchParams.toString()}`;

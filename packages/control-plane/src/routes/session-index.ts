@@ -56,7 +56,8 @@ async function handleListSessions(
   const parsedQuery = parseSessionListQuery(url.searchParams);
   if (!parsedQuery.success) return error(`Invalid ${parsedQuery.invalidParam}`, 400);
 
-  const { createdBy, ...listOptions } = parsedQuery.data;
+  const { createdBy, status, excludeStatus, excludeAutomationLineage, limit, offset } =
+    parsedQuery.data;
   const createdByUserIds = parseCreatedByFilters(createdBy, ctx.principal);
 
   if (createdByUserIds instanceof Response) {
@@ -67,8 +68,12 @@ async function handleListSessions(
   const listStartedAt = Date.now();
   const viewerUserId = ctx.principal?.kind === "user" ? ctx.principal.userId : undefined;
   const result = await store.list({
-    ...listOptions,
+    status,
+    excludeStatus,
+    excludeAutomationLineage,
     createdByUserIds,
+    limit,
+    offset,
     viewerUserId,
   });
   if (viewerUserId) {
