@@ -33,7 +33,7 @@ export type AutomationInvocationStatus =
 export const MAX_AUTOMATION_REPOSITORIES = MAX_TARGET_REPOSITORIES;
 
 /** A repository selected on an automation (response shape, resolved). */
-export const automationRepositorySchema = z.object({
+const automationRepositorySchema = z.object({
   repoOwner: z.string(),
   repoName: z.string(),
   repoId: z.number().nullable(),
@@ -67,7 +67,7 @@ export const automationRepositoryInputSchema = repositoryInputSchema;
 export type AutomationRepositoryInput = RepositoryInput;
 export const automationRepositoriesInputSchema = repositoriesInputSchema;
 
-export const automationSchema = z.object({
+const automationSchema = z.object({
   id: z.string(),
   name: z.string(),
   instructions: z.string(),

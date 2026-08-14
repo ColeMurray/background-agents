@@ -44,13 +44,27 @@ describe("listAutomationsResponseSchema", () => {
     ).toBe(false);
   });
 
-  it("rejects malformed automation and trigger-condition records", () => {
+  it("rejects malformed automation records", () => {
     expect(
       listAutomationsResponseSchema.safeParse({
         automations: [
           {
             ...automation,
             enabled: "yes",
+          },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects malformed trigger-condition records", () => {
+    expect(
+      listAutomationsResponseSchema.safeParse({
+        automations: [
+          {
+            ...automation,
             triggerConfig: {
               conditions: [{ type: "branch", operator: "invalid", value: ["main"] }],
             },

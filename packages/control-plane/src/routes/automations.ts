@@ -304,7 +304,6 @@ function validateSlackTriggerConfig(
 
 const DEFAULT_AUTOMATION_LIST_PAGE_SIZE = 25;
 const MAX_AUTOMATION_LIST_PAGE_SIZE = 100;
-const MAX_AUTOMATION_NAME_SEARCH_LENGTH = 200;
 
 const automationListLimitSchema = z
   .string()
@@ -317,24 +316,16 @@ const automationListLimitSchema = z
 const automationListQuerySchema = z.object({
   limit: automationListLimitSchema.optional(),
   cursor: z.string().optional(),
-  search: z
-    .string()
-    .trim()
-    .max(MAX_AUTOMATION_NAME_SEARCH_LENGTH, { message: "Search is too long" })
-    .optional(),
+  search: z.string().trim().max(MAX_NAME_LENGTH, { message: "Search is too long" }).optional(),
   repoOwner: z.string().optional(),
   repoName: z.string().optional(),
 });
 
-const AUTOMATION_LIST_QUERY_PARAM_NAMES = [
-  "limit",
-  "cursor",
-  "search",
-  "repoOwner",
-  "repoName",
-] as const;
+type AutomationListQueryParamName = keyof z.input<typeof automationListQuerySchema>;
 
-type AutomationListQueryParamName = (typeof AUTOMATION_LIST_QUERY_PARAM_NAMES)[number];
+const AUTOMATION_LIST_QUERY_PARAM_NAMES = Object.keys(
+  automationListQuerySchema.shape
+) as AutomationListQueryParamName[];
 
 type ReadAutomationListQueryResult =
   | { ok: true; query: Partial<Record<AutomationListQueryParamName, string>> }

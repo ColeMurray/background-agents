@@ -164,6 +164,24 @@ describe("useAutomations", () => {
     expect(result.current.hasMore).toBe(false);
   });
 
+  it("does not request another page after the final page", async () => {
+    const fetcher = vi.fn(
+      async (): Promise<ListAutomationsResponse> => ({
+        automations: [firstAutomation],
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
+    const { result } = renderHook(() => useAutomations(""), {
+      wrapper: wrapper(fetcher),
+    });
+
+    await waitFor(() => expect(result.current.automations).toEqual([firstAutomation]));
+    await act(() => result.current.loadMore());
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("does not cache or paginate beyond an invalid later page", async () => {
     const fetcher = vi.fn(async (path: string) =>
       path.includes("cursor=")

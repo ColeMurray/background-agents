@@ -46,14 +46,16 @@ export function useAutomations(nameSearch: string) {
   const lastPage = loadedPages[loadedPages.length - 1];
   const loading = authStatus === "loading" || (!!session && !data && !error);
   const loadingMore = !!data && isValidating && data[size - 1] === undefined;
+  const hasMore = lastPage?.hasMore ?? false;
 
   return {
     automations,
     loading,
     loadingMore,
     error: error instanceof Error ? error : undefined,
-    hasMore: lastPage?.hasMore ?? false,
+    hasMore,
     loadMore: async () => {
+      if (loadingMore || !hasMore) return;
       await setSize((pageCount) => pageCount + 1);
     },
     mutate,

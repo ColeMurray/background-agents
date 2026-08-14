@@ -12,31 +12,28 @@ import { Input } from "@/components/ui/input";
 import { PlusIcon, SearchIcon } from "@/components/ui/icons";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
-export const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 300;
 
 export default function AutomationsPage() {
   const { isOpen } = useSidebarContext();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialNameSearch = searchParams.get("search") ?? "";
-  const [nameSearch, setNameSearch] = useState(initialNameSearch);
-  const [debouncedNameSearch, setDebouncedNameSearch] = useState(initialNameSearch.trim());
+  const urlNameSearch = searchParams.get("search") ?? "";
+  const committedNameSearch = urlNameSearch.trim();
+  const [nameSearch, setNameSearch] = useState(urlNameSearch);
   const { automations, loading, loadingMore, error, hasMore, loadMore, mutate } =
-    useAutomations(debouncedNameSearch);
+    useAutomations(committedNameSearch);
 
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
-    const urlNameSearch = searchParams.get("search") ?? "";
     setNameSearch(urlNameSearch);
-    setDebouncedNameSearch(urlNameSearch.trim());
-  }, [searchParams]);
+  }, [urlNameSearch]);
 
   useEffect(() => {
     const debounceTimeoutId = window.setTimeout(() => {
       const normalizedNameSearch = nameSearch.trim();
-      setDebouncedNameSearch(normalizedNameSearch);
 
       const nextSearchParams = new URLSearchParams(searchParams.toString());
       if (normalizedNameSearch) {
@@ -141,8 +138,8 @@ export default function AutomationsPage() {
             <AutomationsList
               automations={automations}
               emptyState={
-                debouncedNameSearch
-                  ? { kind: "no-search-results", nameSearch: debouncedNameSearch }
+                committedNameSearch
+                  ? { kind: "no-search-results", nameSearch: committedNameSearch }
                   : { kind: "no-automations" }
               }
               onPause={(id) => handleAction(id, "pause")}

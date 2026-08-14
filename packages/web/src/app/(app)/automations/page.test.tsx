@@ -4,7 +4,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import AutomationsPage, { SEARCH_DEBOUNCE_MS } from "./page";
+import AutomationsPage from "./page";
 
 expect.extend(matchers);
 
@@ -67,17 +67,20 @@ describe("AutomationsPage", () => {
   });
 
   it("debounces name search and stores it in the URL", () => {
-    render(<AutomationsPage />);
+    const { rerender } = render(<AutomationsPage />);
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search automations by name" }), {
       target: { value: "release" },
     });
 
     expect(mockUseAutomations).toHaveBeenLastCalledWith("");
-    act(() => vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS));
+    act(() => vi.runOnlyPendingTimers());
 
-    expect(mockUseAutomations).toHaveBeenLastCalledWith("release");
     expect(mockReplace).toHaveBeenCalledWith("/automations?search=release", { scroll: false });
+
+    mockSearchParamsState.value = new URLSearchParams({ search: "release" });
+    rerender(<AutomationsPage />);
+    expect(mockUseAutomations).toHaveBeenLastCalledWith("release");
   });
 
   it("shows retry and load-more controls for their respective states", () => {

@@ -16,7 +16,7 @@ import type {
 } from "@open-inspect/shared/types/automations";
 import type { TriggerConfig } from "@open-inspect/shared/triggers";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
-import { automationListCursorFromRow, type AutomationListCursor } from "./automation-list-cursor";
+import type { AutomationListCursor } from "./automation-list-cursor";
 
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -69,7 +69,7 @@ export interface AutomationRow {
   trigger_auth_data: string | null;
 }
 
-export type AutomationListResult = { automations: AutomationRow[] } & (
+type AutomationListResult = { automations: AutomationRow[] } & (
   | { hasMore: false; nextCursor: null }
   | { hasMore: true; nextCursor: AutomationListCursor }
 );
@@ -386,7 +386,10 @@ export class AutomationStore {
     return {
       automations,
       hasMore: true,
-      nextCursor: automationListCursorFromRow(automations[automations.length - 1]),
+      nextCursor: {
+        createdAt: automations[automations.length - 1].created_at,
+        id: automations[automations.length - 1].id,
+      },
     };
   }
 

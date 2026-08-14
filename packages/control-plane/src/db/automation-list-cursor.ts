@@ -1,19 +1,11 @@
-import type { AutomationRow } from "./automation-store";
-
 export interface AutomationListCursor {
   createdAt: number;
   id: string;
 }
 
-export type ParseAutomationListCursorResult =
+type ParseAutomationListCursorResult =
   | { ok: true; cursor: AutomationListCursor | null }
   | { ok: false; error: string };
-
-export function automationListCursorFromRow(
-  automation: Pick<AutomationRow, "created_at" | "id">
-): AutomationListCursor {
-  return { createdAt: automation.created_at, id: automation.id };
-}
 
 export function encodeAutomationListCursor(cursor: AutomationListCursor): string {
   return `${cursor.createdAt}:${encodeURIComponent(cursor.id)}`;

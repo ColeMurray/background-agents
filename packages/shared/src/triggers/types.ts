@@ -17,7 +17,7 @@ export const automationTriggerTypeSchema = z.enum([
 
 export type AutomationTriggerType = z.infer<typeof automationTriggerTypeSchema>;
 
-export const jsonPathFilterSchema = z.object({
+const jsonPathFilterSchema = z.object({
   path: z.string(),
   comparison: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "contains", "exists"]),
   value: z.union([z.string(), z.number(), z.boolean()]).optional(),
@@ -26,7 +26,7 @@ export const jsonPathFilterSchema = z.object({
 export type JsonPathFilter = z.infer<typeof jsonPathFilterSchema>;
 
 /** Value shape for the `text_match` condition (keyword / substring / regex). */
-export const textMatchValueSchema = z.object({
+const textMatchValueSchema = z.object({
   /** Keyword/substring (contains/exact) or regular-expression source (regex). */
   pattern: z.string(),
   /** Case/regex flags; only an allowlisted subset is accepted (see ALLOWED_REGEX_FLAGS). */
@@ -37,7 +37,7 @@ export type TextMatchValue = z.infer<typeof textMatchValueSchema>;
 
 const stringArrayConditionValueSchema = z.array(z.string());
 
-export const triggerConditionSchema = z.discriminatedUnion("type", [
+const triggerConditionSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("branch"),
     operator: z.enum(["glob_match", "exact"]),
