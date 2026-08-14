@@ -701,21 +701,13 @@ describe("VercelSandboxProvider", () => {
     const provider = new VercelSandboxProvider(client, providerConfig);
 
     await provider.triggerImageBuild({
-      buildId: "envimg-1",
-      scopeKind: "environment",
-      scopeId: "env_flagship",
+      ...environmentBuildConfig(),
       repositories: [
         { repoOwner: "acme", repoName: "web", baseBranch: "main" },
         { repoOwner: "acme", repoName: "api", baseBranch: "develop" },
       ],
-      callbackUrl: "https://control-plane.test/image-builds/build-complete",
-      failureCallbackUrl: "https://control-plane.test/image-builds/build-failed",
-      callbackToken: "callback-token",
-      buildExecutionTimeoutSeconds: 1800,
-      providerSessionTimeoutSeconds: 2400,
       cloneToken: "clone-token",
       onProviderSessionCreated,
-      correlation: { trace_id: "trace-1", request_id: "request-1" },
     });
 
     const createCall = vi.mocked(client.createSandbox).mock.calls[0][0];
