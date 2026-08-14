@@ -6,7 +6,7 @@
  * GitHub App installation to get the list of accessible repositories.
  */
 
-import type { Env, RepoConfig } from "../types";
+import type { Env } from "../types";
 import { normalizeRepoId } from "../utils/repo";
 import {
   normalizeRoutingRules,
@@ -16,6 +16,7 @@ import {
 import {
   controlPlaneReposResponseSchema,
   repoConfigSchema,
+  type RepoConfig,
 } from "@open-inspect/shared/types/repository-catalog";
 import { createKvCacheStore } from "@open-inspect/shared/cache-store";
 import { createCachedResource } from "./cached-resource";
@@ -309,30 +310,6 @@ export function filterReposByQuery(repos: RepoConfig[], query: string | undefine
     return repos;
   }
   return repos.filter((repo) => repo.fullName.toLowerCase().includes(normalizedQuery));
-}
-
-/**
- * Find a repository by owner and name.
- */
-export async function getRepoByFullName(
-  env: Env,
-  fullName: string,
-  traceId?: string
-): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.find((r) => r.fullName.toLowerCase() === fullName.toLowerCase());
-}
-
-/**
- * Find a repository by its ID.
- */
-export async function getRepoById(
-  env: Env,
-  id: string,
-  traceId?: string
-): Promise<RepoConfig | undefined> {
-  const repos = await getAvailableRepos(env, traceId);
-  return repos.find((r) => r.id.toLowerCase() === id.toLowerCase());
 }
 
 /**

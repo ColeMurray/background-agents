@@ -107,8 +107,11 @@ CREATE TABLE IF NOT EXISTS messages (
   reasoning_effort TEXT,                            -- Per-message reasoning effort override
   attachments TEXT,                                 -- JSON array
   callback_context TEXT,                            -- JSON callback context for Slack follow-up notifications
+  client_request_id TEXT,                           -- Web-client idempotency key
+  request_fingerprint TEXT,                         -- Participant-scoped canonical request hash
   status TEXT DEFAULT 'pending',                    -- 'pending', 'processing', 'completed', 'failed'
   error_message TEXT,                               -- If status='failed'
+  stop_confirmation_deadline INTEGER,               -- Blocks dispatch until stop is confirmed or times out
   created_at INTEGER NOT NULL,
   started_at INTEGER,                               -- When processing began
   completed_at INTEGER,                             -- When processing finished
@@ -186,13 +189,20 @@ CREATE TABLE IF NOT EXISTS ws_client_mapping (
   created_at INTEGER NOT NULL,
   FOREIGN KEY (participant_id) REFERENCES participants(id)
 );
+`;
 
--- Indexes for common queries
+// Indexes run only after migrations so they can safely reference columns that
+// do not exist in legacy tables. Migration-specific index creation remains in
+// the relevant migration so partially applied upgrades stay idempotent.
+const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
 CREATE INDEX IF NOT EXISTS idx_messages_author ON messages(author_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
+ON messages(client_request_id) WHERE client_request_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_events_message ON events(message_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_timeline_sequence ON events(timeline_sequence);
 CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user_id);
 `;
 
@@ -510,6 +520,21 @@ export const MIGRATIONS: readonly SchemaMigration[] = [
       runMigration(sql, `ALTER TABLE session ADD COLUMN vnc_enabled INTEGER NOT NULL DEFAULT 0`);
     },
   },
+  {
+    id: 40,
+    description: "Add web prompt idempotency fields",
+    run: (sql) => {
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN client_request_id TEXT`);
+      runMigration(sql, `ALTER TABLE messages ADD COLUMN request_fingerprint TEXT`);
+      sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_client_request_id
+        ON messages(client_request_id) WHERE client_request_id IS NOT NULL`);
+    },
+  },
+  {
+    id: 41,
+    description: "Add dedicated stop confirmation deadline",
+    run: `ALTER TABLE messages ADD COLUMN stop_confirmation_deadline INTEGER`,
+  },
 ];
 
 /**
@@ -564,4 +589,5 @@ export function applyMigrations(sql: SqlStorage): void {
 export function initSchema(sql: SqlStorage): void {
   sql.exec(SCHEMA_SQL);
   applyMigrations(sql);
+  sql.exec(INDEXES_SQL);
 }

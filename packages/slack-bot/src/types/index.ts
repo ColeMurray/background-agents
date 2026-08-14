@@ -42,16 +42,6 @@ export interface Env {
 }
 
 /**
- * Repository configuration for the classifier.
- */
-export type {
-  RepoConfig,
-  RepoMetadata,
-  ControlPlaneRepo,
-  ControlPlaneReposResponse,
-} from "@open-inspect/shared/types/repository-catalog";
-
-/**
  * Thread context for classification.
  */
 export interface ThreadContext {
@@ -81,64 +71,9 @@ export interface ClassificationResult {
   needsClarification: boolean;
 }
 
-export type { ConfidenceLevel } from "@open-inspect/shared/types/repository-catalog";
-export type { Environment } from "@open-inspect/shared/types/environments";
 export type { SlackSessionTarget } from "../targets";
 
-/**
- * Slack event types.
- */
-export interface SlackEvent {
-  type: string;
-  event: {
-    type: string;
-    text?: string;
-    user?: string;
-    channel?: string;
-    ts?: string;
-    thread_ts?: string;
-    bot_id?: string;
-  };
-  event_id: string;
-  event_time: number;
-  team_id: string;
-}
-
-/**
- * Slack message event.
- */
-export interface SlackMessageEvent {
-  type: "message";
-  text: string;
-  user: string;
-  channel: string;
-  ts: string;
-  thread_ts?: string;
-  bot_id?: string;
-}
-
-/**
- * Slack app_mention event.
- */
-export interface SlackAppMentionEvent {
-  type: "app_mention";
-  text: string;
-  user: string;
-  channel: string;
-  ts: string;
-  thread_ts?: string;
-}
-
 export type { SlackInteractionPayload } from "../interaction-payload";
-
-/**
- * Callback context passed with prompts for follow-up notifications.
- */
-export type { SlackCallbackContext, CallbackContext } from "@open-inspect/shared";
-import type { SlackCallbackContext } from "@open-inspect/shared";
-
-// Keep backward-compatible alias
-export type SlackBotCallbackContext = SlackCallbackContext;
 
 /**
  * Thread-to-session mapping stored in KV for conversation continuity.
@@ -160,42 +95,3 @@ export interface ThreadSession {
    */
   lastPromptTs?: string;
 }
-
-/**
- * Completion callback payload from control-plane.
- */
-export interface CompletionCallback {
-  sessionId: string;
-  messageId: string;
-  success: boolean;
-  error?: string;
-  timestamp: number;
-  signature: string;
-  context: SlackCallbackContext;
-}
-
-/**
- * Tool-call callback payload from control-plane.
- */
-export interface ToolCallCallback {
-  sessionId: string;
-  tool: string;
-  args: Record<string, unknown>;
-  callId: string;
-  timestamp: number;
-  signature: string;
-  context: SlackCallbackContext;
-}
-
-/**
- * Event response from control-plane events API.
- */
-export type {
-  ArtifactResponse,
-  ListArtifactsResponse,
-  ToolCallSummary,
-  ArtifactInfo,
-  AgentResponse,
-  UserPreferences,
-} from "@open-inspect/shared";
-export type { EventResponse, ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";

@@ -1,4 +1,8 @@
-import type { ScmSettings, ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import type {
+  ScmSettings,
+  ScmGlobalConfig,
+  ScmRepoSettings,
+} from "@open-inspect/shared/types/integrations";
 import { IntegrationSettingsStore } from "./integration-settings";
 import type { SqlDatabase } from "./sql-database";
 

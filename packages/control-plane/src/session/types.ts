@@ -2,18 +2,19 @@
  * Session-specific type definitions.
  */
 
+import type { ResolvedSessionAttachment } from "@open-inspect/shared/types/session-attachments";
 import type {
-  ResolvedSessionAttachment,
   SessionStatus,
   SandboxStatus,
   MessageStatus,
   MessageSource,
   ParticipantRole,
   SpawnSource,
-  ArtifactType,
-} from "../types";
+} from "@open-inspect/shared/types/sessions";
+import type { ArtifactType } from "@open-inspect/shared/types/artifacts";
 import type { EventType, GitSyncStatus } from "@open-inspect/shared/types/sandbox-events";
 import type { GitPushSpec } from "../source-control";
+import { z } from "zod";
 
 // Database row types (match SQLite schema)
 
@@ -102,22 +103,27 @@ export interface MessageRow {
   reasoning_effort: string | null; // Reasoning effort for per-message override
   attachments: string | null; // JSON
   callback_context: string | null; // JSON: { channel, threadTs, repoFullName, model }
+  client_request_id: string | null;
+  request_fingerprint: string | null;
   status: MessageStatus;
   error_message: string | null;
+  stop_confirmation_deadline: number | null;
   created_at: number;
   started_at: number | null;
   completed_at: number | null;
 }
 
-export interface SessionAttachmentRow {
-  id: string;
-  mime_type: string;
-  size_bytes: number;
-  object_key: string;
-  message_id: string | null; // Set once a prompt references this upload
-  cleanup_claimed_at: number | null; // Retained until object deletion is acknowledged
-  created_at: number;
-}
+export const sessionAttachmentRowSchema = z.object({
+  id: z.string(),
+  mime_type: z.string(),
+  size_bytes: z.number(),
+  object_key: z.string(),
+  message_id: z.string().nullable(), // Set once a prompt references this upload
+  cleanup_claimed_at: z.number().nullable(), // Retained until object deletion is acknowledged
+  created_at: z.number(),
+});
+
+export type SessionAttachmentRow = z.infer<typeof sessionAttachmentRowSchema>;
 
 export interface EventRow {
   id: string;
@@ -164,7 +170,7 @@ export interface SandboxRow {
 
 // Command types for sandbox communication
 
-export interface PromptCommand {
+interface PromptCommand {
   type: "prompt";
   messageId: string;
   content: string;
@@ -177,29 +183,29 @@ export interface PromptCommand {
   attachments?: ResolvedSessionAttachment[];
 }
 
-export interface StopCommand {
+interface StopCommand {
   type: "stop";
 }
 
-export interface SnapshotCommand {
+interface SnapshotCommand {
   type: "snapshot";
 }
 
-export interface ShutdownCommand {
+interface ShutdownCommand {
   type: "shutdown";
 }
 
-export interface AckCommand {
+interface AckCommand {
   type: "ack";
   ackId: string;
 }
 
-export interface PushCommand {
+interface PushCommand {
   type: "push";
   pushSpec: GitPushSpec;
 }
 
-export interface RefreshDiffCommand {
+interface RefreshDiffCommand {
   type: "refresh_diff";
 }
 
@@ -211,21 +217,3 @@ export type SandboxCommand =
   | AckCommand
   | PushCommand
   | RefreshDiffCommand;
-
-// Internal session update types
-
-export interface SessionUpdate {
-  title?: string;
-  branchName?: string;
-  baseSha?: string;
-  currentSha?: string;
-  opencodeSessionId?: string;
-  status?: SessionStatus;
-}
-
-export interface SandboxUpdate {
-  modalSandboxId?: string;
-  snapshotId?: string;
-  status?: SandboxStatus;
-  gitSyncStatus?: GitSyncStatus;
-}

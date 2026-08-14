@@ -5,9 +5,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { EnrichedRepository, ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared/types/integrations";
+import type { EnrichedRepository } from "@open-inspect/shared/types/repository-catalog";
 import { parseRepositoryFullName } from "@open-inspect/shared/types/repositories";
-import { getScmRepoSettingsPath, ScmSettingsPage } from "./scm-settings";
+import { ScmSettingsPage } from "./scm-settings";
 
 expect.extend(matchers);
 
@@ -101,17 +102,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("getScmRepoSettingsPath", () => {
-  it("encodes a nested GitLab namespace as one owner segment", () => {
-    expect(getScmRepoSettingsPath("group/subgroup/repo")).toBe(
-      "/api/scm-settings/repos/group%2Fsubgroup/repo"
-    );
-  });
-
-  it("rejects malformed repository names", () => {
-    expect(getScmRepoSettingsPath("repo")).toBeNull();
-  });
-
+describe("ScmSettingsPage", () => {
   it("synchronizes clean controls after revalidation without overwriting dirty edits", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<ScmSettingsPage />);

@@ -4,6 +4,7 @@ import type { SandboxEvent } from "@/types/session";
 import { formatSessionEventTime } from "@/lib/time";
 import { formatToolCall } from "@/lib/tool-formatters";
 import { SlackNotifyEvent } from "./slack-notify-event";
+import { TimelineRowContent } from "./timeline-row-content";
 import {
   ChevronRightIcon,
   FileIcon,
@@ -26,7 +27,7 @@ interface ToolCallItemProps {
 function ToolIcon({ name }: { name: string | null }) {
   if (!name) return null;
 
-  const iconClass = "w-3.5 h-3.5 text-secondary-foreground";
+  const iconClass = "mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground";
 
   switch (name) {
     case "file":
@@ -50,7 +51,7 @@ function ToolIcon({ name }: { name: string | null }) {
   }
 }
 
-export function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
+function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }) {
   const formatted = formatToolCall(event);
   const isApplyPatch = event.tool?.toLowerCase() === "apply_patch";
   const { args, output } = formatted.getDetails();
@@ -62,27 +63,27 @@ export function ToolCallDetails({ event }: { event: ToolCallItemProps["event"] }
   const hasNonPatchArgs = !!nonPatchArgs && Object.keys(nonPatchArgs).length > 0;
 
   return (
-    <div className="p-3 bg-card border border-border-muted text-xs overflow-hidden">
+    <div className="min-w-0 max-w-full overflow-hidden border border-border-muted bg-card p-3 text-xs">
       {hasNonPatchArgs && (
-        <div className="mb-2">
+        <div className="mb-2 min-w-0 max-w-full">
           <div className="text-muted-foreground mb-1 font-medium">Arguments:</div>
-          <pre className="overflow-x-auto text-foreground whitespace-pre-wrap">
+          <pre className="w-full max-w-full overflow-x-auto whitespace-pre text-foreground">
             {JSON.stringify(nonPatchArgs, null, 2)}
           </pre>
         </div>
       )}
       {patchText && (
-        <div className="mb-2">
+        <div className="mb-2 min-w-0 max-w-full">
           <div className="text-muted-foreground mb-1 font-medium">Patch:</div>
-          <pre className="overflow-x-auto max-h-64 text-foreground whitespace-pre-wrap">
+          <pre className="max-h-64 w-full max-w-full overflow-x-auto whitespace-pre text-foreground">
             {patchText}
           </pre>
         </div>
       )}
       {output && (
-        <div>
+        <div className="min-w-0 max-w-full">
           <div className="text-muted-foreground mb-1 font-medium">Output:</div>
-          <pre className="overflow-x-auto max-h-48 text-foreground whitespace-pre-wrap">
+          <pre className="max-h-48 w-full max-w-full overflow-x-auto whitespace-pre text-foreground">
             {output}
           </pre>
         </div>
@@ -110,28 +111,27 @@ export function ToolCallItem({ event, isExpanded, onToggle, showTime = true }: T
   const time = formatSessionEventTime(event.timestamp);
 
   return (
-    <div className="py-0.5">
+    <div className="min-w-0 max-w-full py-0.5">
       <button
         type="button"
         onClick={onToggle}
-        className="w-full flex items-center gap-1.5 text-sm text-left text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full min-w-0 items-start gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRightIcon
-          className={`w-3.5 h-3.5 text-secondary-foreground transition-transform duration-200 ${
+          className={`mt-[3px] h-3.5 w-3.5 shrink-0 text-secondary-foreground transition-transform duration-200 ${
             isExpanded ? "rotate-90" : ""
           }`}
         />
         <ToolIcon name={formatted.icon} />
-        <span className="truncate">
-          {formatted.toolName} {formatted.summary}
-        </span>
-        {showTime && (
-          <span className="text-xs text-secondary-foreground flex-shrink-0 ml-auto">{time}</span>
-        )}
+        <TimelineRowContent time={showTime ? time : undefined}>
+          <span className="block truncate">
+            {formatted.toolName} {formatted.summary}
+          </span>
+        </TimelineRowContent>
       </button>
 
       {isExpanded && (
-        <div className="mt-2 ml-5">
+        <div className="mt-2 min-w-0 w-full max-w-full sm:ml-5 sm:w-[calc(100%_-_1.25rem)]">
           <ToolCallDetails event={event} />
         </div>
       )}

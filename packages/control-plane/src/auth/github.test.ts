@@ -1,21 +1,19 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { exchangeCodeForToken, refreshAccessToken } from "./github";
-import type { GitHubOAuthConfig } from "./github";
-import type { GitHubTokenResponse } from "../types";
+import { refreshAccessToken } from "./github";
+import type { GitHubOAuthConfig, GitHubTokenResponse } from "./github";
 
 describe("github auth", () => {
   const originalFetch = globalThis.fetch;
   const config: GitHubOAuthConfig = {
     clientId: "client-id",
     clientSecret: "client-secret",
-    encryptionKey: "unused",
   };
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
   });
 
-  describe("exchangeCodeForToken", () => {
+  describe("refreshAccessToken", () => {
     it("parses a valid token response", async () => {
       const tokenResponse: GitHubTokenResponse = {
         access_token: "gho_token",
@@ -29,7 +27,7 @@ describe("github auth", () => {
         json: () => Promise.resolve(tokenResponse),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).resolves.toEqual(tokenResponse);
+      await expect(refreshAccessToken("old-refresh", config)).resolves.toEqual(tokenResponse);
     });
 
     it("parses a valid token response with optional fields omitted", async () => {
@@ -43,7 +41,7 @@ describe("github auth", () => {
         json: () => Promise.resolve(tokenResponse),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).resolves.toEqual(tokenResponse);
+      await expect(refreshAccessToken("old-refresh", config)).resolves.toEqual(tokenResponse);
     });
 
     it("rejects a malformed token response", async () => {
@@ -51,7 +49,7 @@ describe("github auth", () => {
         json: () => Promise.resolve({ access_token: "gho_token", token_type: "bearer" }),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).rejects.toThrow(
+      await expect(refreshAccessToken("old-refresh", config)).rejects.toThrow(
         "Invalid GitHub token response"
       );
     });
@@ -65,36 +63,8 @@ describe("github auth", () => {
           }),
       } as unknown as Response);
 
-      await expect(exchangeCodeForToken("code", config)).rejects.toThrow(
-        "The code passed is incorrect or expired."
-      );
-    });
-  });
-
-  describe("refreshAccessToken", () => {
-    it("parses a valid refresh response", async () => {
-      const tokenResponse: GitHubTokenResponse = {
-        access_token: "gho_new",
-        token_type: "bearer",
-        scope: "repo,user",
-        refresh_token: "ghr_new",
-        expires_in: 28800,
-      };
-
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        json: () => Promise.resolve(tokenResponse),
-      } as unknown as Response);
-
-      await expect(refreshAccessToken("old-refresh", config)).resolves.toEqual(tokenResponse);
-    });
-
-    it("rejects a malformed refresh response", async () => {
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        json: () => Promise.resolve({ access_token: "gho_new", token_type: "bearer" }),
-      } as unknown as Response);
-
       await expect(refreshAccessToken("old-refresh", config)).rejects.toThrow(
-        "Invalid GitHub token response"
+        "The code passed is incorrect or expired."
       );
     });
   });

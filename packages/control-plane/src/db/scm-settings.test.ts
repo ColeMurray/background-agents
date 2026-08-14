@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared";
+import type { ScmGlobalConfig, ScmRepoSettings } from "@open-inspect/shared/types/integrations";
 import { ScmSettingsStore, ScmSettingsValidationError } from "./scm-settings";
 import { IntegrationSettingsStore } from "./integration-settings";
 import type { SqlDatabase } from "./sql-database";

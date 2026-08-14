@@ -16,10 +16,6 @@ export const linearClientCredentialsTokenResponseSchema = z.object({
   scope: responseScopeSchema.optional(),
 });
 
-export type LinearClientCredentialsTokenResponse = z.infer<
-  typeof linearClientCredentialsTokenResponseSchema
->;
-
 export const linearOAuthErrorResponseSchema = z.object({
   error: z
     .string()

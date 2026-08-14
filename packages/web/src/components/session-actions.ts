@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { SessionStatus } from "@open-inspect/shared";
+import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { toast } from "sonner";
 import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
 import { getSafeExternalUrl } from "@/lib/urls";

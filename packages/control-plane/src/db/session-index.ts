@@ -5,7 +5,11 @@ import type {
   SessionReadState,
   SessionStatus,
   SpawnSource,
-} from "@open-inspect/shared";
+} from "@open-inspect/shared/types/sessions";
+import {
+  DEFAULT_SESSION_LIST_LIMIT,
+  DEFAULT_SESSION_LIST_OFFSET,
+} from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase } from "./sql-database";
@@ -218,6 +222,14 @@ function normalizeSessionRepository(session: SessionEntry): {
 export class SessionIndexStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  async exists(id: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("SELECT 1 AS ok FROM sessions WHERE id = ?")
+      .bind(id)
+      .first<{ ok: number }>();
+    return result !== null;
+  }
+
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);
 
@@ -326,8 +338,8 @@ export class SessionIndexStore {
       repoOwner,
       repoName,
       createdByUserIds,
-      limit = 50,
-      offset = 0,
+      limit = DEFAULT_SESSION_LIST_LIMIT,
+      offset = DEFAULT_SESSION_LIST_OFFSET,
       viewerUserId,
     } = options;
 
@@ -345,7 +357,11 @@ export class SessionIndexStore {
     }
 
     if (excludeAutomationLineage) {
-      conditions.push("automation_id IS NULL AND spawn_source != 'automation'");
+      // The "Mine" view excludes sessions no human initiated in the app.
+      // github-bot sessions are attributed to the webhook sender (the verified
+      // actor), but auto reviews and review-request handling are bot-initiated,
+      // so they are lineage-excluded alongside automation runs.
+      conditions.push("automation_id IS NULL AND spawn_source NOT IN ('automation', 'github-bot')");
     }
 
     // Repo filters match against the membership table so a session is found

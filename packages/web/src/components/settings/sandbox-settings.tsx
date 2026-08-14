@@ -903,8 +903,16 @@ export function SandboxSettingsPage() {
 
       {/* Repo selector */}
       <div className="mb-6">
-        <label className="block text-sm font-medium text-foreground mb-1.5">Repository</label>
+        <label
+          id="sandbox-repository-label"
+          htmlFor="sandbox-repository"
+          className="block text-sm font-medium text-foreground mb-1.5"
+        >
+          Repository
+        </label>
         <Combobox
+          id="sandbox-repository"
+          labelId="sandbox-repository-label"
           value={selectedRepo}
           onChange={setSelectedRepo}
           items={repos.map((repo) => ({

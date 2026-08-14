@@ -40,6 +40,18 @@ describe("SessionMessengerImpl", () => {
     expect(send).toHaveBeenCalledWith(sandboxSocket, { type: "refresh_diff" });
   });
 
+  it("emits prompt queue updates to every authenticated client", () => {
+    const { messenger, clientSockets, send } = harness();
+    const message = { type: "prompt_queue_updated", promptQueue: [] } satisfies Parameters<
+      typeof messenger.broadcast
+    >[0];
+
+    messenger.broadcast(message);
+
+    expect(send).toHaveBeenCalledTimes(clientSockets.length);
+    for (const ws of clientSockets) expect(send).toHaveBeenCalledWith(ws, message);
+  });
+
   it("reports failure when no sandbox is connected", () => {
     const { messenger, send } = harness(null);
 

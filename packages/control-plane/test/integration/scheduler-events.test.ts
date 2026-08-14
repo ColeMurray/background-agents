@@ -134,7 +134,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
       });
       // Firing keys live on the invocation, not the child run.
       expect(run.invocation_id).not.toBeNull();
-      const invocation = await store.getInvocationById(run.invocation_id!);
+      const invocation = await store.getInvocationById(run.invocation_id);
       expect(invocation).toMatchObject({
         source: "event",
         trigger_key: event.triggerKey,
@@ -173,7 +173,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
 
       const run = runs[0]!;
       expect(run.automation_id).toBe(automationId);
-      const invocation = await store.getInvocationById(run.invocation_id!);
+      const invocation = await store.getInvocationById(run.invocation_id);
       expect(invocation!.trigger_key).toBe(event.triggerKey);
     });
   });
@@ -343,7 +343,7 @@ describe("SchedulerDO /internal/event (integration)", () => {
       // Only the original run exists; the skip is a childless invocation.
       const runs = await fetchRuns(automationId);
       expect(runs).toHaveLength(1);
-      const activeInvocation = await store.getInvocationById(runs[0]!.invocation_id!);
+      const activeInvocation = await store.getInvocationById(runs[0]!.invocation_id);
       expect(activeInvocation!.concurrency_key).toBe(concurrencyKey);
 
       const { invocations } = await store.listInvocations(automationId, {

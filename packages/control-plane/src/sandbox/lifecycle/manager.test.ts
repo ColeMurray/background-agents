@@ -37,7 +37,7 @@ import {
   type StopResult,
 } from "../provider";
 import type { SandboxRow, SessionRow } from "../../session/types";
-import type { SandboxStatus } from "../../types";
+import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 
 // ==================== Mock Factories ====================
 
@@ -267,7 +267,7 @@ function createMockWebSocketManager(
   return {
     sendCalls,
     getSandboxWebSocket: vi.fn(() => (hasSandboxWs ? ({} as WebSocket) : null)),
-    closeSandboxWebSocket: vi.fn(),
+    detachSandboxWebSocket: vi.fn(),
     sendToSandbox: vi.fn((message: object) => {
       sendCalls.push(message);
       return true;
@@ -355,6 +355,113 @@ function createTestConfig(): SandboxLifecycleConfig {
   };
 }
 
+type ProviderStartupKind = "spawn" | "restore" | "resume";
+
+async function expectEarlyBridgeStartup(kind: ProviderStartupKind): Promise<void> {
+  const sandbox = createMockSandbox({
+    status: kind === "spawn" ? "pending" : "stopped",
+    created_at: Date.now() - 60000,
+    snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+  });
+  const storage = createMockStorage(
+    createMockSession({ code_server_enabled: 1, vnc_enabled: 1 }),
+    sandbox
+  );
+  const broadcaster = createMockBroadcaster();
+  const wsManager = createMockWebSocketManager(false);
+  const alarmScheduler = createMockAlarmScheduler();
+  const accessAtBroadcast: Array<
+    Pick<
+      SandboxRow,
+      "code_server_url" | "code_server_password" | "vnc_url" | "vnc_password" | "tunnel_urls"
+    >
+  > = [];
+  vi.mocked(broadcaster.broadcast).mockImplementation((message: object) => {
+    broadcaster.messages.push(message);
+    if ((message as { type?: string }).type === "sandbox_access_changed") {
+      accessAtBroadcast.push({
+        code_server_url: sandbox.code_server_url,
+        code_server_password: sandbox.code_server_password,
+        vnc_url: sandbox.vnc_url,
+        vnc_password: sandbox.vnc_password,
+        tunnel_urls: sandbox.tunnel_urls,
+      });
+    }
+  });
+  const connectBridge = () => {
+    sandbox.status = "ready";
+    vi.mocked(wsManager.getSandboxWebSocket).mockReturnValue({} as WebSocket);
+    broadcaster.broadcast({ type: "sandbox_status", status: "ready" });
+  };
+  const access = {
+    codeServerUrl: `https://${kind}-code.test`,
+    codeServerPassword: `${kind}-code-secret`,
+    vncAccess: { url: `https://${kind}-vnc.test`, password: `${kind}-vnc-secret` },
+    tunnelUrls: { "3000": `https://${kind}-preview.test` },
+  };
+  const provider = createMockProvider({
+    capabilities: { supportsPersistentResume: kind === "resume" },
+    createSandbox: vi.fn(async (config) => {
+      connectBridge();
+      return {
+        sandboxId: config.sandboxId,
+        status: "connecting",
+        createdAt: Date.now(),
+        ...access,
+      };
+    }),
+    restoreFromSnapshot: vi.fn(async (config) => {
+      connectBridge();
+      return { success: true, sandboxId: config.sandboxId, ...access };
+    }),
+    resumeSandbox: vi.fn(async () => {
+      connectBridge();
+      return { success: true, ...access };
+    }),
+  });
+  const manager = new SandboxLifecycleManager(
+    provider,
+    storage,
+    broadcaster,
+    wsManager,
+    alarmScheduler,
+    createMockIdGenerator(),
+    createTestConfig()
+  );
+
+  await manager.spawnSandbox();
+
+  expect(sandbox.status).toBe("ready");
+  expect(storage.calls.filter((call) => call === "updateSandboxStatus:connecting")).toHaveLength(
+    kind === "resume" ? 1 : 0
+  );
+  expect(alarmScheduler.alarms).toEqual([]);
+  expect(manager.isProviderStartupPending()).toBe(false);
+  const readyIndex = broadcaster.messages.findIndex(
+    (message) =>
+      (message as { type?: string; status?: string }).type === "sandbox_status" &&
+      (message as { status?: string }).status === "ready"
+  );
+  expect(broadcaster.messages.slice(readyIndex + 1)).not.toContainEqual({
+    type: "sandbox_status",
+    status: "connecting",
+  });
+  expect(
+    broadcaster.messages.filter(
+      (message) => (message as { type: string }).type === "sandbox_access_changed"
+    )
+  ).toHaveLength(1);
+  expect(accessAtBroadcast).toEqual([
+    {
+      code_server_url: access.codeServerUrl,
+      code_server_password: access.codeServerPassword,
+      vnc_url: access.vncAccess.url,
+      vnc_password: access.vncAccess.password,
+      tunnel_urls: JSON.stringify(access.tunnelUrls),
+    },
+  ]);
+}
+
 // ==================== Tests ====================
 
 describe("SandboxLifecycleManager", () => {
@@ -388,7 +495,7 @@ describe("SandboxLifecycleManager", () => {
       ).toBe(true);
     });
 
-    it("stores VNC access and invalidates authenticated access", async () => {
+    it("stores VNC access without publishing it before the sandbox is ready", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession({ vnc_enabled: 1 }), sandbox);
       const broadcaster = createMockBroadcaster();
@@ -416,9 +523,14 @@ describe("SandboxLifecycleManager", () => {
         expect.objectContaining({ vncEnabled: true })
       );
       expect(storage.updateSandboxVnc).toHaveBeenCalledWith("https://vnc.test", "secret");
-      expect(broadcaster.messages).toContainEqual({ type: "sandbox_access_changed" });
+      expect(broadcaster.messages).not.toContainEqual({ type: "sandbox_access_changed" });
       expect(JSON.stringify(broadcaster.messages)).not.toContain("secret");
     });
+
+    it.each(["spawn", "restore", "resume"] as const)(
+      "preserves an early bridge connection until %s access is persisted",
+      expectEarlyBridgeStartup
+    );
 
     it("logs one terminal sandbox.spawn event for success", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
@@ -695,6 +807,7 @@ describe("SandboxLifecycleManager", () => {
       const wsManager = createMockWebSocketManager(false);
       const provider = createMockProvider();
 
+      const onSandboxTerminated = vi.fn(async () => {});
       const manager = new SandboxLifecycleManager(
         provider,
         storage,
@@ -702,7 +815,8 @@ describe("SandboxLifecycleManager", () => {
         wsManager,
         createMockAlarmScheduler(),
         createMockIdGenerator(),
-        createTestConfig()
+        createTestConfig(),
+        { onSandboxTerminated }
       );
 
       await manager.spawnSandbox();
@@ -711,6 +825,7 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "sandbox_error")
       ).toBe(true);
+      expect(onSandboxTerminated).not.toHaveBeenCalled();
     });
 
     it("resets circuit breaker when window passes", async () => {
@@ -1304,6 +1419,10 @@ describe("SandboxLifecycleManager", () => {
       expect(
         broadcaster.messages.some((m) => (m as { type: string }).type === "snapshot_saved")
       ).toBe(true);
+      expect(broadcaster.messages.slice(-2)).toEqual([
+        { type: "sandbox_status", status: "ready" },
+        { type: "sandbox_access_changed" },
+      ]);
     });
 
     it("skips when provider does not support snapshots", async () => {
@@ -1420,7 +1539,7 @@ describe("SandboxLifecycleManager", () => {
         true
       );
       expect(wsManager.sendToSandbox).toHaveBeenCalledWith({ type: "shutdown" });
-      expect(wsManager.closeSandboxWebSocket).toHaveBeenCalledWith(1000, "Heartbeat stale");
+      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(1000, "Heartbeat stale");
     });
 
     it("handles inactivity timeout", async () => {
@@ -1858,6 +1977,72 @@ describe("SandboxLifecycleManager", () => {
       await manager.handleAlarm();
 
       expect(onSandboxTerminating).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("terminateUnresponsiveSandbox", () => {
+    it.each([
+      ["prompt_dispatch_send_failed", "Prompt dispatch send failed"],
+      ["stop_send_failed", "Stop command send failed"],
+      ["stop_confirmation_timeout", "Stop confirmation timed out"],
+    ] as const)(
+      "uses the %s reason for provider stop and socket close",
+      async (trigger, closeReason) => {
+        const storage = createMockStorage();
+        const wsManager = createMockWebSocketManager(true);
+        const stopSandbox = vi.fn(async () => ({ success: true }));
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox,
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          createMockBroadcaster(),
+          wsManager,
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await manager.terminateUnresponsiveSandbox(trigger);
+
+        expect(stopSandbox).toHaveBeenCalledWith(expect.objectContaining({ reason: trigger }));
+        expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(1011, closeReason);
+      }
+    );
+
+    it("detaches dispatch before awaiting a paused provider stop", async () => {
+      let resolveStop!: (result: StopResult) => void;
+      const providerStop = new Promise<StopResult>((resolve) => {
+        resolveStop = resolve;
+      });
+      const wsManager = createMockWebSocketManager(true);
+      const onSandboxTerminated = vi.fn(async () => {});
+      const manager = new SandboxLifecycleManager(
+        createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox: vi.fn(() => providerStop),
+        }),
+        createMockStorage(),
+        createMockBroadcaster(),
+        wsManager,
+        createMockAlarmScheduler(),
+        createMockIdGenerator(),
+        createTestConfig(),
+        { onSandboxTerminated }
+      );
+
+      const terminating = manager.terminateUnresponsiveSandbox("stop_confirmation_timeout");
+
+      expect(wsManager.detachSandboxWebSocket).toHaveBeenCalledWith(
+        1011,
+        "Stop confirmation timed out"
+      );
+      expect(onSandboxTerminated).not.toHaveBeenCalled();
+      resolveStop({ success: true });
+      await terminating;
+      expect(onSandboxTerminated).toHaveBeenCalledOnce();
     });
   });
 

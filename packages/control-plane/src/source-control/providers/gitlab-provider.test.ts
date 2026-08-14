@@ -847,6 +847,19 @@ describe("GitLabSourceControlProvider", () => {
 
       expect(branches).toEqual([{ name: "main" }, { name: "develop" }, { name: "feature/foo" }]);
     });
+
+    it("throws permanent error when a listed branch shape is invalid", async () => {
+      mockFetch.mockResolvedValueOnce(makeResponse([{ name: "main" }, { commit: { id: "sha" } }]));
+
+      const provider = new GitLabSourceControlProvider(fakeConfig);
+      const err = await provider
+        .listBranches({ owner: "acme", name: "web" })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(SourceControlProviderError);
+      expect((err as SourceControlProviderError).errorType).toBe("permanent");
+      expect((err as Error).message).toContain("unexpected response shape");
+    });
   });
 
   describe("generatePushAuth", () => {

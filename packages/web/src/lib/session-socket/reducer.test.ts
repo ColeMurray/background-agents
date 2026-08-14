@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { SandboxEvent } from "@/types/session";
-import type { SessionState } from "@open-inspect/shared";
-import type { ServerMessage, SessionSnapshot } from "@open-inspect/shared/types/server-messages";
+import type {
+  ServerMessage,
+  SessionSnapshot,
+  SessionState,
+} from "@open-inspect/shared/types/server-messages";
 import {
   createSessionSocketState,
   initialSessionSocketState,
@@ -37,6 +40,7 @@ function createSubscribedMessage(overrides: Partial<SubscribedMessage> = {}): Su
     participant: { participantId: "participant-1", name: "Test User" },
     timeline: { events: [], hasMore: false, cursor: null },
     spawnError: null,
+    promptQueue: [],
     ...overrides,
   };
 }
@@ -62,6 +66,7 @@ function createSnapshot(overrides: Partial<SessionSnapshot> = {}): SessionSnapsh
       cursor: { timestamp: 1, id: "event-1", sequence: 1 },
     },
     spawnError: null,
+    promptQueue: [],
     ...overrides,
   };
 }
@@ -82,10 +87,25 @@ function subscribedState(overrides: Partial<SubscribedMessage> = {}): SessionSoc
 
 describe("sessionSocketReducer", () => {
   describe("snapshot", () => {
+    it("hydrates the authoritative prompt queue", () => {
+      const promptQueue = [
+        {
+          messageId: "message-1",
+          content: "Running",
+          status: "processing" as const,
+        },
+      ];
+      const state = createSessionSocketState({
+        ...createSnapshot(),
+        promptQueue,
+      } as SessionSnapshot);
+      expect(state.promptQueue).toEqual(promptQueue);
+    });
     it("initializes the rendered state before the socket connects", () => {
       const state = createSessionSocketState(createSnapshot());
 
       expect(state.ready).toBe(false);
+      expect(state.presenceSynced).toBe(false);
       expect(state.events).toHaveLength(1);
       expect(state.cursor).toEqual({ timestamp: 1, id: "event-1", sequence: 1 });
     });
@@ -138,6 +158,21 @@ describe("sessionSocketReducer", () => {
       expect(state.events.map((event) => event.type)).toEqual(["token", "execution_complete"]);
       expect(state.events[0]).toEqual(expect.objectContaining({ content: "Final" }));
     });
+  });
+
+  it("replaces the queue from a live prompt_queue_updated message", () => {
+    const queue = [
+      {
+        messageId: "message-2",
+        content: "Next",
+        status: "pending" as const,
+      },
+    ];
+    const state = reduce(
+      subscribedState(),
+      serverMessage({ type: "prompt_queue_updated", promptQueue: queue })
+    );
+    expect(state.promptQueue).toEqual(queue);
   });
 
   describe("subscribed", () => {
@@ -390,10 +425,51 @@ describe("sessionSocketReducer", () => {
         subscribedState(),
         serverMessage({ type: "presence_sync", participants })
       );
+      expect(synced.presenceSynced).toBe(true);
       expect(synced.participants).toEqual(participants);
 
       const left = reduce(synced, serverMessage({ type: "presence_leave", userId: "user-1" }));
       expect(left.participants.map((p) => p.userId)).toEqual(["user-2"]);
+    });
+
+    it("marks an empty presence sync as synchronized", () => {
+      const state = reduce(
+        subscribedState(),
+        serverMessage({ type: "presence_sync", participants: [] })
+      );
+
+      expect(state.presenceSynced).toBe(true);
+      expect(state.participants).toEqual([]);
+    });
+
+    it("waits for a new presence sync while reconnecting", () => {
+      const synced = reduce(
+        subscribedState(),
+        serverMessage({
+          type: "presence_sync",
+          participants: [
+            {
+              participantId: "participant-1",
+              userId: "user-1",
+              name: "A",
+              status: "active",
+              lastSeen: 1,
+            },
+          ],
+        })
+      );
+      const disconnected = reduce(synced, { type: "socket_closed" });
+      const resubscribed = reduce(disconnected, serverMessage(createSubscribedMessage()));
+      const resynced = reduce(
+        resubscribed,
+        serverMessage({ type: "presence_sync", participants: [] })
+      );
+
+      expect(disconnected.presenceSynced).toBe(false);
+      expect(disconnected.participants).toEqual([]);
+      expect(resubscribed.presenceSynced).toBe(false);
+      expect(resynced.presenceSynced).toBe(true);
+      expect(resynced.participants).toEqual([]);
     });
   });
 
@@ -598,20 +674,13 @@ describe("sessionSocketReducer", () => {
   });
 
   describe("local actions", () => {
-    it("optimistically marks the session as processing on prompt_sent", () => {
-      const state = reduce(subscribedState(), { type: "prompt_sent" });
-      expect(state.sessionState?.isProcessing).toBe(true);
-    });
-
     it("keeps the socket unready when it closes", () => {
       const state = reduce(initialSessionSocketState, { type: "socket_closed" });
       expect(state.ready).toBe(false);
     });
 
     it("leaves a null sessionState untouched for state-dependent messages", () => {
-      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }), {
-        type: "prompt_sent",
-      });
+      const state = reduce(initialSessionSocketState, serverMessage({ type: "sandbox_ready" }));
       expect(state.sessionState).toBeNull();
     });
   });

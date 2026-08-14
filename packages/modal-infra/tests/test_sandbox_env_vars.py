@@ -369,23 +369,22 @@ async def test_restore_omits_branch_when_none(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_restore_with_session_config_object(monkeypatch):
-    """restore_from_snapshot extracts branch from a SessionConfig object."""
+async def test_restore_serializes_typed_session_config(monkeypatch):
     captured = _fake_restore_setup(monkeypatch)
 
-    manager = SandboxManager()
-    config = SessionConfig(
-        session_id="sess-1",
-        repo_owner="acme",
-        repo_name="repo",
-        branch="develop",
-    )
-    await manager.restore_from_snapshot(
+    await SandboxManager().restore_from_snapshot(
         snapshot_image_id="img-abc",
-        session_config=config,
+        session_config=SessionConfig(
+            session_id="sess-1",
+            repo_owner="acme",
+            repo_name="repo",
+            branch="develop",
+        ),
     )
 
     session_config = json.loads(captured["env"]["SESSION_CONFIG"])
+    assert session_config["repo_owner"] == "acme"
+    assert session_config["repo_name"] == "repo"
     assert session_config["branch"] == "develop"
 
 

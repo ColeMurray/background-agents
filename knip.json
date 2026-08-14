@@ -1,0 +1,62 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "ignoreDependencies": ["wrangler", "cloudflare", "postcss-load-config", "vitest"],
+  "ignoreBinaries": ["ruff", "ssh-keygen"],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/cf-logs.ts", "scripts/merge-split-users.ts", "vitest.workspace.ts"],
+      "project": ["scripts/**/*.ts"],
+      "ignoreDependencies": ["database", "survivor", "loser"]
+    },
+    "packages/shared": {
+      "project": ["src/**/*.ts"],
+      "ignoreIssues": {
+        "src/types/repositories.ts": ["duplicates"]
+      }
+    },
+    "packages/control-plane": {
+      "entry": ["test/integration/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+    },
+    "packages/github-bot": {
+      "entry": ["test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"]
+    },
+    "packages/linear-bot": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/slack-bot": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/opencomputer-infra": {
+      "project": ["src/**/*.ts"]
+    },
+    "packages/sandbox-runtime": {
+      "entry": [
+        "src/sandbox_runtime/bin/upload-media.js",
+        "src/sandbox_runtime/plugins/codex-auth-plugin.js",
+        "src/sandbox_runtime/plugins/inspect-plugin.js",
+        "src/sandbox_runtime/plugins/xai-auth-plugin.js",
+        "src/sandbox_runtime/tools/cancel-child.js",
+        "src/sandbox_runtime/tools/get-child-status.js",
+        "src/sandbox_runtime/tools/send-child-prompt.js",
+        "src/sandbox_runtime/tools/slack-notify.js",
+        "src/sandbox_runtime/tools/spawn-child.js",
+        "src/sandbox_runtime/ttyd_proxy/server.ts"
+      ]
+    },
+    "packages/web": {
+      "next": true,
+      "entry": [
+        "open-next.config.ts",
+        "public/hljs-themes/atom-one-dark.css",
+        "public/hljs-themes/atom-one-light.css",
+        "public/hljs-themes/github-dark.css",
+        "public/hljs-themes/github.css",
+        "src/**/*.test.ts",
+        "src/**/*.test.tsx"
+      ],
+      "project": ["src/**/*.{ts,tsx,css}"]
+    }
+  }
+}

@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
-import { buildAnalyticsBreakdownPath } from "@/lib/analytics-query";
+import { buildControlPlanePath } from "@/lib/control-plane-query";
 
 export async function GET(request: NextRequest) {
   const session = await getServerAuthSession();
@@ -10,7 +10,10 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const path = buildAnalyticsBreakdownPath(new URL(request.url).searchParams);
+  const path = buildControlPlanePath("/analytics/breakdown", new URL(request.url).searchParams, [
+    "days",
+    "by",
+  ]);
 
   try {
     const response = await controlPlaneUserFetch(path);

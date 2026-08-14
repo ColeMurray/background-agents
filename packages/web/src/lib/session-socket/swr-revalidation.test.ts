@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
-import type { SessionArtifact } from "@open-inspect/shared";
+import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import { swrKeysToRevalidate } from "./swr-revalidation";
 
 const SESSION_ID = "session-1";
@@ -95,6 +95,7 @@ describe("swrKeysToRevalidate", () => {
           participantId: "participant-1",
           participant: { participantId: "participant-1", name: "User" },
           timeline: { events: [], hasMore: false, cursor: null },
+          promptQueue: [],
         },
         SESSION_ID
       )

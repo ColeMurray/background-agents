@@ -506,8 +506,8 @@ from a dedicated settings page, and have them injected into the sandbox environm
 **Structured JSON logging.** Wide events and correlation IDs across the control plane, Modal
 infrastructure, and Slack bot.
 
-**D1 migration system.** A proper migration system replaces the single `schema.sql`, with a
-standalone script to migrate the session index and repository metadata from KV to D1.
+**D1 migration system.** A proper migration system replaces the single `schema.sql`, with session
+index and repository metadata storage moved from KV to D1.
 
 _Also:_ `.openinspect/setup.sh` repository setup support, an archived-chats section in settings, and
 bridge-timeout hardening with an inactivity-based SSE timeout.

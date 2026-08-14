@@ -14,9 +14,6 @@ import type { SessionRepository, WsClientMappingResult } from "./repository";
 // Types
 // ---------------------------------------------------------------------------
 
-/** The two kinds of WebSocket connections the DO manages. */
-export type WsKind = "client" | "sandbox";
-
 /** Result of parsing a WebSocket's Cloudflare hibernation tags. */
 export type ParsedTags =
   | { kind: "sandbox"; sandboxId?: string }
@@ -52,6 +49,9 @@ export interface SessionWebSocketManager {
 
   /** Clear the in-memory sandbox socket reference. */
   clearSandboxSocket(): void;
+
+  /** Clear and close all active sandbox sockets without consulting persisted dispatch status. */
+  detachSandboxSocket(code: number, reason: string): void;
 
   /** Clear sandbox socket only if ws matches current reference. Returns true if it was the active socket. */
   clearSandboxSocketIfMatch(ws: WebSocket): boolean;
@@ -150,11 +150,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   getSandboxSocket(): WebSocket | null {
-    if (this.sandboxWs?.readyState === WebSocket.OPEN) {
-      return this.sandboxWs;
-    }
-
-    // Hibernation recovery: scan all WebSockets, validate sandbox identity
     const sandbox = this.repository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
@@ -164,6 +159,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
     // hibernation. On wake, the zombie WS still appears OPEN — skip it.
     const terminalStatuses = ["stopped", "failed", "stale"];
     if (sandbox && terminalStatuses.includes(sandbox.status)) {
+      this.sandboxWs = null;
       // Close any lingering sandbox WebSockets so they don't persist
       for (const ws of this.ctx.getWebSockets()) {
         const parsed = this.classify(ws);
@@ -173,6 +169,12 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       }
       return null;
     }
+
+    if (this.sandboxWs?.readyState === WebSocket.OPEN) {
+      return this.sandboxWs;
+    }
+
+    // Hibernation recovery: scan all WebSockets, validate sandbox identity
 
     for (const ws of this.ctx.getWebSockets()) {
       const parsed = this.classify(ws);
@@ -196,6 +198,16 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   clearSandboxSocket(): void {
     this.sandboxWs = null;
+  }
+
+  detachSandboxSocket(code: number, reason: string): void {
+    const sockets = new Set<WebSocket>();
+    if (this.sandboxWs) sockets.add(this.sandboxWs);
+    for (const ws of this.ctx.getWebSockets()) {
+      if (this.classify(ws).kind === "sandbox") sockets.add(ws);
+    }
+    this.sandboxWs = null;
+    for (const ws of sockets) this.close(ws, code, reason);
   }
 
   clearSandboxSocketIfMatch(ws: WebSocket): boolean {

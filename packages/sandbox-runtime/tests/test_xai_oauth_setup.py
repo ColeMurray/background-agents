@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sandbox_runtime.entrypoint import SandboxSupervisor
+from sandbox_runtime.opencode_server import OpenCodeServer
+from tests.runtime_helpers import make_opencode_server
 
 
-def _make_supervisor() -> SandboxSupervisor:
+def _make_opencode_server() -> OpenCodeServer:
     with patch.dict(
         "os.environ",
         {
@@ -18,11 +19,11 @@ def _make_supervisor() -> SandboxSupervisor:
             "REPO_NAME": "app",
         },
     ):
-        return SandboxSupervisor()
+        return make_opencode_server()
 
 
 def test_auth_json_merges_openai_and_xai_entries(tmp_path):
-    supervisor = _make_supervisor()
+    supervisor = _make_opencode_server()
     auth_file = tmp_path / ".local" / "share" / "opencode" / "auth.json"
 
     with (
@@ -53,7 +54,7 @@ def test_auth_json_merges_openai_and_xai_entries(tmp_path):
 
 
 def test_auth_json_preserves_existing_provider_entries(tmp_path):
-    supervisor = _make_supervisor()
+    supervisor = _make_opencode_server()
     auth_file = tmp_path / ".local" / "share" / "opencode" / "auth.json"
     auth_file.parent.mkdir(parents=True)
     auth_file.write_text(json.dumps({"anthropic": {"type": "api", "key": "existing"}}))
@@ -76,7 +77,7 @@ def test_auth_json_preserves_existing_provider_entries(tmp_path):
 
 
 def test_auth_json_removes_stale_managed_provider_entries(tmp_path):
-    supervisor = _make_supervisor()
+    supervisor = _make_opencode_server()
     auth_file = tmp_path / ".local" / "share" / "opencode" / "auth.json"
     auth_file.parent.mkdir(parents=True)
     auth_file.write_text(
@@ -116,8 +117,8 @@ def test_xai_plugin_uses_broker_without_refresh_token_environment():
     assert "reasoningEffort" not in plugin
 
 
-async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
-    supervisor = _make_supervisor()
+async def test_start_deploys_xai_plugin_from_marker(tmp_path):
+    supervisor = _make_opencode_server()
     supervisor.workspace_path = tmp_path / "workspace"
     supervisor.workspace_path.mkdir()
     (supervisor.workspace_path / ".git").mkdir()
@@ -130,15 +131,16 @@ async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
 
     with (
         patch.dict("os.environ", {"XAI_OAUTH_MANAGED": "1"}, clear=True),
-        patch("sandbox_runtime.entrypoint.Path") as mock_path,
-        patch("sandbox_runtime.entrypoint.shutil.copy") as mock_copy,
-        patch("sandbox_runtime.entrypoint.install_runtime_git_excludes") as mock_excludes,
+        patch("sandbox_runtime.opencode_server.Path") as mock_path,
+        patch("sandbox_runtime.opencode_server.shutil.copy") as mock_copy,
+        patch("sandbox_runtime.opencode_server.install_runtime_git_excludes") as mock_excludes,
         patch(
-            "sandbox_runtime.entrypoint.asyncio.create_subprocess_exec",
+            "sandbox_runtime.opencode_server.asyncio.create_subprocess_exec",
             AsyncMock(return_value=fake_proc),
         ),
         patch(
-            "sandbox_runtime.entrypoint.asyncio.create_task", side_effect=lambda coro: coro.close()
+            "sandbox_runtime.opencode_server.asyncio.create_task",
+            side_effect=lambda coro: coro.close(),
         ),
     ):
         mock_path.side_effect = lambda value: (
@@ -152,7 +154,7 @@ async def test_start_opencode_deploys_xai_plugin_from_marker(tmp_path):
         supervisor._install_bin_scripts = MagicMock()
         supervisor._wait_for_health = AsyncMock()
 
-        await supervisor.start_opencode()
+        await supervisor.start((), supervisor.workspace_path)
 
     mock_copy.assert_called_once_with(
         plugin_source,

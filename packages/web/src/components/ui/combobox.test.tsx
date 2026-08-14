@@ -203,6 +203,61 @@ describe("Combobox", () => {
     });
   });
 
+  describe("accessible name", () => {
+    // The trigger is a plain <button>, so a `label[for]` pointed at it would win the
+    // accessible name outright and hide the selection from screen readers while the
+    // listbox is collapsed. `labelId` names the trigger from label plus value instead.
+    function LabeledCombobox() {
+      const [value, setValue] = useState("apple");
+      const selected = FLAT_ITEMS.find((item) => item.value === value);
+      return (
+        <>
+          <label id="fruit-label" htmlFor="fruit">
+            Fruit
+          </label>
+          <Combobox
+            id="fruit"
+            labelId="fruit-label"
+            value={value}
+            onChange={setValue}
+            items={FLAT_ITEMS}
+          >
+            <span>{selected?.label ?? "Select a fruit"}</span>
+          </Combobox>
+        </>
+      );
+    }
+
+    it("names the trigger with both the field label and the current value", () => {
+      render(<LabeledCombobox />);
+
+      expect(screen.getByRole("button")).toHaveAccessibleName("Fruit Apple");
+    });
+
+    it("updates the accessible name when the selection changes", async () => {
+      const user = userEvent.setup();
+      render(<LabeledCombobox />);
+
+      await user.click(screen.getByRole("button", { name: "Fruit Apple" }));
+      await user.click(screen.getByRole("option", { name: "Cherry" }));
+
+      expect(screen.getByRole("button")).toHaveAccessibleName("Fruit Cherry");
+    });
+
+    it("keeps the trigger addressable by label[for]", () => {
+      render(<LabeledCombobox />);
+
+      expect(screen.getByRole("button")).toHaveAttribute("id", "fruit");
+      expect(screen.getByText("Fruit")).toHaveAttribute("for", "fruit");
+    });
+
+    it("names the trigger from its content when no label is associated", () => {
+      renderCombobox();
+
+      expect(screen.getByRole("button")).toHaveAccessibleName("Open");
+    });
+  });
+
   describe("opening behavior", () => {
     it("activates the selected value when opening", async () => {
       const user = userEvent.setup();

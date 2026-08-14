@@ -327,6 +327,63 @@ async def test_create_clamps_build_execution_timeout_independently(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["repo_owner", "repo_name", "branch"])
+async def test_create_rejects_non_string_repository_fields(monkeypatch, field):
+    service = _patch_dependencies(monkeypatch)
+    repository = {**REPOSITORIES[0], field: True}
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": [repository],
+                **CALLBACK_CONTEXT,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "repositories entry fields must be strings"
+    service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_update", "expected_detail"),
+    [
+        ({"repositories": "not-a-list"}, "repositories must be a list"),
+        (
+            {"user_env_vars": {"TOKEN": 123}},
+            "user_env_vars values must be strings",
+        ),
+    ],
+)
+async def test_create_reports_container_validation_errors_without_echoing_values(
+    monkeypatch, request_update, expected_detail
+):
+    service = _patch_dependencies(monkeypatch)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_create_build_sandbox,
+            {
+                "scope_kind": "repo",
+                "scope_id": "acme/repo",
+                "build_id": "imgb-1",
+                "repositories": REPOSITORIES,
+                **CALLBACK_CONTEXT,
+                **request_update,
+            },
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == expected_detail
+    service.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_case_insensitive_repository_path_collisions(monkeypatch):
     service = _patch_dependencies(monkeypatch)
 
@@ -489,6 +546,55 @@ async def test_snapshot_build_maps_missing_or_mismatched_session_to_not_found(mo
 
     assert exc.value.status_code == 404
     assert exc.value.detail == "build session not found"
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_accepts_valid_request(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+
+    result = await _call(
+        web_api.api_delete_provider_image,
+        {"provider_image_id": "im-1"},
+    )
+
+    assert result == {
+        "success": True,
+        "data": {"provider_image_id": "im-1", "deleted": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_image_rejects_non_string_id(monkeypatch):
+    monkeypatch.setattr(web_api, "require_auth", lambda _authorization: None)
+    info = MagicMock()
+    monkeypatch.setattr(web_api.log, "info", info)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_delete_provider_image,
+            {"provider_image_id": 123},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "provider_image_id must be a string"
+    assert info.call_args.kwargs["http_status"] == 400
+    assert info.call_args.kwargs["outcome"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_image_request_validation_runs_after_authentication(monkeypatch):
+    def reject_auth(_authorization):
+        raise web_api.HTTPException(status_code=401, detail="Unauthorized")
+
+    monkeypatch.setattr(web_api, "require_auth", reject_auth)
+
+    with pytest.raises(web_api.HTTPException) as exc:
+        await _call(
+            web_api.api_delete_provider_image,
+            {"provider_image_id": 123},
+        )
+
+    assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
