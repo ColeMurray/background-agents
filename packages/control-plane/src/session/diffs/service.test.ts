@@ -3,6 +3,7 @@ import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";
+import type { SessionRow } from "../types";
 import {
   DiffBaselineMismatchError,
   DiffFileNotFoundError,
@@ -133,6 +134,27 @@ describe("SessionDiffService", () => {
       type: "diff_state_changed",
       revisionId: "revision-1",
       updatedAt: 200,
+    });
+  });
+
+  it("uses the scalar baseline for a legacy session without repository rows", () => {
+    const { service, repository } = harness();
+    repository.getSessionRepositories = vi.fn(() => [
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: null,
+        isPrimary: true,
+        row: null,
+      },
+    ]);
+    repository.getSession = vi.fn(() => ({ base_sha: "a".repeat(40) }) as unknown as SessionRow);
+
+    expect(service.publishBundle(upload)).toBe("revision-1");
+    expect(service.getPublicState()).toMatchObject({
+      current: { revisionId: "revision-1" },
+      unavailableReason: null,
     });
   });
 
