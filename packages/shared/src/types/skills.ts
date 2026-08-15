@@ -312,13 +312,6 @@ export const sandboxSkillInstallationSchema = z.object({
   ),
 });
 
-export const skillActivationInputSchema = z.strictObject({
-  manifestSha256: z.string().min(1),
-  status: z.enum(["activated", "failed"]),
-  errorCode: z.string().max(100).optional(),
-  message: z.string().max(1000).optional(),
-});
-
 export type SkillFileInput = z.infer<typeof skillFileInputSchema>;
 export type SkillContentInput = z.infer<typeof skillContentInputSchema>;
 export type SkillAssignmentInput = z.infer<typeof skillAssignmentInputSchema>;
@@ -334,4 +327,3 @@ export type SessionSkillSelection = z.infer<typeof sessionSkillSelectionSchema>;
 export type ResolvedSkill = z.infer<typeof resolvedSkillSchema>;
 export type SandboxSkillManifest = z.infer<typeof sandboxSkillManifestSchema>;
 export type SandboxSkillInstallation = z.infer<typeof sandboxSkillInstallationSchema>;
-export type SkillActivationInput = z.infer<typeof skillActivationInputSchema>;

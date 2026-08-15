@@ -157,11 +157,6 @@ CREATE TABLE session_skill_manifests (
   resolver_version       INTEGER NOT NULL,
   manifest_sha256        TEXT NOT NULL,
   resolved_at            INTEGER NOT NULL,
-  activation_status      TEXT NOT NULL DEFAULT 'pending'
-    CHECK (activation_status IN ('pending', 'activated', 'failed')),
-  activated_at           INTEGER,
-  activation_error_code  TEXT,
-  activation_error       TEXT,
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
   CHECK (
     (selection_mode = 'profile' AND profile_id IS NOT NULL AND profile_name IS NOT NULL)

@@ -43,7 +43,7 @@ _DISCOVERY_PATHS = (".opencode/skills", ".claude/skills", ".agents/skills")
 
 
 class ManagedSkillsError(RuntimeError):
-    """A managed-skill startup failure with a stable activation error code."""
+    """A managed-skill startup failure with a stable error code."""
 
     def __init__(self, message: str, *, code: str) -> None:
         super().__init__(message)
@@ -127,35 +127,6 @@ class ManagedSkillsClient:
         raise ManagedSkillsError(
             f"failed to fetch managed skills: {last_error}", code="fetch_failed"
         ) from last_error
-
-    async def report_activation(
-        self,
-        manifest_sha256: str,
-        status: str,
-        *,
-        error_code: str | None = None,
-        message: str | None = None,
-    ) -> None:
-        body: dict[str, str] = {"manifestSha256": manifest_sha256, "status": status}
-        if error_code:
-            body["errorCode"] = error_code[:100]
-        if message:
-            body["message"] = message[:1000]
-        for attempt in range(MANAGED_SKILLS_REQUEST_ATTEMPTS):
-            try:
-                async with httpx.AsyncClient(transport=self._transport) as client:
-                    response = await client.post(
-                        f"{self._skills_url}/activation",
-                        headers=self._headers,
-                        json=body,
-                        timeout=MANAGED_SKILLS_FETCH_TIMEOUT_SECONDS,
-                    )
-                    response.raise_for_status()
-                    return
-            except (httpx.HTTPError, OSError) as error:
-                if not _retryable_error(error) or attempt == MANAGED_SKILLS_REQUEST_ATTEMPTS - 1:
-                    raise
-                await asyncio.sleep(MANAGED_SKILLS_RETRY_BASE_SECONDS * (2**attempt))
 
 
 def _retryable_error(error: Exception) -> bool:
@@ -476,7 +447,7 @@ class ManagedSkillsMaterializer:
         parent.mkdir(parents=True, exist_ok=True)
         staging = parent / ".managed-skills-staging"
         backup = parent / ".managed-skills-backup"
-        journal = parent / ".managed-skills-activation"
+        journal = parent / ".managed-skills-swap"
         self._repair_interrupted_swap(staging, backup, journal)
         if self.destination.is_symlink() or (
             self.destination.exists() and not self.destination.is_dir()
@@ -508,53 +479,21 @@ class ManagedSkillsMaterializer:
             journal.unlink(missing_ok=True)
             raise
 
-    async def activate(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
-        manifest_sha256: str | None = None
+    async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         try:
             raw = await self.client.fetch_manifest()
-            try:
-                unvalidated = json.loads(raw)
-                candidate = (
-                    unvalidated.get("manifestSha256") if isinstance(unvalidated, dict) else None
-                )
-                if isinstance(candidate, str) and _SHA256_RE.fullmatch(candidate):
-                    manifest_sha256 = candidate
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                pass
             manifest = validate_manifest(raw)
-            manifest_sha256 = manifest.manifest_sha256
             self._check_collisions(manifest, repositories, workdir)
             self._install(manifest)
-        except ManagedSkillsError as error:
-            if manifest_sha256:
-                try:
-                    await self.client.report_activation(
-                        manifest_sha256, "failed", error_code=error.code, message=str(error)
-                    )
-                except Exception as report_error:
-                    self.log.warn("managed_skills.activation_report_failed", exc=report_error)
+        except ManagedSkillsError:
             raise
         except Exception as error:
-            if manifest_sha256:
-                try:
-                    await self.client.report_activation(
-                        manifest_sha256,
-                        "failed",
-                        error_code="install_failed",
-                        message=str(error),
-                    )
-                except Exception as report_error:
-                    self.log.warn("managed_skills.activation_report_failed", exc=report_error)
             raise ManagedSkillsError(
                 f"failed to install managed skills: {error}", code="install_failed"
             ) from error
 
-        try:
-            await self.client.report_activation(manifest.manifest_sha256, "activated")
-        except Exception as error:
-            self.log.warn("managed_skills.activation_report_failed", exc=error)
         self.log.info(
-            "managed_skills.activated",
+            "managed_skills.materialized",
             manifest_sha256=manifest.manifest_sha256,
             skill_count=len(manifest.skills),
         )

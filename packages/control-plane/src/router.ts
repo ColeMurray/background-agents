@@ -94,7 +94,7 @@ const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/, // Parent agent follow-up to a direct child
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
   /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
-  /^\/sessions\/[^/]+\/sandbox-skills(?:\/activation)?$/,
+  /^\/sessions\/[^/]+\/sandbox-skills$/,
 ];
 
 /** Diff endpoints the sandbox needs, constrained by both path and method. */
@@ -183,7 +183,6 @@ export function isScmAgnosticRoute(method: string, path: string): boolean {
     /^\/sessions\/[^/]+\/(sandbox-access|tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh|skills|sandbox-skills)$/.test(
       path
     ) ||
-    /^\/sessions\/[^/]+\/sandbox-skills\/activation$/.test(path) ||
     /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/.test(path) ||
     /^\/sessions\/[^/]+\/diff(?:\/.*)?$/.test(path)
   );

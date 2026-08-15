@@ -1229,7 +1229,7 @@
             <span class="chapter-number">03</span>
             <div>
               <span class="kicker">User journey</span>
-              <h2>Author to activate</h2>
+              <h2>Author to session</h2>
             </div>
             <button class="mark-read" data-mark="experience">Mark complete</button>
           </div>
@@ -1439,8 +1439,7 @@ GET    /sessions/:id/skills</pre
             </div>
             <div class="tab-panel" data-panel="sandbox-api">
               <pre>
-GET  /sessions/:id/sandbox-skills
-POST /sessions/:id/sandbox-skills/activation
+ GET /sessions/:id/sandbox-skills
 
 Authentication:
   session-specific sandbox bearer token
@@ -1494,8 +1493,8 @@ Rejected:
               <p>Recheck names, paths, limits, UTF-8, source collisions, and every digest.</p>
             </div>
             <div class="flow-step">
-              <b>ACTIVATE</b><strong>Journaled swap</strong>
-              <p>Repair prior journals, activate a complete tree, acknowledge, then launch.</p>
+              <b>INSTALL</b><strong>Journaled swap</strong>
+              <p>Repair prior journals, install the complete tree, then launch.</p>
             </div>
           </div>
 
@@ -1537,7 +1536,7 @@ Rejected:
             <div class="details-body">
               Verified authorship, safe YAML, bounded UTF-8 files, normalized relative paths, no
               links or special files, per-file and package digests, session-bound download auth,
-              independent runtime validation, and fail-closed activation.
+              independent runtime validation, and fail-closed materialization.
             </div>
           </details>
           <details>
@@ -1634,10 +1633,7 @@ Rejected:
             <article class="phase">
               <b>PHASE 3</b>
               <h3>Sandbox delivery</h3>
-              <p>
-                Authenticated fetch, materializer, activation reporting, internal rollout, opt-in,
-                default.
-              </p>
+              <p>Authenticated fetch, materializer, internal rollout, opt-in, default.</p>
             </article>
             <article class="phase">
               <b>PHASE 4</b>

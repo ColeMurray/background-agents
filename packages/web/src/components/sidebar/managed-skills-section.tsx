@@ -13,7 +13,7 @@ function assignmentLabel(assignment: SkillAssignment): string {
 }
 
 export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
-  const { provenance, loading, error, activationReportUnavailable } = useSessionSkills(sessionId);
+  const { provenance, loading, error } = useSessionSkills(sessionId);
   if (error) return null;
   if (loading) {
     return (
@@ -30,10 +30,6 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
       : provenance.selection?.mode === "none"
         ? "None"
         : "All applicable";
-  const activationStatus = activationReportUnavailable
-    ? "report unavailable"
-    : (provenance.activation?.status ?? "pending");
-
   return (
     <CollapsibleSection title={`Managed skills (${provenance.skills.length})`} defaultOpen={false}>
       <div className="space-y-3">
@@ -41,15 +37,6 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
           <span className="text-muted-foreground">Selection</span>
           <span className="max-w-[11rem] truncate text-foreground">{profileLabel}</span>
         </div>
-        <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">Installation</span>
-          <span className="capitalize text-foreground">{activationStatus}</span>
-        </div>
-        {provenance.activation?.status === "failed" && (
-          <p className="rounded bg-destructive/10 p-2 text-xs text-destructive">
-            {provenance.activation.message ?? "Managed skills failed to install."}
-          </p>
-        )}
         {provenance.skills.map((skill) => (
           <div key={skill.skillId} className="rounded border border-border-muted p-2.5">
             <div className="flex items-center justify-between gap-2">

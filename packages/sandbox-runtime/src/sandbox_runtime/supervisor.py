@@ -352,7 +352,7 @@ class SandboxSupervisor:
             self._repository_boot_result = boot_result
 
             if self.managed_skills is not None:
-                await self.managed_skills.activate(boot_result.repositories, boot_result.workdir)
+                await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
 
             try:
                 await self.code_server.start(boot_result.workdir)

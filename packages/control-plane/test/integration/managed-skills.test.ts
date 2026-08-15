@@ -139,18 +139,6 @@ describe("managed skills persistence and resolution", () => {
         .bind(otherSkill.currentRevisionId, "parent", skill.id)
         .run()
     ).rejects.toThrow(/foreign key/i);
-    await expect(
-      store.reportActivation("child", {
-        manifestSha256: manifest.manifestSha256,
-        status: "activated",
-      })
-    ).resolves.toBe("updated");
-    await expect(
-      store.reportActivation("child", {
-        manifestSha256: manifest.manifestSha256,
-        status: "activated",
-      })
-    ).resolves.toBe("unchanged");
     await env.DB.prepare(
       "UPDATE session_skill_manifests SET resolver_version = 2 WHERE session_id = 'child'"
     ).run();

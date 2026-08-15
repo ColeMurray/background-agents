@@ -3,7 +3,6 @@ import {
   type SandboxSkillInstallation,
   skillAssignmentSchema,
   type SandboxSkillManifest,
-  type SkillActivationInput,
 } from "@open-inspect/shared/types/skills";
 import { SkillStore } from "./skills";
 import type { SqlDatabase } from "./sql-database";
@@ -16,10 +15,6 @@ interface ManifestRow {
   resolver_version: number;
   manifest_sha256: string;
   resolved_at: number;
-  activation_status: "pending" | "activated" | "failed";
-  activated_at: number | null;
-  activation_error_code: string | null;
-  activation_error: string | null;
 }
 
 interface RevisionRow {
@@ -39,12 +34,6 @@ export interface SessionSkillsView {
   resolverVersion: number;
   selection: SandboxSkillManifest["selection"];
   resolvedAt: number;
-  activation: {
-    status: "pending" | "activated" | "failed";
-    activatedAt: number | null;
-    errorCode: string | null;
-    message: string | null;
-  };
   skills: Omit<SandboxSkillManifest["skills"][number], "files">[];
 }
 
@@ -59,12 +48,6 @@ export class SessionSkillStore {
       resolverVersion: loaded.manifest.resolver_version,
       selection: this.selection(loaded.manifest),
       resolvedAt: loaded.manifest.resolved_at,
-      activation: {
-        status: loaded.manifest.activation_status,
-        activatedAt: loaded.manifest.activated_at,
-        errorCode: loaded.manifest.activation_error_code,
-        message: loaded.manifest.activation_error,
-      },
       skills: loaded.revisions.map((row) => this.resolvedSkill(row)),
     };
   }
@@ -94,35 +77,6 @@ export class SessionSkillStore {
       );
     }
     return parsed.data;
-  }
-
-  async reportActivation(
-    sessionId: string,
-    input: SkillActivationInput
-  ): Promise<"updated" | "unchanged" | "not_found" | "digest_mismatch"> {
-    const current = await this.db
-      .prepare("SELECT * FROM session_skill_manifests WHERE session_id = ?")
-      .bind(sessionId)
-      .first<ManifestRow>();
-    if (!current) return "not_found";
-    if (current.manifest_sha256 !== input.manifestSha256) return "digest_mismatch";
-    if (current.activation_status === input.status) return "unchanged";
-    const result = await this.db
-      .prepare(
-        `UPDATE session_skill_manifests
-         SET activation_status = ?, activated_at = ?, activation_error_code = ?, activation_error = ?
-         WHERE session_id = ? AND manifest_sha256 = ?`
-      )
-      .bind(
-        input.status,
-        input.status === "activated" ? Date.now() : null,
-        input.status === "failed" ? (input.errorCode ?? null) : null,
-        input.status === "failed" ? sanitizeMessage(input.message) : null,
-        sessionId,
-        input.manifestSha256
-      )
-      .run();
-    return result.meta.changes > 0 ? "updated" : "unchanged";
   }
 
   private async load(
@@ -178,15 +132,4 @@ export class SessionSkillStore {
       assignmentSources,
     };
   }
-}
-
-function sanitizeMessage(message: string | undefined): string | null {
-  if (!message) return null;
-  return Array.from(message)
-    .filter((character) => {
-      const code = character.charCodeAt(0);
-      return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127);
-    })
-    .join("")
-    .slice(0, 1000);
 }

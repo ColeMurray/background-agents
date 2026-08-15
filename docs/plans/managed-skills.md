@@ -513,11 +513,6 @@ CREATE TABLE session_skill_manifests (
   resolver_version    INTEGER NOT NULL,
   manifest_sha256     TEXT NOT NULL,
   resolved_at         INTEGER NOT NULL,
-  activation_status   TEXT NOT NULL DEFAULT 'pending'
-    CHECK(activation_status IN ('pending', 'activated', 'failed')),
-  activated_at        INTEGER,
-  activation_error_code TEXT,
-  activation_error    TEXT,
   FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
   CHECK(
     (selection_mode = 'profile' AND profile_id IS NOT NULL AND profile_name IS NOT NULL)
@@ -639,7 +634,7 @@ GET /sessions/:id/sandbox-skills
 The session-specific sandbox bearer token, validated by the Session Durable Object, must
 authenticate the request and bind it to exactly the same session ID. Internal HMAC service
 authentication and human principals are rejected on this sandbox-only route. The response is a
-narrow installation DTO containing only the activation correlation digest and bounded UTF-8 files:
+narrow installation DTO containing the pinned manifest digest and bounded UTF-8 files:
 
 ```json
 {
@@ -678,22 +673,10 @@ count. Assignment sources are sorted by the UTF-8 byte tuple
 `(type, assignmentId, repoOwner, repoName, environmentId, environmentName)` and contribute each of
 those six values with `str`, using the empty string for fields not applicable to that source type.
 
-The control plane owns the canonical provenance digest. The sandbox treats `manifestSha256` as an
-opaque activation correlation value and independently verifies every delivered file's path, size,
-content hash, permissions, and generated `SKILL.md` identity. Selection, revision metadata, and
-assignment provenance remain available from `GET /sessions/:id/skills`. Return
-`ETag: "<manifestSha256>"` for diagnostics and future caching.
-
-Add a second sandbox-only route:
-
-```text
-POST /sessions/:id/sandbox-skills/activation
-```
-
-Its body is `{ manifestSha256, status, errorCode?, message? }`, where status is `activated` or
-`failed`. Require the digest to equal the session manifest, make duplicate reports idempotent, bound
-and sanitize the message, and reject internal-service and human principals. Both sandbox routes must
-be registered in the router's sandbox-auth-only classification.
+The control plane owns the canonical provenance digest. The sandbox independently verifies every
+delivered file's path, size, content hash, permissions, and generated `SKILL.md` identity.
+Selection, revision metadata, and assignment provenance remain available from
+`GET /sessions/:id/skills`. Return `ETag: "<manifestSha256>"` for diagnostics and future caching.
 
 The response is intentionally not placed in `SESSION_CONFIG`, environment variables, or the Modal
 create request. Content can exceed environment limits, executable instructions should not appear in
@@ -715,9 +698,8 @@ control-plane URL, session ID, and sandbox authentication token.
 5. Build the complete managed tree in a temporary directory on the same filesystem.
 6. Set executable bits only where the manifest permits; remove other write/execute bits as
    appropriate.
-7. Activate the managed tree with a journaled directory swap.
-8. Report successful activation and the manifest digest to the control plane.
-9. Start `opencode serve` only after activation succeeds.
+7. Install the managed tree with a journaled directory swap.
+8. Start `opencode serve` only after materialization succeeds.
 
 Use `OpenCodeServer._resolve_opencode_global_config_dir() / "skills"`, normally
 `~/.config/opencode/skills`, for managed skills. This avoids changing a repository checkout and
@@ -785,20 +767,19 @@ explicit because mutating their skills in place would break reproducibility.
 
 ## Failure Handling
 
-| Failure                               | Behavior                                                               |
-| ------------------------------------- | ---------------------------------------------------------------------- |
-| Invalid content save                  | Return field/path errors; keep the current revision unchanged.         |
-| Concurrent edit                       | Return `409 Conflict` with the new current revision ID.                |
-| Profile deleted before session create | Return `404`; do not silently use All.                                 |
-| Skill disabled during resolution      | Omit it from new sessions.                                             |
-| Revision changes after resolution     | Session uses the pinned old revision.                                  |
-| Missing pinned revision               | Fail session initialization and mark the session failed.               |
-| Sandbox download auth failure         | Fail startup; do not start OpenCode without selected skills.           |
-| Control-plane timeout                 | Retry with bounded exponential backoff, then fail startup.             |
-| Manifest or file hash mismatch        | Delete staging content, report integrity failure, fail startup.        |
-| Name collision                        | Fail startup with both sources and remediation guidance.               |
-| Activation callback failure           | Start may continue after local activation; retry callback best-effort. |
-| Snapshot contains stale managed files | Replace the complete managed directory before startup.                 |
+| Failure                               | Behavior                                                       |
+| ------------------------------------- | -------------------------------------------------------------- |
+| Invalid content save                  | Return field/path errors; keep the current revision unchanged. |
+| Concurrent edit                       | Return `409 Conflict` with the new current revision ID.        |
+| Profile deleted before session create | Return `404`; do not silently use All.                         |
+| Skill disabled during resolution      | Omit it from new sessions.                                     |
+| Revision changes after resolution     | Session uses the pinned old revision.                          |
+| Missing pinned revision               | Fail session initialization and mark the session failed.       |
+| Sandbox download auth failure         | Fail startup; do not start OpenCode without selected skills.   |
+| Control-plane timeout                 | Retry with bounded exponential backoff, then fail startup.     |
+| Manifest or file hash mismatch        | Delete staging content and fail startup.                       |
+| Name collision                        | Fail startup with both sources and remediation guidance.       |
+| Snapshot contains stale managed files | Replace the complete managed directory before startup.         |
 
 Use a named TypeScript timeout constant in milliseconds and a Python timeout constant in seconds.
 Define each default once. Sandbox download retries must fit inside the existing OpenCode startup
@@ -812,8 +793,8 @@ Emit structured events and metrics for:
 - profile create, update, and delete;
 - manifest resolution count, duration, selection mode, and digest;
 - bundle response bytes and duration;
-- sandbox fetch, validation, collision scan, install, and activation duration;
-- activation success/failure grouped by stable error code;
+- sandbox fetch, validation, collision scan, and installation duration;
+- materialization failures grouped by stable error code;
 - skill count and total bytes per manifest.
 
 Do not log full skill content. Logs may contain IDs, canonical names, hashes, paths, sizes, user
@@ -821,10 +802,6 @@ IDs, and assignment types. Audit records should retain actor, action, target ID,
 revision IDs, assignment changes, and timestamp. If a general audit-event facility is not introduced
 in V1, the immutable revision author plus `created_by`/`updated_by` is the minimum; assignment
 changes will not have complete history and this limitation should be documented.
-
-The sandbox activation callback updates `activated_at` and `activation_error` only when its
-presented manifest digest matches the session row. Session and run analytics can then be joined to
-the exact manifest that ran.
 
 ## Testing Strategy
 
@@ -873,7 +850,7 @@ Build `@open-inspect/shared` before dependent packages.
 - Stale files disappear on snapshot restore.
 - A matching installed digest can take the validated fast path.
 - Managed/repository and managed/bundled name collisions fail clearly.
-- Download retry, timeout, auth, and activation callback behavior.
+- Download retry, timeout, and authentication behavior.
 - Python and TypeScript canonical digest fixtures produce identical values.
 
 ### Web tests

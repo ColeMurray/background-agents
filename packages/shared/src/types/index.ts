@@ -241,7 +241,6 @@ export {
   skillResolutionPreviewResponseSchema,
   sandboxSkillManifestSchema,
   sandboxSkillInstallationSchema,
-  skillActivationInputSchema,
 } from "./skills";
 export type {
   SkillFileInput,

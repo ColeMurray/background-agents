@@ -353,10 +353,9 @@ export class SessionIndexStore {
         .prepare(
           `INSERT INTO session_skill_manifests
            (session_id, selection_mode, profile_id, profile_name, manifest_sha256, resolved_at,
-             resolver_version, activation_status, activated_at, activation_error_code, activation_error)
-            SELECT ?, selection_mode, profile_id, profile_name, manifest_sha256, resolved_at,
-                   resolver_version,
-                   'pending', NULL, NULL, NULL
+              resolver_version)
+             SELECT ?, selection_mode, profile_id, profile_name, manifest_sha256, resolved_at,
+                    resolver_version
            FROM session_skill_manifests WHERE session_id = ?`
         )
         .bind(childSessionId, parentSessionId),

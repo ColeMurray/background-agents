@@ -138,12 +138,10 @@ async def test_client_retries_transient_fetch_failures(monkeypatch):
     assert sleep.await_count == 2
 
 
-async def test_materializer_replaces_destination_and_reports_activation(tmp_path):
+async def test_materializer_replaces_destination(tmp_path):
     document = _manifest()
-    manifest_sha256 = document["manifestSha256"]
     client = MagicMock()
     client.fetch_manifest = AsyncMock(return_value=json.dumps(document).encode())
-    client.report_activation = AsyncMock()
     destination = tmp_path / "config" / "opencode" / "skills"
     destination.mkdir(parents=True)
     (destination / "stale.txt").write_text("stale")
@@ -154,20 +152,17 @@ async def test_materializer_replaces_destination_and_reports_activation(tmp_path
         bundled_skills_path=tmp_path / "missing-bundled",
     )
 
-    await materializer.activate((), tmp_path / "workspace")
+    await materializer.materialize((), tmp_path / "workspace")
 
     assert not (destination / "stale.txt").exists()
     assert "name: managed" in (destination / "managed" / "SKILL.md").read_text()
     assert (destination / "managed" / "SKILL.md").stat().st_mode & 0o777 == 0o400
-    client.report_activation.assert_awaited_once_with(manifest_sha256, "activated")
 
 
 async def test_materializer_rejects_bundled_name_collision(tmp_path):
     document = _manifest(name="conflict")
-    manifest_sha256 = document["manifestSha256"]
     client = MagicMock()
     client.fetch_manifest = AsyncMock(return_value=json.dumps(document).encode())
-    client.report_activation = AsyncMock()
     bundled = tmp_path / "bundled" / "conflict"
     bundled.mkdir(parents=True)
     (bundled / "SKILL.md").write_text("---\nname: conflict\n---\n")
@@ -179,21 +174,14 @@ async def test_materializer_rejects_bundled_name_collision(tmp_path):
     )
 
     with pytest.raises(ManagedSkillsError, match="collides"):
-        await materializer.activate((), tmp_path / "workspace")
-
-    client.report_activation.assert_awaited_once_with(
-        manifest_sha256,
-        "failed",
-        error_code="name_collision",
-        message=f"managed skill 'conflict' collides with discovered skill at {bundled}",
-    )
+        await materializer.materialize((), tmp_path / "workspace")
 
 
 def test_materializer_repairs_interrupted_swap(tmp_path):
     destination = tmp_path / "skills"
     backup = tmp_path / ".managed-skills-backup"
     staging = tmp_path / ".managed-skills-staging"
-    journal = tmp_path / ".managed-skills-activation"
+    journal = tmp_path / ".managed-skills-swap"
     backup.mkdir()
     staging.mkdir()
     (backup / "previous").write_text("ok")
@@ -207,11 +195,11 @@ def test_materializer_repairs_interrupted_swap(tmp_path):
     assert not journal.exists()
 
 
-def test_materializer_repairs_interrupted_swap_after_destination_activation(tmp_path):
+def test_materializer_repairs_interrupted_swap_after_destination_install(tmp_path):
     destination = tmp_path / "skills"
     backup = tmp_path / ".managed-skills-backup"
     staging = tmp_path / ".managed-skills-staging"
-    journal = tmp_path / ".managed-skills-activation"
+    journal = tmp_path / ".managed-skills-swap"
     destination.mkdir()
     backup.mkdir()
     staging.mkdir()
