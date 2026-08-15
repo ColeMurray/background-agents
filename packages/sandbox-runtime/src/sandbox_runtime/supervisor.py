@@ -95,6 +95,145 @@ class SandboxSupervisor:
                 await asyncio.sleep(min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX))
         return False
 
+    async def _handle_opencode_exit(self, restart_count: int) -> tuple[int, bool]:
+        exit_code = self.opencode_server.exit_code()
+        if exit_code is None:
+            return restart_count, False
+
+        restart_count += 1
+        self.log.error(
+            "opencode.crash",
+            exit_code=exit_code,
+            restart_count=restart_count,
+        )
+        if restart_count > self.MAX_RESTARTS:
+            self.log.error("opencode.max_restarts", restart_count=restart_count)
+            await self._report_fatal_error(f"OpenCode crashed {restart_count} times, giving up")
+            self.shutdown_event.set()
+            return restart_count, True
+
+        delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
+        self.log.info(
+            "opencode.restart",
+            delay_s=round(delay, 1),
+            restart_count=restart_count,
+        )
+        await asyncio.sleep(delay)
+        if self._repository_boot_result is None:
+            raise RuntimeError("OpenCode restart requested before repository boot")
+        await self.opencode_server.start(
+            self._repository_boot_result.repositories,
+            self._repository_boot_result.workdir,
+        )
+        return restart_count, False
+
+    async def _handle_bridge_exit(self, restart_count: int) -> tuple[int, bool]:
+        exit_code = self.agent_bridge.exit_code()
+        if exit_code is None:
+            return restart_count, False
+        if exit_code == 0:
+            self.log.info("bridge.graceful_exit", exit_code=exit_code)
+            self.shutdown_event.set()
+            return restart_count, True
+
+        restart_count += 1
+        self.log.error(
+            "bridge.crash",
+            exit_code=exit_code,
+            restart_count=restart_count,
+        )
+        if restart_count > self.MAX_RESTARTS:
+            self.log.error("bridge.max_restarts", restart_count=restart_count)
+            await self._report_fatal_error(f"Bridge crashed {restart_count} times, giving up")
+            self.shutdown_event.set()
+            return restart_count, True
+
+        delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
+        self.log.info(
+            "bridge.restart",
+            delay_s=round(delay, 1),
+            restart_count=restart_count,
+        )
+        await asyncio.sleep(delay)
+        await self.agent_bridge.start()
+        return restart_count, False
+
+    async def _handle_code_server_exit(self, restart_count: int) -> int:
+        exit_code = self.code_server.exit_code()
+        if exit_code is None:
+            return restart_count
+
+        restart_count += 1
+        self.log.warn(
+            "code_server.crash",
+            exit_code=exit_code,
+            restart_count=restart_count,
+        )
+        if restart_count > self.MAX_RESTARTS:
+            self.log.warn("code_server.max_restarts", restart_count=restart_count)
+            await self.code_server.stop()
+            return restart_count
+
+        await asyncio.sleep(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX))
+        try:
+            if self._repository_boot_result is None:
+                raise RuntimeError("code-server restart requested before repository boot")
+            await self.code_server.start(self._repository_boot_result.workdir)
+        except Exception as error:
+            self.log.warn("code_server.restart_failed", exc=error)
+            await self.code_server.stop()
+        return restart_count
+
+    async def _handle_terminal_crash(self, restart_count: int) -> int:
+        crash = self.web_terminal.crash()
+        if not crash:
+            return restart_count
+
+        component, exit_code = crash
+        restart_count += 1
+        self.log.warn(
+            "web_terminal.crash",
+            component=component,
+            exit_code=exit_code,
+            restart_count=restart_count,
+        )
+        await self.web_terminal.stop()
+        if restart_count > self.MAX_RESTARTS:
+            self.log.warn("web_terminal.max_restarts", restart_count=restart_count)
+            return restart_count
+
+        await asyncio.sleep(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX))
+        try:
+            if self._repository_boot_result is None:
+                raise RuntimeError("terminal restart requested before repository boot")
+            await self.web_terminal.start(self._repository_boot_result.workdir)
+        except Exception as error:
+            self.log.warn("web_terminal.restart_failed", exc=error)
+            await self.web_terminal.stop()
+        return restart_count
+
+    async def _handle_desktop_crash(self, restart_count: int) -> int:
+        crash = self.browser_desktop.crash()
+        if not crash or (
+            self._desktop_restart_task is not None and not self._desktop_restart_task.done()
+        ):
+            return restart_count
+
+        component, exit_code = crash
+        restart_count += 1
+        self.log.warn(
+            "vnc.crash",
+            component=component,
+            exit_code=exit_code,
+            restart_count=restart_count,
+        )
+        await self.browser_desktop.stop()
+        if restart_count <= self.MAX_RESTARTS:
+            self._desktop_restart_task = asyncio.create_task(self._start_desktop_with_retries())
+        else:
+            self.log.warn("vnc.max_restarts", restart_count=restart_count)
+        return restart_count
+
     async def monitor_processes(self) -> None:
         """Monitor each concrete process owner with its explicit restart policy."""
         opencode_restarts = 0
@@ -104,137 +243,15 @@ class SandboxSupervisor:
         desktop_restarts = 0
 
         while not self.shutdown_event.is_set():
-            opencode_exit_code = self.opencode_server.exit_code()
-            if opencode_exit_code is not None:
-                opencode_restarts += 1
-                self.log.error(
-                    "opencode.crash",
-                    exit_code=opencode_exit_code,
-                    restart_count=opencode_restarts,
-                )
-                if opencode_restarts > self.MAX_RESTARTS:
-                    self.log.error(
-                        "opencode.max_restarts",
-                        restart_count=opencode_restarts,
-                    )
-                    await self._report_fatal_error(
-                        f"OpenCode crashed {opencode_restarts} times, giving up"
-                    )
-                    self.shutdown_event.set()
-                    break
-                delay = min(self.BACKOFF_BASE**opencode_restarts, self.BACKOFF_MAX)
-                self.log.info(
-                    "opencode.restart",
-                    delay_s=round(delay, 1),
-                    restart_count=opencode_restarts,
-                )
-                await asyncio.sleep(delay)
-                if self._repository_boot_result is None:
-                    raise RuntimeError("OpenCode restart requested before repository boot")
-                await self.opencode_server.start(
-                    self._repository_boot_result.repositories,
-                    self._repository_boot_result.workdir,
-                )
-
-            bridge_exit_code = self.agent_bridge.exit_code()
-            if bridge_exit_code is not None:
-                if bridge_exit_code == 0:
-                    self.log.info("bridge.graceful_exit", exit_code=bridge_exit_code)
-                    self.shutdown_event.set()
-                    break
-                bridge_restarts += 1
-                self.log.error(
-                    "bridge.crash",
-                    exit_code=bridge_exit_code,
-                    restart_count=bridge_restarts,
-                )
-                if bridge_restarts > self.MAX_RESTARTS:
-                    self.log.error(
-                        "bridge.max_restarts",
-                        restart_count=bridge_restarts,
-                    )
-                    await self._report_fatal_error(
-                        f"Bridge crashed {bridge_restarts} times, giving up"
-                    )
-                    self.shutdown_event.set()
-                    break
-                delay = min(self.BACKOFF_BASE**bridge_restarts, self.BACKOFF_MAX)
-                self.log.info(
-                    "bridge.restart",
-                    delay_s=round(delay, 1),
-                    restart_count=bridge_restarts,
-                )
-                await asyncio.sleep(delay)
-                await self.agent_bridge.start()
-
-            code_server_exit_code = self.code_server.exit_code()
-            if code_server_exit_code is not None:
-                code_server_restarts += 1
-                self.log.warn(
-                    "code_server.crash",
-                    exit_code=code_server_exit_code,
-                    restart_count=code_server_restarts,
-                )
-                if code_server_restarts <= self.MAX_RESTARTS:
-                    await asyncio.sleep(
-                        min(self.BACKOFF_BASE**code_server_restarts, self.BACKOFF_MAX)
-                    )
-                    try:
-                        if self._repository_boot_result is None:
-                            raise RuntimeError(
-                                "code-server restart requested before repository boot"
-                            )
-                        await self.code_server.start(self._repository_boot_result.workdir)
-                    except Exception as error:
-                        self.log.warn("code_server.restart_failed", exc=error)
-                        await self.code_server.stop()
-                else:
-                    self.log.warn("code_server.max_restarts", restart_count=code_server_restarts)
-                    await self.code_server.stop()
-
-            terminal_crash = self.web_terminal.crash()
-            if terminal_crash:
-                component, exit_code = terminal_crash
-                terminal_restarts += 1
-                self.log.warn(
-                    "web_terminal.crash",
-                    component=component,
-                    exit_code=exit_code,
-                    restart_count=terminal_restarts,
-                )
-                await self.web_terminal.stop()
-                if terminal_restarts <= self.MAX_RESTARTS:
-                    await asyncio.sleep(min(self.BACKOFF_BASE**terminal_restarts, self.BACKOFF_MAX))
-                    try:
-                        if self._repository_boot_result is None:
-                            raise RuntimeError("terminal restart requested before repository boot")
-                        await self.web_terminal.start(self._repository_boot_result.workdir)
-                    except Exception as error:
-                        self.log.warn("web_terminal.restart_failed", exc=error)
-                        await self.web_terminal.stop()
-                else:
-                    self.log.warn("web_terminal.max_restarts", restart_count=terminal_restarts)
-
-            desktop_crash = self.browser_desktop.crash()
-            if desktop_crash and (
-                self._desktop_restart_task is None or self._desktop_restart_task.done()
-            ):
-                component, exit_code = desktop_crash
-                desktop_restarts += 1
-                self.log.warn(
-                    "vnc.crash",
-                    component=component,
-                    exit_code=exit_code,
-                    restart_count=desktop_restarts,
-                )
-                await self.browser_desktop.stop()
-                if desktop_restarts <= self.MAX_RESTARTS:
-                    self._desktop_restart_task = asyncio.create_task(
-                        self._start_desktop_with_retries()
-                    )
-                else:
-                    self.log.warn("vnc.max_restarts", restart_count=desktop_restarts)
-
+            opencode_restarts, should_stop = await self._handle_opencode_exit(opencode_restarts)
+            if should_stop:
+                break
+            bridge_restarts, should_stop = await self._handle_bridge_exit(bridge_restarts)
+            if should_stop:
+                break
+            code_server_restarts = await self._handle_code_server_exit(code_server_restarts)
+            terminal_restarts = await self._handle_terminal_crash(terminal_restarts)
+            desktop_restarts = await self._handle_desktop_crash(desktop_restarts)
             await asyncio.sleep(1.0)
 
     def _image_build_execution_timeout_seconds(self) -> int | None:
