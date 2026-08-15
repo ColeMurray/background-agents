@@ -1,0 +1,600 @@
+import {
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_REVISION_BYTES,
+  type CreateSkillInput,
+  type EditSkillInput,
+  type Skill,
+  type SkillAssignment,
+  type SkillAssignmentInput,
+  type SkillContentInput,
+  type SkillFile,
+  type SkillSummary,
+  type UpdateSkillInput,
+} from "@open-inspect/shared/types/skills";
+import { generateId } from "../auth/crypto";
+import { buildHashedFiles } from "../skills/canonical";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
+
+const RESERVED_SKILL_NAMES = new Set([
+  "agent-browser",
+  "record-video",
+  "upload-screenshot",
+  "visual-verification",
+  "customize-opencode",
+]);
+
+interface SkillRow {
+  id: string;
+  name: string;
+  current_revision_id: string;
+  enabled: number;
+  deleted_at: number | null;
+  created_by: string;
+  updated_by: string;
+  created_at: number;
+  updated_at: number;
+  revision_number: number;
+  content_sha256: string;
+  description: string;
+  body: string;
+  license: string | null;
+  compatibility: string | null;
+  metadata_json: string;
+  total_bytes: number;
+  revision_created_by: string;
+  creator_display_name: string | null;
+  last_editor_display_name: string | null;
+  revision_author_display_name: string | null;
+}
+
+interface AssignmentRow {
+  id: string;
+  skill_id: string;
+  scope_type: "global" | "repository" | "environment";
+  repo_owner: string | null;
+  repo_name: string | null;
+  environment_id: string | null;
+  environment_name: string | null;
+}
+
+interface FileRow {
+  path: string;
+  content: string;
+  content_sha256: string;
+  size_bytes: number;
+  executable: number;
+}
+
+export class SkillConflictError extends Error {}
+export class SkillValidationError extends Error {}
+
+export interface ApplicableSkill extends SkillSummary {
+  totalBytes: number;
+}
+
+export class SkillStore {
+  constructor(private readonly db: SqlDatabase) {}
+
+  async list(): Promise<SkillSummary[]> {
+    const result = await this.db
+      .prepare(
+        `${this.currentSkillSelect()}
+         WHERE s.deleted_at IS NULL
+         ORDER BY s.name`
+      )
+      .all<SkillRow>();
+    const rows = result.results ?? [];
+    const assignments = await this.assignmentsForSkills(rows.map((row) => row.id));
+    return Promise.all(rows.map((row) => this.toSummary(row, assignments.get(row.id) ?? [])));
+  }
+
+  async get(id: string, includeDeleted = false): Promise<Skill | null> {
+    const row = await this.db
+      .prepare(
+        `${this.currentSkillSelect()}
+         WHERE s.id = ? ${includeDeleted ? "" : "AND s.deleted_at IS NULL"}`
+      )
+      .bind(id)
+      .first<SkillRow>();
+    if (!row) return null;
+    const [summary, files] = await Promise.all([
+      this.toSummary(row),
+      this.filesForRevision(row.current_revision_id),
+    ]);
+    return {
+      ...summary,
+      body: row.body,
+      license: row.license,
+      compatibility: row.compatibility,
+      metadata: JSON.parse(row.metadata_json) as Record<string, string>,
+      files,
+    };
+  }
+
+  async create(input: CreateSkillInput, actorUserId: string): Promise<Skill> {
+    if (RESERVED_SKILL_NAMES.has(input.name)) {
+      throw new SkillConflictError("Skill name is reserved by the sandbox runtime");
+    }
+    const existing = await this.db
+      .prepare("SELECT id FROM skills WHERE lower(name) = lower(?)")
+      .bind(input.name)
+      .first<{ id: string }>();
+    if (existing) throw new SkillConflictError("A skill with this name already exists");
+
+    await this.validateAssignments(input.assignments);
+    const hashed = await this.validateAndHash(input.name, input.content);
+    const id = `skill_${generateId()}`;
+    const revisionId = `skillrev_${generateId()}`;
+    const now = Date.now();
+    await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO skills
+           (id, name, current_revision_id, enabled, deleted_at, created_by, updated_by, created_at, updated_at)
+           VALUES (?, ?, NULL, 1, NULL, ?, ?, ?, ?)`
+        )
+        .bind(id, input.name, actorUserId, actorUserId, now, now),
+      this.revisionInsert(revisionId, id, 1, input.content, hashed, actorUserId, now),
+      ...this.fileInserts(revisionId, hashed.files),
+      this.db
+        .prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
+        .bind(revisionId, id),
+      ...this.assignmentInserts(id, input.assignments, actorUserId, now),
+      this.bumpGeneration(),
+    ]);
+    return (await this.get(id))!;
+  }
+
+  async updateMetadata(
+    id: string,
+    input: UpdateSkillInput,
+    actorUserId: string
+  ): Promise<Skill | null> {
+    const current = await this.get(id);
+    if (!current) return null;
+    if (input.assignments !== undefined) await this.validateAssignments(input.assignments);
+    const now = Date.now();
+    const statements: SqlStatement[] = [];
+    if (input.enabled !== undefined || input.assignments !== undefined) {
+      statements.push(
+        this.db
+          .prepare(
+            "UPDATE skills SET enabled = ?, updated_by = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+          )
+          .bind(
+            input.enabled === undefined ? (current.enabled ? 1 : 0) : input.enabled ? 1 : 0,
+            actorUserId,
+            now,
+            id
+          )
+      );
+    }
+    if (input.assignments !== undefined) {
+      statements.push(
+        this.db.prepare("DELETE FROM skill_assignments WHERE skill_id = ?").bind(id),
+        ...this.assignmentInserts(id, input.assignments, actorUserId, now)
+      );
+    }
+    if (statements.length > 0) await this.db.batch([...statements, this.bumpGeneration()]);
+    return this.get(id);
+  }
+
+  async updateContent(
+    id: string,
+    content: SkillContentInput,
+    actorUserId: string,
+    expectedRevisionId: string
+  ): Promise<Skill | null> {
+    const current = await this.get(id);
+    if (!current) return null;
+    if (expectedRevisionId !== current.currentRevisionId) {
+      throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
+    }
+    const hashed = await this.validateAndHash(current.name, content);
+    if (hashed.contentSha256 === current.contentSha256) return current;
+
+    const revisionId = `skillrev_${generateId()}`;
+    const revisionNumber = current.revisionNumber + 1;
+    const now = Date.now();
+    let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
+    try {
+      results = await this.db.batch([
+        this.revisionInsert(
+          revisionId,
+          id,
+          revisionNumber,
+          content,
+          hashed,
+          actorUserId,
+          now,
+          current.currentRevisionId
+        ),
+        ...this.fileInserts(revisionId, hashed.files),
+        this.db
+          .prepare(
+            `UPDATE skills SET current_revision_id = ?, updated_by = ?, updated_at = ?
+             WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
+          )
+          .bind(revisionId, actorUserId, now, id, current.currentRevisionId),
+        this.bumpGeneration(),
+      ]);
+    } catch (error) {
+      const latest = await this.get(id);
+      if (latest && latest.currentRevisionId !== current.currentRevisionId) {
+        throw new SkillConflictError("Skill content changed concurrently");
+      }
+      throw error;
+    }
+    const updateResult = results[results.length - 2];
+    if ((updateResult?.meta.changes ?? 0) === 0) {
+      throw new SkillConflictError("Skill content changed concurrently");
+    }
+    return this.get(id);
+  }
+
+  async edit(
+    id: string,
+    input: EditSkillInput,
+    actorUserId: string,
+    expectedRevisionId: string
+  ): Promise<Skill | null> {
+    const current = await this.get(id);
+    if (!current) return null;
+    if (expectedRevisionId !== current.currentRevisionId) {
+      throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
+    }
+    await this.validateAssignments(input.assignments);
+    const hashed = await this.validateAndHash(current.name, input.content);
+    const now = Date.now();
+    const statements: SqlStatement[] = [];
+    let updateResultIndex: number;
+
+    if (hashed.contentSha256 === current.contentSha256) {
+      updateResultIndex = statements.length;
+      statements.push(
+        this.db
+          .prepare(
+            `UPDATE skills SET enabled = ?, updated_by = ?, updated_at = ?
+             WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
+          )
+          .bind(
+            (input.enabled ?? current.enabled) ? 1 : 0,
+            actorUserId,
+            now,
+            id,
+            expectedRevisionId
+          )
+      );
+    } else {
+      const revisionId = `skillrev_${generateId()}`;
+      statements.push(
+        this.revisionInsert(
+          revisionId,
+          id,
+          current.revisionNumber + 1,
+          input.content,
+          hashed,
+          actorUserId,
+          now,
+          expectedRevisionId
+        ),
+        ...this.fileInserts(revisionId, hashed.files)
+      );
+      updateResultIndex = statements.length;
+      statements.push(
+        this.db
+          .prepare(
+            `UPDATE skills SET current_revision_id = ?, enabled = ?, updated_by = ?, updated_at = ?
+             WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
+          )
+          .bind(
+            revisionId,
+            (input.enabled ?? current.enabled) ? 1 : 0,
+            actorUserId,
+            now,
+            id,
+            expectedRevisionId
+          )
+      );
+    }
+    statements.push(
+      this.db.prepare("DELETE FROM skill_assignments WHERE skill_id = ?").bind(id),
+      ...this.assignmentInserts(id, input.assignments, actorUserId, now),
+      this.bumpGeneration()
+    );
+    let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
+    try {
+      results = await this.db.batch(statements);
+    } catch (error) {
+      const latest = await this.get(id);
+      if (latest && latest.currentRevisionId !== expectedRevisionId) {
+        throw new SkillConflictError("Skill changed concurrently");
+      }
+      throw error;
+    }
+    if ((results[updateResultIndex]?.meta.changes ?? 0) === 0) {
+      throw new SkillConflictError("Skill changed concurrently");
+    }
+    return this.get(id);
+  }
+
+  async delete(id: string, actorUserId: string): Promise<boolean> {
+    const now = Date.now();
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE skills SET deleted_at = ?, enabled = 0, updated_by = ?, updated_at = ?
+           WHERE id = ? AND deleted_at IS NULL`
+        )
+        .bind(now, actorUserId, now, id),
+      this.bumpGeneration(),
+    ]);
+    return (results[0]?.meta.changes ?? 0) > 0;
+  }
+
+  async catalogGeneration(): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT generation FROM skills_catalog_state WHERE singleton = 1")
+      .first<{ generation: number }>();
+    if (!row) throw new Error("Managed skills catalog state is missing");
+    return row.generation;
+  }
+
+  async listApplicable(input: {
+    repositories: readonly { repoOwner: string; repoName: string }[];
+    environmentId: string | null;
+  }): Promise<ApplicableSkill[]> {
+    const rows = await this.db
+      .prepare(
+        `${this.currentSkillSelect()} WHERE s.enabled = 1 AND s.deleted_at IS NULL ORDER BY s.name`
+      )
+      .all<SkillRow>();
+    const repositoryKeys = new Set(
+      input.repositories.map(
+        (repository) =>
+          `${repository.repoOwner.toLowerCase()}\0${repository.repoName.toLowerCase()}`
+      )
+    );
+    const assignmentsBySkill = await this.assignmentsForSkills(
+      (rows.results ?? []).map((row) => row.id)
+    );
+    const applicable: ApplicableSkill[] = [];
+    for (const row of rows.results ?? []) {
+      const assignments = assignmentsBySkill.get(row.id) ?? [];
+      const matching = assignments.filter((assignment) => {
+        if (assignment.type === "global") return true;
+        if (assignment.type === "environment") {
+          return input.environmentId !== null && assignment.environmentId === input.environmentId;
+        }
+        return repositoryKeys.has(
+          `${assignment.repoOwner.toLowerCase()}\0${assignment.repoName.toLowerCase()}`
+        );
+      });
+      if (matching.length === 0) continue;
+      applicable.push({ ...(await this.toSummary(row, matching)), totalBytes: row.total_bytes });
+    }
+    return applicable;
+  }
+
+  async filesForRevision(revisionId: string): Promise<SkillFile[]> {
+    const result = await this.db
+      .prepare("SELECT * FROM skill_revision_files WHERE revision_id = ? ORDER BY path")
+      .bind(revisionId)
+      .all<FileRow>();
+    return (result.results ?? []).map((row) => ({
+      path: row.path,
+      content: row.content,
+      sha256: row.content_sha256,
+      sizeBytes: row.size_bytes,
+      executable: row.executable === 1,
+    }));
+  }
+
+  private currentSkillSelect(): string {
+    return `SELECT s.*, r.revision_number, r.content_sha256, r.description, r.body,
+       r.license, r.compatibility, r.metadata_json, r.total_bytes,
+       r.created_by AS revision_created_by,
+       creator.display_name AS creator_display_name,
+       editor.display_name AS last_editor_display_name,
+       revision_author.display_name AS revision_author_display_name
+             FROM skills s
+            JOIN skill_revisions r ON r.id = s.current_revision_id AND r.skill_id = s.id
+            LEFT JOIN users creator ON creator.id = s.created_by
+            LEFT JOIN users editor ON editor.id = s.updated_by
+            LEFT JOIN users revision_author ON revision_author.id = r.created_by`;
+  }
+
+  private async toSummary(row: SkillRow, assignments?: SkillAssignment[]): Promise<SkillSummary> {
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description,
+      enabled: row.enabled === 1,
+      deleted: row.deleted_at !== null,
+      currentRevisionId: row.current_revision_id,
+      revisionNumber: row.revision_number,
+      contentSha256: row.content_sha256,
+      revisionCreatedBy: row.revision_created_by,
+      creatorDisplayName: row.creator_display_name,
+      lastEditorDisplayName: row.last_editor_display_name,
+      revisionAuthorDisplayName: row.revision_author_display_name,
+      assignments: assignments ?? (await this.assignmentsForSkill(row.id)),
+      createdBy: row.created_by,
+      updatedBy: row.updated_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  private async assignmentsForSkill(skillId: string): Promise<SkillAssignment[]> {
+    return (await this.assignmentsForSkills([skillId])).get(skillId) ?? [];
+  }
+
+  private async assignmentsForSkills(skillIds: string[]): Promise<Map<string, SkillAssignment[]>> {
+    const assignments = new Map(skillIds.map((id) => [id, [] as SkillAssignment[]]));
+    if (skillIds.length === 0) return assignments;
+    const placeholders = skillIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT a.*, e.name AS environment_name
+         FROM skill_assignments a
+         LEFT JOIN environments e ON e.id = a.environment_id
+         WHERE a.skill_id IN (${placeholders})
+         ORDER BY a.skill_id, a.scope_type, a.id`
+      )
+      .bind(...skillIds)
+      .all<AssignmentRow>();
+    for (const row of result.results ?? []) {
+      let assignment: SkillAssignment;
+      if (row.scope_type === "repository") {
+        assignment = {
+          id: row.id,
+          type: "repository",
+          repoOwner: row.repo_owner!,
+          repoName: row.repo_name!,
+        };
+      } else if (row.scope_type === "environment") {
+        assignment = {
+          id: row.id,
+          type: "environment",
+          environmentId: row.environment_id!,
+          ...(row.environment_name ? { environmentName: row.environment_name } : {}),
+        };
+      } else {
+        assignment = { id: row.id, type: "global" };
+      }
+      assignments.get(row.skill_id)?.push(assignment);
+    }
+    return assignments;
+  }
+
+  async validateAndHash(name: string, content: SkillContentInput) {
+    const hashed = await buildHashedFiles(name, content);
+    const oversized = hashed.files.find((file) => file.sizeBytes > MAX_SKILL_FILE_BYTES);
+    if (oversized)
+      throw new SkillValidationError(`${oversized.path} exceeds the per-file size limit`);
+    if (hashed.totalBytes > MAX_SKILL_REVISION_BYTES) {
+      throw new SkillValidationError("Rendered skill exceeds the revision size limit");
+    }
+    return hashed;
+  }
+
+  private async validateAssignments(assignments: SkillAssignmentInput[]): Promise<void> {
+    const keys = assignments.map((assignment) => {
+      if (assignment.type === "global") return "global";
+      if (assignment.type === "environment") return `environment:${assignment.environmentId}`;
+      return `repository:${assignment.repository.repoOwner.toLowerCase()}/${assignment.repository.repoName.toLowerCase()}`;
+    });
+    if (new Set(keys).size !== keys.length) {
+      throw new SkillValidationError("Skill assignments must be unique");
+    }
+    const environmentIds = [
+      ...new Set(
+        assignments.flatMap((assignment) =>
+          assignment.type === "environment" ? [assignment.environmentId] : []
+        )
+      ),
+    ];
+    if (environmentIds.length === 0) return;
+    const placeholders = environmentIds.map(() => "?").join(", ");
+    const row = await this.db
+      .prepare(`SELECT COUNT(*) AS count FROM environments WHERE id IN (${placeholders})`)
+      .bind(...environmentIds)
+      .first<{ count: number }>();
+    if ((row?.count ?? 0) !== environmentIds.length) {
+      throw new SkillValidationError("One or more assigned environments do not exist");
+    }
+  }
+
+  private revisionInsert(
+    revisionId: string,
+    skillId: string,
+    revisionNumber: number,
+    content: SkillContentInput,
+    hashed: Awaited<ReturnType<typeof buildHashedFiles>>,
+    actorUserId: string,
+    now: number,
+    expectedCurrentRevisionId: string | null = null
+  ): SqlStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO skill_revisions
+         (id, skill_id, revision_number, content_sha256, description, body, license,
+          compatibility, metadata_json, total_bytes, created_by, created_at)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE ? IS NULL OR EXISTS (
+            SELECT 1 FROM skills
+            WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
+          )`
+      )
+      .bind(
+        revisionId,
+        skillId,
+        revisionNumber,
+        hashed.contentSha256,
+        content.description,
+        content.body,
+        content.license ?? null,
+        content.compatibility ?? null,
+        JSON.stringify(content.metadata),
+        hashed.totalBytes,
+        actorUserId,
+        now,
+        expectedCurrentRevisionId,
+        skillId,
+        expectedCurrentRevisionId
+      );
+  }
+
+  private fileInserts(revisionId: string, files: SkillFile[]): SqlStatement[] {
+    return files.map((file) =>
+      this.db
+        .prepare(
+          `INSERT INTO skill_revision_files
+           (revision_id, path, content, content_sha256, size_bytes, executable)
+           VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          revisionId,
+          file.path,
+          file.content,
+          file.sha256,
+          file.sizeBytes,
+          file.executable ? 1 : 0
+        )
+    );
+  }
+
+  private assignmentInserts(
+    skillId: string,
+    assignments: SkillAssignmentInput[],
+    actorUserId: string,
+    now: number
+  ): SqlStatement[] {
+    return assignments.map((assignment) => {
+      const id = `skillassign_${generateId()}`;
+      return this.db
+        .prepare(
+          `INSERT INTO skill_assignments
+           (id, skill_id, scope_type, repo_owner, repo_name, environment_id, created_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          id,
+          skillId,
+          assignment.type,
+          assignment.type === "repository" ? assignment.repository.repoOwner : null,
+          assignment.type === "repository" ? assignment.repository.repoName : null,
+          assignment.type === "environment" ? assignment.environmentId : null,
+          actorUserId,
+          now
+        );
+    });
+  }
+
+  private bumpGeneration(): SqlStatement {
+    return this.db.prepare(
+      "UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1"
+    );
+  }
+}

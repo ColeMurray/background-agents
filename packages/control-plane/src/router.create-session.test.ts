@@ -7,6 +7,7 @@ import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-suppor
 import { sessionCreateRoutes } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
+import { resolveManagedSkills } from "./session/skill-resolution";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -15,6 +16,14 @@ vi.mock("./db/session-index", () => ({
 vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
+
+vi.mock("./session/skill-resolution", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    resolveManagedSkills: vi.fn(),
+  };
+});
 
 vi.mock("./routes/shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -32,6 +41,13 @@ const USER_PRINCIPAL: Principal = {
 describe("handleCreateSession D1 ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveManagedSkills).mockResolvedValue({
+      selection: { mode: "all" },
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      skills: [],
+    });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       defaultBranch: "main",

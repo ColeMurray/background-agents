@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sessionSkillSelectionSchema } from "./skills";
 import type { AgentResponse } from "./artifacts";
 import { sessionRepositoriesInputSchema } from "./repositories";
 import type { EventResponse } from "./sandbox-events";
@@ -195,6 +196,8 @@ const createSessionRequestBaseSchema = z.object({
    * fields.
    */
   environmentId: z.string().trim().min(1).nullish(),
+  /** Managed skills are resolved and pinned when the session is created. */
+  skillSelection: sessionSkillSelectionSchema.optional(),
 });
 
 export const createSessionRequestSchema = createSessionRequestBaseSchema

@@ -227,6 +227,12 @@ variable "slack_triggers_enabled" {
   default     = false
 }
 
+variable "managed_skills_enabled" {
+  description = "Emergency kill switch for managed-skill authoring and resolution. Existing pinned sessions remain bootable."
+  type        = bool
+  default     = true
+}
+
 variable "slack_bot_token" {
   description = "Slack Bot OAuth token (xoxb-...)"
   type        = string

@@ -11,8 +11,9 @@ import {
   DEFAULT_SESSION_LIST_OFFSET,
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
+import type { SessionSkillManifestInput } from "../session/skill-resolution";
 import { SessionPullRequestStore } from "./session-pull-request-store";
-import type { SqlDatabase } from "./sql-database";
+import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const TERMINAL_STATUSES = [
   "completed",
@@ -83,6 +84,10 @@ export interface SessionEntry {
    */
   pullRequestSummary?: PullRequestSummary;
   readState?: SessionReadState;
+  /** Resolved manifest to persist atomically with a new top-level session. */
+  skillManifest?: SessionSkillManifestInput;
+  /** Parent manifest to copy atomically for an agent-spawned child. */
+  skillManifestSourceSessionId?: string;
 }
 
 interface SessionRepositoryRow {
@@ -233,6 +238,10 @@ export class SessionIndexStore {
   async create(session: SessionEntry): Promise<void> {
     const repository = normalizeSessionRepository(session);
 
+    if (session.skillManifest && session.skillManifestSourceSessionId) {
+      throw new Error("Session cannot both resolve and copy a managed skill manifest");
+    }
+
     const sessionStmt = this.db
       .prepare(
         `INSERT OR IGNORE INTO sessions (id, title, repo_owner, repo_name, model, reasoning_effort, base_branch, status, parent_session_id, spawn_source, spawn_depth, automation_id, automation_run_id, scm_login, user_id, environment_id, created_at, updated_at)
@@ -275,7 +284,12 @@ export class SessionIndexStore {
         )
     );
 
-    const results = await this.db.batch([sessionStmt, ...repositoryStmts]);
+    const manifestStmts = session.skillManifest
+      ? this.bindManifestInserts(session.id, session.skillManifest)
+      : session.skillManifestSourceSessionId
+        ? this.bindManifestCopy(session.id, session.skillManifestSourceSessionId)
+        : [];
+    const results = await this.db.batch([sessionStmt, ...repositoryStmts, ...manifestStmts]);
 
     // INSERT OR IGNORE swallows every constraint violation, which would leave
     // the session invisible to dashboards while the DO proceeds. Session ids
@@ -286,6 +300,77 @@ export class SessionIndexStore {
         `Session index insert was skipped for session ${session.id} (duplicate id or constraint violation)`
       );
     }
+  }
+
+  private bindManifestInserts(
+    sessionId: string,
+    manifest: SessionSkillManifestInput
+  ): SqlStatement[] {
+    const profile = manifest.selection.mode === "profile" ? manifest.selection : null;
+    return [
+      this.db
+        .prepare(
+          `INSERT INTO session_skill_manifests
+           (session_id, selection_mode, profile_id, profile_name, resolver_version, manifest_sha256, resolved_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          sessionId,
+          manifest.selection.mode,
+          profile?.profileId ?? null,
+          profile?.profileName ?? null,
+          manifest.resolverVersion,
+          manifest.manifestSha256,
+          manifest.resolvedAt
+        ),
+      ...manifest.skills.map((skill, position) =>
+        this.db
+          .prepare(
+            `INSERT INTO session_skill_revisions
+             (session_id, position, skill_id, revision_id, skill_name, description,
+              revision_number, content_sha256, total_bytes, assignment_sources)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            sessionId,
+            position,
+            skill.skillId,
+            skill.revisionId,
+            skill.name,
+            skill.description,
+            skill.revisionNumber,
+            skill.contentSha256,
+            skill.totalBytes,
+            JSON.stringify(skill.assignmentSources)
+          )
+      ),
+    ];
+  }
+
+  private bindManifestCopy(childSessionId: string, parentSessionId: string): SqlStatement[] {
+    return [
+      this.db
+        .prepare(
+          `INSERT INTO session_skill_manifests
+           (session_id, selection_mode, profile_id, profile_name, manifest_sha256, resolved_at,
+             resolver_version, activation_status, activated_at, activation_error_code, activation_error)
+            SELECT ?, selection_mode, profile_id, profile_name, manifest_sha256, resolved_at,
+                   resolver_version,
+                   'pending', NULL, NULL, NULL
+           FROM session_skill_manifests WHERE session_id = ?`
+        )
+        .bind(childSessionId, parentSessionId),
+      this.db
+        .prepare(
+          `INSERT INTO session_skill_revisions
+           (session_id, position, skill_id, revision_id, skill_name, description,
+            revision_number, content_sha256, total_bytes, assignment_sources)
+           SELECT ?, position, skill_id, revision_id, skill_name, description,
+                  revision_number, content_sha256, total_bytes, assignment_sources
+           FROM session_skill_revisions WHERE session_id = ? ORDER BY position`
+        )
+        .bind(childSessionId, parentSessionId),
+    ];
   }
 
   async get(id: string): Promise<SessionEntry | null> {

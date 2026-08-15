@@ -13,6 +13,7 @@ import { parseCreateSessionInput } from "../session/create-session-input";
 import { initializeSession, type SessionInitInput } from "../session/initialize";
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
@@ -183,6 +184,23 @@ async function handleCreateSession(
 
   const sessionId = generateId();
 
+  let managedSkillsManifest;
+  try {
+    managedSkillsManifest = await resolveManagedSkills(
+      ctx.db,
+      {
+        repositories: repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []),
+        environmentId,
+      },
+      body.skillSelection ?? { mode: "all" },
+      resolvedUserId,
+      env.MANAGED_SKILLS_ENABLED !== "false"
+    );
+  } catch (e) {
+    if (e instanceof SkillResolutionError) return error(e.message, e.status);
+    throw e;
+  }
+
   const input: SessionInitInput = {
     sessionId,
     repoOwner,
@@ -208,6 +226,7 @@ async function handleCreateSession(
     vncEnabled,
     sandboxSettings,
     spawnSource,
+    managedSkillsManifest,
   };
 
   try {

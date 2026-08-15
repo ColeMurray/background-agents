@@ -31,6 +31,16 @@ vi.mock("../source-control", () => ({
   })),
 }));
 
+vi.mock("../session/skill-resolution", () => ({
+  resolveManagedSkills: vi.fn(async () => ({
+    selection: { mode: "all" },
+    resolverVersion: 1,
+    manifestSha256: "0".repeat(64),
+    resolvedAt: 1,
+    skills: [],
+  })),
+}));
+
 // Must import AFTER vi.mock so the hoisted mock is in place
 const { SchedulerDO } = await import("./durable-object");
 

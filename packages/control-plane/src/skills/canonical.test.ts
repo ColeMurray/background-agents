@@ -1,0 +1,76 @@
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { buildHashedFiles, hashManifest, renderSkillMarkdown } from "./canonical";
+import {
+  MAX_MANAGED_SKILLS_PER_SESSION,
+  MAX_MANAGED_SKILL_MANIFEST_BYTES,
+  MAX_SKILL_FILES,
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_PATH_BYTES,
+  MAX_SKILL_PATH_DEPTH,
+  MAX_SKILL_REVISION_BYTES,
+} from "@open-inspect/shared/types/skills";
+
+describe("managed skill canonicalization", () => {
+  const golden = JSON.parse(
+    readFileSync(
+      new URL("../../../shared/test-fixtures/managed-skills-golden.json", import.meta.url),
+      "utf8"
+    )
+  );
+  const content = {
+    description: "Deploy the service",
+    body: "# Deploy\n\nFollow the runbook.\n",
+    license: "MIT",
+    compatibility: null,
+    metadata: { zeta: "last", alpha: "first" },
+    files: [{ path: "scripts/deploy.sh", content: "#!/bin/sh\n", executable: true }],
+  };
+
+  it("renders canonical SKILL.md with fixed and sorted frontmatter", () => {
+    expect(renderSkillMarkdown("acme-deploy", content)).toBe(
+      '---\nname: acme-deploy\ndescription: "Deploy the service"\nlicense: "MIT"\nmetadata:\n  "alpha": "first"\n  "zeta": "last"\n---\n# Deploy\n\nFollow the runbook.\n'
+    );
+  });
+
+  it("pins cross-runtime content limits", () => {
+    expect(golden.limits).toEqual({
+      maxSkillFiles: MAX_SKILL_FILES,
+      maxSkillFileBytes: MAX_SKILL_FILE_BYTES,
+      maxSkillRevisionBytes: MAX_SKILL_REVISION_BYTES,
+      maxSkillPathBytes: MAX_SKILL_PATH_BYTES,
+      maxSkillPathDepth: MAX_SKILL_PATH_DEPTH,
+      maxManagedSkillsPerSession: MAX_MANAGED_SKILLS_PER_SESSION,
+      maxManagedSkillManifestBytes: MAX_MANAGED_SKILL_MANIFEST_BYTES,
+    });
+  });
+
+  it("produces stable revision and manifest hashes independent of input ordering", async () => {
+    const first = await buildHashedFiles("acme-deploy", content);
+    const second = await buildHashedFiles("acme-deploy", {
+      ...content,
+      metadata: { alpha: "first", zeta: "last" },
+    });
+    expect(first.contentSha256).toBe(second.contentSha256);
+    expect(first.contentSha256).toBe(golden.revisionSha256);
+    expect(first.files[0].content).toBe(golden.skillMarkdown);
+    expect(first.files.map((file) => file.path)).toEqual(["SKILL.md", "scripts/deploy.sh"]);
+
+    const skill = {
+      skillId: "skill_1",
+      revisionId: "skillrev_1",
+      name: "acme-deploy",
+      contentSha256: first.contentSha256,
+      assignmentSources: [
+        { id: "assign_repo", type: "repository" as const, repoOwner: "acme", repoName: "api" },
+        { id: "assign_global", type: "global" as const },
+      ],
+    };
+    await expect(hashManifest({ mode: "all" }, [skill])).resolves.toBe(
+      await hashManifest({ mode: "all" }, [
+        { ...skill, assignmentSources: [...skill.assignmentSources].reverse() },
+      ])
+    );
+    await expect(hashManifest({ mode: "all" }, [skill])).resolves.toBe(golden.manifestSha256);
+  });
+});

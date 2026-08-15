@@ -205,6 +205,30 @@ describe("sessions API route (POST)", () => {
     expect(sent.environmentId).toBeUndefined();
   });
 
+  it("forwards only the managed skill selection from the browser", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({
+      user: { id: "0123456789abcdef0123456789abcdef" },
+    } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ id: "sess-skills" }, { status: 201 })
+    );
+
+    await POST(
+      postRequest({
+        repoOwner: "acme",
+        repoName: "web",
+        skillSelection: { mode: "profile", profileId: "profile-1" },
+        skillIds: ["caller-controlled-id"],
+      })
+    );
+
+    expect(controlPlaneBody()).toEqual({
+      repoOwner: "acme",
+      repoName: "web",
+      skillSelection: { mode: "profile", profileId: "profile-1" },
+    });
+  });
+
   it("still strips fields outside the allowlist", async () => {
     vi.mocked(getServerAuthSession).mockResolvedValue({
       user: { id: "0123456789abcdef0123456789abcdef" },

@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import os
 import signal
+from pathlib import Path
 
 from .agent_bridge_process import AgentBridgeProcess
 from .boot_warnings import BootWarningSink
@@ -14,6 +15,7 @@ from .browser_desktop import BrowserDesktop
 from .code_server import CodeServer
 from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .log_config import configure_logging, get_logger
+from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
 from .opencode_server import OpenCodeServer
 from .repository_boot import RepositoryBoot
@@ -48,11 +50,23 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         RepositoryHooks(log),
         RepositorySynchronizer(config.vcs_host, log),
     )
+    managed_skills_config = config.managed_skills_config()
+    managed_skills = ManagedSkillsMaterializer(
+        ManagedSkillsClient(
+            managed_skills_config.control_plane_url,
+            managed_skills_config.session_id,
+            managed_skills_config.sandbox_token,
+        ),
+        OpenCodeServer._resolve_opencode_global_config_dir() / "skills",
+        Path.home() / ".config/open-inspect/managed-skills-manifest.json",
+        log,
+    )
     opencode_server = OpenCodeServer(
         config.opencode_config(),
         shutdown_event,
         log,
         warnings.record,
+        managed_skills,
     )
     agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
     code_server = CodeServer(log)

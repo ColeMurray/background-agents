@@ -220,6 +220,7 @@ async function handleSpawnChild(
     spawnDepth: childDepth,
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
+    managedSkillsSourceSessionId: parentId,
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(

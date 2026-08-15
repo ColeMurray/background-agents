@@ -6,6 +6,7 @@ import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import { SessionIndexStore } from "../db/session-index";
 import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import { createLogger } from "../logger";
+import type { SessionSkillManifestInput } from "./skill-resolution";
 
 const logger = createLogger("session-init");
 
@@ -68,6 +69,8 @@ export interface SessionInitInput {
   spawnDepth?: number;
   automationId?: string | null;
   automationRunId?: string | null;
+  managedSkillsManifest?: SessionSkillManifestInput;
+  managedSkillsSourceSessionId?: string;
 }
 
 /**
@@ -148,6 +151,8 @@ export async function initializeSession(
     userId: input.platformUserId,
     createdAt: now,
     updatedAt: now,
+    skillManifest: input.managedSkillsManifest,
+    skillManifestSourceSessionId: input.managedSkillsSourceSessionId,
   });
 
   // Step 2: DO init
