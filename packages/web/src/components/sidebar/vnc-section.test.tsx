@@ -22,6 +22,22 @@ describe("VncSection", () => {
     );
   });
 
+  it("waits for the password before linking the desktop", () => {
+    const { rerender } = render(
+      <VncSection url="https://desktop.example" password={null} sandboxStatus="ready" />
+    );
+
+    expect(screen.getByText("Desktop unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+
+    rerender(<VncSection url="https://desktop.example" password="secret" sandboxStatus="ready" />);
+
+    expect(screen.getByRole("link", { name: "Open Desktop" })).toHaveAttribute(
+      "href",
+      "https://desktop.example/vnc.html?autoconnect=true&resize=scale#password=secret"
+    );
+  });
+
   it("does not link unsafe URLs or inactive sandboxes", () => {
     const { rerender } = render(
       <VncSection url="javascript:alert(1)" password="secret" sandboxStatus="ready" />
