@@ -1,6 +1,7 @@
 import {
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_REVISION_BYTES,
+  skillMetadataSchema,
   type CreateSkillInput,
   type EditSkillInput,
   type Skill,
@@ -106,7 +107,7 @@ export class SkillStore {
       body: row.body,
       license: row.license,
       compatibility: row.compatibility,
-      metadata: JSON.parse(row.metadata_json) as Record<string, string>,
+      metadata: skillMetadataSchema.parse(JSON.parse(row.metadata_json)),
       files,
     };
   }
@@ -359,7 +360,8 @@ export class SkillStore {
   }
 
   async filesForRevisions(revisionIds: string[]): Promise<Map<string, SkillFile[]>> {
-    const files = new Map(revisionIds.map((revisionId) => [revisionId, [] as SkillFile[]]));
+    const files = new Map<string, SkillFile[]>();
+    for (const revisionId of revisionIds) files.set(revisionId, []);
     if (revisionIds.length === 0) return files;
     const placeholders = revisionIds.map(() => "?").join(", ");
     const result = await this.db
@@ -423,7 +425,8 @@ export class SkillStore {
   }
 
   private async assignmentsForSkills(skillIds: string[]): Promise<Map<string, SkillAssignment[]>> {
-    const assignments = new Map(skillIds.map((id) => [id, [] as SkillAssignment[]]));
+    const assignments = new Map<string, SkillAssignment[]>();
+    for (const skillId of skillIds) assignments.set(skillId, []);
     if (skillIds.length === 0) return assignments;
     const placeholders = skillIds.map(() => "?").join(", ");
     const result = await this.db
@@ -450,8 +453,8 @@ export class SkillStore {
           id: row.id,
           type: "environment",
           environmentId: row.environment_id!,
-          ...(row.environment_name ? { environmentName: row.environment_name } : {}),
         };
+        if (row.environment_name) assignment.environmentName = row.environment_name;
       } else {
         assignment = { id: row.id, type: "global" };
       }

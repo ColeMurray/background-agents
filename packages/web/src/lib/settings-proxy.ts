@@ -5,8 +5,6 @@ import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
-const DEFAULT_METHODS = ["GET", "PUT", "DELETE"] as const;
-
 const METHOD_VERBS: Record<ProxyMethod, string> = {
   GET: "fetch",
   POST: "create",
@@ -20,9 +18,7 @@ type RouteHandler<P> = (
   context: { params: Promise<P> }
 ) => Promise<NextResponse>;
 
-type ProxyHandlers<P, M extends readonly ProxyMethod[]> = {
-  [Method in M[number]]: RouteHandler<P>;
-};
+type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
 
 async function proxyResponse(response: Response): Promise<NextResponse> {
   const text = await response.text();
@@ -37,17 +33,7 @@ async function proxyResponse(response: Response): Promise<NextResponse> {
 export function settingsProxy<P>(
   buildPath: (params: P) => string,
   label: string
-): ProxyHandlers<P, typeof DEFAULT_METHODS>;
-export function settingsProxy<P, const M extends readonly ProxyMethod[]>(
-  buildPath: (params: P) => string,
-  label: string,
-  methods: M
-): ProxyHandlers<P, M>;
-export function settingsProxy<P, const M extends readonly ProxyMethod[]>(
-  buildPath: (params: P) => string,
-  label: string,
-  methods: M = DEFAULT_METHODS as unknown as M
-): ProxyHandlers<P, M> {
+): ProxyHandlers<P> {
   const proxy = async (
     request: NextRequest,
     context: { params: Promise<P> },
@@ -62,16 +48,13 @@ export function settingsProxy<P, const M extends readonly ProxyMethod[]>(
 
     try {
       const ifMatch = request.headers.get("if-match");
-      const response = await controlPlaneUserFetch(
-        buildPath(params),
-        method === "GET"
-          ? undefined
-          : {
-              method,
-              ...(method !== "DELETE" ? { body: JSON.stringify(await request.json()) } : {}),
-              ...(ifMatch ? { headers: { "If-Match": ifMatch } } : {}),
-            }
-      );
+      let init: RequestInit | undefined;
+      if (method !== "GET") {
+        init = { method };
+        if (method !== "DELETE") init.body = JSON.stringify(await request.json());
+        if (ifMatch) init.headers = { "If-Match": ifMatch };
+      }
+      const response = await controlPlaneUserFetch(buildPath(params), init);
       return proxyResponse(response);
     } catch (error) {
       console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);
@@ -82,10 +65,16 @@ export function settingsProxy<P, const M extends readonly ProxyMethod[]>(
     }
   };
 
-  return Object.fromEntries(
-    methods.map((method) => [
-      method,
-      (request: NextRequest, context: { params: Promise<P> }) => proxy(request, context, method),
-    ])
-  ) as ProxyHandlers<P, M>;
+  const handler =
+    (method: ProxyMethod): RouteHandler<P> =>
+    (request, context) =>
+      proxy(request, context, method);
+
+  return {
+    GET: handler("GET"),
+    POST: handler("POST"),
+    PATCH: handler("PATCH"),
+    PUT: handler("PUT"),
+    DELETE: handler("DELETE"),
+  };
 }

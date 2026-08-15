@@ -77,16 +77,18 @@ export const skillFileInputSchema = z
     path: ["path"],
   });
 
+export const skillMetadataSchema = z.record(
+  wellFormedString.min(1).max(100),
+  wellFormedString.max(500)
+);
+
 export const skillContentInputSchema = z
   .strictObject({
     description: wellFormedString.trim().min(1).max(MAX_SKILL_DESCRIPTION_LENGTH),
     body: wellFormedString,
     license: wellFormedString.trim().min(1).max(200).nullish(),
     compatibility: wellFormedString.trim().min(1).max(MAX_SKILL_COMPATIBILITY_LENGTH).nullish(),
-    metadata: z
-      .record(wellFormedString.min(1).max(100), wellFormedString.max(500))
-      .optional()
-      .default({}),
+    metadata: skillMetadataSchema.optional().default({}),
     files: z
       .array(skillFileInputSchema)
       .max(MAX_SKILL_FILES - 1)

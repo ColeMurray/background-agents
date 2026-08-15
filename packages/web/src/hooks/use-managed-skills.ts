@@ -1,44 +1,55 @@
 import useSWR from "swr";
+import { z } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
+import {
+  skillProfileResponseSchema,
+  skillResolutionPreviewResponseSchema,
+  skillResponseSchema,
+} from "@open-inspect/shared/types/skills";
 import type {
   CreateSkillInput,
   EditSkillInput,
   Skill,
   SkillContentInput,
   SkillProfile,
-  ResolvedSkill,
   SkillSummary,
   UpdateSkillInput,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
-import type { z } from "zod";
 
 export type SkillResolutionPreviewInput = z.infer<typeof skillResolutionPreviewInputSchema>;
 
-export interface SkillResolutionPreviewResponse {
-  skills: ResolvedSkill[];
-  totalBytes: number;
-  ignoredProfileSkillIds: string[];
-}
+export type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
 
-export interface SkillContentPreview {
-  skillMarkdown: string;
-  contentSha256: string;
-  totalBytes: number;
-}
+const skillContentPreviewSchema = z.strictObject({
+  skillMarkdown: z.string(),
+  contentSha256: z.string(),
+  totalBytes: z.number().int().nonnegative(),
+});
+export type SkillContentPreview = z.infer<typeof skillContentPreviewSchema>;
+
+const okResponseSchema = z.strictObject({ ok: z.literal(true) });
+const errorResponseSchema = z.object({ error: z.string() });
 
 export const SKILLS_KEY = "/api/skills";
 export const SKILL_PROFILES_KEY = "/api/skill-profiles";
 
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await browserApiFetch(path as `/api/${string}`, {
+async function apiRequest<T>(
+  path: BrowserApiPath,
+  schema: z.ZodType<T>,
+  init?: RequestInit
+): Promise<T> {
+  const response = await browserApiFetch(path, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Managed skills request failed");
-  return data;
+  const data: unknown = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const parsedError = errorResponseSchema.safeParse(data);
+    throw new Error(parsedError.success ? parsedError.data.error : "Managed skills request failed");
+  }
+  return schema.parse(data);
 }
 
 export function useSkills() {
@@ -77,7 +88,7 @@ export function useSkillProfiles() {
 
 export async function createSkill(input: CreateSkillInput): Promise<Skill> {
   return (
-    await apiRequest<{ skill: Skill }>(SKILLS_KEY, {
+    await apiRequest(SKILLS_KEY, skillResponseSchema, {
       method: "POST",
       body: JSON.stringify(input),
     })
@@ -86,7 +97,7 @@ export async function createSkill(input: CreateSkillInput): Promise<Skill> {
 
 export async function updateSkill(id: string, input: UpdateSkillInput): Promise<Skill> {
   return (
-    await apiRequest<{ skill: Skill }>(`${SKILLS_KEY}/${id}`, {
+    await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
       method: "PATCH",
       body: JSON.stringify(input),
     })
@@ -99,7 +110,7 @@ export async function editSkill(
   input: EditSkillInput
 ): Promise<Skill> {
   return (
-    await apiRequest<{ skill: Skill }>(`${SKILLS_KEY}/${id}`, {
+    await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
       method: "PUT",
       headers: { "If-Match": revisionId },
       body: JSON.stringify(input),
@@ -111,14 +122,14 @@ export async function previewSkill(
   name: string,
   content: SkillContentInput
 ): Promise<SkillContentPreview> {
-  return apiRequest<SkillContentPreview>(`${SKILLS_KEY}/preview`, {
+  return apiRequest(`${SKILLS_KEY}/preview`, skillContentPreviewSchema, {
     method: "POST",
     body: JSON.stringify({ name, content }),
   });
 }
 
 export async function deleteSkill(id: string): Promise<void> {
-  await apiRequest(`${SKILLS_KEY}/${id}`, { method: "DELETE" });
+  await apiRequest(`${SKILLS_KEY}/${id}`, okResponseSchema, { method: "DELETE" });
 }
 
 export async function createSkillProfile(input: {
@@ -126,7 +137,7 @@ export async function createSkillProfile(input: {
   skillIds: string[];
 }): Promise<SkillProfile> {
   return (
-    await apiRequest<{ profile: SkillProfile }>(SKILL_PROFILES_KEY, {
+    await apiRequest(SKILL_PROFILES_KEY, skillProfileResponseSchema, {
       method: "POST",
       body: JSON.stringify(input),
     })
@@ -138,7 +149,7 @@ export async function updateSkillProfile(
   input: { name?: string; skillIds?: string[] }
 ): Promise<SkillProfile> {
   return (
-    await apiRequest<{ profile: SkillProfile }>(`${SKILL_PROFILES_KEY}/${id}`, {
+    await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, skillProfileResponseSchema, {
       method: "PATCH",
       body: JSON.stringify(input),
     })
@@ -146,14 +157,14 @@ export async function updateSkillProfile(
 }
 
 export async function deleteSkillProfile(id: string): Promise<void> {
-  await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, { method: "DELETE" });
+  await apiRequest(`${SKILL_PROFILES_KEY}/${id}`, okResponseSchema, { method: "DELETE" });
 }
 
 export async function resolveSkillPreview(
   input: SkillResolutionPreviewInput,
   signal?: AbortSignal
 ): Promise<SkillResolutionPreviewResponse> {
-  return apiRequest(`${SKILLS_KEY}/resolve-preview`, {
+  return apiRequest(`${SKILLS_KEY}/resolve-preview`, skillResolutionPreviewResponseSchema, {
     method: "POST",
     body: JSON.stringify(input),
     signal,

@@ -43,14 +43,25 @@ async function enforceWriteLimit(ctx: RequestContext, userId: string): Promise<R
     : null;
 }
 
-function audit(ctx: RequestContext, action: string, details: Record<string, unknown>): void {
+type SkillAuditEvent =
+  | {
+      action: "skill.created" | "skill.edited";
+      skill_id: string;
+      revision_id: string;
+    }
+  | { action: "skill.metadata_updated" | "skill.deleted"; skill_id: string }
+  | {
+      action: "profile.created" | "profile.updated" | "profile.deleted";
+      profile_id: string;
+    };
+
+function audit(ctx: RequestContext, event: SkillAuditEvent): void {
   log.info("managed_skills.audit", {
     event: "managed_skills.audit",
-    action,
     actor_user_id: canonicalUserId(ctx),
     request_id: ctx.request_id,
     trace_id: ctx.trace_id,
-    ...details,
+    ...event,
   });
 }
 
@@ -109,7 +120,11 @@ async function handleCreateSkill(
   if (!parsed.success) return error("Invalid skill", 400);
   try {
     const skill = await new SkillStore(ctx.db).create(parsed.data, userId);
-    audit(ctx, "skill.created", { skill_id: skill.id, revision_id: skill.currentRevisionId });
+    audit(ctx, {
+      action: "skill.created",
+      skill_id: skill.id,
+      revision_id: skill.currentRevisionId,
+    });
     return json({ skill }, 201);
   } catch (e) {
     return skillWriteError(e);
@@ -159,7 +174,7 @@ async function handleUpdateSkill(
   if (!parsed.success) return error("Invalid skill update", 400);
   try {
     const skill = await new SkillStore(ctx.db).updateMetadata(id, parsed.data, userId);
-    if (skill) audit(ctx, "skill.metadata_updated", { skill_id: id });
+    if (skill) audit(ctx, { action: "skill.metadata_updated", skill_id: id });
     return skill ? json({ skill }) : error("Skill not found", 404);
   } catch (e) {
     return skillWriteError(e);
@@ -187,7 +202,11 @@ async function handleEditSkill(
   try {
     const skill = await new SkillStore(ctx.db).edit(id, parsed.data, userId, ifMatch);
     if (!skill) return error("Skill not found", 404);
-    audit(ctx, "skill.edited", { skill_id: id, revision_id: skill.currentRevisionId });
+    audit(ctx, {
+      action: "skill.edited",
+      skill_id: id,
+      revision_id: skill.currentRevisionId,
+    });
     return json({ skill });
   } catch (e) {
     return skillWriteError(e);
@@ -207,7 +226,7 @@ async function handleDeleteSkill(
   const limited = await enforceWriteLimit(ctx, userId);
   if (limited) return limited;
   const deleted = await new SkillStore(ctx.db).delete(id, userId);
-  if (deleted) audit(ctx, "skill.deleted", { skill_id: id });
+  if (deleted) audit(ctx, { action: "skill.deleted", skill_id: id });
   return deleted ? json({ ok: true }) : error("Skill not found", 404);
 }
 
@@ -243,7 +262,7 @@ async function handleCreateProfile(
       parsed.data.skillIds
     );
     const response = json({ profile }, 201);
-    audit(ctx, "profile.created", { profile_id: profile.id });
+    audit(ctx, { action: "profile.created", profile_id: profile.id });
     return response;
   } catch (e) {
     return profileWriteError(e);
@@ -268,7 +287,7 @@ async function handleUpdateProfile(
   if (!parsed.success) return error("Invalid skill profile", 400);
   try {
     const profile = await new SkillProfileStore(ctx.db).update(id, userId, parsed.data);
-    if (profile) audit(ctx, "profile.updated", { profile_id: id });
+    if (profile) audit(ctx, { action: "profile.updated", profile_id: id });
     return profile ? json({ profile }) : error("Skill profile not found", 404);
   } catch (e) {
     return profileWriteError(e);
@@ -288,7 +307,7 @@ async function handleDeleteProfile(
   const limited = await enforceWriteLimit(ctx, userId);
   if (limited) return limited;
   const deleted = await new SkillProfileStore(ctx.db).delete(id, userId);
-  if (deleted) audit(ctx, "profile.deleted", { profile_id: id });
+  if (deleted) audit(ctx, { action: "profile.deleted", profile_id: id });
   return deleted ? json({ ok: true }) : error("Skill profile not found", 404);
 }
 

@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type {
-  Skill,
-  SkillAssignmentInput,
-  SkillContentInput,
-  SkillFileInput,
+import {
+  skillMetadataSchema,
+  type Skill,
+  type SkillAssignmentInput,
+  type SkillContentInput,
+  type SkillFileInput,
 } from "@open-inspect/shared/types/skills";
 import { createSkill, editSkill, previewSkill } from "@/hooks/use-managed-skills";
 import { useEnvironments } from "@/hooks/use-environments";
@@ -108,15 +109,11 @@ export function SkillEditor({
 
   function parsedMetadata(): Record<string, string> {
     const value: unknown = JSON.parse(metadataText);
-    if (
-      !value ||
-      Array.isArray(value) ||
-      typeof value !== "object" ||
-      Object.values(value).some((item) => typeof item !== "string")
-    ) {
+    const parsed = skillMetadataSchema.safeParse(value);
+    if (!parsed.success) {
       throw new Error("Metadata must be a JSON object with string values");
     }
-    return value as Record<string, string>;
+    return parsed.data;
   }
 
   const content: SkillContentInput = {

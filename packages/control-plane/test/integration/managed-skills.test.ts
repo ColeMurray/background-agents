@@ -181,6 +181,15 @@ describe("managed skills persistence and resolution", () => {
       manifestSha256: manifest.manifestSha256,
       selection: { mode: "all" },
     });
+
+    await env.DB.prepare(
+      "DELETE FROM skill_revision_files WHERE revision_id = ? AND path = 'SKILL.md'"
+    )
+      .bind(skill.currentRevisionId)
+      .run();
+    await expect(store.getSandboxInstallation("child")).rejects.toThrow(
+      `Missing files for session skill revision ${skill.currentRevisionId}`
+    );
   });
 
   it("serves catalog and personal profile CRUD through authenticated routes", async () => {

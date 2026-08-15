@@ -1,7 +1,6 @@
 import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { PATCH, DELETE } = settingsProxy(
+export const { PATCH, DELETE } = settingsProxy<{ id: string }>(
   ({ id }) => `/skill-profiles/${encodeURIComponent(id)}`,
-  "skill profile",
-  ["PATCH", "DELETE"]
+  "skill profile"
 );

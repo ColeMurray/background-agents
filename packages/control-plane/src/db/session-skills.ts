@@ -79,10 +79,13 @@ export class SessionSkillStore {
     const manifest = {
       schemaVersion: 1,
       manifestSha256: loaded.manifest.manifest_sha256,
-      skills: loaded.revisions.map((row) => ({
-        name: row.skill_name,
-        files: filesByRevision.get(row.revision_id) ?? [],
-      })),
+      skills: loaded.revisions.map((row) => {
+        const files = filesByRevision.get(row.revision_id);
+        if (!files?.some((file) => file.path === "SKILL.md")) {
+          throw new Error(`Missing files for session skill revision ${row.revision_id}`);
+        }
+        return { name: row.skill_name, files };
+      }),
     };
     const parsed = sandboxSkillInstallationSchema.safeParse(manifest);
     if (!parsed.success) {

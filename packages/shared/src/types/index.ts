@@ -218,6 +218,7 @@ export {
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
   skillNameSchema,
   skillFileInputSchema,
+  skillMetadataSchema,
   skillContentInputSchema,
   skillAssignmentInputSchema,
   createSkillInputSchema,

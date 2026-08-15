@@ -31,8 +31,28 @@ const profile = {
   id: "profile-1",
   name: "Frontend work",
   skillIds: ["skill-1"],
-} as SkillProfile;
-const skill = { id: "skill-1", name: "review-ui", enabled: true } as SkillSummary;
+  createdAt: 1,
+  updatedAt: 1,
+} satisfies SkillProfile;
+const skill = {
+  id: "skill-1",
+  name: "review-ui",
+  description: "Reviews UI changes",
+  enabled: true,
+  deleted: false,
+  currentRevisionId: "revision-1",
+  revisionNumber: 1,
+  contentSha256: "a".repeat(64),
+  revisionCreatedBy: "user-1",
+  creatorDisplayName: "User One",
+  lastEditorDisplayName: "User One",
+  revisionAuthorDisplayName: "User One",
+  assignments: [],
+  createdBy: "user-1",
+  updatedBy: "user-1",
+  createdAt: 1,
+  updatedAt: 1,
+} satisfies SkillSummary;
 
 beforeEach(() => {
   updateSkillProfileMock.mockReset();
