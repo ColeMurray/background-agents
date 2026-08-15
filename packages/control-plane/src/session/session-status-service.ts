@@ -66,6 +66,37 @@ export class SessionStatusService {
   }
 
   /**
+   * Re-project this session's current status onto the index, for callers that
+   * already know the two disagree.
+   *
+   * A swallowed projection failure leaves D1 behind, and the stale row keeps
+   * being picked up by anything that scans on status. Unlike `transition`, this
+   * claims no new activity: the session did not do anything, its mirror was
+   * simply wrong, so `updated_at` is left alone.
+   */
+  async repairIndexStatus(): Promise<void> {
+    const session = this.repository.getSession();
+    if (!session || !this.sessionIndex) return;
+
+    const publicSessionId = this.getPublicSessionId(session);
+    const repaired = await this.sessionIndex
+      .repairStatus(publicSessionId, session.status)
+      .catch((error) => {
+        this.logSessionIndexStatusSyncError(
+          publicSessionId,
+          session.status,
+          session.updated_at,
+          error
+        );
+        return false;
+      });
+
+    if (repaired && session.status === "active") {
+      await this.sessionIndex.finalizeChildAdmission(publicSessionId);
+    }
+  }
+
+  /**
    * Atomically close the local aggregate before publishing cancellation.
    * The callback must be synchronous: no request may observe cancelled status
    * with unfinished messages, or accept work between those two mutations.
