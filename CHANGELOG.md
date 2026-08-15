@@ -17,12 +17,13 @@ confirmation.
 
 ## August 14, 2026
 
-**OpenCode runtime upgraded to 1.18.18.** All sandbox providers now use a release that fixes a
-message-ID wraparound which prevented older sessions from recognizing new prompts after August 14.
+**OpenCode runtime upgraded to 1.18.18.** Newly built images across all sandbox providers now use a
+release that fixes a message-ID wraparound which prevented older sessions from recognizing new
+prompts after August 14. Sessions restored from pre-upgrade snapshots retain their existing runtime.
 
 **Automatic abandoned-draft cleanup.** Warmed sessions that never receive a prompt are archived
-after an eight-hour grace period, while active drafts and sessions with messages or queued work are
-left untouched.
+after an eight-hour grace period, while sessions that have started work or contain messages or
+queued prompts are left untouched.
 
 **More adaptable session controls.** Desktop users can hide the session details sidebar, with the
 preference preserved across visits. Mobile headers now show separate connection and sandbox states,
