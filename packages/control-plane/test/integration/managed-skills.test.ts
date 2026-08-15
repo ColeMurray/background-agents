@@ -114,8 +114,8 @@ describe("managed skills persistence and resolution", () => {
     });
 
     const store = new SessionSkillStore(env.DB);
-    const parent = await store.getHumanManifest("parent");
-    const child = await store.getHumanManifest("child");
+    const parent = await store.getSessionSkillsView("parent");
+    const child = await store.getSessionSkillsView("child");
     expect(child?.manifestSha256).toBe(parent?.manifestSha256);
     expect(child?.selection).toEqual(parent?.selection);
     expect(child?.skills).toEqual(parent?.skills);
@@ -142,7 +142,7 @@ describe("managed skills persistence and resolution", () => {
     await env.DB.prepare(
       "UPDATE session_skill_manifests SET resolver_version = 2 WHERE session_id = 'child'"
     ).run();
-    await expect(store.getHumanManifest("child")).rejects.toThrow(
+    await expect(store.getSessionSkillsView("child")).rejects.toThrow(
       "Unsupported managed skill resolver version: 2"
     );
     await env.DB.prepare(

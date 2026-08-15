@@ -40,7 +40,7 @@ export interface SessionSkillsView {
 export class SessionSkillStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async getHumanManifest(sessionId: string): Promise<SessionSkillsView | null> {
+  async getSessionSkillsView(sessionId: string): Promise<SessionSkillsView | null> {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;
     return {

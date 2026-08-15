@@ -8,7 +8,7 @@ function sessionId(match: RegExpMatchArray): string | Response {
   return match.groups?.id ?? error("Session ID required", 400);
 }
 
-async function handleHumanSessionSkills(
+async function handleSessionSkillsView(
   _request: Request,
   _env: Env,
   match: RegExpMatchArray,
@@ -20,9 +20,9 @@ async function handleHumanSessionSkills(
   if (!(await new SessionIndexStore(ctx.db).getVisibleForUser(id, ctx.principal.userId))) {
     return error("Session not found", 404);
   }
-  const manifest = await new SessionSkillStore(ctx.db).getHumanManifest(id);
-  if (!manifest) return error("Session skill manifest not found", 404);
-  const response = json(manifest);
+  const view = await new SessionSkillStore(ctx.db).getSessionSkillsView(id);
+  if (!view) return error("Session skill manifest not found", 404);
+  const response = json(view);
   response.headers.set("Cache-Control", "private, no-store");
   return response;
 }
@@ -61,7 +61,7 @@ export const sessionSkillRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/sessions/:id/skills"),
-    handler: handleHumanSessionSkills,
+    handler: handleSessionSkillsView,
   },
   {
     method: "GET",
