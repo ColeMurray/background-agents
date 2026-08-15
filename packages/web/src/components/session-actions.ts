@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { toast } from "sonner";
-import { findPrArtifactForRepo } from "@/lib/pr-artifacts";
+import { findLatestOpenPrArtifact } from "@/lib/pr-artifacts";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { Artifact } from "@/types/session";
 
@@ -11,7 +11,7 @@ export interface SessionActionProps {
   sessionId: string;
   sessionStatus: SessionStatus;
   artifacts: Artifact[];
-  /** Select the repository's PR instead of the first PR in multi-repo sessions. */
+  /** Scope the PR action to the repository's PRs in multi-repo sessions. */
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
@@ -21,9 +21,9 @@ export function resolveSessionActions(
   artifacts: Artifact[],
   primaryRepo?: SessionActionProps["primaryRepo"]
 ) {
-  const prArtifact = primaryRepo
-    ? findPrArtifactForRepo(artifacts, primaryRepo, true)
-    : artifacts.find((artifact) => artifact.type === "pr");
+  // Sessions can hold several PRs per repo; the action targets the latest
+  // open one (else the latest overall) — the sidebar lists them all.
+  const prArtifact = findLatestOpenPrArtifact(artifacts, primaryRepo ?? null, true);
   const previewArtifact = artifacts.find((artifact) => artifact.type === "preview");
 
   return {

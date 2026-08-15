@@ -46,6 +46,38 @@ describe("MetadataSection", () => {
     expect(screen.getByText("open")).toBeInTheDocument();
   });
 
+  it("renders every PR for a single-repo session, oldest first", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        artifacts={[
+          {
+            id: "pr-newer",
+            type: "pr",
+            url: "https://github.com/acme/web/pull/12",
+            metadata: { prNumber: 12, prState: "open" },
+            createdAt: 2,
+          },
+          {
+            id: "pr-older",
+            type: "pr",
+            url: "https://github.com/acme/web/pull/7",
+            metadata: { prNumber: 7, prState: "merged" },
+            createdAt: 1,
+          },
+        ]}
+      />
+    );
+
+    const prLinks = screen.getAllByRole("link", { name: /^#\d+$/ });
+    expect(prLinks.map((link) => link.textContent)).toEqual(["#7", "#12"]);
+    expect(screen.getByText("merged")).toBeInTheDocument();
+    expect(screen.getByText("open")).toBeInTheDocument();
+  });
+
   it("renders an explicit no-repository row for repo-less sessions", () => {
     render(
       <MetadataSection createdAt={Date.now()} baseBranch={null} repoOwner={null} repoName={null} />
@@ -102,6 +134,45 @@ describe("MetadataSection", () => {
     expect(screen.getByRole("link", { name: "#2" })).toBeInTheDocument();
     expect(screen.getByText("open")).toBeInTheDocument();
     expect(screen.getByText("merged")).toBeInTheDocument();
+  });
+
+  it("renders every PR chip for a member holding several PRs", () => {
+    render(
+      <MetadataSection
+        createdAt={Date.now()}
+        baseBranch="main"
+        repoOwner="acme"
+        repoName="web"
+        repositories={[member("acme", "web", 0), member("acme", "api", 1)]}
+        artifacts={[
+          {
+            id: "pr-web-1",
+            type: "pr",
+            url: "https://github.com/acme/web/pull/1",
+            metadata: { prNumber: 1, prState: "merged", repoOwner: "acme", repoName: "web" },
+            createdAt: 1,
+          },
+          {
+            id: "pr-web-2",
+            type: "pr",
+            url: "https://github.com/acme/web/pull/3",
+            metadata: { prNumber: 3, prState: "open", repoOwner: "acme", repoName: "web" },
+            createdAt: 3,
+          },
+          {
+            id: "pr-api",
+            type: "pr",
+            url: "https://github.com/acme/api/pull/2",
+            metadata: { prNumber: 2, prState: "open", repoOwner: "acme", repoName: "api" },
+            createdAt: 2,
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByRole("link", { name: "#1" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "#3" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "#2" })).toBeInTheDocument();
   });
 
   it("attributes an identity-less PR artifact to the primary member only", () => {
