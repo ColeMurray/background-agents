@@ -351,6 +351,8 @@ class SandboxSupervisor:
             boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
             self._repository_boot_result = boot_result
 
+            # Materialization is sandbox-boot work; OpenCode process restarts
+            # reuse this tree and must not depend on control-plane availability.
             if self.managed_skills is not None:
                 await self.managed_skills.materialize(boot_result.repositories, boot_result.workdir)
 

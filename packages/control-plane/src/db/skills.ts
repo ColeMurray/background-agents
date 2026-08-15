@@ -73,6 +73,7 @@ export interface ApplicableSkill extends SkillSummary {
   totalBytes: number;
 }
 
+/** Mutable catalog operations backed by immutable content revisions. */
 export class SkillStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -180,6 +181,10 @@ export class SkillStore {
     return this.get(id);
   }
 
+  /**
+   * Atomically replace content and assignments under one revision precondition.
+   * Every statement is guarded so a stale editor cannot partially mutate scope.
+   */
   async edit(
     id: string,
     input: EditSkillInput,
@@ -297,6 +302,7 @@ export class SkillStore {
     return row.generation;
   }
 
+  /** Return enabled skills with only the assignments matching this session target. */
   async listApplicable(input: {
     repositories: readonly { repoOwner: string; repoName: string }[];
     environmentId: string | null;

@@ -301,6 +301,7 @@ export const sandboxSkillManifestSchema = z.strictObject({
   ),
 });
 
+/** Narrow sandbox DTO: installation files only; provenance stays on the user-facing view. */
 export const sandboxSkillInstallationSchema = z.object({
   schemaVersion: z.literal(1),
   manifestSha256: z.string(),

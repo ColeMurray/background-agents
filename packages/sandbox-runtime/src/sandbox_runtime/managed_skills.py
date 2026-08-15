@@ -93,6 +93,7 @@ class ManagedSkillsClient:
         return f"{self._base_url}/sessions/{session_id}/sandbox-skills"
 
     async def fetch_manifest(self) -> bytes:
+        """Fetch the session-bound installation DTO with bounded retries and response size."""
         last_error: Exception | None = None
         for attempt in range(MANAGED_SKILLS_REQUEST_ATTEMPTS):
             try:
@@ -333,6 +334,7 @@ class ManagedSkillsMaterializer:
             path.unlink(missing_ok=True)
 
     def _repair_interrupted_swap(self, staging: Path, backup: Path, journal: Path) -> None:
+        """Restore the last complete tree or finish cleanup after an interrupted swap."""
         if not journal.exists():
             self._remove_path(staging)
             self._remove_path(backup)
@@ -443,6 +445,7 @@ class ManagedSkillsMaterializer:
             os.close(descriptor)
 
     def _install(self, manifest: ManagedSkillManifest) -> None:
+        """Replace the complete managed tree using a recoverable same-filesystem swap."""
         parent = self.destination.parent
         parent.mkdir(parents=True, exist_ok=True)
         staging = parent / ".managed-skills-staging"
@@ -480,6 +483,7 @@ class ManagedSkillsMaterializer:
             raise
 
     async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
+        """Fetch, validate, collision-check, and install skills before OpenCode starts."""
         try:
             raw = await self.client.fetch_manifest()
             manifest = validate_manifest(raw)

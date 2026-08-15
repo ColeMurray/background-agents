@@ -97,6 +97,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
   return output;
 }
 
+/** Render generated SKILL.md and hash the complete, byte-ordered revision tree. */
 export async function buildHashedFiles(
   name: string,
   content: SkillContentInput
@@ -142,6 +143,7 @@ function sourceValues(source: SkillAssignment): [string, string, string, string,
   return [source.type, source.id, "", "", "", ""];
 }
 
+/** Hash selection, pinned revisions, and assignment provenance in canonical byte order. */
 export async function hashManifest(
   selection: ManifestSelection,
   skills: readonly ManifestHashSkill[]

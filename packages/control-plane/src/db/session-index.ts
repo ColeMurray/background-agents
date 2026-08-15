@@ -302,6 +302,11 @@ export class SessionIndexStore {
     }
   }
 
+  /**
+   * Build manifest statements for the session-creation batch. The caller owns
+   * execution so the session, repository snapshot, and pinned skills commit
+   * atomically rather than leaving a partially initialized session.
+   */
   private bindManifestInserts(
     sessionId: string,
     manifest: SessionSkillManifestInput
@@ -347,6 +352,7 @@ export class SessionIndexStore {
     ];
   }
 
+  /** Copy a parent's exact pinned manifest into the atomic child-session batch. */
   private bindManifestCopy(childSessionId: string, parentSessionId: string): SqlStatement[] {
     return [
       this.db

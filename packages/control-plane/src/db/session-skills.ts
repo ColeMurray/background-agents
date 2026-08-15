@@ -29,6 +29,7 @@ interface RevisionRow {
   assignment_sources: string;
 }
 
+/** Human-facing provenance for the immutable skill revisions pinned to a session. */
 export interface SessionSkillsView {
   manifestSha256: string;
   resolverVersion: number;
@@ -40,6 +41,7 @@ export interface SessionSkillsView {
 export class SessionSkillStore {
   constructor(private readonly db: SqlDatabase) {}
 
+  /** Return selection and revision provenance without installation file contents. */
   async getSessionSkillsView(sessionId: string): Promise<SessionSkillsView | null> {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;
@@ -52,6 +54,10 @@ export class SessionSkillStore {
     };
   }
 
+  /**
+   * Project the pinned snapshot into the narrow sandbox installation contract.
+   * Persisted revisions fail closed if their generated SKILL.md is missing.
+   */
   async getSandboxInstallation(sessionId: string): Promise<SandboxSkillInstallation | null> {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;

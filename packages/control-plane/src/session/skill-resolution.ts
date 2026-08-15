@@ -12,6 +12,7 @@ import { SKILL_RESOLVER_VERSION } from "../skills/canonical";
 
 const MAX_CATALOG_READ_ATTEMPTS = 3;
 
+/** Immutable resolver output persisted with a session before sandbox creation. */
 export interface SessionSkillManifestInput {
   selection: ManifestSelection;
   resolverVersion: number;
@@ -26,6 +27,11 @@ export interface SkillResolutionTarget {
   environmentId: string | null;
 }
 
+/**
+ * Resolve the mutable catalog into a deterministic session snapshot. Generation
+ * checks retry concurrent catalog changes so the returned digest never mixes
+ * rows from different catalog states.
+ */
 export async function resolveManagedSkills(
   db: SqlDatabase,
   target: SkillResolutionTarget,
