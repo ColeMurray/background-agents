@@ -200,7 +200,7 @@ function normalizeRepoIdentifier(value: string | null | undefined): string | nul
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
-function normalizeSessionRepository(session: SessionEntry): {
+function normalizeSessionRepositoryFields(session: SessionEntry): {
   repoOwner: string | null;
   repoName: string | null;
   baseBranch: string | null;
@@ -231,7 +231,7 @@ export class SessionIndexStore {
   }
 
   async create(session: SessionEntry): Promise<void> {
-    const repository = normalizeSessionRepository(session);
+    const repository = normalizeSessionRepositoryFields(session);
 
     const sessionStmt = this.db
       .prepare(

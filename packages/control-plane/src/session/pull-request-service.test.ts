@@ -146,7 +146,7 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
 
   const repository: PullRequestRepository = {
     getSession: () => session,
-    // Mirrors SessionRepository.getSessionRepositories: members derive from the
+    // Mirrors SessionCoreRepository.getSessionRepositories: members derive from the
     // session scalars plus whatever rows the test seeds.
     getSessionRepositories: () =>
       session?.repo_owner && session.repo_name

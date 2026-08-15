@@ -518,7 +518,7 @@ export class SessionDO extends DurableObject<Env> {
   private get childSessionsHandler(): ChildSessionsHandler {
     if (!this._childSessionsHandler) {
       this._childSessionsHandler = createChildSessionsHandler({
-        repository: this.messageRepository,
+        messageRepository: this.messageRepository,
         eventRepository: this.eventRepository,
         participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
@@ -537,7 +537,7 @@ export class SessionDO extends DurableObject<Env> {
   private get sandboxHandler(): SandboxHandler {
     if (!this._sandboxHandler) {
       this._sandboxHandler = createSandboxHandler({
-        repository: this.messageRepository,
+        messageRepository: this.messageRepository,
         eventRepository: this.eventRepository,
         participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,

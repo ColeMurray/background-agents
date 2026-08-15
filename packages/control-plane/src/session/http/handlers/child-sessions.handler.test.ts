@@ -170,7 +170,7 @@ function createHandler() {
   const messageService = { enqueuePrompt };
 
   const handler = createChildSessionsHandler({
-    repository: repository as unknown as MessageRepository,
+    messageRepository: repository as unknown as MessageRepository,
     eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository: artifactRepository as unknown as ArtifactRepository,

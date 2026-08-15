@@ -42,7 +42,7 @@ function createHandler() {
   } as unknown as Logger;
 
   const sandboxHandler = createSandboxHandler({
-    repository: repository as unknown as MessageRepository,
+    messageRepository: repository as unknown as MessageRepository,
     eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository,

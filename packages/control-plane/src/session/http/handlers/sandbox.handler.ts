@@ -37,7 +37,7 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: MessageRepository;
+  messageRepository: MessageRepository;
   eventRepository: EventRepository;
   participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;
@@ -109,7 +109,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         return Response.json({ error: "artifactId and objectKey are required" }, { status: 400 });
       }
 
-      const processingMessage = deps.repository.getProcessingMessage();
+      const processingMessage = deps.messageRepository.getProcessingMessage();
       if (!processingMessage) {
         return Response.json({ error: "No active prompt" }, { status: 409 });
       }

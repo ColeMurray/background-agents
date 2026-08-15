@@ -75,7 +75,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   let repositoryRows: SessionRepositoryRow[] = [];
-  // Mirrors SessionRepository.getSessionRepositories: members derive from the
+  // Mirrors SessionCoreRepository.getSessionRepositories: members derive from the
   // session scalars plus whatever rows the test seeds.
   const getSessionRepositories = vi.fn<() => SessionRepositoryEntry[]>(() => {
     const session = getSession();
