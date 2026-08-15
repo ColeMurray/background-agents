@@ -256,76 +256,86 @@ export type AutomationEvent =
   | SlackAutomationEvent;
 
 const baseAutomationEventSchema = {
-  eventType: z.string(),
-  triggerKey: z.string(),
-  concurrencyKey: z.string(),
+  eventType: z.string().min(1),
+  triggerKey: z.string().min(1),
+  concurrencyKey: z.string().min(1),
   contextBlock: z.string(),
   meta: z.record(z.string(), z.unknown()),
 };
 
+export const githubAutomationEventSchema = z.object({
+  ...baseAutomationEventSchema,
+  source: z.literal("github"),
+  repoOwner: z.string().min(1),
+  repoName: z.string().min(1),
+  branch: z.string().optional(),
+  targetBranch: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  actor: z.string().optional(),
+  changedFiles: z.array(z.string()).optional(),
+  checkConclusion: z.string().optional(),
+  pullRequest: z
+    .object({
+      number: z.number(),
+      state: z.enum(["open", "closed"]).optional(),
+      draft: z.boolean().optional(),
+      merged: z.boolean().optional(),
+      headSha: z.string().optional(),
+      isCrossRepository: z.boolean().optional(),
+      url: z.string().optional(),
+      repositoryExternalId: z.string().optional(),
+      providerCreatedAt: z.number().optional(),
+      providerUpdatedAt: z.number().optional(),
+      mergedAt: z.number().optional(),
+      closedAt: z.number().optional(),
+    })
+    .optional(),
+}) satisfies z.ZodType<GitHubAutomationEvent>;
+
+export const linearAutomationEventSchema = z.object({
+  ...baseAutomationEventSchema,
+  source: z.literal("linear"),
+  repoOwner: z.string().min(1),
+  repoName: z.string().min(1),
+  actor: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+  linearStatus: z.string().optional(),
+}) satisfies z.ZodType<LinearAutomationEvent>;
+
+export const sentryAutomationEventSchema = z.object({
+  ...baseAutomationEventSchema,
+  source: z.literal("sentry"),
+  automationId: z.string().min(1),
+  sentryProject: z.string().min(1),
+  sentryLevel: z.string().min(1),
+  culpritFile: z.string().optional(),
+}) satisfies z.ZodType<SentryAutomationEvent>;
+
+export const webhookAutomationEventSchema = z.object({
+  ...baseAutomationEventSchema,
+  source: z.literal("webhook"),
+  automationId: z.string().min(1),
+  body: z.unknown(),
+}) satisfies z.ZodType<WebhookAutomationEvent>;
+
+export const slackAutomationEventSchema = z.object({
+  ...baseAutomationEventSchema,
+  source: z.literal("slack"),
+  channelId: z.string().min(1),
+  channelName: z.string().optional(),
+  permalink: z.string().optional(),
+  threadTs: z.string().optional(),
+  ts: z.string().min(1),
+  actorUserId: z.string().min(1),
+  text: z.string(),
+}) satisfies z.ZodType<SlackAutomationEvent>;
+
 export const automationEventSchema = z.discriminatedUnion("source", [
-  z.object({
-    ...baseAutomationEventSchema,
-    source: z.literal("github"),
-    repoOwner: z.string(),
-    repoName: z.string(),
-    branch: z.string().optional(),
-    targetBranch: z.string().optional(),
-    labels: z.array(z.string()).optional(),
-    actor: z.string().optional(),
-    changedFiles: z.array(z.string()).optional(),
-    checkConclusion: z.string().optional(),
-    pullRequest: z
-      .object({
-        number: z.number(),
-        state: z.enum(["open", "closed"]).optional(),
-        draft: z.boolean().optional(),
-        merged: z.boolean().optional(),
-        headSha: z.string().optional(),
-        isCrossRepository: z.boolean().optional(),
-        url: z.string().optional(),
-        repositoryExternalId: z.string().optional(),
-        providerCreatedAt: z.number().optional(),
-        providerUpdatedAt: z.number().optional(),
-        mergedAt: z.number().optional(),
-        closedAt: z.number().optional(),
-      })
-      .optional(),
-  }),
-  z.object({
-    ...baseAutomationEventSchema,
-    source: z.literal("linear"),
-    repoOwner: z.string(),
-    repoName: z.string(),
-    actor: z.string().optional(),
-    labels: z.array(z.string()).optional(),
-    linearStatus: z.string().optional(),
-  }),
-  z.object({
-    ...baseAutomationEventSchema,
-    source: z.literal("sentry"),
-    automationId: z.string(),
-    sentryProject: z.string(),
-    sentryLevel: z.string(),
-    culpritFile: z.string().optional(),
-  }),
-  z.object({
-    ...baseAutomationEventSchema,
-    source: z.literal("webhook"),
-    automationId: z.string(),
-    body: z.unknown(),
-  }),
-  z.object({
-    ...baseAutomationEventSchema,
-    source: z.literal("slack"),
-    channelId: z.string(),
-    channelName: z.string().optional(),
-    permalink: z.string().optional(),
-    threadTs: z.string().optional(),
-    ts: z.string(),
-    actorUserId: z.string(),
-    text: z.string(),
-  }),
+  githubAutomationEventSchema,
+  linearAutomationEventSchema,
+  sentryAutomationEventSchema,
+  webhookAutomationEventSchema,
+  slackAutomationEventSchema,
 ]);
 
 // ─── Trigger Source Definition ────────────────────────────────────────────────

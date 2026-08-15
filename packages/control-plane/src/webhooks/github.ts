@@ -6,7 +6,7 @@
  * background and is additive: its failure never affects automation matching.
  */
 
-import { automationEventSchema } from "@open-inspect/shared/triggers";
+import type { GitHubAutomationEvent } from "@open-inspect/shared/triggers";
 import { SessionIndexStore } from "../db/session-index";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { createLogger, parseLogLevel } from "../logger";
@@ -26,19 +26,13 @@ import {
   type SessionArtifactSummary,
 } from "./pull-request-lifecycle";
 
-function validateGitHubEvent(event: Record<string, unknown>): string | null {
-  return !event.repoOwner || !event.repoName
-    ? "Invalid event: repoOwner and repoName are required"
-    : null;
-}
-
 /**
  * Best-effort PR lifecycle tracking for one normalized event. Runs in
  * waitUntil off the request path; every failure is logged and swallowed.
  */
 async function trackPullRequestLifecycle(
   env: Env,
-  rawEvent: Record<string, unknown>,
+  event: GitHubAutomationEvent,
   ctx: RequestContext
 ): Promise<void> {
   const log = createLogger(
@@ -49,21 +43,7 @@ async function trackPullRequestLifecycle(
   try {
     if (!env.SESSION) return;
 
-    const parsed = automationEventSchema.safeParse(rawEvent);
-    if (!parsed.success) {
-      // Distinguish schema drift from the benign "not a PR event" skip: if
-      // the bot and control plane ever disagree on the envelope shape, PR
-      // tracking would otherwise go dark with zero signal.
-      if (typeof rawEvent.eventType === "string" && rawEvent.eventType.startsWith("pull_request")) {
-        log.warn("pull_request_lifecycle.envelope_parse_failed", {
-          event_type: rawEvent.eventType,
-          issues: parsed.error.issues.slice(0, 5).map((issue) => issue.path.join(".")),
-        });
-      }
-      return;
-    }
-    if (parsed.data.source !== "github" || !parsed.data.pullRequest) return;
-    const event = parsed.data;
+    if (!event.pullRequest) return;
 
     const sessionRuntime = createSessionRuntimeClient(env, ctx);
     const deps: PullRequestLifecycleDeps = {
@@ -129,7 +109,7 @@ async function handleGitHubAutomationEvent(
     return error("Invalid JSON", 400);
   }
 
-  const validated = validateAutomationEventEnvelope(body, "github", validateGitHubEvent);
+  const validated = validateAutomationEventEnvelope(body, "github");
   if (validated.response) return validated.response;
 
   const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);

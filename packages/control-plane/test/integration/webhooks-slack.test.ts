@@ -147,6 +147,19 @@ describe("POST /internal/slack-event (integration)", () => {
     expect(res.status).toBe(400);
   });
 
+  it.each([
+    ["eventType", { type: "message.posted" }],
+    ["triggerKey", ["slack:msg:C1:1"]],
+    ["concurrencyKey", { key: "slack:C1:1" }],
+    ["channelId", ["C1"]],
+    ["ts", { value: "1700000000.000200" }],
+  ])("returns 400 when %s is not a string", async (field, value) => {
+    const res = await postEvent(makeSlackEventBody({ [field]: value }));
+
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(field);
+  });
+
   it("forwards a valid event to the scheduler and returns trigger counts", async () => {
     const id = await seedSlackAutomation();
     const body = makeSlackEventBody({ text: "please deploy the api" });

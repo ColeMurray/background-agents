@@ -9,48 +9,55 @@
  * named handler.
  */
 
-import type { AutomationEventSource } from "@open-inspect/shared/triggers";
+import {
+  automationEventSchema,
+  type AutomationEvent,
+  type AutomationEventSource,
+} from "@open-inspect/shared/triggers";
 import { requireEventPoster } from "../auth/identity-enforcement";
 import type { Route, RequestContext } from "../routes/shared";
 import { parsePattern, json, error } from "../routes/shared";
 import type { Env } from "../types";
 
-export type AutomationEventEnvelopeResult =
-  | { event: Record<string, unknown>; response?: never }
+type AutomationEventForSource<S extends AutomationEventSource> = Extract<
+  AutomationEvent,
+  { source: S }
+>;
+
+export type AutomationEventEnvelopeResult<S extends AutomationEventSource> =
+  | { event: AutomationEventForSource<S>; response?: never }
   | { event?: never; response: Response };
 
 /**
- * Validate the normalized event envelope — source, then source-specific
- * fields, then the common dispatch keys every event must carry.
+ * Validate the source and the complete normalized event protocol.
  */
-export function validateAutomationEventEnvelope(
+export function validateAutomationEventEnvelope<S extends AutomationEventSource>(
   body: unknown,
-  source: AutomationEventSource,
-  validate: (event: Record<string, unknown>) => string | null
-): AutomationEventEnvelopeResult {
+  source: S
+): AutomationEventEnvelopeResult<S> {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     return { response: error("Invalid event: body must be a JSON object", 400) };
   }
-  const event = body as Record<string, unknown>;
-  if (event.source !== source) {
+  if ((body as Record<string, unknown>).source !== source) {
     return { response: error(`Invalid event: source must be '${source}'`, 400) };
   }
-  const fieldError = validate(event);
-  if (fieldError) {
-    return { response: error(fieldError, 400) };
+
+  const parsed = automationEventSchema.safeParse(body);
+  if (!parsed.success) {
+    const invalidFields = [
+      ...new Set(parsed.error.issues.map((issue) => issue.path.join(".") || "body")),
+    ].join(", ");
+    return { response: error(`Invalid event: ${invalidFields}`, 400) };
   }
-  if (!event.eventType || !event.triggerKey || !event.concurrencyKey) {
-    return {
-      response: error("Invalid event: eventType, triggerKey, and concurrencyKey are required", 400),
-    };
-  }
-  return { event };
+
+  // The source equality check above narrows the discriminated union at runtime.
+  return { event: parsed.data as AutomationEventForSource<S> };
 }
 
 /** Forward a validated event to the singleton SchedulerDO for matching. */
 export async function forwardAutomationEventToScheduler(
   env: Env,
-  event: Record<string, unknown>
+  event: AutomationEvent
 ): Promise<Response> {
   if (!env.SCHEDULER) {
     return error("Scheduler not configured", 503);
@@ -81,8 +88,6 @@ export async function forwardAutomationEventToScheduler(
 export function createAutomationEventRoute(opts: {
   path: string;
   source: AutomationEventSource;
-  /** Validate source-specific required fields. Returns an error message, or null when valid. */
-  validate: (event: Record<string, unknown>) => string | null;
 }): Route {
   async function handler(
     request: Request,
@@ -100,7 +105,7 @@ export function createAutomationEventRoute(opts: {
       return error("Invalid JSON", 400);
     }
 
-    const validated = validateAutomationEventEnvelope(body, opts.source, opts.validate);
+    const validated = validateAutomationEventEnvelope(body, opts.source);
     if (validated.response) return validated.response;
 
     return forwardAutomationEventToScheduler(env, validated.event);
