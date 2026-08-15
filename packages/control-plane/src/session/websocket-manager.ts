@@ -8,7 +8,7 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { SessionRepository } from "./repository";
+import type { SandboxRepository } from "./sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
@@ -102,7 +102,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
 
   constructor(
     private readonly ctx: DurableObjectState,
-    private readonly repository: SessionRepository,
+    private readonly sandboxRepository: SandboxRepository,
     private readonly wsClientMappingRepository: WsClientMappingRepository,
     private readonly log: Logger,
     private readonly config: WebSocketManagerConfig
@@ -155,7 +155,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // -------------------------------------------------------------------------
 
   getSandboxSocket(): WebSocket | null {
-    const sandbox = this.repository.getSandbox();
+    const sandbox = this.sandboxRepository.getSandbox();
     const expectedSandboxId = sandbox?.modal_sandbox_id;
 
     // If the sandbox is in a terminal state, don't re-adopt stale WebSockets.

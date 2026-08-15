@@ -5,6 +5,7 @@ import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
+import type { SandboxRepository } from "./sandbox-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
@@ -41,6 +42,7 @@ export class SessionSandboxEventProcessor {
     // capturing one by value at construction time.
     private readonly getLog: () => Logger,
     private readonly repository: SessionRepository,
+    private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
@@ -81,7 +83,7 @@ export class SessionSandboxEventProcessor {
     const ackId = event.ackId;
 
     if (event.type === "heartbeat") {
-      this.repository.updateSandboxHeartbeat(now);
+      this.sandboxRepository.updateSandboxHeartbeat(now);
       return;
     }
 
@@ -278,7 +280,7 @@ export class SessionSandboxEventProcessor {
     });
 
     if (event.type === "git_sync") {
-      this.repository.updateSandboxGitSyncStatus(event.status);
+      this.sandboxRepository.updateSandboxGitSyncStatus(event.status);
 
       if (event.sha) {
         this.repository.updateSessionCurrentSha(event.sha);

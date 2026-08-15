@@ -5,6 +5,7 @@ import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionStatusService } from "../../session-status-service";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
+import type { SandboxRepository } from "../../sandbox-repository";
 import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -88,11 +89,11 @@ function createHandler() {
   const repository = {
     upsertSession: vi.fn(),
     replaceSessionRepositories: vi.fn(),
-    createSandbox: vi.fn(),
     createParticipant: vi.fn(),
     getPendingOrProcessingCount: vi.fn(() => 0),
     getMessageCount: vi.fn(() => 0),
   };
+  const sandboxRepository = { createSandbox: vi.fn() } as unknown as SandboxRepository;
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
   const validateReasoningEffort = vi.fn();
@@ -120,6 +121,7 @@ function createHandler() {
 
   const lifecycleHandler = createSessionLifecycleHandler({
     repository,
+    sandboxRepository,
     messageRepository: repository as unknown as MessageRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     getDurableObjectId,
@@ -151,6 +153,7 @@ function createHandler() {
   return {
     handler,
     repository,
+    sandboxRepository,
     getDurableObjectId,
     encryptToken,
     validateReasoningEffort,
@@ -177,7 +180,7 @@ describe("createSessionLifecycleHandler", () => {
     ["repoId without repository context", { repoOwner: null, repoName: null, repoId: 123 }],
     ["repository context without repoId", { repoOwner: "acme", repoName: "repo", repoId: null }],
   ])("rejects partial repository contexts during init: %s", async (_name, repoFields) => {
-    const { handler, repository, scheduleWarmSandbox } = createHandler();
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
 
     const response = await handler.init(
       new Request("http://internal/internal/init", {
@@ -196,7 +199,7 @@ describe("createSessionLifecycleHandler", () => {
       error: "Repository context must include repoOwner, repoName, and repoId together",
     });
     expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
     expect(repository.createParticipant).not.toHaveBeenCalled();
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });
@@ -205,6 +208,7 @@ describe("createSessionLifecycleHandler", () => {
     const {
       handler,
       repository,
+      sandboxRepository,
       getDurableObjectId,
       encryptToken,
       validateReasoningEffort,
@@ -271,7 +275,7 @@ describe("createSessionLifecycleHandler", () => {
       createdAt: 1234,
       updatedAt: 1234,
     });
-    expect(repository.createSandbox).toHaveBeenCalledWith({
+    expect(sandboxRepository.createSandbox).toHaveBeenCalledWith({
       id: "sandbox-1",
       status: "pending",
       gitSyncStatus: "pending",
@@ -458,7 +462,7 @@ describe("createSessionLifecycleHandler", () => {
   });
 
   it("rejects malformed init bodies before creating records", async () => {
-    const { handler, repository, scheduleWarmSandbox } = createHandler();
+    const { handler, repository, sandboxRepository, scheduleWarmSandbox } = createHandler();
 
     const response = await handler.init(
       new Request("http://internal/internal/init", {
@@ -476,7 +480,7 @@ describe("createSessionLifecycleHandler", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Invalid request body" });
     expect(repository.upsertSession).not.toHaveBeenCalled();
-    expect(repository.createSandbox).not.toHaveBeenCalled();
+    expect(sandboxRepository.createSandbox).not.toHaveBeenCalled();
     expect(repository.createParticipant).not.toHaveBeenCalled();
     expect(scheduleWarmSandbox).not.toHaveBeenCalled();
   });

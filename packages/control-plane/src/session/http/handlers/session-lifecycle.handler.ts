@@ -9,6 +9,7 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import type { SessionRepository } from "../../repository";
+import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionStatusService } from "../../session-status-service";
@@ -22,10 +23,8 @@ import { z } from "zod";
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
 export interface SessionLifecycleHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "upsertSession" | "replaceSessionRepositories" | "createSandbox"
-  >;
+  repository: Pick<SessionRepository, "upsertSession" | "replaceSessionRepositories">;
+  sandboxRepository: SandboxRepository;
   messageRepository: MessageRepository;
   participantRepository: ParticipantRepository;
   getDurableObjectId: () => string;
@@ -282,7 +281,7 @@ export function createSessionLifecycleHandler(
         }))
       );
       const sandboxId = deps.generateId();
-      deps.repository.createSandbox({
+      deps.sandboxRepository.createSandbox({
         id: sandboxId,
         status: "pending",
         gitSyncStatus: "pending",

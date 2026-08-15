@@ -1,7 +1,7 @@
 /**
  * Unit tests for SessionWebSocketManagerImpl.
  *
- * Uses fake DurableObjectState and mock SessionRepository to test
+ * Uses fake DurableObjectState and mock repositories to test
  * all WebSocket mechanics in isolation from the full DO.
  */
 
@@ -10,7 +10,7 @@ import { SessionWebSocketManagerImpl } from "./websocket-manager";
 import type { WebSocketManagerConfig } from "./websocket-manager";
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
-import type { SessionRepository } from "./repository";
+import type { SandboxRepository } from "./sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
@@ -93,7 +93,7 @@ function createMockLogger(): Logger {
   };
 }
 
-/** Create a mock SessionRepository with configurable return values. */
+/** Create mock repositories with configurable return values. */
 function createMockRepository() {
   const mappings = new Map<string, WsClientMappingResult>();
   let sandboxRow: SandboxRow | null = null;
@@ -124,7 +124,7 @@ function createMockRepository() {
         scm_login: null,
       });
     },
-  } as unknown as SessionRepository;
+  } as unknown as SandboxRepository;
 
   return {
     repo,

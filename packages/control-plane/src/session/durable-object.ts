@@ -61,6 +61,7 @@ import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
+import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
@@ -170,6 +171,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private readonly db: SqlDatabase | null;
   private repository: SessionRepository;
+  private sandboxRepository: SandboxRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private artifactRepository: ArtifactRepository;
   private eventRepository: EventRepository;
@@ -298,6 +300,7 @@ export class SessionDO extends DurableObject<Env> {
     );
     this.participantRepository = new ParticipantRepository(this.sql);
     this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
+    this.sandboxRepository = new SandboxRepository(this.sql);
     this.repository = new SessionRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
     );
@@ -401,7 +404,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._wsManager) {
       this._wsManager = new SessionWebSocketManagerImpl(
         this.ctx,
-        this.repository,
+        this.sandboxRepository,
         this.wsClientMappingRepository,
         this.log,
         { authTimeoutMs: WS_AUTH_TIMEOUT_MS }
@@ -598,6 +601,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
         repository: this.repository,
+        sandboxRepository: this.sandboxRepository,
         messageRepository: this.messageRepository,
         participantRepository: this.participantRepository,
         getDurableObjectId: () => this.ctx.id.toString(),
@@ -745,6 +749,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         () => this.log,
         this.repository,
+        this.sandboxRepository,
         this.messageRepository,
         this.eventRepository,
         this.artifactRepository,
@@ -810,8 +815,8 @@ export class SessionDO extends DurableObject<Env> {
 
     // Storage adapter
     const storage: SandboxStorage = {
-      getSandbox: () => this.repository.getSandbox(),
-      getSandboxWithCircuitBreaker: () => this.repository.getSandboxWithCircuitBreaker(),
+      getSandbox: () => this.sandboxRepository.getSandbox(),
+      getSandboxWithCircuitBreaker: () => this.sandboxRepository.getSandboxWithCircuitBreaker(),
       getSession: () => this.repository.getSession(),
       getSessionRepositories: () =>
         this.repository.getSessionRepositories().map((entry) => ({
@@ -822,43 +827,43 @@ export class SessionDO extends DurableObject<Env> {
         })),
       getUserEnvVars: () => this.getUserEnvVars(),
       updateSandboxStatus: (status) => this.updateSandboxStatus(status),
-      updateSandboxForSpawn: (data) => this.repository.updateSandboxForSpawn(data),
-      updateSandboxForResume: (data) => this.repository.updateSandboxForResume(data),
-      updateSandboxModalObjectId: (id) => this.repository.updateSandboxModalObjectId(id),
+      updateSandboxForSpawn: (data) => this.sandboxRepository.updateSandboxForSpawn(data),
+      updateSandboxForResume: (data) => this.sandboxRepository.updateSandboxForResume(data),
+      updateSandboxModalObjectId: (id) => this.sandboxRepository.updateSandboxModalObjectId(id),
       updateSandboxSnapshotImageId: (sandboxId, imageId) =>
-        this.repository.updateSandboxSnapshotImageId(sandboxId, imageId),
+        this.sandboxRepository.updateSandboxSnapshotImageId(sandboxId, imageId),
       updateSandboxLastActivity: (timestamp) =>
-        this.repository.updateSandboxLastActivity(timestamp),
+        this.sandboxRepository.updateSandboxLastActivity(timestamp),
       incrementCircuitBreakerFailure: (timestamp) =>
-        this.repository.incrementCircuitBreakerFailure(timestamp),
-      resetCircuitBreaker: () => this.repository.resetCircuitBreaker(),
+        this.sandboxRepository.incrementCircuitBreakerFailure(timestamp),
+      resetCircuitBreaker: () => this.sandboxRepository.resetCircuitBreaker(),
       setLastSpawnError: (error, timestamp) =>
-        this.repository.updateSandboxSpawnError(error, timestamp),
+        this.sandboxRepository.updateSandboxSpawnError(error, timestamp),
       updateSandboxCodeServer: async (url, password) => {
         const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
           ? await encryptToken(password, this.env.REPO_SECRETS_ENCRYPTION_KEY)
           : password;
-        this.repository.updateSandboxCodeServer(url, encrypted);
+        this.sandboxRepository.updateSandboxCodeServer(url, encrypted);
       },
-      clearSandboxCodeServer: () => this.repository.clearSandboxCodeServer(),
-      clearSandboxCodeServerUrl: () => this.repository.clearSandboxCodeServerUrl(),
+      clearSandboxCodeServer: () => this.sandboxRepository.clearSandboxCodeServer(),
+      clearSandboxCodeServerUrl: () => this.sandboxRepository.clearSandboxCodeServerUrl(),
       updateSandboxVnc: async (url, password) => {
         const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
           ? await encryptToken(password, this.env.REPO_SECRETS_ENCRYPTION_KEY)
           : password;
-        this.repository.updateSandboxVnc(url, encrypted);
+        this.sandboxRepository.updateSandboxVnc(url, encrypted);
       },
-      clearSandboxVnc: () => this.repository.clearSandboxVnc(),
-      clearSandboxVncUrl: () => this.repository.clearSandboxVncUrl(),
-      updateSandboxTunnelUrls: (urls) => this.repository.updateSandboxTunnelUrls(urls),
-      clearSandboxTunnelUrls: () => this.repository.clearSandboxTunnelUrls(),
+      clearSandboxVnc: () => this.sandboxRepository.clearSandboxVnc(),
+      clearSandboxVncUrl: () => this.sandboxRepository.clearSandboxVncUrl(),
+      updateSandboxTunnelUrls: (urls) => this.sandboxRepository.updateSandboxTunnelUrls(urls),
+      clearSandboxTunnelUrls: () => this.sandboxRepository.clearSandboxTunnelUrls(),
       updateSandboxTtyd: async (url, token) => {
         const encrypted = this.env.REPO_SECRETS_ENCRYPTION_KEY
           ? await encryptToken(token, this.env.REPO_SECRETS_ENCRYPTION_KEY)
           : token;
-        this.repository.updateSandboxTtyd(url, encrypted);
+        this.sandboxRepository.updateSandboxTtyd(url, encrypted);
       },
-      clearSandboxTtyd: () => this.repository.clearSandboxTtyd(),
+      clearSandboxTtyd: () => this.sandboxRepository.clearSandboxTtyd(),
     };
 
     // Broadcaster adapter
@@ -1159,7 +1164,7 @@ export class SessionDO extends DurableObject<Env> {
         // IMPORTANT: Must await to ensure alarm is scheduled before returning
         const now = Date.now();
         this.updateLastActivity(now);
-        this.repository.updateSandboxHeartbeat(now);
+        this.sandboxRepository.updateSandboxHeartbeat(now);
         await this.scheduleInactivityCheck();
 
         log.info("ws.connect", {
@@ -2019,7 +2024,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private getSandbox(): SandboxRow | null {
-    return this.repository.getSandbox();
+    return this.sandboxRepository.getSandbox();
   }
 
   private async ensureRepoId(session: SessionRow): Promise<number> {
@@ -2156,7 +2161,7 @@ export class SessionDO extends DurableObject<Env> {
   }
 
   private updateSandboxStatus(status: string): void {
-    this.repository.updateSandboxStatus(status as SandboxStatus);
+    this.sandboxRepository.updateSandboxStatus(status as SandboxStatus);
   }
 
   // HTTP handlers
