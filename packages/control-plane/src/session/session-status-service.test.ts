@@ -6,6 +6,7 @@ import type { SessionIndexStore } from "../db/session-index";
 import type { SessionRow, ArtifactRow, MessageRow } from "./types";
 import type { SessionRepository } from "./repository";
 import type { ArtifactRepository } from "./artifact-repository";
+import type { MessageRepository } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -89,6 +90,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
     ctx,
     log as unknown as Logger,
     repository as unknown as SessionRepository,
+    repository as unknown as MessageRepository,
     artifactRepository,
     messenger,
     sessionIndex as unknown as SessionIndexStore | null,

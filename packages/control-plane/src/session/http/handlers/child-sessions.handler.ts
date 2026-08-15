@@ -8,7 +8,7 @@ import {
   PromptQueueFullError,
   SessionNotPromptableError,
 } from "../../message-queue";
-import type { SessionRepository } from "../../repository";
+import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
 import type { ParticipantRepository } from "../../participant-repository";
@@ -26,10 +26,7 @@ import {
 } from "./child-session-summary";
 
 export interface ChildSessionsHandlerDeps {
-  repository: Pick<
-    SessionRepository,
-    "getLatestTerminalMessage" | "getPendingOrProcessingCount" | "getProcessingMessageAuthor"
-  >;
+  repository: MessageRepository;
   eventRepository: EventRepository;
   participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;

@@ -6,6 +6,7 @@ import {
   type CallbackServiceEnv,
   type CallbackServiceDeps,
 } from "./callback-notification-service";
+import type { MessageRepository } from "./message-repository";
 
 // ---- Mock factories ----
 
@@ -19,9 +20,9 @@ function createMockLogger(): Logger {
   };
 }
 
-function createMockRepository(): CallbackRepository {
+function createMockRepository() {
   return {
-    getMessageCallbackContext: vi.fn(() => null),
+    getMessageCallbackContext: vi.fn<MessageRepository["getMessageCallbackContext"]>(() => null),
     getSession: vi.fn(() => null),
   };
 }
@@ -52,7 +53,8 @@ function createTestHarness(overrides?: {
   };
 
   const deps: CallbackServiceDeps = {
-    repository,
+    repository: repository as CallbackRepository,
+    messageRepository: repository as unknown as MessageRepository,
     env,
     log,
     getSessionId: overrides?.getSessionId ?? (() => "session-123"),

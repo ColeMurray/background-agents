@@ -9,6 +9,7 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import type { SessionRepository } from "../../repository";
+import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SessionStatusService } from "../../session-status-service";
 import {
@@ -23,12 +24,9 @@ const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "canc
 export interface SessionLifecycleHandlerDeps {
   repository: Pick<
     SessionRepository,
-    | "upsertSession"
-    | "replaceSessionRepositories"
-    | "createSandbox"
-    | "getPendingOrProcessingCount"
-    | "getMessageCount"
+    "upsertSession" | "replaceSessionRepositories" | "createSandbox"
   >;
+  messageRepository: MessageRepository;
   participantRepository: ParticipantRepository;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -423,7 +421,7 @@ export function createSessionLifecycleHandler(
         return Response.json({ error: "Cancelled sessions cannot be archived" }, { status: 409 });
       }
 
-      if (deps.repository.getPendingOrProcessingCount() > 0) {
+      if (deps.messageRepository.getPendingOrProcessingCount() > 0) {
         return Response.json(
           { error: "Cannot archive a session with queued work" },
           { status: 409 }
@@ -466,8 +464,8 @@ export function createSessionLifecycleHandler(
       }
 
       if (
-        deps.repository.getMessageCount() > 0 ||
-        deps.repository.getPendingOrProcessingCount() > 0
+        deps.messageRepository.getMessageCount() > 0 ||
+        deps.messageRepository.getPendingOrProcessingCount() > 0
       )
         return Response.json({ outcome: "has_work", status: session.status });
 

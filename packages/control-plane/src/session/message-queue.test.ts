@@ -8,6 +8,7 @@ import type { ClientInfo } from "../types";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
 import type { SessionRepository } from "./repository";
 import type { ParticipantRepository } from "./participant-repository";
+import type { MessageRepository } from "./message-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { ParticipantService } from "./participant-service";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -201,6 +202,7 @@ function buildQueue() {
     { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
     log,
     repository as unknown as SessionRepository,
+    repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,
     wsManager as unknown as SessionWebSocketManager,

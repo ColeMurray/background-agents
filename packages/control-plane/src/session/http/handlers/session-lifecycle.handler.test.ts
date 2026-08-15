@@ -4,6 +4,7 @@ import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionStatusService } from "../../session-status-service";
 import type { ParticipantRepository } from "../../participant-repository";
+import type { MessageRepository } from "../../message-repository";
 import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -119,6 +120,7 @@ function createHandler() {
 
   const lifecycleHandler = createSessionLifecycleHandler({
     repository,
+    messageRepository: repository as unknown as MessageRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     getDurableObjectId,
     tokenEncryptionKey: "encryption-key",

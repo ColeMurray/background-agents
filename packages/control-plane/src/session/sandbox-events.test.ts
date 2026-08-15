@@ -8,6 +8,7 @@ import type { SessionDiffService } from "./diffs/service";
 import type { SessionRepository } from "./repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
+import type { MessageRepository } from "./message-repository";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
@@ -85,6 +86,7 @@ function createProcessor() {
     { waitUntil } as unknown as DurableObjectState,
     () => log,
     repository as unknown as SessionRepository,
+    repository as unknown as MessageRepository,
     eventRepository,
     artifactRepository,
     callbackService as unknown as CallbackNotificationService,

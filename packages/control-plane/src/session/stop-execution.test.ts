@@ -1,7 +1,7 @@
 /**
  * Unit tests for the stop-execution–related repository behavior.
  *
- * These tests exercise SessionRepository processing-message lookup used by
+ * These tests exercise MessageRepository processing-message lookup used by
  * stopExecution() and the execution_complete guard in processSandboxEvent().
  *
  * We focus here on the repository-level interactions and state transitions
@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository } from "./repository";
+import { MessageRepository } from "./message-repository";
 import { EventRepository } from "./event-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
@@ -52,11 +52,11 @@ function createMockSql() {
 
 describe("Stop execution - repository interactions", () => {
   let mock: ReturnType<typeof createMockSql>;
-  let repo: SessionRepository;
+  let repo: MessageRepository;
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(
+    repo = new MessageRepository(
       mock.sql,
       (closure) => closure(),
       new SessionAttachmentRepository(mock.sql),

@@ -64,6 +64,7 @@ import { SessionRepository } from "./repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
 import { EventRepository } from "./event-repository";
+import { MessageRepository } from "./message-repository";
 import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { resolveParticipantName } from "./participant-name";
@@ -172,6 +173,7 @@ export class SessionDO extends DurableObject<Env> {
   private attachmentRepository: SessionAttachmentRepository;
   private artifactRepository: ArtifactRepository;
   private eventRepository: EventRepository;
+  private messageRepository: MessageRepository;
   private participantRepository: ParticipantRepository;
   private wsClientMappingRepository: WsClientMappingRepository;
   private initialized = false;
@@ -288,13 +290,16 @@ export class SessionDO extends DurableObject<Env> {
     this.eventRepository = new EventRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
     );
-    this.participantRepository = new ParticipantRepository(this.sql);
-    this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
-    this.repository = new SessionRepository(
+    this.messageRepository = new MessageRepository(
       this.sql,
       (closure) => ctx.storage.transactionSync(closure),
       this.attachmentRepository,
       this.eventRepository
+    );
+    this.participantRepository = new ParticipantRepository(this.sql);
+    this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
+    this.repository = new SessionRepository(this.sql, (closure) =>
+      ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
@@ -332,7 +337,7 @@ export class SessionDO extends DurableObject<Env> {
           : null;
       this._participantService = new ParticipantService({
         repository: this.participantRepository,
-        getProcessingMessageAuthor: () => this.repository.getProcessingMessageAuthor(),
+        getProcessingMessageAuthor: () => this.messageRepository.getProcessingMessageAuthor(),
         env: this.env,
         log: this.log,
         generateId: () => generateId(),
@@ -354,6 +359,7 @@ export class SessionDO extends DurableObject<Env> {
 
       this._callbackService = new CallbackNotificationService({
         repository: this.repository,
+        messageRepository: this.messageRepository,
         env: {
           ...this.env,
           SCHEDULER_CALLBACK: schedulerCallback,
@@ -434,6 +440,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         this.log,
         this.repository,
+        this.messageRepository,
         this.participantRepository,
         this.attachmentRepository,
         this.wsManager,
@@ -475,7 +482,7 @@ export class SessionDO extends DurableObject<Env> {
   private get messageService(): MessageService {
     if (!this._messageService) {
       this._messageService = new MessageService({
-        repository: this.repository,
+        repository: this.messageRepository,
         eventRepository: this.eventRepository,
         artifactRepository: this.artifactRepository,
         messageQueue: this.messageQueue,
@@ -508,7 +515,7 @@ export class SessionDO extends DurableObject<Env> {
   private get childSessionsHandler(): ChildSessionsHandler {
     if (!this._childSessionsHandler) {
       this._childSessionsHandler = createChildSessionsHandler({
-        repository: this.repository,
+        repository: this.messageRepository,
         eventRepository: this.eventRepository,
         participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
@@ -527,7 +534,7 @@ export class SessionDO extends DurableObject<Env> {
   private get sandboxHandler(): SandboxHandler {
     if (!this._sandboxHandler) {
       this._sandboxHandler = createSandboxHandler({
-        repository: this.repository,
+        repository: this.messageRepository,
         eventRepository: this.eventRepository,
         participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
@@ -591,6 +598,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
         repository: this.repository,
+        messageRepository: this.messageRepository,
         participantRepository: this.participantRepository,
         getDurableObjectId: () => this.ctx.id.toString(),
         tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
@@ -718,7 +726,7 @@ export class SessionDO extends DurableObject<Env> {
   private get alarmHandler(): AlarmHandler {
     if (!this._alarmHandler) {
       this._alarmHandler = createAlarmHandler({
-        repository: this.repository,
+        repository: this.messageRepository,
         messageQueue: this.messageQueue,
         lifecycleManager: this.lifecycleManager,
         alarmScheduler: this.alarmScheduler,
@@ -737,6 +745,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         () => this.log,
         this.repository,
+        this.messageRepository,
         this.eventRepository,
         this.artifactRepository,
         this.callbackService,
@@ -773,6 +782,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         this.log,
         this.repository,
+        this.messageRepository,
         this.artifactRepository,
         this.messenger,
         this.db ? new SessionIndexStore(this.db) : null,
@@ -1832,7 +1842,7 @@ export class SessionDO extends DurableObject<Env> {
       branchName: session.branch_name,
       status: session.status,
       sandboxStatus: sandbox?.status ?? "pending",
-      messageCount: this.repository.getMessageCount(),
+      messageCount: this.messageRepository.getMessageCount(),
       createdAt: session.created_at,
       model: session.model ?? DEFAULT_MODEL,
       reasoningEffort: session.reasoning_effort ?? undefined,
@@ -1860,7 +1870,7 @@ export class SessionDO extends DurableObject<Env> {
         session: local.session,
         artifacts: this.messageService.listArtifacts().artifacts,
         timeline: this.eventStream.getReplay(),
-        promptQueue: this.repository.listPromptQueue(),
+        promptQueue: this.messageRepository.listPromptQueue(),
         spawnError: local.sandbox?.last_spawn_error ?? null,
       };
     });
@@ -1991,7 +2001,7 @@ export class SessionDO extends DurableObject<Env> {
    * Check if any message is currently being processed.
    */
   private getIsProcessing(): boolean {
-    return this.repository.getProcessingMessage() !== null;
+    return this.messageRepository.getProcessingMessage() !== null;
   }
 
   private safeParseTunnelUrls(raw: string): Record<string, string> | null {

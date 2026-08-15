@@ -14,6 +14,7 @@ import type { SessionIndexStore } from "../db/session-index";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
+import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
 
@@ -25,6 +26,7 @@ export class SessionStatusService {
     private readonly ctx: DurableObjectState,
     private readonly log: Logger,
     private readonly repository: SessionRepository,
+    private readonly messageRepository: MessageRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,
     private readonly sessionIndex: SessionIndexStore | null,
@@ -106,15 +108,15 @@ export class SessionStatusService {
    * when more prompts are queued, otherwise completed/failed by outcome.
    */
   async reconcileAfterExecution(success: boolean): Promise<void> {
-    const pendingOrProcessing = this.repository.getPendingOrProcessingCount();
+    const pendingOrProcessing = this.messageRepository.getPendingOrProcessingCount();
     const nextStatus: SessionStatus =
       pendingOrProcessing > 0 ? "active" : success ? "completed" : "failed";
     await this.transition(nextStatus);
   }
 
   async reconcileAfterQueueRemoval(): Promise<void> {
-    if (this.repository.getPendingOrProcessingCount() > 0) return;
-    const latestMessage = this.repository.getLatestTerminalMessage();
+    if (this.messageRepository.getPendingOrProcessingCount() > 0) return;
+    const latestMessage = this.messageRepository.getLatestTerminalMessage();
     const nextStatus: SessionStatus = latestMessage
       ? latestMessage.status === "failed"
         ? "failed"
@@ -209,8 +211,8 @@ export class SessionStatusService {
     const session = this.repository.getSession();
     if (!session) return;
 
-    const messageCount = this.repository.getMessageCount();
-    const activeDurationMs = this.repository.getActiveDurationMs();
+    const messageCount = this.messageRepository.getMessageCount();
+    const activeDurationMs = this.messageRepository.getActiveDurationMs();
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 

@@ -18,6 +18,7 @@ import type {
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { EventRepository } from "../../event-repository";
+import type { MessageRepository } from "../../message-repository";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -169,7 +170,7 @@ function createHandler() {
   const messageService = { enqueuePrompt };
 
   const handler = createChildSessionsHandler({
-    repository,
+    repository: repository as unknown as MessageRepository,
     eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository: artifactRepository as unknown as ArtifactRepository,

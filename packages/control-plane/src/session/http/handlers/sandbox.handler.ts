@@ -17,7 +17,7 @@ import {
 import type { XaiTokenRefreshResult } from "../../xai-token-refresh-service";
 import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
-import type { SessionRepository } from "../../repository";
+import type { MessageRepository } from "../../message-repository";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { EventRepository } from "../../event-repository";
 import type { ParticipantRepository } from "../../participant-repository";
@@ -37,7 +37,7 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: Pick<SessionRepository, "getProcessingMessage">;
+  repository: MessageRepository;
   eventRepository: EventRepository;
   participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;

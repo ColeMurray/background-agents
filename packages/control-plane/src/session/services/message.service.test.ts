@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ArtifactRow, EventRow, MessageRow } from "../types";
-import type { SessionRepository } from "../repository";
+import type { MessageRepository } from "../message-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
@@ -9,7 +9,7 @@ import { MessageService } from "./message.service";
 function createService() {
   const repository = {
     listMessages: vi.fn(),
-  } as unknown as SessionRepository;
+  } as unknown as MessageRepository;
   const eventRepository = {
     listEventPage: vi.fn(),
   } as unknown as EventRepository;

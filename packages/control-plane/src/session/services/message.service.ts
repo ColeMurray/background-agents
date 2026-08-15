@@ -2,7 +2,7 @@ import type { ArtifactRow } from "../types";
 import type { SessionMessage } from "@open-inspect/shared/types/sessions";
 import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-events";
 import type { NormalizedArtifactResponse } from "../artifacts";
-import type { SessionRepository } from "../repository";
+import type { MessageRepository } from "../message-repository";
 import type { ArtifactRepository } from "../artifact-repository";
 import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
@@ -19,7 +19,7 @@ export interface ListMessagesRequest {
 }
 
 interface MessageServiceDeps {
-  repository: SessionRepository;
+  repository: MessageRepository;
   eventRepository: EventRepository;
   artifactRepository: ArtifactRepository;
   messageQueue: SessionMessageQueue;

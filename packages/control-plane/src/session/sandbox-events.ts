@@ -5,6 +5,7 @@ import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
+import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
@@ -40,6 +41,7 @@ export class SessionSandboxEventProcessor {
     // capturing one by value at construction time.
     private readonly getLog: () => Logger,
     private readonly repository: SessionRepository,
+    private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly callbackService: CallbackNotificationService,
@@ -93,7 +95,7 @@ export class SessionSandboxEventProcessor {
     }
 
     const eventMessageId = "messageId" in event ? event.messageId : null;
-    const processingMessage = this.repository.getProcessingMessage();
+    const processingMessage = this.messageRepository.getProcessingMessage();
     const messageId = eventMessageId ?? processingMessage?.id ?? null;
 
     if (event.type === "artifact") {
@@ -209,7 +211,7 @@ export class SessionSandboxEventProcessor {
     if (event.type === "execution_complete") {
       const completion =
         processingMessage?.id === event.messageId
-          ? this.repository.recordMessageCompletion(event, now, "processing")
+          ? this.messageRepository.recordMessageCompletion(event, now, "processing")
           : null;
       if (completion) {
         await this.projectTerminalMessage(
@@ -236,7 +238,7 @@ export class SessionSandboxEventProcessor {
         this.messenger.broadcast({ type: "sandbox_event", event });
         this.messenger.broadcast({
           type: "processing_status",
-          isProcessing: this.repository.getProcessingMessage() !== null,
+          isProcessing: this.messageRepository.getProcessingMessage() !== null,
         });
         this.broadcastPromptQueue();
         this.ctx.waitUntil(
@@ -244,7 +246,7 @@ export class SessionSandboxEventProcessor {
         );
         await this.statusService.reconcileAfterExecution(event.success);
       } else {
-        this.repository.clearMessageAwaitingStopConfirmation(event.messageId);
+        this.messageRepository.clearMessageAwaitingStopConfirmation(event.messageId);
         this.log.info("prompt.complete", {
           event: "prompt.complete",
           message_id: event.messageId,

@@ -2,10 +2,10 @@ import type { Logger } from "../../logger";
 import { evaluateExecutionTimeout } from "../../sandbox/lifecycle/decisions";
 import type { AlarmScheduler, SandboxLifecycleManager } from "../../sandbox/lifecycle/manager";
 import type { SessionMessageQueue } from "../message-queue";
-import type { SessionRepository } from "../repository";
+import type { MessageRepository } from "../message-repository";
 
 export interface AlarmHandlerDeps {
-  repository: Pick<SessionRepository, "getProcessingMessageWithStartedAt">;
+  repository: MessageRepository;
   messageQueue: Pick<
     SessionMessageQueue,
     "failStuckProcessingMessage" | "recoverStopConfirmationTimeout"

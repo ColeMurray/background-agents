@@ -13,14 +13,12 @@ import type { Logger } from "../logger";
 import { deliverWithRetry } from "./callback-delivery";
 import { notifyLinearStarted } from "./linear-start-callback";
 import type { SessionRow } from "./types";
+import type { MessageRepository } from "./message-repository";
 
 /**
  * Narrow repository interface — only the methods CallbackNotificationService needs.
  */
 export interface CallbackRepository {
-  getMessageCallbackContext(
-    messageId: string
-  ): { callback_context: string | null; source: string | null } | null;
   getSession(): SessionRow | null;
 }
 
@@ -43,6 +41,7 @@ export interface CallbackServiceEnv {
  */
 export interface CallbackServiceDeps {
   repository: CallbackRepository;
+  messageRepository: MessageRepository;
   env: CallbackServiceEnv;
   log: Logger;
   getSessionId: () => string;
@@ -66,6 +65,7 @@ interface CallbackDeliveryResult {
 
 export class CallbackNotificationService {
   private readonly repository: CallbackRepository;
+  private readonly messageRepository: MessageRepository;
   private readonly env: CallbackServiceEnv;
   private readonly log: Logger;
   private readonly getSessionId: () => string;
@@ -75,6 +75,7 @@ export class CallbackNotificationService {
 
   constructor(deps: CallbackServiceDeps) {
     this.repository = deps.repository;
+    this.messageRepository = deps.messageRepository;
     this.env = deps.env;
     this.log = deps.log;
     this.getSessionId = deps.getSessionId;
@@ -117,7 +118,7 @@ export class CallbackNotificationService {
 
   /** Notify the Linear worker after a Linear message is dispatched to a live sandbox. */
   async notifyStarted(messageId: string): Promise<void> {
-    const message = this.repository.getMessageCallbackContext(messageId);
+    const message = this.messageRepository.getMessageCallbackContext(messageId);
     if (!message?.callback_context || message.source !== "linear") {
       this.log.debug("callback.started", {
         message_id: messageId,
@@ -173,7 +174,7 @@ export class CallbackNotificationService {
 
     try {
       sessionId = this.getSessionId();
-      const message = this.repository.getMessageCallbackContext(messageId);
+      const message = this.messageRepository.getMessageCallbackContext(messageId);
       if (!message?.callback_context) {
         result.rejectReason = "no_callback_context";
         return;
@@ -346,7 +347,7 @@ export class CallbackNotificationService {
 
     const tool = event.tool ?? "unknown";
 
-    const message = this.repository.getMessageCallbackContext(messageId);
+    const message = this.messageRepository.getMessageCallbackContext(messageId);
     if (!message?.callback_context) {
       this.log.debug("callback.tool_call", {
         message_id: messageId,

@@ -20,7 +20,7 @@ import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/mana
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
 import type { SessionRepository } from "./repository";
 import type { ParticipantRepository } from "./participant-repository";
-import { STOP_CONFIRMATION_TIMEOUT_MS } from "./repository";
+import { STOP_CONFIRMATION_TIMEOUT_MS, type MessageRepository } from "./message-repository";
 import {
   AttachmentClaimConflictError,
   type SessionAttachmentRepository,
@@ -143,6 +143,7 @@ export class SessionMessageQueue {
     private readonly ctx: DurableObjectState,
     private readonly log: Logger,
     private readonly repository: SessionRepository,
+    private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
     private readonly wsManager: SessionWebSocketManager,
@@ -256,7 +257,7 @@ export class SessionMessageQueue {
     ws: WebSocket,
     data: { messageId: string; clientRequestId: string }
   ): Promise<void> {
-    if (!this.repository.cancelPendingMessage(data.messageId)) {
+    if (!this.messageRepository.cancelPendingMessage(data.messageId)) {
       this.wsManager.send(ws, {
         type: "error",
         code: "PROMPT_NOT_CANCELLABLE",
@@ -285,7 +286,7 @@ export class SessionMessageQueue {
     if (!currentSession || !isPromptableSessionStatus(currentSession.status)) {
       return;
     }
-    const awaitingStop = this.repository.getMessageAwaitingStopConfirmation();
+    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
       if (awaitingStop.deadline <= Date.now()) {
         await this.recoverStopConfirmationTimeout();
@@ -295,12 +296,12 @@ export class SessionMessageQueue {
       this.log.debug("processMessageQueue: waiting for sandbox stop confirmation");
       return;
     }
-    if (this.repository.getProcessingMessage()) {
+    if (this.messageRepository.getProcessingMessage()) {
       this.log.debug("processMessageQueue: already processing, returning");
       return;
     }
 
-    const message = this.repository.getNextPendingMessage();
+    const message = this.messageRepository.getNextPendingMessage();
     if (!message) {
       return;
     }
@@ -381,7 +382,7 @@ export class SessionMessageQueue {
     if (!sent) {
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
     } else {
-      this.repository.startMessageProcessing(message.id, now, userMessageEvent);
+      this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent);
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();
@@ -419,7 +420,7 @@ export class SessionMessageQueue {
 
   async stopExecution(options: StopExecutionOptions = {}): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
+    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     let stoppedMessageId: string | null = null;
 
     if (
@@ -428,7 +429,7 @@ export class SessionMessageQueue {
     ) {
       stoppedMessageId = processingMessage.id;
       const stopConfirmationDeadline = now + STOP_CONFIRMATION_TIMEOUT_MS;
-      this.repository.markMessageAwaitingStopConfirmation(
+      this.messageRepository.markMessageAwaitingStopConfirmation(
         processingMessage.id,
         stopConfirmationDeadline
       );
@@ -452,7 +453,7 @@ export class SessionMessageQueue {
   }
 
   async recoverStopConfirmationTimeout(): Promise<void> {
-    const awaitingStop = this.repository.getMessageAwaitingStopConfirmation();
+    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (!awaitingStop || awaitingStop.deadline > Date.now()) return;
     this.log.warn("Sandbox did not confirm stop before deadline", {
       event: "prompt.stop_confirmation_timeout",
@@ -462,9 +463,9 @@ export class SessionMessageQueue {
   }
 
   async resumeAfterSandboxTermination(): Promise<void> {
-    const awaitingStop = this.repository.getMessageAwaitingStopConfirmation();
+    const awaitingStop = this.messageRepository.getMessageAwaitingStopConfirmation();
     if (awaitingStop) {
-      this.repository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
+      this.messageRepository.clearMessageAwaitingStopConfirmation(awaitingStop.id);
     }
     await this.processMessageQueue();
   }
@@ -472,11 +473,11 @@ export class SessionMessageQueue {
   /** Close every unfinished message synchronously; status projection happens afterwards. */
   cancelExecution(): void {
     const now = Date.now();
-    for (const message of this.repository.listPendingMessagesWithCreatedAt()) {
+    for (const message of this.messageRepository.listPendingMessagesWithCreatedAt()) {
       this.failMessage(message, "Execution was cancelled before it started", now, "pending");
     }
 
-    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
+    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (processingMessage) {
       this.failMessage(processingMessage, "Execution was cancelled", now, "processing");
     }
@@ -496,7 +497,7 @@ export class SessionMessageQueue {
    */
   async failStuckProcessingMessage(): Promise<void> {
     const now = Date.now();
-    const processingMessage = this.repository.getProcessingMessageWithCreatedAt();
+    const processingMessage = this.messageRepository.getProcessingMessageWithCreatedAt();
     if (!processingMessage) return;
 
     if (
@@ -528,7 +529,11 @@ export class SessionMessageQueue {
       sandboxId: "",
       timestamp: completedAt / 1000,
     };
-    const completion = this.repository.recordMessageCompletion(event, completedAt, expectedStatus);
+    const completion = this.messageRepository.recordMessageCompletion(
+      event,
+      completedAt,
+      expectedStatus
+    );
     if (!completion) return false;
 
     this.ctx.waitUntil(
@@ -627,9 +632,9 @@ export class SessionMessageQueue {
 
     // Keep the idempotency lookup, capacity check, and insert in one synchronous
     // turn so concurrent WebSocket requests cannot race between them.
-    const queueDepthBefore = this.repository.getPendingOrProcessingCount();
+    const queueDepthBefore = this.messageRepository.getPendingOrProcessingCount();
     if (data.clientRequestId) {
-      const existing = this.repository.getMessageByClientRequestId(data.clientRequestId);
+      const existing = this.messageRepository.getMessageByClientRequestId(data.clientRequestId);
       if (existing) {
         if (
           existing.author_id !== data.participant.id ||
@@ -653,7 +658,7 @@ export class SessionMessageQueue {
         });
         return {
           messageId: existing.id,
-          position: this.repository.getUnfinishedMessagePosition(existing.id),
+          position: this.messageRepository.getUnfinishedMessagePosition(existing.id),
         };
       }
     }
@@ -683,7 +688,7 @@ export class SessionMessageQueue {
       this.log
     );
     try {
-      this.repository.createMessageWithAttachments(
+      this.messageRepository.createMessageWithAttachments(
         {
           id: messageId,
           authorId: data.participant.id,
@@ -712,7 +717,7 @@ export class SessionMessageQueue {
     await this.sessionStatus.transition("active");
     this.broadcastPromptQueue();
 
-    const position = this.repository.getPendingOrProcessingCount();
+    const position = this.messageRepository.getPendingOrProcessingCount();
     this.log.info("prompt.enqueue", {
       event: "prompt.enqueue",
       outcome: "enqueued",
@@ -741,7 +746,9 @@ export class SessionMessageQueue {
     }
   }
 
-  private assertQueueCapacity(queueDepth = this.repository.getPendingOrProcessingCount()): void {
+  private assertQueueCapacity(
+    queueDepth = this.messageRepository.getPendingOrProcessingCount()
+  ): void {
     if (queueDepth >= MAX_UNFINISHED_PROMPTS) {
       this.log.warn("prompt.enqueue", {
         event: "prompt.enqueue",
@@ -757,7 +764,7 @@ export class SessionMessageQueue {
   broadcastPromptQueue(): void {
     this.messenger.broadcast({
       type: "prompt_queue_updated",
-      promptQueue: this.repository.listPromptQueue(),
+      promptQueue: this.messageRepository.listPromptQueue(),
     });
   }
 }
