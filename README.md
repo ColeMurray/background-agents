@@ -139,6 +139,9 @@ To understand the architecture and core concepts, read
 
 To set up recurring scheduled tasks, see **[docs/AUTOMATIONS.md](docs/AUTOMATIONS.md)**.
 
+To create and use reusable agent instructions, see
+**[docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md)**.
+
 ## Key Features
 
 ### Fast Startup
@@ -162,6 +165,15 @@ One session can work across several repositories in a single sandbox:
   optional prebuilt images, then launch it from the picker like any repository
 - See [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#environments) for the model and
   [docs/IMAGE_PREBUILD.md](docs/IMAGE_PREBUILD.md) for environment prebuilds
+
+### Managed Skills
+
+Create reusable instructions and supporting files that agents receive when a session starts:
+
+- Assign shared skills globally or to selected repositories and environments
+- Save personal profiles for frequently used skill sets
+- Pin exact skill revisions to each session for repeatable behavior
+- See [docs/MANAGED_SKILLS.md](docs/MANAGED_SKILLS.md) for the user guide
 
 ### Multiplayer Sessions
 
