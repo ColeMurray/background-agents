@@ -28,10 +28,6 @@ function createProcessor() {
   const repository = {
     updateSandboxHeartbeat: vi.fn(),
     getProcessingMessage,
-    upsertTokenEvent: vi.fn(),
-    createContextCompactionEvent: vi.fn(),
-    upsertToolCallEvent: vi.fn(),
-    createEvent: vi.fn(),
     addSessionCost: vi.fn(),
     recordMessageCompletion: vi.fn((event: { messageId: string }, completedAt: number) => {
       getProcessingMessage.mockReturnValue(null);
@@ -47,6 +43,12 @@ function createProcessor() {
     updateSandboxGitSyncStatus: vi.fn(),
     updateSessionCurrentSha: vi.fn(),
   };
+  const eventRepository = {
+    upsertTokenEvent: vi.fn(),
+    createContextCompactionEvent: vi.fn(),
+    upsertToolCallEvent: vi.fn(),
+    createEvent: vi.fn(),
+  } as unknown as EventRepository;
   const artifactRepository = { createArtifact: vi.fn() } as unknown as ArtifactRepository;
 
   const callbackService = {
@@ -83,7 +85,7 @@ function createProcessor() {
     { waitUntil } as unknown as DurableObjectState,
     () => log,
     repository as unknown as SessionRepository,
-    repository as unknown as EventRepository,
+    eventRepository,
     artifactRepository,
     callbackService as unknown as CallbackNotificationService,
     wsManager as unknown as SessionWebSocketManager,
@@ -103,6 +105,7 @@ function createProcessor() {
     processor,
     artifactRepository,
     repository,
+    eventRepository,
     wsManager,
     callbackService,
     broadcast,
@@ -187,7 +190,7 @@ describe("SessionSandboxEventProcessor", () => {
     expect(h.applySessionTitleUpdate).toHaveBeenCalledWith("Generated title", {
       onlyIfUnset: true,
     });
-    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).not.toHaveBeenCalled();
     expect(h.updateLastActivity).not.toHaveBeenCalled();
   });
@@ -217,7 +220,11 @@ describe("SessionSandboxEventProcessor", () => {
 
     await h.processor.processSandboxEvent(event);
 
-    expect(h.repository.upsertTokenEvent).toHaveBeenCalledWith("msg-1", event, expect.any(Number));
+    expect(h.eventRepository.upsertTokenEvent).toHaveBeenCalledWith(
+      "msg-1",
+      event,
+      expect.any(Number)
+    );
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
@@ -233,15 +240,15 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
     await h.processor.processSandboxEvent({ ...event, timestamp: 1001 });
 
-    expect(h.repository.createContextCompactionEvent).toHaveBeenCalledTimes(2);
-    expect(h.repository.createContextCompactionEvent).toHaveBeenNthCalledWith(1, {
+    expect(h.eventRepository.createContextCompactionEvent).toHaveBeenCalledTimes(2);
+    expect(h.eventRepository.createContextCompactionEvent).toHaveBeenNthCalledWith(1, {
       id: expect.any(String),
       type: "context_compacted",
       data: JSON.stringify(event),
       messageId: "msg-1",
       createdAt: expect.any(Number),
     });
-    expect(h.repository.createContextCompactionEvent).toHaveBeenNthCalledWith(2, {
+    expect(h.eventRepository.createContextCompactionEvent).toHaveBeenNthCalledWith(2, {
       id: expect.any(String),
       type: "context_compacted",
       data: JSON.stringify({ ...event, timestamp: 1001 }),
@@ -285,7 +292,7 @@ describe("SessionSandboxEventProcessor", () => {
       }),
       createdAt: expect.any(Number),
     });
-    expect(h.repository.createEvent).toHaveBeenCalledWith({
+    expect(h.eventRepository.createEvent).toHaveBeenCalledWith({
       id: expect.any(String),
       type: "artifact",
       data: expect.any(String),
@@ -332,7 +339,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.repository.addSessionCost).toHaveBeenCalledWith(0.0123, expect.any(Number));
-    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
@@ -349,7 +356,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
@@ -382,7 +389,7 @@ describe("SessionSandboxEventProcessor", () => {
     await h.processor.processSandboxEvent(event);
 
     expect(h.repository.addSessionCost).not.toHaveBeenCalled();
-    expect(h.repository.createEvent).not.toHaveBeenCalled();
+    expect(h.eventRepository.createEvent).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith({ type: "sandbox_event", event });
   });
 
@@ -683,7 +690,7 @@ describe("SessionSandboxEventProcessor", () => {
       });
 
       expect(h.updateLastActivity).toHaveBeenCalledWith(expect.any(Number));
-      expect(h.repository.upsertToolCallEvent).toHaveBeenCalledWith(
+      expect(h.eventRepository.upsertToolCallEvent).toHaveBeenCalledWith(
         "msg-1",
         expect.objectContaining({ callId: "call-1", status: "running" }),
         expect.any(Number)
