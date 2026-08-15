@@ -13,11 +13,8 @@
 import type { SessionArtifact } from "@open-inspect/shared/types/artifacts";
 import type { SessionPullRequestStore } from "../db/session-pull-request-store";
 import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
-import {
-  parsePullRequestArtifactMetadata,
-  preparePullRequestArtifactUpdate,
-  snapshotToRecord,
-} from "./pull-request-snapshot";
+import { parsePullRequestArtifactMetadata } from "./pull-request-snapshot";
+import { applyPullRequestSnapshot } from "./pull-request-snapshot-apply";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionRow } from "./types";
 
@@ -127,41 +124,22 @@ export async function refreshSessionPullRequests(
       continue;
     }
 
-    let recordAccepted = true;
-    if (sessionPullRequests) {
-      const record = snapshotToRecord(snapshot, {
+    const applied = await applyPullRequestSnapshot(
+      { artifactRepository, sessionPullRequests },
+      { artifactId: artifact.id, sessionId, artifactCreatedAt: artifact.created_at },
+      snapshot
+    );
+    if (applied.recordWriteError !== null) {
+      failures.push({
         artifactId: artifact.id,
-        sessionId,
-        createdAt: artifact.created_at,
-        updatedAt: Date.now(),
+        reason: "record_write_failed",
+        prNumber: target.prNumber,
+        repoOwner: target.repoOwner,
+        repoName: target.repoName,
+        error: applied.recordWriteError,
       });
-      try {
-        recordAccepted = (await sessionPullRequests.upsert(record)).applied;
-      } catch (error) {
-        failures.push({
-          artifactId: artifact.id,
-          reason: "record_write_failed",
-          prNumber: target.prNumber,
-          repoOwner: target.repoOwner,
-          repoName: target.repoName,
-          error,
-        });
-      }
     }
-    if (!recordAccepted) continue;
-
-    // Re-read the row at apply time: a webhook snapshot push can land on this
-    // DO between this pass's awaits, and the staleness guard must evaluate
-    // against the artifact's current state, not the pre-await copy (the
-    // snapshot-push handler re-reads the same way).
-    const currentArtifact = artifactRepository.getArtifactById(artifact.id);
-    if (!currentArtifact) continue;
-
-    const artifactUpdate = preparePullRequestArtifactUpdate(currentArtifact, snapshot, Date.now());
-    if (!artifactUpdate) continue;
-
-    artifactRepository.updateArtifact(currentArtifact.id, artifactUpdate.update);
-    updated.push(artifactUpdate.artifact);
+    if (applied.updatedArtifact) updated.push(applied.updatedArtifact);
   }
 
   return { updated, failures };
