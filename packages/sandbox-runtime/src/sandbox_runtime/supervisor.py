@@ -92,8 +92,18 @@ class SandboxSupervisor:
                 if attempt > self.MAX_RESTARTS:
                     self.log.warn("vnc.max_restarts", restart_count=attempt)
                     return False
-                await asyncio.sleep(min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX))
+                if await self._wait_for_shutdown(min(self.BACKOFF_BASE**attempt, self.BACKOFF_MAX)):
+                    return False
         return False
+
+    async def _wait_for_shutdown(self, delay: float) -> bool:
+        if self.shutdown_event.is_set():
+            return True
+        try:
+            await asyncio.wait_for(self.shutdown_event.wait(), timeout=delay)
+        except TimeoutError:
+            return False
+        return True
 
     async def _handle_opencode_exit(self, restart_count: int) -> tuple[int, bool]:
         exit_code = self.opencode_server.exit_code()
@@ -118,7 +128,8 @@ class SandboxSupervisor:
             delay_s=round(delay, 1),
             restart_count=restart_count,
         )
-        await asyncio.sleep(delay)
+        if await self._wait_for_shutdown(delay):
+            return restart_count, True
         if self._repository_boot_result is None:
             raise RuntimeError("OpenCode restart requested before repository boot")
         await self.opencode_server.start(
@@ -154,7 +165,8 @@ class SandboxSupervisor:
             delay_s=round(delay, 1),
             restart_count=restart_count,
         )
-        await asyncio.sleep(delay)
+        if await self._wait_for_shutdown(delay):
+            return restart_count, True
         await self.agent_bridge.start()
         return restart_count, False
 
@@ -174,7 +186,8 @@ class SandboxSupervisor:
             await self.code_server.stop()
             return restart_count
 
-        await asyncio.sleep(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX))
+        if await self._wait_for_shutdown(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)):
+            return restart_count
         try:
             if self._repository_boot_result is None:
                 raise RuntimeError("code-server restart requested before repository boot")
@@ -202,7 +215,8 @@ class SandboxSupervisor:
             self.log.warn("web_terminal.max_restarts", restart_count=restart_count)
             return restart_count
 
-        await asyncio.sleep(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX))
+        if await self._wait_for_shutdown(min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)):
+            return restart_count
         try:
             if self._repository_boot_result is None:
                 raise RuntimeError("terminal restart requested before repository boot")
@@ -250,9 +264,14 @@ class SandboxSupervisor:
             if should_stop:
                 break
             code_server_restarts = await self._handle_code_server_exit(code_server_restarts)
+            if self.shutdown_event.is_set():
+                break
             terminal_restarts = await self._handle_terminal_crash(terminal_restarts)
+            if self.shutdown_event.is_set():
+                break
             desktop_restarts = await self._handle_desktop_crash(desktop_restarts)
-            await asyncio.sleep(1.0)
+            if await self._wait_for_shutdown(1.0):
+                break
 
     def _image_build_execution_timeout_seconds(self) -> int | None:
         raw_timeout = os.environ.get(IMAGE_BUILD_EXECUTION_TIMEOUT_ENV_VAR)
