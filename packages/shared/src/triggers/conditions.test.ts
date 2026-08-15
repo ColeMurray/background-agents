@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { matchesConditions, validateConditions } from "./conditions";
-import { conditionRegistry } from "./registry";
+import { conditionRegistry, GITHUB_CONCLUSIONS } from "./registry";
 import { buildMockEvent } from "./testing";
 
 describe("matchesConditions", () => {
@@ -130,6 +130,57 @@ describe("matchesConditions", () => {
       expect(matchesConditions(conditions, event, conditionRegistry)).toBe(false);
     });
   });
+
+  describe("GitHub workflow_name", () => {
+    it("matches only the configured workflow", () => {
+      const event = buildMockEvent("github", { workflowName: "CI" });
+      const conditions = [{ type: "workflow_name" as const, operator: "eq" as const, value: "CI" }];
+
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+      expect(
+        matchesConditions(
+          conditions,
+          buildMockEvent("github", { workflowName: "Deploy" }),
+          conditionRegistry
+        )
+      ).toBe(false);
+    });
+
+    it("does not match events without a workflow name", () => {
+      const conditions = [{ type: "workflow_name" as const, operator: "eq" as const, value: "CI" }];
+
+      expect(matchesConditions(conditions, buildMockEvent("github"), conditionRegistry)).toBe(
+        false
+      );
+    });
+  });
+
+  describe("GitHub conclusion", () => {
+    it("matches a workflow conclusion without using the check-suite field", () => {
+      const event = buildMockEvent("github", { conclusion: "failure" });
+      const conditions = [
+        { type: "conclusion" as const, operator: "eq" as const, value: "failure" },
+      ];
+
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+      expect(
+        matchesConditions(
+          conditions,
+          buildMockEvent("github", { checkConclusion: "failure" }),
+          conditionRegistry
+        )
+      ).toBe(false);
+    });
+
+    it("keeps the check conclusion condition compatible", () => {
+      const event = buildMockEvent("github", { checkConclusion: "failure" });
+      const conditions = [
+        { type: "check_conclusion" as const, operator: "eq" as const, value: "failure" },
+      ];
+
+      expect(matchesConditions(conditions, event, conditionRegistry)).toBe(true);
+    });
+  });
 });
 
 describe("validateConditions", () => {
@@ -179,5 +230,17 @@ describe("validateConditions", () => {
       conditionRegistry
     );
     expect(errors).toHaveLength(0);
+  });
+
+  it.each(GITHUB_CONCLUSIONS)("accepts the %s GitHub conclusion", (conclusion) => {
+    for (const type of ["conclusion", "check_conclusion"] as const) {
+      expect(
+        validateConditions(
+          [{ type, operator: "eq", value: conclusion }],
+          "github",
+          conditionRegistry
+        )
+      ).toHaveLength(0);
+    }
   });
 });

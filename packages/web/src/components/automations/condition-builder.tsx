@@ -6,7 +6,11 @@ import type {
   AutomationEventSource,
   JsonPathFilter,
 } from "@open-inspect/shared/triggers";
-import { conditionRegistry } from "@open-inspect/shared/triggers";
+import {
+  conditionRegistry,
+  DEFAULT_GITHUB_CONCLUSION,
+  GITHUB_CONCLUSIONS,
+} from "@open-inspect/shared/triggers";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
@@ -35,7 +39,9 @@ const CONDITION_LABELS: Record<string, string> = {
   label: "Label",
   path_glob: "Path Glob",
   actor: "Actor",
+  conclusion: "Conclusion",
   check_conclusion: "Check Conclusion",
+  workflow_name: "Workflow Name",
   linear_status: "Linear Status",
   text_match: "Message Text",
   slack_channel: "Slack Channel",
@@ -45,13 +51,6 @@ const CONDITION_LABELS: Record<string, string> = {
 const TEXT_MATCH_MODES = ["contains", "exact", "regex"] as const;
 
 const SENTRY_LEVELS = ["warning", "error", "fatal"];
-const CHECK_CONCLUSION_OPTIONS = [
-  "success",
-  "failure",
-  "neutral",
-  "cancelled",
-  "timed_out",
-] as const;
 
 export function ConditionBuilder({ conditions, onChange, triggerSource }: ConditionBuilderProps) {
   // Get available condition types for this trigger source
@@ -90,12 +89,22 @@ export function ConditionBuilder({ conditions, onChange, triggerSource }: Condit
       case "actor":
         newCondition = { type: "actor", operator: "include", value: [] };
         break;
+      case "conclusion":
+        newCondition = {
+          type: "conclusion",
+          operator: "eq",
+          value: DEFAULT_GITHUB_CONCLUSION,
+        };
+        break;
       case "check_conclusion":
         newCondition = {
           type: "check_conclusion",
           operator: "eq",
-          value: CHECK_CONCLUSION_OPTIONS[0],
+          value: DEFAULT_GITHUB_CONCLUSION,
         };
+        break;
+      case "workflow_name":
+        newCondition = { type: "workflow_name", operator: "eq", value: "" };
         break;
       case "text_match":
         newCondition = { type: "text_match", operator: "contains", value: { pattern: "" } };
@@ -248,6 +257,7 @@ function ConditionEditor({
           />
         </div>
       );
+    case "conclusion":
     case "check_conclusion":
       return (
         <Select value={condition.value} onValueChange={(v) => onChange({ ...condition, value: v })}>
@@ -255,13 +265,23 @@ function ConditionEditor({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {CHECK_CONCLUSION_OPTIONS.map((option) => (
+            {GITHUB_CONCLUSIONS.map((option) => (
               <SelectItem key={option} value={option}>
                 {option}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+      );
+    case "workflow_name":
+      return (
+        <Input
+          type="text"
+          value={condition.value}
+          onChange={(event) => onChange({ ...condition, value: event.target.value })}
+          placeholder="Exact workflow name, e.g. CI"
+          className="text-xs"
+        />
       );
     case "text_match": {
       const flags = condition.value.flags ?? "";

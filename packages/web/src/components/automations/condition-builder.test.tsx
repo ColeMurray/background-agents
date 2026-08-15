@@ -4,10 +4,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as matchers from "@testing-library/jest-dom/matchers";
-import type { TriggerCondition } from "@open-inspect/shared/triggers";
+import {
+  GITHUB_CONCLUSIONS,
+  type AutomationEventSource,
+  type TriggerCondition,
+} from "@open-inspect/shared/triggers";
 import { ConditionBuilder } from "./condition-builder";
 
 type ChannelListing = { id: string; name: string; isPrivate: boolean; isMember: boolean };
+const DEFAULT_TRIGGER_SOURCE = "slack" as const satisfies AutomationEventSource;
 // Mutable per-test channel listing; the hoisted use-slack-channels mock closes over it.
 let slackChannelsMock: { channels: ChannelListing[]; loading: boolean; error?: string };
 vi.mock("@/hooks/use-slack-channels", () => ({
@@ -22,9 +27,14 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-function renderBuilder(conditions: TriggerCondition[]) {
+function renderBuilder(
+  conditions: TriggerCondition[],
+  triggerSource: "slack" | "github" = DEFAULT_TRIGGER_SOURCE
+) {
   const onChange = vi.fn();
-  render(<ConditionBuilder conditions={conditions} onChange={onChange} triggerSource="slack" />);
+  render(
+    <ConditionBuilder conditions={conditions} onChange={onChange} triggerSource={triggerSource} />
+  );
   return onChange;
 }
 
@@ -92,5 +102,29 @@ describe("ConditionBuilder — slack editors", () => {
     renderBuilder([{ type: "slack_actor", operator: "include", value: [] }]);
     expect(screen.getByText("Slack User")).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Add Slack user ID/)).toBeInTheDocument();
+  });
+});
+
+describe("ConditionBuilder — GitHub workflow editors", () => {
+  it("stores the exact workflow name", () => {
+    const onChange = renderBuilder(
+      [{ type: "workflow_name", operator: "eq", value: "" }],
+      "github"
+    );
+
+    fireEvent.change(screen.getByPlaceholderText(/Exact workflow name/), {
+      target: { value: "CI" },
+    });
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { type: "workflow_name", operator: "eq", value: "CI" },
+    ]);
+  });
+
+  it.each(GITHUB_CONCLUSIONS)("renders the %s conclusion", (conclusion) => {
+    renderBuilder([{ type: "conclusion", operator: "eq", value: conclusion }], "github");
+
+    expect(screen.getByText("Conclusion")).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")[0]).toHaveTextContent(conclusion);
   });
 });

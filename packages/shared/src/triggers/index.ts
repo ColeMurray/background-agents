@@ -28,7 +28,12 @@ export type { ConditionHandler, ConditionRegistry } from "./conditions";
 export { matchesConditions, validateConditions } from "./conditions";
 
 // Registry
-export { conditionRegistry, triggerSources } from "./registry";
+export {
+  conditionRegistry,
+  triggerSources,
+  DEFAULT_GITHUB_CONCLUSION,
+  GITHUB_CONCLUSIONS,
+} from "./registry";
 
 // Glob utility
 export { matchGlob } from "./glob";

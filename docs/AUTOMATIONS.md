@@ -12,7 +12,7 @@ Trigger types:
 | **Inbound Webhook** | Trigger from any system with an HTTP POST | Available          |
 | **Sentry Alert**    | Trigger from a Sentry Custom Integration  | Available          |
 | **Slack Message**   | Trigger on messages in watched channels   | Available (opt-in) |
-| **GitHub Event**    | Trigger on GitHub activity                | Planned            |
+| **GitHub Event**    | Trigger on GitHub activity                | Available          |
 | **Linear Event**    | Trigger on Linear activity                | Planned            |
 
 Common use cases include nightly dependency updates, reacting to deploy or incident events, triaging
@@ -30,7 +30,7 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 
 | Field                        | Description                                                                                                                                                                                                                                      |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Trigger Type**             | How the automation starts: schedule, inbound webhook, Sentry alert, or Slack message.                                                                                                                                                            |
+| **Trigger Type**             | How the automation starts: schedule, inbound webhook, Sentry alert, GitHub event, or Slack message.                                                                                                                                              |
 | **Name**                     | A short label for the automation (max 200 characters). Appears in the automations list and in session titles prefixed with `[Auto]`.                                                                                                             |
 | **Repository Configuration** | Pick no repository, one repository, or (for scheduled automations) up to 10 repositories. Selecting several fans each firing out into one session per repository. Only repositories installed on the GitHub App are available.                   |
 | **Instructions**             | The prompt sent to the coding agent each time the automation fires (max 15,000 characters). Write this as you would a normal session prompt and reference the trigger context when useful. Multi-repo automations share one prompt across repos. |
@@ -42,7 +42,7 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 | **Branch**     | The base branch for each session (shown when exactly one repository is selected). Multi-repo selections use each repository's default branch. |
 | **Model**      | The AI model to use. Defaults to the system default model.                                                                                    |
 | **Reasoning**  | Optional reasoning level for models that support it.                                                                                          |
-| **Conditions** | Optional trigger filters for event-driven automations such as inbound webhooks and Sentry alerts.                                             |
+| **Conditions** | Optional trigger filters for event-driven automations such as inbound webhooks, GitHub events, and Sentry alerts.                             |
 
 ### Trigger-Specific Fields
 
@@ -51,6 +51,7 @@ Start by choosing a **Trigger Type**. The rest of the form adjusts based on that
 | **Schedule**        | **Schedule** and **Timezone**                                                                |
 | **Inbound Webhook** | No extra required fields                                                                     |
 | **Sentry Alert**    | **Event Type** and **Sentry Client Secret**                                                  |
+| **GitHub Event**    | **Event Type** and optional **Conditions**                                                   |
 | **Slack Message**   | **Conditions** (a Slack Channel condition is required; a Message Text condition is optional) |
 
 For non-schedule automations, schedule fields are not used.
@@ -211,6 +212,32 @@ concurrency protection.
 | `404`  | Automation not found or not a webhook automation |
 | `413`  | Payload too large                                |
 | `415`  | `Content-Type` was not `application/json`        |
+
+---
+
+## GitHub Event Triggers
+
+A **GitHub Event** automation starts a session when a supported webhook event arrives for its
+repository. Pick one repository and one event type. The GitHub App must subscribe to that event and
+have its required repository permission. See the
+[GitHub App setup](GETTING_STARTED.md#step-3-create-github-app) for the permission and webhook
+settings.
+
+**Workflow Run Completed** handles completed GitHub Actions workflow runs. It requires the GitHub
+App's read-only Actions permission and the **Workflow runs** event subscription. Use these
+conditions to restrict it:
+
+- **Workflow Name** matches the workflow name exactly.
+- **Conclusion** matches `success`, `failure`, `neutral`, `cancelled`, `timed_out`,
+  `action_required`, `skipped`, `stale`, or `startup_failure`.
+
+All configured conditions must match. Open-Inspect includes the workflow name, conclusion, and run
+ID in the untrusted event context sent to the agent. When GitHub supplies them, the context also
+includes the branch, commit SHA, workflow path, and run URL. Open-Inspect includes the attempt
+number in its deduplication key, so it can admit each GitHub rerun once.
+
+**Conclusion** also works for completed check suites. **Check Conclusion** remains available for
+existing check-suite automations.
 
 ---
 
