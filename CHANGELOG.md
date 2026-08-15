@@ -4,6 +4,12 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## August 15, 2026
 
+**Managed skills.** Create and edit reusable Agent Skills in Settings, assign them globally or to
+specific repositories and environments, and organize personal profiles. When starting a session,
+choose all applicable skills, none, or a profile; Open-Inspect pins and securely installs the exact
+revisions before the agent starts, while the session sidebar records each skill's revision and
+assignment source so existing sessions stay reproducible as the shared catalog changes.
+
 **Multiple pull requests per session.** The `create-pull-request` tool now opens one PR per head
 branch instead of one per repository: agents can create stacked PRs (each level passing the previous
 branch as `baseBranch`), open a fresh PR after the previous one merges, and calling the tool again
