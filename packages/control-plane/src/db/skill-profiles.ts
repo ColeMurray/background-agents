@@ -13,6 +13,14 @@ interface ProfileRow {
 export class SkillProfileConflictError extends Error {}
 export class SkillProfileValidationError extends Error {}
 
+/**
+ * Persist user-owned named filters over the shared skill catalog. Profiles do
+ * not grant applicability: resolution intersects their IDs with enabled skills
+ * assigned to the session target. Every lookup and mutation is owner-scoped.
+ *
+ * Profile writes advance the shared catalog generation because resolution must
+ * retry if profile membership changes while it is constructing a snapshot.
+ */
 export class SkillProfileStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -31,6 +39,7 @@ export class SkillProfileStore {
     return (result.results ?? []).map((row) => this.toProfile(row, JSON.parse(row.skill_ids)));
   }
 
+  /** Return a profile only when it belongs to the canonical user. */
   async getOwned(id: string, userId: string): Promise<SkillProfile | null> {
     const row = await this.db
       .prepare("SELECT * FROM skill_profiles WHERE id = ? AND user_id = ?")
@@ -70,6 +79,7 @@ export class SkillProfileStore {
     return { id, name, skillIds: [...new Set(skillIds)].sort(), createdAt: now, updatedAt: now };
   }
 
+  /** Atomically replace requested fields and profile membership. */
   async update(
     id: string,
     userId: string,
@@ -126,6 +136,7 @@ export class SkillProfileStore {
     return (results[1]?.meta.changes ?? 0) > 0;
   }
 
+  /** Reject duplicate, missing, or soft-deleted catalog references before writes. */
   private async validateSkillIds(skillIds: string[]): Promise<void> {
     const unique = [...new Set(skillIds)];
     if (unique.length !== skillIds.length) {
@@ -152,6 +163,7 @@ export class SkillProfileStore {
     );
   }
 
+  /** Participate in the resolver's cross-store consistency check. */
   private bumpGeneration(): SqlStatement {
     return this.db.prepare(
       "UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1"
