@@ -2,58 +2,39 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types";
 import type { SlackSessionTarget } from "../targets";
 import type { SlackActorIdentity } from "../user-identity";
-import { startSessionAndSendPrompt } from "./session-launcher";
-import { getAvailableModels } from "../app-home/models";
-import { getUserRepoBranchPreference } from "../branch-preferences";
-import { getResolvedUserPreferences } from "../user-preferences";
-import { createSession } from "./control-plane-client";
-import { getSlackSettings } from "../slack-settings";
-import { deliverPrompt } from "./prompt-delivery";
-import { buildThreadSession, storeThreadSession } from "./thread-session-store";
-import { postMessage } from "@open-inspect/shared/slack";
+import type { SlackImageAttachment } from "../attachments";
 import {
-  notifyDroppedAttachments,
-  prepareImageAttachments,
-  type SlackImageAttachment,
-} from "../attachments";
+  createSessionLauncher,
+  type SessionLauncherDependencies,
+} from "./session-launcher-application";
 
-vi.mock("@open-inspect/shared/slack", () => ({
-  postMessage: vi.fn(),
-}));
-
-vi.mock("../attachments", () => ({
-  prepareImageAttachments: vi.fn(async () => ({ files: [], dropped: [] })),
-  notifyDroppedAttachments: vi.fn(async () => {}),
-}));
-
-vi.mock("./prompt-delivery", () => ({
-  deliverPrompt: vi.fn(),
-}));
-
-vi.mock("../app-home/models", () => ({
+const dependencies: SessionLauncherDependencies = {
   getAvailableModels: vi.fn(),
-}));
-
-vi.mock("../branch-preferences", () => ({
-  getUserRepoBranchPreference: vi.fn(),
-}));
-
-vi.mock("../user-preferences", () => ({
-  getResolvedUserPreferences: vi.fn(),
-}));
-
-vi.mock("./control-plane-client", () => ({
-  createSession: vi.fn(),
-}));
-
-vi.mock("../slack-settings", () => ({
   getSlackSettings: vi.fn(),
-}));
-
-vi.mock("./thread-session-store", () => ({
+  getResolvedUserPreferences: vi.fn(),
+  getUserRepoBranchPreference: vi.fn(),
+  createSession: vi.fn(),
+  prepareImageAttachments: vi.fn(),
+  notifyDroppedAttachments: vi.fn(),
+  deliverPrompt: vi.fn(),
+  postMessage: vi.fn(),
   buildThreadSession: vi.fn(),
   storeThreadSession: vi.fn(),
-}));
+};
+const {
+  getAvailableModels,
+  getSlackSettings,
+  getResolvedUserPreferences,
+  getUserRepoBranchPreference,
+  createSession,
+  prepareImageAttachments,
+  notifyDroppedAttachments,
+  deliverPrompt,
+  postMessage,
+  buildThreadSession,
+  storeThreadSession,
+} = dependencies;
+const startSessionAndSendPrompt = createSessionLauncher(dependencies);
 
 function makeEnv(): Env {
   return {
