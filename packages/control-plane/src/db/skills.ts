@@ -179,59 +179,6 @@ export class SkillStore {
     return this.get(id);
   }
 
-  async updateContent(
-    id: string,
-    content: SkillContentInput,
-    actorUserId: string,
-    expectedRevisionId: string
-  ): Promise<Skill | null> {
-    const current = await this.get(id);
-    if (!current) return null;
-    if (expectedRevisionId !== current.currentRevisionId) {
-      throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
-    }
-    const hashed = await this.validateAndHash(current.name, content);
-    if (hashed.contentSha256 === current.contentSha256) return current;
-
-    const revisionId = `skillrev_${generateId()}`;
-    const revisionNumber = current.revisionNumber + 1;
-    const now = Date.now();
-    let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
-    try {
-      results = await this.db.batch([
-        this.revisionInsert(
-          revisionId,
-          id,
-          revisionNumber,
-          content,
-          hashed,
-          actorUserId,
-          now,
-          current.currentRevisionId
-        ),
-        ...this.fileInserts(revisionId, hashed.files),
-        this.db
-          .prepare(
-            `UPDATE skills SET current_revision_id = ?, updated_by = ?, updated_at = ?
-             WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
-          )
-          .bind(revisionId, actorUserId, now, id, current.currentRevisionId),
-        this.bumpGeneration(id, revisionId),
-      ]);
-    } catch (error) {
-      const latest = await this.get(id);
-      if (latest && latest.currentRevisionId !== current.currentRevisionId) {
-        throw new SkillConflictError("Skill content changed concurrently");
-      }
-      throw error;
-    }
-    const updateResult = results[results.length - 2];
-    if ((updateResult?.meta.changes ?? 0) === 0) {
-      throw new SkillConflictError("Skill content changed concurrently");
-    }
-    return this.get(id);
-  }
-
   async edit(
     id: string,
     input: EditSkillInput,

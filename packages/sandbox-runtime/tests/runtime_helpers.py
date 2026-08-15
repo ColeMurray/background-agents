@@ -95,6 +95,7 @@ def make_supervisor(
         code_server,
         web_terminal,
         browser_desktop,
+        None,
         shutdown_event,
         log,
     )

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import type { SkillProfile } from "@open-inspect/shared/types/skills";
+import type { SkillProfile, SkillSummary } from "@open-inspect/shared/types/skills";
 import {
   createSkillProfile,
   deleteSkillProfile,
@@ -16,8 +16,21 @@ import { Label } from "@/components/ui/label";
 import { PlusIcon } from "@/components/ui/icons";
 import { errorMessage, ScopeCheckbox } from "./shared";
 
-export function ProfileForm({ profile, onDone }: { profile?: SkillProfile; onDone: () => void }) {
-  const { skills, loading: skillsLoading, error: skillsError } = useSkills();
+interface ProfileFormProps {
+  profile?: SkillProfile;
+  skills: SkillSummary[];
+  skillsLoading: boolean;
+  skillsError: unknown;
+  onDone: () => void;
+}
+
+export function ProfileForm({
+  profile,
+  skills,
+  skillsLoading,
+  skillsError,
+  onDone,
+}: ProfileFormProps) {
   const { mutate } = useSkillProfiles();
   const [name, setName] = useState(profile?.name ?? "");
   const [skillIds, setSkillIds] = useState(() => new Set(profile?.skillIds ?? []));
@@ -124,12 +137,15 @@ export function ProfileForm({ profile, onDone }: { profile?: SkillProfile; onDon
 
 export function Profiles() {
   const { profiles, loading, error, mutate } = useSkillProfiles();
-  const { skills } = useSkills();
+  const { skills, loading: skillsLoading, error: skillsError } = useSkills();
   const [editing, setEditing] = useState<SkillProfile | "new" | null>(null);
   if (editing) {
     return (
       <ProfileForm
         profile={editing === "new" ? undefined : editing}
+        skills={skills}
+        skillsLoading={skillsLoading}
+        skillsError={skillsError}
         onDone={() => setEditing(null)}
       />
     );
@@ -179,9 +195,15 @@ export function Profiles() {
                 <p className="truncate text-sm font-medium text-foreground">{profile.name}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {profile.skillIds.length} skill{profile.skillIds.length === 1 ? "" : "s"}:{" "}
-                  {profile.skillIds
-                    .map((id) => skills.find((skill) => skill.id === id)?.name ?? "Unavailable")
-                    .join(", ") || "None"}
+                  {skillsLoading
+                    ? "Loading skill names..."
+                    : skillsError
+                      ? "Skill names could not be loaded"
+                      : profile.skillIds
+                          .map(
+                            (id) => skills.find((skill) => skill.id === id)?.name ?? "Unavailable"
+                          )
+                          .join(", ") || "None"}
                 </p>
               </button>
               <Button variant="ghost" size="xs" onClick={() => remove(profile)}>

@@ -42,7 +42,7 @@ async function handleSandboxManifest(
   if (ctx.principal?.kind !== "sandbox" || ctx.principal.sessionId !== id) {
     return error("Sandbox authentication required", 403);
   }
-  const manifest = await new SessionSkillStore(ctx.db).getSandboxManifest(id);
+  const manifest = await new SessionSkillStore(ctx.db).getSandboxInstallation(id);
   // Sessions created before managed-skills shipped have no pinned row. Treat
   // them as an empty legacy manifest so snapshot restores remain bootable.
   const resolvedManifest =

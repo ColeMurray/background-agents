@@ -2,7 +2,6 @@ import {
   createSkillInputSchema,
   createSkillProfileInputSchema,
   editSkillInputSchema,
-  skillContentInputSchema,
   skillResolutionPreviewInputSchema,
   updateSkillInputSchema,
   updateSkillProfileInputSchema,
@@ -161,34 +160,6 @@ async function handleUpdateSkill(
   try {
     const skill = await new SkillStore(ctx.db).updateMetadata(id, parsed.data, userId);
     if (skill) audit(ctx, "skill.metadata_updated", { skill_id: id });
-    return skill ? json({ skill }) : error("Skill not found", 404);
-  } catch (e) {
-    return skillWriteError(e);
-  }
-}
-
-async function handleUpdateSkillContent(
-  request: Request,
-  _env: Env,
-  match: RegExpMatchArray,
-  ctx: RequestContext
-): Promise<Response> {
-  const id = skillId(match);
-  if (id instanceof Response) return id;
-  const userId = canonicalUserId(ctx);
-  if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
-  const body = await parsedBody(request);
-  if (body instanceof Response) return body;
-  const parsed = skillContentInputSchema.safeParse(body);
-  if (!parsed.success) return error("Invalid skill content", 400);
-  const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
-  if (!ifMatch) return error("If-Match revision is required", 428);
-  try {
-    const skill = await new SkillStore(ctx.db).updateContent(id, parsed.data, userId, ifMatch);
-    if (skill)
-      audit(ctx, "skill.content_updated", { skill_id: id, revision_id: skill.currentRevisionId });
     return skill ? json({ skill }) : error("Skill not found", 404);
   } catch (e) {
     return skillWriteError(e);
@@ -402,11 +373,6 @@ export const skillRoutes: Route[] = [
   { method: "GET", pattern: parsePattern("/skills/:id"), handler: enabled(handleGetSkill) },
   { method: "PATCH", pattern: parsePattern("/skills/:id"), handler: enabled(handleUpdateSkill) },
   { method: "PUT", pattern: parsePattern("/skills/:id"), handler: enabled(handleEditSkill) },
-  {
-    method: "PUT",
-    pattern: parsePattern("/skills/:id/content"),
-    handler: enabled(handleUpdateSkillContent),
-  },
   { method: "DELETE", pattern: parsePattern("/skills/:id"), handler: enabled(handleDeleteSkill) },
   { method: "GET", pattern: parsePattern("/skill-profiles"), handler: enabled(handleListProfiles) },
   {

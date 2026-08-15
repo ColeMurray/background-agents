@@ -93,20 +93,6 @@ export async function updateSkill(id: string, input: UpdateSkillInput): Promise<
   ).skill;
 }
 
-export async function updateSkillContent(
-  id: string,
-  revisionId: string,
-  input: SkillContentInput
-): Promise<Skill> {
-  return (
-    await apiRequest<{ skill: Skill }>(`${SKILLS_KEY}/${id}/content`, {
-      method: "PUT",
-      headers: { "If-Match": revisionId },
-      body: JSON.stringify(input),
-    })
-  ).skill;
-}
-
 export async function editSkill(
   id: string,
   revisionId: string,

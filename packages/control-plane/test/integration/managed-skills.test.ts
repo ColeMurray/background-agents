@@ -39,9 +39,15 @@ describe("managed skills persistence and resolution", () => {
     );
     expect(skill.files.find((file) => file.path === "scripts/deploy.sh")?.executable).toBe(true);
 
-    const unchanged = await skills.updateContent(
+    const unchanged = await skills.edit(
       skill.id,
-      content,
+      {
+        content,
+        assignments: [
+          { type: "global" },
+          { type: "repository", repository: { repoOwner: "group/subgroup", repoName: "api" } },
+        ],
+      },
       "user_2",
       skill.currentRevisionId
     );
@@ -115,7 +121,9 @@ describe("managed skills persistence and resolution", () => {
     expect(child?.skills).toEqual(parent?.skills);
     expect(child?.skills[0].skillId).toBe(skill.id);
 
-    const sandboxManifest = await store.getSandboxManifest("child");
+    const sandboxManifest = await store.getSandboxInstallation("child");
+    expect(sandboxManifest).not.toHaveProperty("selection");
+    expect(Object.keys(sandboxManifest?.skills[0] ?? {}).sort()).toEqual(["files", "name"]);
     expect(sandboxManifest?.skills[0].files.map((file) => file.path)).toEqual([
       "SKILL.md",
       "scripts/deploy.sh",
@@ -289,17 +297,19 @@ describe("managed skills persistence and resolution", () => {
       "user_1"
     );
     const originalValidate = skills.validateAndHash.bind(skills);
+    let generationAfterWinningEdit = 0;
     vi.spyOn(skills, "validateAndHash").mockImplementationOnce(async (name, candidate) => {
-      await new SkillStore(env.DB).updateContent(
+      const winningStore = new SkillStore(env.DB);
+      await winningStore.edit(
         skill.id,
-        { ...content, body: "winning edit" },
+        { content: { ...content, body: "winning edit" }, assignments: [{ type: "global" }] },
         "user_2",
         skill.currentRevisionId
       );
+      generationAfterWinningEdit = await winningStore.catalogGeneration();
       return originalValidate(name, candidate);
     });
 
-    const generationBeforeRace = await skills.catalogGeneration();
     await expect(
       skills.edit(
         skill.id,
@@ -309,7 +319,7 @@ describe("managed skills persistence and resolution", () => {
       )
     ).rejects.toThrow("Skill changed concurrently");
 
-    expect(await skills.catalogGeneration()).toBe(generationBeforeRace + 1);
+    expect(await skills.catalogGeneration()).toBe(generationAfterWinningEdit);
     const revisionCount = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM skill_revisions WHERE skill_id = ?"
     )

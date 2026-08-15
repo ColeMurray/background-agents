@@ -60,7 +60,6 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
                 managed_skills_config.sandbox_token,
             ),
             global_config_dir / "skills",
-            global_config_dir.parent / "open-inspect/managed-skills-manifest.json",
             log,
         )
     opencode_server = OpenCodeServer(
@@ -68,7 +67,6 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         shutdown_event,
         log,
         warnings.record,
-        managed_skills,
     )
     agent_bridge = AgentBridgeProcess(config.bridge_process_config(), log)
     code_server = CodeServer(log)
@@ -82,6 +80,7 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         code_server,
         web_terminal,
         browser_desktop,
+        managed_skills,
         shutdown_event,
         log,
     )

@@ -24,7 +24,6 @@ from .process_output import iter_process_lines
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
-    from .managed_skills import ManagedSkillsMaterializer
     from .repo_config import RepoEntry
     from .runtime_config import OpenCodeConfig
 
@@ -54,7 +53,6 @@ class OpenCodeServer:
         shutdown_event: asyncio.Event,
         log: Any,
         record_boot_warning: Callable[..., None],
-        managed_skills: ManagedSkillsMaterializer | None = None,
     ) -> None:
         self.shutdown_event = shutdown_event
         self.log = log
@@ -65,7 +63,6 @@ class OpenCodeServer:
         self.model = config.model
         self.mcp_servers = config.mcp_servers
         self._opencode_process: asyncio.subprocess.Process | None = None
-        self.managed_skills = managed_skills
 
     def _assemble_workspace_opencode(self, repositories: Sequence[RepoEntry]) -> None:
         """Merge member repos' .opencode/ into the workspace root (multi-repo only).
@@ -503,9 +500,6 @@ class OpenCodeServer:
         # Working directory: the repo for single-repo sessions, /workspace
         # for multi-repo (every member visible) and repo-less sessions.
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir, repositories)
-        if self.managed_skills is not None:
-            await self.managed_skills.activate(repositories, workdir)
-
         # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
         managed_plugins = (

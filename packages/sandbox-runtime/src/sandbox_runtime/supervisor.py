@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from .agent_bridge_process import AgentBridgeProcess
     from .browser_desktop import BrowserDesktop
     from .code_server import CodeServer
+    from .managed_skills import ManagedSkillsMaterializer
     from .opencode_server import OpenCodeServer
     from .repository_boot import RepositoryBoot, RepositoryBootResult
     from .web_terminal import WebTerminal
@@ -48,6 +49,7 @@ class SandboxSupervisor:
         code_server: CodeServer,
         web_terminal: WebTerminal,
         browser_desktop: BrowserDesktop,
+        managed_skills: ManagedSkillsMaterializer | None,
         shutdown_event: asyncio.Event,
         log: Any,
     ) -> None:
@@ -58,6 +60,7 @@ class SandboxSupervisor:
         self.code_server = code_server
         self.web_terminal = web_terminal
         self.browser_desktop = browser_desktop
+        self.managed_skills = managed_skills
         self.shutdown_event = shutdown_event
         self.log = log
         self.boot_mode = BootMode.FRESH
@@ -347,6 +350,9 @@ class SandboxSupervisor:
 
             boot_result = await self.repository_boot.boot(self.boot_mode, expected_tunnel_ports)
             self._repository_boot_result = boot_result
+
+            if self.managed_skills is not None:
+                await self.managed_skills.activate(boot_result.repositories, boot_result.workdir)
 
             try:
                 await self.code_server.start(boot_result.workdir)

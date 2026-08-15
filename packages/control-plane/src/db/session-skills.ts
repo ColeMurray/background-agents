@@ -1,5 +1,6 @@
 import {
-  sandboxSkillManifestSchema,
+  sandboxSkillInstallationSchema,
+  type SandboxSkillInstallation,
   skillAssignmentSchema,
   type SandboxSkillManifest,
   type SkillActivationInput,
@@ -68,7 +69,7 @@ export class SessionSkillStore {
     };
   }
 
-  async getSandboxManifest(sessionId: string): Promise<SandboxSkillManifest | null> {
+  async getSandboxInstallation(sessionId: string): Promise<SandboxSkillInstallation | null> {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;
     const skillStore = new SkillStore(this.db);
@@ -77,15 +78,13 @@ export class SessionSkillStore {
     );
     const manifest = {
       schemaVersion: 1,
-      resolverVersion: loaded.manifest.resolver_version,
       manifestSha256: loaded.manifest.manifest_sha256,
-      selection: this.selection(loaded.manifest),
       skills: loaded.revisions.map((row) => ({
-        ...this.resolvedSkill(row),
+        name: row.skill_name,
         files: filesByRevision.get(row.revision_id) ?? [],
       })),
     };
-    const parsed = sandboxSkillManifestSchema.safeParse(manifest);
+    const parsed = sandboxSkillInstallationSchema.safeParse(manifest);
     if (!parsed.success) {
       throw new Error(
         `Invalid persisted session skill manifest: ${parsed.error.issues[0]?.message}`

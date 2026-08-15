@@ -151,8 +151,6 @@ export const editSkillInputSchema = z.strictObject({
   enabled: z.boolean().optional(),
 });
 
-export const updateSkillContentInputSchema = skillContentInputSchema;
-
 export const skillFileSchema = z.strictObject({
   path: z.string(),
   content: z.string(),
@@ -301,6 +299,17 @@ export const sandboxSkillManifestSchema = z.strictObject({
   ),
 });
 
+export const sandboxSkillInstallationSchema = z.object({
+  schemaVersion: z.literal(1),
+  manifestSha256: z.string(),
+  skills: z.array(
+    z.object({
+      name: skillNameSchema,
+      files: z.array(skillFileSchema),
+    })
+  ),
+});
+
 export const skillActivationInputSchema = z.strictObject({
   manifestSha256: z.string().min(1),
   status: z.enum(["activated", "failed"]),
@@ -322,4 +331,5 @@ export type SkillProfile = z.infer<typeof skillProfileSchema>;
 export type SessionSkillSelection = z.infer<typeof sessionSkillSelectionSchema>;
 export type ResolvedSkill = z.infer<typeof resolvedSkillSchema>;
 export type SandboxSkillManifest = z.infer<typeof sandboxSkillManifestSchema>;
+export type SandboxSkillInstallation = z.infer<typeof sandboxSkillInstallationSchema>;
 export type SkillActivationInput = z.infer<typeof skillActivationInputSchema>;

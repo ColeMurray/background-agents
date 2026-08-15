@@ -17,6 +17,14 @@ interface SessionSkillSelectorProps {
   disabled?: boolean;
 }
 
+interface PreviewState {
+  count: number | null;
+  ignoredCount: number;
+  loading: boolean;
+}
+
+const EMPTY_PREVIEW: PreviewState = { count: null, ignoredCount: 0, loading: false };
+
 function selectionValue(selection: SessionSkillSelection): string {
   return selection.mode === "profile" ? `profile:${selection.profileId}` : selection.mode;
 }
@@ -28,17 +36,13 @@ export function SessionSkillSelector({
   disabled,
 }: SessionSkillSelectorProps) {
   const { profiles, loading } = useSkillProfiles();
-  const [count, setCount] = useState<number | null>(null);
-  const [ignoredCount, setIgnoredCount] = useState(0);
-  const [previewing, setPreviewing] = useState(false);
+  const [preview, setPreview] = useState<PreviewState>(EMPTY_PREVIEW);
   const targetKey = JSON.stringify(target);
   const valueKey = selectionValue(value);
 
   useEffect(() => {
     if (targetKey === "null") {
-      setCount(null);
-      setIgnoredCount(0);
-      setPreviewing(false);
+      setPreview(EMPTY_PREVIEW);
       return;
     }
     const previewTarget = JSON.parse(targetKey) as Omit<SkillResolutionPreviewInput, "selection">;
@@ -47,20 +51,20 @@ export function SessionSkillSelector({
         ? { mode: valueKey }
         : { mode: "profile", profileId: valueKey.slice("profile:".length) };
     const controller = new AbortController();
-    setPreviewing(true);
+    setPreview({ count: null, ignoredCount: 0, loading: true });
     resolveSkillPreview({ ...previewTarget, selection }, controller.signal)
-      .then((preview) => {
-        setCount(preview.skills.length);
-        setIgnoredCount(preview.ignoredProfileSkillIds.length);
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setPreview({
+          count: result.skills.length,
+          ignoredCount: result.ignoredProfileSkillIds.length,
+          loading: false,
+        });
       })
       .catch((error) => {
         if (!(error instanceof Error && error.name === "AbortError")) {
-          setCount(null);
-          setIgnoredCount(0);
+          setPreview(EMPTY_PREVIEW);
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setPreviewing(false);
       });
     return () => controller.abort();
   }, [targetKey, valueKey]); // Serialized keys keep target objects from retriggering the preview.
@@ -102,15 +106,15 @@ export function SessionSkillSelector({
       <span className="max-w-[9rem] truncate">{selectedLabel}</span>
       {target && (
         <span className="text-xs text-muted-foreground">
-          {previewing ? "..." : count === null ? "" : `(${count})`}
+          {preview.loading ? "..." : preview.count === null ? "" : `(${preview.count})`}
         </span>
       )}
-      {ignoredCount > 0 && (
+      {preview.ignoredCount > 0 && (
         <span
           className="text-xs text-amber-600"
           title="Profile entries that are disabled or not assigned to this target are ignored"
         >
-          {ignoredCount} ignored
+          {preview.ignoredCount} ignored
         </span>
       )}
     </Combobox>

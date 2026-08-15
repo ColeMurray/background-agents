@@ -1,8 +1,6 @@
 import asyncio
 import hashlib
 import json
-import struct
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,54 +8,11 @@ import pytest
 
 from sandbox_runtime.entrypoint import build_supervisor
 from sandbox_runtime.managed_skills import (
-    MAX_MANAGED_SKILL_MANIFEST_BYTES,
-    MAX_MANAGED_SKILLS_PER_SESSION,
-    MAX_SKILL_FILE_BYTES,
-    MAX_SKILL_FILES,
-    MAX_SKILL_PATH_BYTES,
-    MAX_SKILL_PATH_DEPTH,
-    MAX_SKILL_REVISION_BYTES,
     ManagedSkillsClient,
     ManagedSkillsError,
     ManagedSkillsMaterializer,
     validate_manifest,
 )
-from tests.runtime_helpers import make_opencode_server
-
-
-def _revision_sha(files):
-    encoded = bytearray(b"OPEN_INSPECT_SKILL_REVISION_V1\0")
-    encoded.extend(struct.pack(">I", len(files)))
-    for file in sorted(files, key=lambda item: item["path"].encode()):
-        path = file["path"].encode()
-        content = file["content"].encode()
-        encoded.extend(struct.pack(">I", len(path)))
-        encoded.extend(path)
-        encoded.append(1 if file["executable"] else 0)
-        encoded.extend(struct.pack(">Q", len(content)))
-        encoded.extend(content)
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _encoded_string(value):
-    encoded = value.encode()
-    return struct.pack(">I", len(encoded)) + encoded
-
-
-def _manifest_sha(document):
-    skill = document["skills"][0]
-    encoded = bytearray(b"OPEN_INSPECT_SKILL_MANIFEST_V1\0")
-    encoded.extend(struct.pack(">I", 1))
-    encoded.append(0)
-    encoded.extend(struct.pack(">I", 1))
-    encoded.extend(_encoded_string(skill["skillId"]))
-    encoded.extend(_encoded_string(skill["revisionId"]))
-    encoded.extend(_encoded_string(skill["name"]))
-    encoded.extend(bytes.fromhex(skill["contentSha256"]))
-    encoded.extend(struct.pack(">I", 1))
-    for value in ("global", "assignment-1", "", "", "", ""):
-        encoded.extend(_encoded_string(value))
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _manifest(*, name="managed", path="SKILL.md", content=None):
@@ -75,24 +30,14 @@ def _manifest(*, name="managed", path="SKILL.md", content=None):
     ]
     document = {
         "schemaVersion": 1,
-        "resolverVersion": 1,
         "manifestSha256": "a" * 64,
-        "selection": {"mode": "all"},
         "skills": [
             {
-                "skillId": "skill-1",
-                "revisionId": "revision-1",
                 "name": name,
-                "description": "Managed skill",
-                "revisionNumber": 1,
-                "contentSha256": _revision_sha(files),
-                "totalBytes": len(content_bytes),
-                "assignmentSources": [{"id": "assignment-1", "type": "global"}],
                 "files": files,
             }
         ],
     }
-    document["manifestSha256"] = _manifest_sha(document)
     return document
 
 
@@ -143,28 +88,15 @@ def test_manifest_rejects_file_ancestor_conflicts_in_either_order(paths):
         validate_manifest(json.dumps(document).encode())
 
 
-def test_cross_language_golden_manifest():
-    fixture_path = (
-        Path(__file__).resolve().parents[2]
-        / "shared"
-        / "test-fixtures"
-        / "managed-skills-golden.json"
-    )
-    golden = json.loads(fixture_path.read_text())
+def test_manifest_ignores_additive_contract_fields():
+    document = _manifest()
+    document["futureManifestField"] = True
+    document["skills"][0]["futureSkillField"] = "value"
+    document["skills"][0]["files"][0]["futureFileField"] = 1
 
-    manifest = validate_manifest(json.dumps(golden["manifest"]).encode())
+    manifest = validate_manifest(json.dumps(document).encode())
 
-    assert manifest.manifest_sha256 == golden["manifestSha256"]
-    assert manifest.skills[0].content_sha256 == golden["revisionSha256"]
-    assert golden["limits"] == {
-        "maxSkillFiles": MAX_SKILL_FILES,
-        "maxSkillFileBytes": MAX_SKILL_FILE_BYTES,
-        "maxSkillRevisionBytes": MAX_SKILL_REVISION_BYTES,
-        "maxSkillPathBytes": MAX_SKILL_PATH_BYTES,
-        "maxSkillPathDepth": MAX_SKILL_PATH_DEPTH,
-        "maxManagedSkillsPerSession": MAX_MANAGED_SKILLS_PER_SESSION,
-        "maxManagedSkillManifestBytes": MAX_MANAGED_SKILL_MANIFEST_BYTES,
-    }
+    assert manifest.skills[0].name == "managed"
 
 
 async def test_client_uses_session_url_and_sandbox_bearer_auth():
@@ -218,7 +150,6 @@ async def test_materializer_replaces_destination_and_reports_activation(tmp_path
     materializer = ManagedSkillsMaterializer(
         client,
         destination,
-        tmp_path / "config" / "open-inspect" / "managed-skills-manifest.json",
         MagicMock(),
         bundled_skills_path=tmp_path / "missing-bundled",
     )
@@ -243,7 +174,6 @@ async def test_materializer_rejects_bundled_name_collision(tmp_path):
     materializer = ManagedSkillsMaterializer(
         client,
         tmp_path / "global" / "skills",
-        tmp_path / "state" / "manifest.json",
         MagicMock(),
         bundled_skills_path=tmp_path / "bundled",
     )
@@ -263,14 +193,12 @@ def test_materializer_repairs_interrupted_swap(tmp_path):
     destination = tmp_path / "skills"
     backup = tmp_path / ".managed-skills-backup"
     staging = tmp_path / ".managed-skills-staging"
-    journal = tmp_path / "managed-skills-activation.json"
+    journal = tmp_path / ".managed-skills-activation"
     backup.mkdir()
     staging.mkdir()
     (backup / "previous").write_text("ok")
     journal.write_text("")
-    materializer = ManagedSkillsMaterializer(
-        MagicMock(), destination, tmp_path / "manifest.json", MagicMock()
-    )
+    materializer = ManagedSkillsMaterializer(MagicMock(), destination, MagicMock())
 
     materializer._repair_interrupted_swap(staging, backup, journal)
 
@@ -283,16 +211,14 @@ def test_materializer_repairs_interrupted_swap_after_destination_activation(tmp_
     destination = tmp_path / "skills"
     backup = tmp_path / ".managed-skills-backup"
     staging = tmp_path / ".managed-skills-staging"
-    journal = tmp_path / "managed-skills-activation.json"
+    journal = tmp_path / ".managed-skills-activation"
     destination.mkdir()
     backup.mkdir()
     staging.mkdir()
     (destination / "current").write_text("new")
     (backup / "previous").write_text("old")
     journal.write_text("")
-    materializer = ManagedSkillsMaterializer(
-        MagicMock(), destination, tmp_path / "manifest.json", MagicMock()
-    )
+    materializer = ManagedSkillsMaterializer(MagicMock(), destination, MagicMock())
 
     materializer._repair_interrupted_swap(staging, backup, journal)
 
@@ -321,7 +247,7 @@ def test_supervisor_skips_managed_skills_without_endpoint(
     with patch.dict("os.environ", environment, clear=True):
         supervisor = build_supervisor(asyncio.Event())
 
-    assert supervisor.opencode_server.managed_skills is None
+    assert supervisor.managed_skills is None
 
 
 @pytest.mark.parametrize("config_variable", ["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"])
@@ -341,52 +267,6 @@ def test_supervisor_derives_managed_skill_paths_from_global_config(config_variab
     with patch.dict("os.environ", environment, clear=True):
         supervisor = build_supervisor(asyncio.Event())
 
-    materializer = supervisor.opencode_server.managed_skills
+    materializer = supervisor.managed_skills
     assert materializer is not None
     assert materializer.destination == config_dir / "skills"
-    assert (
-        materializer.state_path == config_dir.parent / "open-inspect/managed-skills-manifest.json"
-    )
-
-
-async def test_opencode_activates_skills_before_spawning(tmp_path, monkeypatch):
-    events = []
-    materializer = MagicMock()
-    materializer.activate = AsyncMock(side_effect=lambda *_args: events.append("skills"))
-    server = make_opencode_server(workspace_path=tmp_path)
-    server.managed_skills = materializer
-    monkeypatch.setattr(server, "_setup_managed_oauth", MagicMock())
-    monkeypatch.setattr(server, "_prepare_opencode_filesystem", MagicMock(return_value=set()))
-    monkeypatch.setattr(server, "_wait_for_health", AsyncMock())
-
-    process = MagicMock()
-    process.stdout = None
-    process.returncode = None
-
-    async def spawn(*_args, **_kwargs):
-        events.append("spawn")
-        return process
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-
-    await server.start((), tmp_path)
-
-    assert events == ["skills", "spawn"]
-
-
-async def test_opencode_does_not_spawn_when_skill_activation_fails(tmp_path, monkeypatch):
-    materializer = MagicMock()
-    materializer.activate = AsyncMock(
-        side_effect=ManagedSkillsError("fetch failed", code="fetch_failed")
-    )
-    server = make_opencode_server(workspace_path=tmp_path)
-    server.managed_skills = materializer
-    monkeypatch.setattr(server, "_setup_managed_oauth", MagicMock())
-    monkeypatch.setattr(server, "_prepare_opencode_filesystem", MagicMock(return_value=set()))
-    spawn = AsyncMock()
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
-
-    with pytest.raises(ManagedSkillsError, match="fetch failed"):
-        await server.start((), tmp_path)
-
-    spawn.assert_not_awaited()

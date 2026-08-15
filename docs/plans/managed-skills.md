@@ -586,15 +586,15 @@ browser requests and forwards no caller-asserted user IDs.
 
 ### Catalog APIs
 
-| Method   | Path                  | Purpose                                                                     |
-| -------- | --------------------- | --------------------------------------------------------------------------- |
-| `GET`    | `/skills`             | List active or disabled skills, assignments, authors, and current metadata. |
-| `POST`   | `/skills`             | Create a skill, first revision, and initial assignments atomically.         |
-| `GET`    | `/skills/:id`         | Read metadata, current files, assignments, and provenance.                  |
-| `PATCH`  | `/skills/:id`         | Change enabled state or assignments without changing content.               |
-| `PUT`    | `/skills/:id/content` | Validate files and atomically create/set the current revision.              |
-| `DELETE` | `/skills/:id`         | Soft-delete and remove it from future resolution.                           |
-| `POST`   | `/skills/preview`     | Validate unsaved files without creating a revision.                         |
+| Method   | Path              | Purpose                                                                     |
+| -------- | ----------------- | --------------------------------------------------------------------------- |
+| `GET`    | `/skills`         | List active or disabled skills, assignments, authors, and current metadata. |
+| `POST`   | `/skills`         | Create a skill, first revision, and initial assignments atomically.         |
+| `GET`    | `/skills/:id`     | Read metadata, current files, assignments, and provenance.                  |
+| `PATCH`  | `/skills/:id`     | Change enabled state or assignments without changing content.               |
+| `PUT`    | `/skills/:id`     | Atomically edit content, enabled state, and assignments with `If-Match`.    |
+| `DELETE` | `/skills/:id`     | Soft-delete and remove it from future resolution.                           |
+| `POST`   | `/skills/preview` | Validate unsaved files without creating a revision.                         |
 
 Use one content update containing the complete desired file tree. Full replacement makes deletion
 unambiguous and allows the server to validate and hash one atomic revision. Reject `If-Match`
@@ -638,34 +638,22 @@ GET /sessions/:id/sandbox-skills
 
 The session-specific sandbox bearer token, validated by the Session Durable Object, must
 authenticate the request and bind it to exactly the same session ID. Internal HMAC service
-authentication and human principals are rejected on this sandbox-only route. The response contains a
-canonical manifest and the bounded UTF-8 files for each pinned revision:
+authentication and human principals are rejected on this sandbox-only route. The response is a
+narrow installation DTO containing only the activation correlation digest and bounded UTF-8 files:
 
 ```json
 {
   "schemaVersion": 1,
-  "resolverVersion": 1,
   "manifestSha256": "...",
-  "selection": { "mode": "profile", "profileId": "skillprof_...", "profileName": "Backend" },
   "skills": [
     {
-      "id": "skill_...",
-      "revisionId": "skillrev_...",
       "name": "acme-deploy",
-      "contentSha256": "...",
-      "assignmentSources": [
-        {
-          "assignmentId": "skillassign_...",
-          "type": "repository",
-          "repoOwner": "acme",
-          "repoName": "api"
-        }
-      ],
       "files": [
         {
           "path": "SKILL.md",
           "content": "---\nname: acme-deploy\n...",
           "sha256": "...",
+          "sizeBytes": 42,
           "executable": false
         }
       ]
@@ -690,8 +678,10 @@ count. Assignment sources are sorted by the UTF-8 byte tuple
 `(type, assignmentId, repoOwner, repoName, environmentId, environmentName)` and contribute each of
 those six values with `str`, using the empty string for fields not applicable to that source type.
 
-The `manifestSha256` field itself and file content are excluded because revision digests already
-commit to content. TypeScript and Python use shared fixtures for both encodings. Return
+The control plane owns the canonical provenance digest. The sandbox treats `manifestSha256` as an
+opaque activation correlation value and independently verifies every delivered file's path, size,
+content hash, permissions, and generated `SKILL.md` identity. Selection, revision metadata, and
+assignment provenance remain available from `GET /sessions/:id/skills`. Return
 `ETag: "<manifestSha256>"` for diagnostics and future caching.
 
 Add a second sandbox-only route:
@@ -719,46 +709,39 @@ control-plane URL, session ID, and sandbox authentication token.
 
 1. Complete repository boot and multi-repository `.opencode` assembly.
 2. Request the pinned session manifest from the control plane.
-3. Revalidate schema, names, paths, counts, sizes, UTF-8, and all SHA-256 hashes.
+3. Revalidate schema, names, paths, counts, sizes, UTF-8, and every file SHA-256 hash.
 4. Scan all skill locations discovered by the pinned OpenCode version except the managed destination
    and reject selected-name collisions.
 5. Build the complete managed tree in a temporary directory on the same filesystem.
 6. Set executable bits only where the manifest permits; remove other write/execute bits as
    appropriate.
 7. Activate the managed tree with a journaled directory swap.
-8. Persist a platform manifest outside the discovered skill tree.
-9. Report successful activation and the manifest digest to the control plane.
-10. Start `opencode serve` only after activation succeeds.
+8. Report successful activation and the manifest digest to the control plane.
+9. Start `opencode serve` only after activation succeeds.
 
 Use `OpenCodeServer._resolve_opencode_global_config_dir() / "skills"`, normally
 `~/.config/opencode/skills`, for managed skills. This avoids changing a repository checkout and
 works for single-repository, multi-repository, and repository-less sessions. The platform owns this
 directory in its sandboxes; repository and bundled skills retain their existing project locations.
 
-Persist activation state at a platform-owned path such as:
-
-```text
-~/.config/open-inspect/managed-skills-manifest.json
-```
-
 On snapshot restore, fetch and reinstall the session's same pinned manifest before OpenCode starts.
 Replacing the complete managed directory removes stale files from prior snapshots and revisions.
-Never refresh skills during a running OpenCode process.
+Never refresh skills during a running OpenCode process or an OpenCode process restart.
 
-The current `_prepare_opencode_filesystem()` method is synchronous. The minimal implementation is to
-split project assembly from asset installation and call an async materializer from
-`OpenCodeServer.start()` between them. Do not perform async HTTP by blocking the event loop.
+The supervisor runs the async materializer once after repository boot and before the initial
+`OpenCodeServer.start()`. Process-level OpenCode restarts reuse the installed tree without requiring
+the control plane. Do not perform async HTTP by blocking the event loop.
 
 ### Atomicity
 
 The destination and staging directory must share a filesystem. Write each file with exclusive
 creation, verify its final hash, and fsync where supported. A normal POSIX rename cannot replace a
 non-empty directory atomically, so use `renameat2(RENAME_EXCHANGE)` where the image and filesystem
-support it. The portable fallback writes a small activation journal, renames the current directory
-to a backup, renames staging to current, records completion, and removes the backup. Every startup
-repairs an interrupted journal before reading or installing skills. OpenCode is not running during
-this sequence, so the fallback may have a transient missing destination but never exposes a partial
-tree to the agent. Tests must cover a crash after each transition.
+support it. The portable fallback writes a single intent marker, renames the current directory to a
+backup, renames staging to current, and removes the backup and marker. Every sandbox startup repairs
+an interrupted journal before reading or installing skills. OpenCode is not running during this
+sequence, so the fallback may have a transient missing destination but never exposes a partial tree
+to the agent. Tests must cover a crash after each transition.
 
 Because each session pins its own manifest, a last-known-good manifest from another session is not a
 valid fallback. A restored snapshot may reuse its matching installed tree only after comparing the

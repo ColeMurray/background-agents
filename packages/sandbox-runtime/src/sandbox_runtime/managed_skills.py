@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import struct
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -40,9 +39,6 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _YAML_NAME_RE = re.compile(
     r"""^\s*(?:name|"name"|'name')\s*:\s*(?:"([^"]+)"|'([^']+)'|([^#\s]+))"""
 )
-_REVISION_DOMAIN = b"OPEN_INSPECT_SKILL_REVISION_V1\0"
-_MANIFEST_DOMAIN = b"OPEN_INSPECT_SKILL_MANIFEST_V1\0"
-_SKILL_RESOLVER_VERSION = 1
 _DISCOVERY_PATHS = (".opencode/skills", ".claude/skills", ".agents/skills")
 
 
@@ -65,10 +61,7 @@ class ManagedSkillFile:
 
 @dataclass(frozen=True)
 class ManagedSkill:
-    skill_id: str
-    revision_id: str
     name: str
-    content_sha256: str
     files: tuple[ManagedSkillFile, ...]
 
 
@@ -172,7 +165,7 @@ def _retryable_error(error: Exception) -> bool:
 
 
 def _require_object(value: Any, keys: set[str], context: str) -> Mapping[str, Any]:
-    if not isinstance(value, dict) or set(value) != keys:
+    if not isinstance(value, dict) or not keys.issubset(value):
         raise ManagedSkillsError(f"invalid {context} object", code="manifest_invalid")
     return value
 
@@ -200,43 +193,6 @@ def _validate_sha256(value: Any, context: str) -> str:
     return digest
 
 
-def _validate_selection(value: Any) -> None:
-    if not isinstance(value, dict):
-        raise ManagedSkillsError("invalid selection object", code="manifest_invalid")
-    mode = value.get("mode")
-    if not isinstance(mode, str):
-        raise ManagedSkillsError("invalid selection mode", code="manifest_invalid")
-    expected = {"mode", "profileId", "profileName"} if mode == "profile" else {"mode"}
-    _require_object(value, expected, "selection")
-    if mode not in {"all", "none", "profile"}:
-        raise ManagedSkillsError("invalid selection mode", code="manifest_invalid")
-    if mode == "profile":
-        _require_string(value["profileId"], "selection profile ID")
-        _require_string(value["profileName"], "selection profile name")
-
-
-def _validate_assignment(value: Any) -> None:
-    if not isinstance(value, dict):
-        raise ManagedSkillsError("invalid assignment source", code="manifest_invalid")
-    assignment_type = value.get("type")
-    if not isinstance(assignment_type, str):
-        raise ManagedSkillsError("invalid assignment type", code="manifest_invalid")
-    keys_by_type = {
-        "global": {"id", "type"},
-        "repository": {"id", "type", "repoOwner", "repoName"},
-        "environment": {"id", "type", "environmentId"},
-    }
-    expected = keys_by_type.get(assignment_type)
-    if expected is None:
-        raise ManagedSkillsError("invalid assignment type", code="manifest_invalid")
-    if assignment_type == "environment" and "environmentName" in value:
-        expected = expected | {"environmentName"}
-    assignment = _require_object(value, expected, "assignment source")
-    for key, item in assignment.items():
-        if key != "type":
-            _require_string(item, f"assignment {key}")
-
-
 def _validate_path(value: Any) -> str:
     path = _require_string(value, "skill file path")
     try:
@@ -257,78 +213,8 @@ def _validate_path(value: Any) -> str:
     return path
 
 
-def _revision_digest(files: Sequence[ManagedSkillFile]) -> str:
-    encoded = bytearray(_REVISION_DOMAIN)
-    encoded.extend(struct.pack(">I", len(files)))
-    for file in sorted(files, key=lambda item: item.path.encode("utf-8")):
-        path = file.path.encode("utf-8")
-        content = file.content.encode("utf-8")
-        encoded.extend(struct.pack(">I", len(path)))
-        encoded.extend(path)
-        encoded.append(1 if file.executable else 0)
-        encoded.extend(struct.pack(">Q", len(content)))
-        encoded.extend(content)
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _encoded_string(value: str) -> bytes:
-    encoded = value.encode("utf-8")
-    return struct.pack(">I", len(encoded)) + encoded
-
-
-def _assignment_values(source: Mapping[str, Any]) -> tuple[str, str, str, str, str, str]:
-    assignment_type = source["type"]
-    if assignment_type == "repository":
-        return (
-            assignment_type,
-            source["id"],
-            source["repoOwner"],
-            source["repoName"],
-            "",
-            "",
-        )
-    if assignment_type == "environment":
-        return (
-            assignment_type,
-            source["id"],
-            "",
-            "",
-            source["environmentId"],
-            source.get("environmentName", ""),
-        )
-    return (assignment_type, source["id"], "", "", "", "")
-
-
-def _manifest_digest(
-    resolver_version: int, selection: Mapping[str, Any], skills: Sequence[Mapping[str, Any]]
-) -> str:
-    mode = selection["mode"]
-    selection_byte = {"all": 0, "none": 1, "profile": 2}[mode]
-    encoded = bytearray(_MANIFEST_DOMAIN)
-    encoded.extend(struct.pack(">I", resolver_version))
-    encoded.append(selection_byte)
-    if mode == "profile":
-        encoded.extend(_encoded_string(selection["profileId"]))
-        encoded.extend(_encoded_string(selection["profileName"]))
-    ordered_skills = sorted(
-        skills, key=lambda skill: (skill["name"].encode("utf-8"), skill["skillId"].encode("utf-8"))
-    )
-    encoded.extend(struct.pack(">I", len(ordered_skills)))
-    for skill in ordered_skills:
-        encoded.extend(_encoded_string(skill["skillId"]))
-        encoded.extend(_encoded_string(skill["revisionId"]))
-        encoded.extend(_encoded_string(skill["name"]))
-        encoded.extend(bytes.fromhex(skill["contentSha256"]))
-        sources = sorted(skill["assignmentSources"], key=_assignment_values)
-        encoded.extend(struct.pack(">I", len(sources)))
-        for source in sources:
-            for value in _assignment_values(source):
-                encoded.extend(_encoded_string(value))
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def validate_manifest(raw: bytes) -> ManagedSkillManifest:
-    """Validate the shared sandbox manifest contract and all content bounds."""
+    """Validate the narrow installation contract and all content bounds."""
     if len(raw) > MAX_MANAGED_SKILL_RESPONSE_BYTES:
         raise ManagedSkillsError(
             "managed skills manifest exceeds the size limit", code="manifest_too_large"
@@ -341,20 +227,14 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
         ) from error
     manifest = _require_object(
         document,
-        {"schemaVersion", "resolverVersion", "manifestSha256", "selection", "skills"},
+        {"schemaVersion", "manifestSha256", "skills"},
         "manifest",
     )
     if type(manifest["schemaVersion"]) is not int or manifest["schemaVersion"] != 1:
         raise ManagedSkillsError(
             "unsupported managed skills schema version", code="manifest_invalid"
         )
-    resolver_version = _require_int(manifest["resolverVersion"], "resolver version", minimum=1)
-    if resolver_version != _SKILL_RESOLVER_VERSION:
-        raise ManagedSkillsError(
-            "unsupported managed skills resolver version", code="manifest_invalid"
-        )
     manifest_sha256 = _validate_sha256(manifest["manifestSha256"], "manifest SHA-256")
-    _validate_selection(manifest["selection"])
     raw_skills = manifest["skills"]
     if not isinstance(raw_skills, list) or len(raw_skills) > MAX_MANAGED_SKILLS_PER_SESSION:
         raise ManagedSkillsError("invalid managed skills list", code="manifest_invalid")
@@ -365,21 +245,9 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
     for raw_skill in raw_skills:
         skill = _require_object(
             raw_skill,
-            {
-                "skillId",
-                "revisionId",
-                "name",
-                "description",
-                "revisionNumber",
-                "contentSha256",
-                "totalBytes",
-                "assignmentSources",
-                "files",
-            },
+            {"name", "files"},
             "skill",
         )
-        skill_id = _require_string(skill["skillId"], "skill ID")
-        revision_id = _require_string(skill["revisionId"], "revision ID")
         name = _require_string(skill["name"], "skill name")
         if len(name) > MAX_SKILL_NAME_LENGTH or not _SKILL_NAME_RE.fullmatch(name):
             raise ManagedSkillsError(f"invalid skill name: {name!r}", code="manifest_invalid")
@@ -388,18 +256,6 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
                 f"duplicate managed skill name: {name}", code="manifest_invalid"
             )
         names.add(name)
-        description = _require_string(skill["description"], "skill description", allow_empty=True)
-        if len(description) > 1024:
-            raise ManagedSkillsError("skill description is too long", code="manifest_invalid")
-        _require_int(skill["revisionNumber"], "revision number", minimum=1)
-        content_sha256 = _validate_sha256(skill["contentSha256"], "content SHA-256")
-        total_bytes = _require_int(skill["totalBytes"], "skill total bytes")
-        assignments = skill["assignmentSources"]
-        if not isinstance(assignments, list):
-            raise ManagedSkillsError("invalid assignment sources", code="manifest_invalid")
-        for assignment in assignments:
-            _validate_assignment(assignment)
-
         raw_files = skill["files"]
         if not isinstance(raw_files, list) or not raw_files or len(raw_files) > MAX_SKILL_FILES:
             raise ManagedSkillsError("invalid skill files list", code="manifest_invalid")
@@ -455,24 +311,18 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
             raise ManagedSkillsError(
                 f"SKILL.md name does not match managed skill {name}", code="manifest_invalid"
             )
-        if revision_bytes > MAX_SKILL_REVISION_BYTES or total_bytes != revision_bytes:
+        if revision_bytes > MAX_SKILL_REVISION_BYTES:
             raise ManagedSkillsError(
                 f"invalid total size for managed skill {name}", code="manifest_invalid"
             )
         manifest_content_bytes += revision_bytes
-        if _revision_digest(files) != content_sha256:
-            raise ManagedSkillsError(
-                f"content SHA-256 mismatch for managed skill {name}", code="hash_mismatch"
-            )
-        skills.append(ManagedSkill(skill_id, revision_id, name, content_sha256, tuple(files)))
+        skills.append(ManagedSkill(name, tuple(files)))
 
     if manifest_content_bytes > MAX_MANAGED_SKILL_MANIFEST_BYTES:
         raise ManagedSkillsError(
             "managed skills content exceeds the session size limit", code="manifest_too_large"
         )
 
-    if _manifest_digest(resolver_version, manifest["selection"], raw_skills) != manifest_sha256:
-        raise ManagedSkillsError("managed skills manifest SHA-256 mismatch", code="hash_mismatch")
     return ManagedSkillManifest(manifest_sha256, tuple(skills))
 
 
@@ -495,14 +345,12 @@ class ManagedSkillsMaterializer:
         self,
         client: ManagedSkillsClient,
         destination: Path,
-        state_path: Path,
         log: Any,
         *,
         bundled_skills_path: Path = Path("/app/sandbox_runtime/skills"),
     ) -> None:
         self.client = client
         self.destination = destination
-        self.state_path = state_path
         self.log = log
         self.bundled_skills_path = bundled_skills_path
 
@@ -525,8 +373,6 @@ class ManagedSkillsMaterializer:
         self._remove_path(staging)
         journal.unlink(missing_ok=True)
         self._fsync_directory(self.destination.parent)
-        if journal.parent != self.destination.parent:
-            self._fsync_directory(journal.parent)
 
     @staticmethod
     def _skill_names(skill_dir: Path) -> set[str]:
@@ -630,7 +476,7 @@ class ManagedSkillsMaterializer:
         parent.mkdir(parents=True, exist_ok=True)
         staging = parent / ".managed-skills-staging"
         backup = parent / ".managed-skills-backup"
-        journal = self.state_path.with_name("managed-skills-activation.json")
+        journal = parent / ".managed-skills-activation"
         self._repair_interrupted_swap(staging, backup, journal)
         if self.destination.is_symlink() or (
             self.destination.exists() and not self.destination.is_dir()
@@ -655,36 +501,12 @@ class ManagedSkillsMaterializer:
             self._remove_path(backup)
             journal.unlink(missing_ok=True)
             self._fsync_directory(parent)
-            if journal.parent != parent:
-                self._fsync_directory(journal.parent)
         except Exception:
             if not self.destination.exists() and backup.exists():
                 backup.rename(self.destination)
             self._remove_path(staging)
             journal.unlink(missing_ok=True)
-            if journal.parent != parent:
-                self._fsync_directory(journal.parent)
             raise
-
-        state = {
-            "schemaVersion": 1,
-            "manifestSha256": manifest.manifest_sha256,
-            "skills": [
-                {
-                    "skillId": skill.skill_id,
-                    "revisionId": skill.revision_id,
-                    "name": skill.name,
-                    "contentSha256": skill.content_sha256,
-                }
-                for skill in manifest.skills
-            ],
-        }
-        self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.state_path.with_name(f".{self.state_path.name}.tmp")
-        temporary.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
-        self._fsync_file(temporary)
-        temporary.replace(self.state_path)
-        self._fsync_directory(self.state_path.parent)
 
     async def activate(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         manifest_sha256: str | None = None

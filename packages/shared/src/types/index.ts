@@ -222,7 +222,6 @@ export {
   skillAssignmentInputSchema,
   createSkillInputSchema,
   updateSkillInputSchema,
-  updateSkillContentInputSchema,
   editSkillInputSchema,
   skillFileSchema,
   skillAssignmentSchema,
@@ -240,6 +239,7 @@ export {
   resolvedSkillSchema,
   skillResolutionPreviewResponseSchema,
   sandboxSkillManifestSchema,
+  sandboxSkillInstallationSchema,
   skillActivationInputSchema,
 } from "./skills";
 export type {
@@ -257,6 +257,7 @@ export type {
   SessionSkillSelection,
   ResolvedSkill,
   SandboxSkillManifest,
+  SandboxSkillInstallation,
 } from "./skills";
 
 export { formatGitHubNoreplyEmail, githubLoginSchema } from "./github-identity";
