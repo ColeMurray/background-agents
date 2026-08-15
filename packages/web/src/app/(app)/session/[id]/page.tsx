@@ -715,7 +715,6 @@ function usePromptInput(
     .map((attachment) => attachment.id)
     .join("\u0000");
   const promptRef = useRef(prompt);
-  promptRef.current = prompt;
 
   const clearTypingTimeout = useCallback(() => {
     if (typingTimeoutRef.current) {
