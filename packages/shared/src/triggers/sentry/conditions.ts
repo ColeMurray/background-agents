@@ -12,7 +12,7 @@ export const conditions = {
     },
     evaluate(c, event) {
       if (event.source !== "sentry") return true;
-      return c.value.includes(event.sentryProject);
+      return event.sentryProject !== undefined && c.value.includes(event.sentryProject);
     },
   },
   sentry_level: {

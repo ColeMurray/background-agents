@@ -21,6 +21,15 @@ describe("sentry conditions", () => {
       );
     });
 
+    it("does not match metric alerts without a project", () => {
+      const event = buildMockEvent("sentry", { sentryProject: undefined });
+      assertConditionMatch(
+        { type: "sentry_project", operator: "any_of", value: ["acme-backend"] },
+        event,
+        false
+      );
+    });
+
     it("passes through for non-sentry events", () => {
       const event = buildMockEvent("github");
       assertConditionMatch(

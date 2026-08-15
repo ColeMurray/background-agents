@@ -18,6 +18,7 @@ import { error, parsePattern } from "../routes/shared";
 import { requireEventPoster } from "../auth/identity-enforcement";
 import {
   forwardAutomationEventToScheduler,
+  logAutomationEventRejection,
   validateAutomationEventEnvelope,
 } from "./automation-event";
 import {
@@ -106,11 +107,15 @@ async function handleGitHubAutomationEvent(
   try {
     body = await request.json();
   } catch {
+    logAutomationEventRejection(undefined, "github", ["body"], ctx);
     return error("Invalid JSON", 400);
   }
 
   const validated = validateAutomationEventEnvelope(body, "github");
-  if (validated.response) return validated.response;
+  if (validated.response) {
+    logAutomationEventRejection(body, "github", validated.issuePaths, ctx);
+    return validated.response;
+  }
 
   const lifecycleWork = trackPullRequestLifecycle(env, validated.event, ctx);
   if (ctx.executionCtx) {

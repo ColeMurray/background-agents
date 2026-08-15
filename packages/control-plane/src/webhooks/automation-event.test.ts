@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { validateAutomationEventEnvelope } from "./automation-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { RequestContext } from "../routes/shared";
+import { logAutomationEventRejection, validateAutomationEventEnvelope } from "./automation-event";
 
 function makeSlackEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -73,5 +74,30 @@ describe("validateAutomationEventEnvelope", () => {
 
     expect(result.response?.status).toBe(400);
     expect(await result.response?.text()).toContain("repoOwner");
+  });
+});
+
+describe("logAutomationEventRejection", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("logs safe protocol and request correlation fields", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    logAutomationEventRejection(
+      makeSlackEvent({ eventType: "x".repeat(200), channelId: [] }),
+      "slack",
+      ["channelId"],
+      { request_id: "request-1", trace_id: "trace-1" } as RequestContext
+    );
+
+    const entry = JSON.parse(String(warn.mock.calls[0]?.[0])) as Record<string, unknown>;
+    expect(entry).toMatchObject({
+      event: "automation_event.ingress_rejected",
+      source: "slack",
+      event_type: "x".repeat(128),
+      issue_paths: ["channelId"],
+      request_id: "request-1",
+      trace_id: "trace-1",
+    });
   });
 });
