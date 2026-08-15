@@ -42,11 +42,16 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function useSkills() {
-  const { data: session } = useAuthSession();
+  const { data: session, status } = useAuthSession();
   const { data, isLoading, error, mutate } = useSWR<{ skills: SkillSummary[] }>(
     session ? SKILLS_KEY : null
   );
-  return { skills: data?.skills ?? [], loading: isLoading, error, mutate };
+  return {
+    skills: data?.skills ?? [],
+    loading: status === "loading" || isLoading,
+    error,
+    mutate,
+  };
 }
 
 export function useSkill(id: string | null) {

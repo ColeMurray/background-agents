@@ -71,6 +71,10 @@ export const skillFileInputSchema = z
   .refine((file) => file.path !== "SKILL.md", {
     message: "SKILL.md is generated from the structured skill fields",
     path: ["path"],
+  })
+  .refine((file) => !file.path.startsWith("SKILL.md/"), {
+    message: "SKILL.md cannot contain descendant paths",
+    path: ["path"],
   });
 
 export const skillContentInputSchema = z
@@ -318,3 +322,4 @@ export type SkillProfile = z.infer<typeof skillProfileSchema>;
 export type SessionSkillSelection = z.infer<typeof sessionSkillSelectionSchema>;
 export type ResolvedSkill = z.infer<typeof resolvedSkillSchema>;
 export type SandboxSkillManifest = z.infer<typeof sandboxSkillManifestSchema>;
+export type SkillActivationInput = z.infer<typeof skillActivationInputSchema>;

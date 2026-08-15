@@ -1,7 +1,6 @@
-import { managedSkillsProxy } from "@/lib/managed-skills-proxy";
+import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { GET, POST } = managedSkillsProxy<Record<string, never>>(
-  () => "/skill-profiles",
-  "manage skill profiles",
-  ["GET", "POST"]
-);
+export const { GET, POST } = settingsProxy(() => "/skill-profiles", "skill profiles", [
+  "GET",
+  "POST",
+]);

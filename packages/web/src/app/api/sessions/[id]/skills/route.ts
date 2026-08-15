@@ -1,7 +1,7 @@
-import { managedSkillsProxy } from "@/lib/managed-skills-proxy";
+import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { GET } = managedSkillsProxy<{ id: string }>(
+export const { GET } = settingsProxy(
   ({ id }) => `/sessions/${encodeURIComponent(id)}/skills`,
-  "fetch session skills",
+  "session skills",
   ["GET"]
 );

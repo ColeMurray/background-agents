@@ -27,6 +27,13 @@ describe("managed skill contracts", () => {
       skillContentInputSchema.safeParse({
         description: "Review code",
         body: "Follow the review checklist.",
+        files: [{ path: "SKILL.md/hidden", content: "x" }],
+      }).success
+    ).toBe(false);
+    expect(
+      skillContentInputSchema.safeParse({
+        description: "Review code",
+        body: "Follow the review checklist.",
         files: [
           { path: "references/checklist.md", content: "one" },
           { path: "references/checklist.md", content: "two" },

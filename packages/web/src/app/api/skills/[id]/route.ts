@@ -1,7 +1,7 @@
-import { managedSkillsProxy } from "@/lib/managed-skills-proxy";
+import { settingsProxy } from "@/lib/settings-proxy";
 
-export const { GET, PATCH, PUT, DELETE } = managedSkillsProxy<{ id: string }>(
+export const { GET, PATCH, PUT, DELETE } = settingsProxy(
   ({ id }) => `/skills/${encodeURIComponent(id)}`,
-  "manage skill",
+  "skill",
   ["GET", "PATCH", "PUT", "DELETE"]
 );

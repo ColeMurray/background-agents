@@ -2,6 +2,9 @@ import useSWR from "swr";
 import { useEffect, useState } from "react";
 import type { ResolvedSkill } from "@open-inspect/shared/types/skills";
 
+const ACTIVATION_REPORT_TIMEOUT_MS = 10 * 60 * 1000;
+const ACTIVATION_POLL_INTERVAL_MS = 2_000;
+
 export interface SessionSkillsProvenance {
   manifestSha256?: string;
   resolverVersion?: number;
@@ -22,14 +25,20 @@ export interface SessionSkillsProvenance {
 export function useSessionSkills(sessionId: string) {
   const [activationReportUnavailable, setActivationReportUnavailable] = useState(false);
   useEffect(() => {
-    const timer = window.setTimeout(() => setActivationReportUnavailable(true), 10 * 60 * 1000);
+    setActivationReportUnavailable(false);
+    const timer = window.setTimeout(
+      () => setActivationReportUnavailable(true),
+      ACTIVATION_REPORT_TIMEOUT_MS
+    );
     return () => window.clearTimeout(timer);
   }, [sessionId]);
   const { data, isLoading, error } = useSWR<SessionSkillsProvenance>(
     `/api/sessions/${sessionId}/skills`,
     {
       refreshInterval: (latest) =>
-        latest?.activation?.status === "pending" && !activationReportUnavailable ? 2000 : 0,
+        latest?.activation?.status === "pending" && !activationReportUnavailable
+          ? ACTIVATION_POLL_INTERVAL_MS
+          : 0,
     }
   );
   return {

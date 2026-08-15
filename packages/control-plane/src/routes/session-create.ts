@@ -14,6 +14,7 @@ import { initializeSession, type SessionInitInput } from "../session/initialize"
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
+import { managedSkillsEnabled } from "../skills/feature";
 import type { Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
@@ -189,12 +190,12 @@ async function handleCreateSession(
     managedSkillsManifest = await resolveManagedSkills(
       ctx.db,
       {
-        repositories: repositories ?? (repoOwner && repoName ? [{ repoOwner, repoName }] : []),
+        repositories: scopeMembers,
         environmentId,
       },
       body.skillSelection ?? { mode: "all" },
       resolvedUserId,
-      env.MANAGED_SKILLS_ENABLED !== "false"
+      managedSkillsEnabled(env)
     );
   } catch (e) {
     if (e instanceof SkillResolutionError) return error(e.message, e.status);

@@ -86,6 +86,46 @@ BEGIN
   SELECT RAISE(ABORT, 'current revision must belong to skill');
 END;
 
+CREATE TRIGGER skills_current_revision_same_skill_insert
+BEFORE INSERT ON skills
+WHEN NEW.current_revision_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM skill_revisions
+    WHERE id = NEW.current_revision_id AND skill_id = NEW.id
+  )
+BEGIN
+  SELECT RAISE(ABORT, 'current revision must belong to skill');
+END;
+
+-- Assignment rows can disappear through foreign-key cascades outside SkillStore.
+-- Keep resolver stability database-owned for every write path.
+CREATE TRIGGER skill_assignments_generation_insert
+AFTER INSERT ON skill_assignments
+BEGIN
+  UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
+CREATE TRIGGER skill_assignments_generation_update
+AFTER UPDATE ON skill_assignments
+BEGIN
+  UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
+CREATE TRIGGER skill_assignments_generation_delete
+AFTER DELETE ON skill_assignments
+BEGIN
+  UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
+-- Environment names are copied into assignment provenance during resolution.
+CREATE TRIGGER skill_environment_name_generation
+AFTER UPDATE OF name ON environments
+WHEN OLD.name IS NOT NEW.name
+  AND EXISTS (SELECT 1 FROM skill_assignments WHERE environment_id = NEW.id)
+BEGIN
+  UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1;
+END;
+
 CREATE TABLE skill_write_throttle (
   user_id      TEXT PRIMARY KEY,
   window_start INTEGER NOT NULL,
@@ -144,5 +184,5 @@ CREATE TABLE session_skill_revisions (
   UNIQUE (session_id, position),
   FOREIGN KEY (session_id) REFERENCES session_skill_manifests(session_id) ON DELETE CASCADE,
   FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE RESTRICT,
-  FOREIGN KEY (revision_id) REFERENCES skill_revisions(id) ON DELETE RESTRICT
+  FOREIGN KEY (revision_id, skill_id) REFERENCES skill_revisions(id, skill_id) ON DELETE RESTRICT
 );

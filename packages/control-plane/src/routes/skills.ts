@@ -7,20 +7,21 @@ import {
   updateSkillInputSchema,
   updateSkillProfileInputSchema,
 } from "@open-inspect/shared/types/skills";
-import { SkillProfileStore } from "../db/skill-profiles";
+import {
+  SkillProfileConflictError,
+  SkillProfileStore,
+  SkillProfileValidationError,
+} from "../db/skill-profiles";
 import { SkillConflictError, SkillStore, SkillValidationError } from "../db/skills";
 import { EnvironmentStore } from "../db/environments";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
+import { managedSkillsEnabled } from "../skills/feature";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 
 const log = createLogger("router:skills");
 const SKILL_WRITES_PER_MINUTE = 30;
-
-function managedSkillsEnabled(env: Env): boolean {
-  return env.MANAGED_SKILLS_ENABLED !== "false";
-}
 
 async function enforceWriteLimit(ctx: RequestContext, userId: string): Promise<Response | null> {
   const now = Date.now();
@@ -265,17 +266,13 @@ async function handleCreateProfile(
   const parsed = createSkillProfileInputSchema.safeParse(body);
   if (!parsed.success) return error("Invalid skill profile", 400);
   try {
-    const response = json(
-      {
-        profile: await new SkillProfileStore(ctx.db).create(
-          userId,
-          parsed.data.name,
-          parsed.data.skillIds
-        ),
-      },
-      201
+    const profile = await new SkillProfileStore(ctx.db).create(
+      userId,
+      parsed.data.name,
+      parsed.data.skillIds
     );
-    audit(ctx, "profile.created", {});
+    const response = json({ profile }, 201);
+    audit(ctx, "profile.created", { profile_id: profile.id });
     return response;
   } catch (e) {
     return profileWriteError(e);
@@ -377,12 +374,8 @@ function skillWriteError(value: unknown): Response {
 }
 
 function profileWriteError(value: unknown): Response {
-  if (value instanceof Error && /unique/i.test(value.message)) {
-    return error("A profile with this name already exists", 409);
-  }
-  if (value instanceof Error && /skills do not exist|skillIds must be unique/.test(value.message)) {
-    return error("Profile references invalid skills", 400);
-  }
+  if (value instanceof SkillProfileConflictError) return error(value.message, 409);
+  if (value instanceof SkillProfileValidationError) return error(value.message, 400);
   throw value;
 }
 

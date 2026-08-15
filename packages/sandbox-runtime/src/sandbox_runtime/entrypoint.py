@@ -7,7 +7,6 @@ import argparse
 import asyncio
 import os
 import signal
-from pathlib import Path
 
 from .agent_bridge_process import AgentBridgeProcess
 from .boot_warnings import BootWarningSink
@@ -17,7 +16,7 @@ from .constants import VNC_DISPLAY, VNC_PASSWORD_ENV_VAR
 from .log_config import configure_logging, get_logger
 from .managed_skills import ManagedSkillsClient, ManagedSkillsMaterializer
 from .modal_image_build_start import MODAL_IMAGE_BUILD_START_ARGUMENT, run_modal_image_build
-from .opencode_server import OpenCodeServer
+from .opencode_server import OpenCodeServer, resolve_opencode_global_config_dir
 from .repository_boot import RepositoryBoot
 from .repository_hooks import RepositoryHooks
 from .repository_sync import RepositorySynchronizer
@@ -51,16 +50,19 @@ def build_supervisor(shutdown_event: asyncio.Event) -> SandboxSupervisor:
         RepositorySynchronizer(config.vcs_host, log),
     )
     managed_skills_config = config.managed_skills_config()
-    managed_skills = ManagedSkillsMaterializer(
-        ManagedSkillsClient(
-            managed_skills_config.control_plane_url,
-            managed_skills_config.session_id,
-            managed_skills_config.sandbox_token,
-        ),
-        OpenCodeServer._resolve_opencode_global_config_dir() / "skills",
-        Path.home() / ".config/open-inspect/managed-skills-manifest.json",
-        log,
-    )
+    managed_skills = None
+    if managed_skills_config.control_plane_url and managed_skills_config.session_id:
+        global_config_dir = resolve_opencode_global_config_dir()
+        managed_skills = ManagedSkillsMaterializer(
+            ManagedSkillsClient(
+                managed_skills_config.control_plane_url,
+                managed_skills_config.session_id,
+                managed_skills_config.sandbox_token,
+            ),
+            global_config_dir / "skills",
+            global_config_dir.parent / "open-inspect/managed-skills-manifest.json",
+            log,
+        )
     opencode_server = OpenCodeServer(
         config.opencode_config(),
         shutdown_event,

@@ -3,11 +3,12 @@ import hashlib
 import json
 import struct
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from sandbox_runtime.entrypoint import build_supervisor
 from sandbox_runtime.managed_skills import (
     MAX_MANAGED_SKILL_MANIFEST_BYTES,
     MAX_MANAGED_SKILLS_PER_SESSION,
@@ -113,6 +114,32 @@ def test_manifest_rejects_mismatched_frontmatter_name():
     document = _manifest(content="---\nname: other\n---\n")
 
     with pytest.raises(ManagedSkillsError, match="does not match"):
+        validate_manifest(json.dumps(document).encode())
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("references", "references/guide.md"),
+        ("references/guide.md", "references"),
+    ],
+)
+def test_manifest_rejects_file_ancestor_conflicts_in_either_order(paths):
+    document = _manifest()
+    files = document["skills"][0]["files"]
+    for path in paths:
+        content = f"content for {path}"
+        files.append(
+            {
+                "path": path,
+                "content": content,
+                "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                "sizeBytes": len(content.encode()),
+                "executable": False,
+            }
+        )
+
+    with pytest.raises(ManagedSkillsError, match="conflicting skill file path"):
         validate_manifest(json.dumps(document).encode())
 
 
@@ -228,7 +255,7 @@ async def test_materializer_rejects_bundled_name_collision(tmp_path):
         manifest_sha256,
         "failed",
         error_code="name_collision",
-        message=str(client.report_activation.await_args.kwargs["message"]),
+        message=f"managed skill 'conflict' collides with discovered skill at {bundled}",
     )
 
 
@@ -240,7 +267,7 @@ def test_materializer_repairs_interrupted_swap(tmp_path):
     backup.mkdir()
     staging.mkdir()
     (backup / "previous").write_text("ok")
-    journal.write_text('{"state":"previous_moved"}')
+    journal.write_text("")
     materializer = ManagedSkillsMaterializer(
         MagicMock(), destination, tmp_path / "manifest.json", MagicMock()
     )
@@ -250,6 +277,76 @@ def test_materializer_repairs_interrupted_swap(tmp_path):
     assert (destination / "previous").read_text() == "ok"
     assert not staging.exists()
     assert not journal.exists()
+
+
+def test_materializer_repairs_interrupted_swap_after_destination_activation(tmp_path):
+    destination = tmp_path / "skills"
+    backup = tmp_path / ".managed-skills-backup"
+    staging = tmp_path / ".managed-skills-staging"
+    journal = tmp_path / "managed-skills-activation.json"
+    destination.mkdir()
+    backup.mkdir()
+    staging.mkdir()
+    (destination / "current").write_text("new")
+    (backup / "previous").write_text("old")
+    journal.write_text("")
+    materializer = ManagedSkillsMaterializer(
+        MagicMock(), destination, tmp_path / "manifest.json", MagicMock()
+    )
+
+    materializer._repair_interrupted_swap(staging, backup, journal)
+
+    assert (destination / "current").read_text() == "new"
+    assert not backup.exists()
+    assert not staging.exists()
+    assert not journal.exists()
+
+
+@pytest.mark.parametrize(
+    ("control_plane_url", "session_config"),
+    [
+        ("", '{"session_id":"session-1"}'),
+        ("https://control.example", "{}"),
+    ],
+)
+def test_supervisor_skips_managed_skills_without_endpoint(
+    control_plane_url, session_config, tmp_path
+):
+    environment = {
+        "CONTROL_PLANE_URL": control_plane_url,
+        "HOME": str(tmp_path / "home"),
+        "SESSION_CONFIG": session_config,
+    }
+
+    with patch.dict("os.environ", environment, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+
+    assert supervisor.opencode_server.managed_skills is None
+
+
+@pytest.mark.parametrize("config_variable", ["OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"])
+def test_supervisor_derives_managed_skill_paths_from_global_config(config_variable, tmp_path):
+    configured_path = tmp_path / "custom"
+    config_dir = (
+        configured_path
+        if config_variable == "OPENCODE_CONFIG_DIR"
+        else configured_path / "opencode"
+    )
+    environment = {
+        "CONTROL_PLANE_URL": "https://control.example",
+        "SESSION_CONFIG": '{"session_id":"session-1"}',
+        config_variable: str(configured_path),
+    }
+
+    with patch.dict("os.environ", environment, clear=True):
+        supervisor = build_supervisor(asyncio.Event())
+
+    materializer = supervisor.opencode_server.managed_skills
+    assert materializer is not None
+    assert materializer.destination == config_dir / "skills"
+    assert (
+        materializer.state_path == config_dir.parent / "open-inspect/managed-skills-manifest.json"
+    )
 
 
 async def test_opencode_activates_skills_before_spawning(tmp_path, monkeypatch):

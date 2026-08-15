@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env, SELF } from "cloudflare:test";
 import { SkillProfileStore } from "../../src/db/skill-profiles";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionSkillStore } from "../../src/db/session-skills";
 import { SkillStore } from "../../src/db/skills";
+import { EnvironmentStore } from "../../src/db/environments";
 import { resolveManagedSkills } from "../../src/session/skill-resolution";
 import { cleanD1Tables } from "./cleanup";
 import { initNamedSessionDO, seedSandboxAuthHash, serviceFetch } from "./helpers";
@@ -119,6 +120,17 @@ describe("managed skills persistence and resolution", () => {
       "SKILL.md",
       "scripts/deploy.sh",
     ]);
+    const otherSkill = await new SkillStore(env.DB).create(
+      { name: "other-pinned-skill", content, assignments: [] },
+      "user_1"
+    );
+    await expect(
+      env.DB.prepare(
+        "UPDATE session_skill_revisions SET revision_id = ? WHERE session_id = ? AND skill_id = ?"
+      )
+        .bind(otherSkill.currentRevisionId, "parent", skill.id)
+        .run()
+    ).rejects.toThrow(/foreign key/i);
     await expect(
       store.reportActivation("child", {
         manifestSha256: manifest.manifestSha256,
@@ -131,6 +143,15 @@ describe("managed skills persistence and resolution", () => {
         status: "activated",
       })
     ).resolves.toBe("unchanged");
+    await env.DB.prepare(
+      "UPDATE session_skill_manifests SET resolver_version = 2 WHERE session_id = 'child'"
+    ).run();
+    await expect(store.getHumanManifest("child")).rejects.toThrow(
+      "Unsupported managed skill resolver version: 2"
+    );
+    await env.DB.prepare(
+      "UPDATE session_skill_manifests SET resolver_version = 1 WHERE session_id = 'child'"
+    ).run();
 
     const { stub } = await initNamedSessionDO("child");
     await seedSandboxAuthHash(stub, { authToken: "child-sandbox-token", sandboxId: "sandbox-1" });
@@ -185,6 +206,46 @@ describe("managed skills persistence and resolution", () => {
     expect(getResponse.status).toBe(404);
   });
 
+  it("maps typed profile validation and conflict failures", async () => {
+    const first = await serviceFetch("https://test.local/skill-profiles", {
+      method: "POST",
+      body: JSON.stringify({ name: "Duplicate", skillIds: [] }),
+    });
+    expect(first.status).toBe(201);
+    const conflict = await serviceFetch("https://test.local/skill-profiles", {
+      method: "POST",
+      body: JSON.stringify({ name: "Duplicate", skillIds: [] }),
+    });
+    expect(conflict.status).toBe(409);
+    const invalid = await serviceFetch("https://test.local/skill-profiles", {
+      method: "POST",
+      body: JSON.stringify({ name: "Invalid", skillIds: ["missing_skill"] }),
+    });
+    expect(invalid.status).toBe(400);
+  });
+
+  it("throttles writes without charging read-only previews", async () => {
+    for (let index = 0; index < 35; index++) {
+      const preview = await serviceFetch("https://test.local/skills/preview", {
+        method: "POST",
+        body: JSON.stringify({ name: "preview-only", content }),
+      });
+      expect(preview.status).toBe(200);
+    }
+    for (let index = 0; index < 30; index++) {
+      const write = await serviceFetch("https://test.local/skills", {
+        method: "POST",
+        body: "{}",
+      });
+      expect(write.status).toBe(400);
+    }
+    const throttled = await serviceFetch("https://test.local/skills", {
+      method: "POST",
+      body: "{}",
+    });
+    expect(throttled.status).toBe(429);
+  });
+
   it("edits content and assignments atomically with a required revision precondition", async () => {
     const skill = await new SkillStore(env.DB).create(
       { name: "atomic-edit", content, assignments: [{ type: "global" }] },
@@ -221,6 +282,76 @@ describe("managed skills persistence and resolution", () => {
     });
   });
 
+  it("leaves revisions, assignments, and generation unchanged when a combined edit CAS is stale", async () => {
+    const skills = new SkillStore(env.DB);
+    const skill = await skills.create(
+      { name: "stale-atomic-edit", content, assignments: [{ type: "global" }] },
+      "user_1"
+    );
+    const originalValidate = skills.validateAndHash.bind(skills);
+    vi.spyOn(skills, "validateAndHash").mockImplementationOnce(async (name, candidate) => {
+      await new SkillStore(env.DB).updateContent(
+        skill.id,
+        { ...content, body: "winning edit" },
+        "user_2",
+        skill.currentRevisionId
+      );
+      return originalValidate(name, candidate);
+    });
+
+    const generationBeforeRace = await skills.catalogGeneration();
+    await expect(
+      skills.edit(
+        skill.id,
+        { content: { ...content, body: "stale edit" }, assignments: [] },
+        "user_1",
+        skill.currentRevisionId
+      )
+    ).rejects.toThrow("Skill changed concurrently");
+
+    expect(await skills.catalogGeneration()).toBe(generationBeforeRace + 1);
+    const revisionCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM skill_revisions WHERE skill_id = ?"
+    )
+      .bind(skill.id)
+      .first<{ count: number }>();
+    expect(revisionCount?.count).toBe(2);
+    expect((await skills.get(skill.id))?.assignments).toMatchObject([{ type: "global" }]);
+  });
+
+  it("tracks environment assignment provenance changes through database-owned triggers", async () => {
+    const environments = new EnvironmentStore(env.DB);
+    await environments.create(
+      {
+        id: "env_skill_generation",
+        name: "Before",
+        description: null,
+        prebuild_enabled: 0,
+        channel_associations: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+      []
+    );
+    const skills = new SkillStore(env.DB);
+    const skill = await skills.create(
+      {
+        name: "environment-trigger",
+        content,
+        assignments: [{ type: "environment", environmentId: "env_skill_generation" }],
+      },
+      "user_1"
+    );
+    const beforeRename = await skills.catalogGeneration();
+    await environments.update("env_skill_generation", { name: "After" });
+    expect(await skills.catalogGeneration()).toBe(beforeRename + 1);
+
+    const beforeDelete = await skills.catalogGeneration();
+    await environments.delete("env_skill_generation");
+    expect(await skills.catalogGeneration()).toBeGreaterThan(beforeDelete);
+    expect((await skills.get(skill.id))?.assignments).toEqual([]);
+  });
+
   it("enforces same-skill current revisions and reports ignored profile references", async () => {
     const skills = new SkillStore(env.DB);
     const first = await skills.create(
@@ -235,6 +366,13 @@ describe("managed skills persistence and resolution", () => {
       env.DB.prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
         .bind(second.currentRevisionId, first.id)
         .run()
+    ).rejects.toThrow(/current revision must belong to skill/);
+    await expect(
+      env.DB.prepare(
+        `INSERT INTO skills
+         (id, name, current_revision_id, enabled, created_by, updated_by, created_at, updated_at)
+         VALUES ('bad_insert', 'bad-insert', 'missing_revision', 1, 'user_1', 'user_1', 1, 1)`
+      ).run()
     ).rejects.toThrow(/current revision must belong to skill/);
 
     const profile = await new SkillProfileStore(env.DB).create("user_1", "Mixed", [

@@ -83,9 +83,9 @@ export async function resolveManagedSkills(
     const applicableIds = new Set(applicable.map((skill) => skill.id));
     const ignoredProfileSkillIds =
       selectedIds === null ? [] : [...selectedIds].filter((id) => !applicableIds.has(id)).sort();
-    enforceManifestLimits(resolved);
     const generationAfter = await skills.catalogGeneration();
     if (generationBefore !== generationAfter) continue;
+    enforceManifestLimits(resolved);
 
     return {
       selection: manifestSelection,

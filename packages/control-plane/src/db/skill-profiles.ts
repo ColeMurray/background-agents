@@ -10,6 +10,9 @@ interface ProfileRow {
   updated_at: number;
 }
 
+export class SkillProfileConflictError extends Error {}
+export class SkillProfileValidationError extends Error {}
+
 export class SkillProfileStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -48,15 +51,22 @@ export class SkillProfileStore {
     const id = `skillprof_${generateId()}`;
     const now = Date.now();
     await this.validateSkillIds(skillIds);
-    await this.db.batch([
-      this.db
-        .prepare(
-          "INSERT INTO skill_profiles (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
-        )
-        .bind(id, userId, name, now, now),
-      ...this.itemStatements(id, skillIds),
-      this.bumpGeneration(),
-    ]);
+    try {
+      await this.db.batch([
+        this.db
+          .prepare(
+            "INSERT INTO skill_profiles (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)"
+          )
+          .bind(id, userId, name, now, now),
+        ...this.itemStatements(id, skillIds),
+        this.bumpGeneration(),
+      ]);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new SkillProfileConflictError("A profile with this name already exists");
+      }
+      throw error;
+    }
     return { id, name, skillIds: [...new Set(skillIds)].sort(), createdAt: now, updatedAt: now };
   }
 
@@ -90,7 +100,16 @@ export class SkillProfileStore {
         ...this.itemStatements(id, input.skillIds)
       );
     }
-    if (statements.length > 0) await this.db.batch([...statements, this.bumpGeneration()]);
+    if (statements.length > 0) {
+      try {
+        await this.db.batch([...statements, this.bumpGeneration()]);
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          throw new SkillProfileConflictError("A profile with this name already exists");
+        }
+        throw error;
+      }
+    }
     return this.getOwned(id, userId);
   }
 
@@ -109,7 +128,9 @@ export class SkillProfileStore {
 
   private async validateSkillIds(skillIds: string[]): Promise<void> {
     const unique = [...new Set(skillIds)];
-    if (unique.length !== skillIds.length) throw new Error("skillIds must be unique");
+    if (unique.length !== skillIds.length) {
+      throw new SkillProfileValidationError("skillIds must be unique");
+    }
     if (unique.length === 0) return;
     const placeholders = unique.map(() => "?").join(", ");
     const result = await this.db
@@ -118,7 +139,9 @@ export class SkillProfileStore {
       )
       .bind(...unique)
       .first<{ count: number }>();
-    if ((result?.count ?? 0) !== unique.length) throw new Error("One or more skills do not exist");
+    if ((result?.count ?? 0) !== unique.length) {
+      throw new SkillProfileValidationError("One or more skills do not exist");
+    }
   }
 
   private itemStatements(profileId: string, skillIds: string[]): SqlStatement[] {
@@ -144,4 +167,8 @@ export class SkillProfileStore {
       updatedAt: row.updated_at,
     };
   }
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return error instanceof Error && /unique constraint/i.test(error.message);
 }

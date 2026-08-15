@@ -9,6 +9,8 @@ import {
   MAX_SKILL_PATH_BYTES,
   MAX_SKILL_PATH_DEPTH,
   MAX_SKILL_REVISION_BYTES,
+  sandboxSkillManifestSchema,
+  skillContentInputSchema,
 } from "@open-inspect/shared/types/skills";
 
 describe("managed skill canonicalization", () => {
@@ -18,19 +20,11 @@ describe("managed skill canonicalization", () => {
       "utf8"
     )
   );
-  const content = {
-    description: "Deploy the service",
-    body: "# Deploy\n\nFollow the runbook.\n",
-    license: "MIT",
-    compatibility: null,
-    metadata: { zeta: "last", alpha: "first" },
-    files: [{ path: "scripts/deploy.sh", content: "#!/bin/sh\n", executable: true }],
-  };
+  const content = skillContentInputSchema.parse(golden.content);
+  const goldenManifest = sandboxSkillManifestSchema.parse(golden.manifest);
 
   it("renders canonical SKILL.md with fixed and sorted frontmatter", () => {
-    expect(renderSkillMarkdown("acme-deploy", content)).toBe(
-      '---\nname: acme-deploy\ndescription: "Deploy the service"\nlicense: "MIT"\nmetadata:\n  "alpha": "first"\n  "zeta": "last"\n---\n# Deploy\n\nFollow the runbook.\n'
-    );
+    expect(renderSkillMarkdown(golden.name, content)).toBe(golden.skillMarkdown);
   });
 
   it("pins cross-runtime content limits", () => {
@@ -46,8 +40,8 @@ describe("managed skill canonicalization", () => {
   });
 
   it("produces stable revision and manifest hashes independent of input ordering", async () => {
-    const first = await buildHashedFiles("acme-deploy", content);
-    const second = await buildHashedFiles("acme-deploy", {
+    const first = await buildHashedFiles(golden.name, content);
+    const second = await buildHashedFiles(golden.name, {
       ...content,
       metadata: { alpha: "first", zeta: "last" },
     });
@@ -72,5 +66,12 @@ describe("managed skill canonicalization", () => {
       ])
     );
     await expect(hashManifest({ mode: "all" }, [skill])).resolves.toBe(golden.manifestSha256);
+    expect({
+      ...goldenManifest,
+      skills: goldenManifest.skills.map((fixtureSkill) => ({
+        ...fixtureSkill,
+        files: first.files,
+      })),
+    }).toEqual(goldenManifest);
   });
 });

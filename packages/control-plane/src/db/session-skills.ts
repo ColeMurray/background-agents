@@ -1,4 +1,9 @@
-import type { SandboxSkillManifest, SkillAssignment } from "@open-inspect/shared/types/skills";
+import {
+  sandboxSkillManifestSchema,
+  skillAssignmentSchema,
+  type SandboxSkillManifest,
+  type SkillActivationInput,
+} from "@open-inspect/shared/types/skills";
 import { SkillStore } from "./skills";
 import type { SqlDatabase } from "./sql-database";
 
@@ -42,13 +47,6 @@ export interface HumanSessionSkills {
   skills: Omit<SandboxSkillManifest["skills"][number], "files">[];
 }
 
-interface SkillActivationInput {
-  manifestSha256: string;
-  status: "activated" | "failed";
-  errorCode?: string;
-  message?: string;
-}
-
 export class SessionSkillStore {
   constructor(private readonly db: SqlDatabase) {}
 
@@ -74,18 +72,26 @@ export class SessionSkillStore {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;
     const skillStore = new SkillStore(this.db);
-    return {
+    const filesByRevision = await skillStore.filesForRevisions(
+      loaded.revisions.map((row) => row.revision_id)
+    );
+    const manifest = {
       schemaVersion: 1,
-      resolverVersion: loaded.manifest.resolver_version as 1,
+      resolverVersion: loaded.manifest.resolver_version,
       manifestSha256: loaded.manifest.manifest_sha256,
       selection: this.selection(loaded.manifest),
-      skills: await Promise.all(
-        loaded.revisions.map(async (row) => ({
-          ...this.resolvedSkill(row),
-          files: await skillStore.filesForRevision(row.revision_id),
-        }))
-      ),
+      skills: loaded.revisions.map((row) => ({
+        ...this.resolvedSkill(row),
+        files: filesByRevision.get(row.revision_id) ?? [],
+      })),
     };
+    const parsed = sandboxSkillManifestSchema.safeParse(manifest);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid persisted session skill manifest: ${parsed.error.issues[0]?.message}`
+      );
+    }
+    return parsed.data;
   }
 
   async reportActivation(
@@ -133,16 +139,32 @@ export class SessionSkillStore {
   }
 
   private selection(manifest: ManifestRow): SandboxSkillManifest["selection"] {
-    return manifest.selection_mode === "profile"
-      ? {
-          mode: "profile",
-          profileId: manifest.profile_id!,
-          profileName: manifest.profile_name!,
-        }
-      : { mode: manifest.selection_mode };
+    if (manifest.resolver_version !== 1) {
+      throw new Error(`Unsupported managed skill resolver version: ${manifest.resolver_version}`);
+    }
+    if (manifest.selection_mode === "profile") {
+      if (!manifest.profile_id || !manifest.profile_name) {
+        throw new Error("Invalid profile selection: profile id and name are required");
+      }
+      return {
+        mode: "profile",
+        profileId: manifest.profile_id,
+        profileName: manifest.profile_name,
+      };
+    }
+    if (manifest.profile_id !== null || manifest.profile_name !== null) {
+      throw new Error("Invalid non-profile selection: profile fields must be null");
+    }
+    return { mode: manifest.selection_mode };
   }
 
   private resolvedSkill(row: RevisionRow) {
+    let assignmentSources: SandboxSkillManifest["skills"][number]["assignmentSources"];
+    try {
+      assignmentSources = skillAssignmentSchema.array().parse(JSON.parse(row.assignment_sources));
+    } catch {
+      throw new Error(`Invalid assignment sources for session skill revision ${row.revision_id}`);
+    }
     return {
       skillId: row.skill_id,
       revisionId: row.revision_id,
@@ -151,7 +173,7 @@ export class SessionSkillStore {
       revisionNumber: row.revision_number,
       contentSha256: row.content_sha256,
       totalBytes: row.total_bytes,
-      assignmentSources: JSON.parse(row.assignment_sources) as SkillAssignment[],
+      assignmentSources,
     };
   }
 }

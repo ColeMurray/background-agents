@@ -216,7 +216,7 @@ export class SkillStore {
              WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
           )
           .bind(revisionId, actorUserId, now, id, current.currentRevisionId),
-        this.bumpGeneration(),
+        this.bumpGeneration(id, revisionId),
       ]);
     } catch (error) {
       const latest = await this.get(id);
@@ -248,6 +248,7 @@ export class SkillStore {
     const now = Date.now();
     const statements: SqlStatement[] = [];
     let updateResultIndex: number;
+    let resultingRevisionId = expectedRevisionId;
 
     if (hashed.contentSha256 === current.contentSha256) {
       updateResultIndex = statements.length;
@@ -267,6 +268,7 @@ export class SkillStore {
       );
     } else {
       const revisionId = `skillrev_${generateId()}`;
+      resultingRevisionId = revisionId;
       statements.push(
         this.revisionInsert(
           revisionId,
@@ -298,9 +300,16 @@ export class SkillStore {
       );
     }
     statements.push(
-      this.db.prepare("DELETE FROM skill_assignments WHERE skill_id = ?").bind(id),
-      ...this.assignmentInserts(id, input.assignments, actorUserId, now),
-      this.bumpGeneration()
+      this.db
+        .prepare(
+          `DELETE FROM skill_assignments WHERE skill_id = ?
+           AND EXISTS (
+             SELECT 1 FROM skills WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
+           )`
+        )
+        .bind(id, id, resultingRevisionId),
+      ...this.assignmentInserts(id, input.assignments, actorUserId, now, resultingRevisionId),
+      this.bumpGeneration(id, resultingRevisionId)
     );
     let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
     try {
@@ -344,10 +353,32 @@ export class SkillStore {
     repositories: readonly { repoOwner: string; repoName: string }[];
     environmentId: string | null;
   }): Promise<ApplicableSkill[]> {
+    const repositoryConditions = input.repositories.map(
+      () =>
+        "(a.scope_type = 'repository' AND lower(a.repo_owner) = lower(?) AND lower(a.repo_name) = lower(?))"
+    );
+    const assignmentConditions = [
+      "a.scope_type = 'global'",
+      ...(input.environmentId === null
+        ? []
+        : ["(a.scope_type = 'environment' AND a.environment_id = ?)"]),
+      ...repositoryConditions,
+    ];
+    const assignmentParams = [
+      ...(input.environmentId === null ? [] : [input.environmentId]),
+      ...input.repositories.flatMap(({ repoOwner, repoName }) => [repoOwner, repoName]),
+    ];
     const rows = await this.db
       .prepare(
-        `${this.currentSkillSelect()} WHERE s.enabled = 1 AND s.deleted_at IS NULL ORDER BY s.name`
+        `${this.currentSkillSelect()}
+         WHERE s.enabled = 1 AND s.deleted_at IS NULL
+           AND EXISTS (
+             SELECT 1 FROM skill_assignments a
+             WHERE a.skill_id = s.id AND (${assignmentConditions.join(" OR ")})
+           )
+         ORDER BY s.name`
       )
+      .bind(...assignmentParams)
       .all<SkillRow>();
     const repositoryKeys = new Set(
       input.repositories.map(
@@ -377,17 +408,31 @@ export class SkillStore {
   }
 
   async filesForRevision(revisionId: string): Promise<SkillFile[]> {
+    return (await this.filesForRevisions([revisionId])).get(revisionId) ?? [];
+  }
+
+  async filesForRevisions(revisionIds: string[]): Promise<Map<string, SkillFile[]>> {
+    const files = new Map(revisionIds.map((revisionId) => [revisionId, [] as SkillFile[]]));
+    if (revisionIds.length === 0) return files;
+    const placeholders = revisionIds.map(() => "?").join(", ");
     const result = await this.db
-      .prepare("SELECT * FROM skill_revision_files WHERE revision_id = ? ORDER BY path")
-      .bind(revisionId)
-      .all<FileRow>();
-    return (result.results ?? []).map((row) => ({
-      path: row.path,
-      content: row.content,
-      sha256: row.content_sha256,
-      sizeBytes: row.size_bytes,
-      executable: row.executable === 1,
-    }));
+      .prepare(
+        `SELECT revision_id, path, content, content_sha256, size_bytes, executable
+         FROM skill_revision_files WHERE revision_id IN (${placeholders})
+         ORDER BY revision_id, path`
+      )
+      .bind(...revisionIds)
+      .all<FileRow & { revision_id: string }>();
+    for (const row of result.results ?? []) {
+      files.get(row.revision_id)?.push({
+        path: row.path,
+        content: row.content,
+        sha256: row.content_sha256,
+        sizeBytes: row.size_bytes,
+        executable: row.executable === 1,
+      });
+    }
+    return files;
   }
 
   private currentSkillSelect(): string {
@@ -551,8 +596,9 @@ export class SkillStore {
       this.db
         .prepare(
           `INSERT INTO skill_revision_files
-           (revision_id, path, content, content_sha256, size_bytes, executable)
-           VALUES (?, ?, ?, ?, ?, ?)`
+            (revision_id, path, content, content_sha256, size_bytes, executable)
+            SELECT ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM skill_revisions WHERE id = ?)`
         )
         .bind(
           revisionId,
@@ -560,7 +606,8 @@ export class SkillStore {
           file.content,
           file.sha256,
           file.sizeBytes,
-          file.executable ? 1 : 0
+          file.executable ? 1 : 0,
+          revisionId
         )
     );
   }
@@ -569,15 +616,19 @@ export class SkillStore {
     skillId: string,
     assignments: SkillAssignmentInput[],
     actorUserId: string,
-    now: number
+    now: number,
+    requiredCurrentRevisionId?: string
   ): SqlStatement[] {
     return assignments.map((assignment) => {
       const id = `skillassign_${generateId()}`;
       return this.db
         .prepare(
           `INSERT INTO skill_assignments
-           (id, skill_id, scope_type, repo_owner, repo_name, environment_id, created_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            (id, skill_id, scope_type, repo_owner, repo_name, environment_id, created_by, created_at)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE ? IS NULL OR EXISTS (
+              SELECT 1 FROM skills WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
+            )`
         )
         .bind(
           id,
@@ -587,14 +638,22 @@ export class SkillStore {
           assignment.type === "repository" ? assignment.repository.repoName : null,
           assignment.type === "environment" ? assignment.environmentId : null,
           actorUserId,
-          now
+          now,
+          requiredCurrentRevisionId ?? null,
+          skillId,
+          requiredCurrentRevisionId ?? null
         );
     });
   }
 
-  private bumpGeneration(): SqlStatement {
-    return this.db.prepare(
-      "UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1"
-    );
+  private bumpGeneration(skillId?: string, requiredCurrentRevisionId?: string): SqlStatement {
+    return this.db
+      .prepare(
+        `UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1
+         AND (? IS NULL OR EXISTS (
+           SELECT 1 FROM skills WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL
+         ))`
+      )
+      .bind(requiredCurrentRevisionId ?? null, skillId ?? null, requiredCurrentRevisionId ?? null);
   }
 }

@@ -37,6 +37,8 @@ export function SessionSkillSelector({
   useEffect(() => {
     if (targetKey === "null") {
       setCount(null);
+      setIgnoredCount(0);
+      setPreviewing(false);
       return;
     }
     const previewTarget = JSON.parse(targetKey) as Omit<SkillResolutionPreviewInput, "selection">;

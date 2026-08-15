@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleRequest } from "./router";
+import { handleRequest, isWebServiceAuthRoute } from "./router";
 
 function createEnv(verifyStatus: number) {
   const fetch = vi
@@ -91,5 +91,18 @@ describe("retired browser-auth routes", () => {
     );
 
     expect(response.status).toBe(404);
+  });
+});
+
+describe("managed skill browser authentication", () => {
+  it.each([
+    ["GET", "/skills"],
+    ["POST", "/skills/preview"],
+    ["GET", "/skills/skill_1"],
+    ["GET", "/skill-profiles"],
+    ["PATCH", "/skill-profiles/profile_1"],
+    ["GET", "/sessions/session_1/skills"],
+  ])("requires Better Auth user authentication for %s %s", (method, path) => {
+    expect(isWebServiceAuthRoute(method, path)).toBe(false);
   });
 });

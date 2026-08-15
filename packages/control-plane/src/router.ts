@@ -164,7 +164,7 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isWebServiceAuthRoute(method: string, path: string): boolean {
+export function isWebServiceAuthRoute(method: string, path: string): boolean {
   return (
     isBrowserAuthProxyRoute(method, path) ||
     (method === "GET" && path === "/internal/auth/sign-in-providers")

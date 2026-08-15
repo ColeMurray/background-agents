@@ -148,7 +148,6 @@ class ManagedSkillsClient:
             body["errorCode"] = error_code[:100]
         if message:
             body["message"] = message[:1000]
-        last_error: Exception | None = None
         for attempt in range(MANAGED_SKILLS_REQUEST_ATTEMPTS):
             try:
                 async with httpx.AsyncClient(transport=self._transport) as client:
@@ -161,12 +160,9 @@ class ManagedSkillsClient:
                     response.raise_for_status()
                     return
             except (httpx.HTTPError, OSError) as error:
-                last_error = error
                 if not _retryable_error(error) or attempt == MANAGED_SKILLS_REQUEST_ATTEMPTS - 1:
                     raise
                 await asyncio.sleep(MANAGED_SKILLS_RETRY_BASE_SECONDS * (2**attempt))
-        if last_error:
-            raise last_error
 
 
 def _retryable_error(error: Exception) -> bool:
@@ -419,6 +415,13 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
                 raise ManagedSkillsError(
                     f"duplicate skill file path: {path}", code="manifest_invalid"
                 )
+            if any(
+                path.startswith(f"{existing}/") or existing.startswith(f"{path}/")
+                for existing in paths
+            ):
+                raise ManagedSkillsError(
+                    f"conflicting skill file path: {path}", code="path_invalid"
+                )
             paths.add(path)
             content = _require_string(file["content"], "skill file content", allow_empty=True)
             content_bytes = content.encode("utf-8")
@@ -577,10 +580,10 @@ class ManagedSkillsMaterializer:
                     )
 
     @staticmethod
-    def _write_journal(journal: Path, state: str) -> None:
+    def _write_journal(journal: Path) -> None:
         journal.parent.mkdir(parents=True, exist_ok=True)
         temporary = journal.with_name(f".{journal.name}.{uuid.uuid4().hex}.tmp")
-        temporary.write_text(json.dumps({"state": state}), encoding="utf-8")
+        temporary.write_text("", encoding="utf-8")
         ManagedSkillsMaterializer._fsync_file(temporary)
         temporary.replace(journal)
         ManagedSkillsMaterializer._fsync_directory(journal.parent)
@@ -643,22 +646,24 @@ class ManagedSkillsMaterializer:
                 skill_dir.mkdir(mode=0o700)
                 for file in sorted(skill.files, key=lambda item: item.path.encode("utf-8")):
                     self._write_file(skill_dir / PurePosixPath(file.path), file)
-            self._write_journal(journal, "prepared")
+            self._write_journal(journal)
             if self.destination.exists():
                 self.destination.rename(backup)
                 self._fsync_directory(parent)
-            self._write_journal(journal, "previous_moved")
             staging.rename(self.destination)
             self._fsync_directory(parent)
-            self._write_journal(journal, "activated")
             self._remove_path(backup)
             journal.unlink(missing_ok=True)
             self._fsync_directory(parent)
+            if journal.parent != parent:
+                self._fsync_directory(journal.parent)
         except Exception:
             if not self.destination.exists() and backup.exists():
                 backup.rename(self.destination)
             self._remove_path(staging)
             journal.unlink(missing_ok=True)
+            if journal.parent != parent:
+                self._fsync_directory(journal.parent)
             raise
 
         state = {

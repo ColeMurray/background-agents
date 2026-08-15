@@ -384,7 +384,7 @@ const selectedIds =
 
 const resolved = applicable
   .filter((skill) => selectedIds.has(skill.id))
-  .sort((a, b) => a.name.localeCompare(b.name))
+  .sort((a, b) => compareUtf8Bytes([a.name, a.id], [b.name, b.id]))
   .map((skill) => ({
     skillId: skill.id,
     revisionId: skill.currentRevisionId,
@@ -400,6 +400,13 @@ reads the generation, loads all inputs, then reads the generation again. A misma
 start with a bounded retry count. An equal before/after value proves the resolved set existed as one
 database state. The immutable revisions and final manifest rows are then persisted in the same D1
 batch as the session and repository snapshot so later catalog edits cannot alter the result.
+
+Assignment generation updates are enforced by database triggers, rather than only by store methods,
+because environment deletion can remove assignments through a foreign-key cascade. An environment
+name update also increments generation when environment assignments reference it, since that display
+name is copied into manifest provenance. The resolver filters candidate skills with a SQL `EXISTS`
+over the bounded target repositories, then batches assignment hydration and retains the small
+in-memory matching pass so every matching source is preserved without constructing JSON in SQL.
 
 Agent-spawned child sessions copy the parent's pinned manifest and selection provenance verbatim;
 they do not re-resolve mutable assignments or lose the parent's personal profile. This keeps a
