@@ -6,6 +6,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
 import type { SessionRepository } from "./repository";
 import type { ArtifactRepository } from "./artifact-repository";
+import type { EventRepository } from "./event-repository";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
 import type { SessionMessenger } from "./messenger";
@@ -39,6 +40,7 @@ export class SessionSandboxEventProcessor {
     // capturing one by value at construction time.
     private readonly getLog: () => Logger,
     private readonly repository: SessionRepository,
+    private readonly eventRepository: EventRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly callbackService: CallbackNotificationService,
     private readonly wsManager: SessionWebSocketManager,
@@ -124,7 +126,7 @@ export class SessionSandboxEventProcessor {
         metadata: artifact.metadata ? JSON.stringify(artifact.metadata) : null,
         createdAt: now,
       });
-      this.repository.createEvent({
+      this.eventRepository.createEvent({
         id: generateId(),
         type: event.type,
         data: JSON.stringify(augmentedEvent),
@@ -139,7 +141,7 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "token") {
       if (messageId) {
-        this.repository.upsertTokenEvent(messageId, event, now);
+        this.eventRepository.upsertTokenEvent(messageId, event, now);
       }
       this.messenger.broadcast({ type: "sandbox_event", event });
       return;
@@ -147,7 +149,7 @@ export class SessionSandboxEventProcessor {
 
     if (event.type === "context_compacted") {
       const eventId = generateId();
-      this.repository.createContextCompactionEvent({
+      this.eventRepository.createContextCompactionEvent({
         id: eventId,
         type: event.type,
         data: JSON.stringify(event),
@@ -175,7 +177,7 @@ export class SessionSandboxEventProcessor {
     if (event.type === "tool_call") {
       this.updateLastActivity(now);
       if (messageId) {
-        this.repository.upsertToolCallEvent(messageId, event, now);
+        this.eventRepository.upsertToolCallEvent(messageId, event, now);
       }
       this.messenger.broadcast({ type: "sandbox_event", event });
 
@@ -193,7 +195,7 @@ export class SessionSandboxEventProcessor {
     }
 
     if (event.type === "tool_result") {
-      this.repository.createEvent({
+      this.eventRepository.createEvent({
         id: generateId(),
         type: event.type,
         data: JSON.stringify(event),
@@ -265,7 +267,7 @@ export class SessionSandboxEventProcessor {
       return;
     }
 
-    this.repository.createEvent({
+    this.eventRepository.createEvent({
       id: generateId(),
       type: event.type,
       data: JSON.stringify(event),

@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { SessionRepository } from "./repository";
+import { EventRepository } from "./event-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 
@@ -58,7 +59,8 @@ describe("Stop execution - repository interactions", () => {
     repo = new SessionRepository(
       mock.sql,
       (closure) => closure(),
-      new SessionAttachmentRepository(mock.sql)
+      new SessionAttachmentRepository(mock.sql),
+      new EventRepository(mock.sql, (closure) => closure())
     );
   });
 

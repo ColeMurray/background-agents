@@ -17,6 +17,7 @@ import type {
 } from "../../types";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { ParticipantRepository } from "../../participant-repository";
+import type { EventRepository } from "../../event-repository";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -169,6 +170,7 @@ function createHandler() {
 
   const handler = createChildSessionsHandler({
     repository,
+    eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository: artifactRepository as unknown as ArtifactRepository,
     getSession,

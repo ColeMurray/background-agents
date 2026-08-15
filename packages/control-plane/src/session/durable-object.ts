@@ -63,6 +63,7 @@ import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
 import { SessionRepository } from "./repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
+import { EventRepository } from "./event-repository";
 import { ParticipantRepository } from "./participant-repository";
 import { WsClientMappingRepository } from "./ws-client-mapping-repository";
 import { resolveParticipantName } from "./participant-name";
@@ -170,6 +171,7 @@ export class SessionDO extends DurableObject<Env> {
   private repository: SessionRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private artifactRepository: ArtifactRepository;
+  private eventRepository: EventRepository;
   private participantRepository: ParticipantRepository;
   private wsClientMappingRepository: WsClientMappingRepository;
   private initialized = false;
@@ -283,12 +285,16 @@ export class SessionDO extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     this.attachmentRepository = new SessionAttachmentRepository(this.sql);
     this.artifactRepository = new ArtifactRepository(this.sql);
+    this.eventRepository = new EventRepository(this.sql, (closure) =>
+      ctx.storage.transactionSync(closure)
+    );
     this.participantRepository = new ParticipantRepository(this.sql);
     this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
     this.repository = new SessionRepository(
       this.sql,
       (closure) => ctx.storage.transactionSync(closure),
-      this.attachmentRepository
+      this.attachmentRepository,
+      this.eventRepository
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
@@ -470,6 +476,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._messageService) {
       this._messageService = new MessageService({
         repository: this.repository,
+        eventRepository: this.eventRepository,
         artifactRepository: this.artifactRepository,
         messageQueue: this.messageQueue,
         stopExecution: () => this.stopExecution(),
@@ -482,7 +489,7 @@ export class SessionDO extends DurableObject<Env> {
 
   private get eventStream(): SessionEventStream {
     if (!this._eventStream) {
-      this._eventStream = new SessionEventStream(this.repository);
+      this._eventStream = new SessionEventStream(this.eventRepository);
     }
 
     return this._eventStream;
@@ -502,6 +509,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._childSessionsHandler) {
       this._childSessionsHandler = createChildSessionsHandler({
         repository: this.repository,
+        eventRepository: this.eventRepository,
         participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
         getSession: () => this.getSession(),
@@ -520,6 +528,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._sandboxHandler) {
       this._sandboxHandler = createSandboxHandler({
         repository: this.repository,
+        eventRepository: this.eventRepository,
         participantRepository: this.participantRepository,
         artifactRepository: this.artifactRepository,
         processSandboxEvent: (event) => this.processSandboxEvent(event),
@@ -728,6 +737,7 @@ export class SessionDO extends DurableObject<Env> {
         this.ctx,
         () => this.log,
         this.repository,
+        this.eventRepository,
         this.artifactRepository,
         this.callbackService,
         this.wsManager,

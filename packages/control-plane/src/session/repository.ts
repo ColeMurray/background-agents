@@ -6,8 +6,7 @@
  * coordinated here when they also create or update core session records.
  */
 
-import type { SessionRow, MessageRow, EventRow, SandboxRow, SessionRepositoryRow } from "./types";
-import { toolCallIdentityKey } from "@open-inspect/shared/types/sandbox-events";
+import type { SessionRow, MessageRow, SandboxRow, SessionRepositoryRow } from "./types";
 import type { GitSyncStatus, SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type {
   SessionStatus,
@@ -17,20 +16,12 @@ import type {
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
-import {
-  eventTimelineCursorFromRow,
-  type EventListCursor,
-  type EventTimelineCursor,
-} from "./event-cursor";
+import type { CreateEventData, EventRepository } from "./event-repository";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 
-type TokenEvent = Extract<SandboxEvent, { type: "token" }>;
-type ToolCallEvent = Extract<SandboxEvent, { type: "tool_call" }>;
 type ExecutionCompleteEvent = Extract<SandboxEvent, { type: "execution_complete" }>;
-type UpsertableEventType = TokenEvent["type"] | ExecutionCompleteEvent["type"];
-const NEXT_TIMELINE_SEQUENCE_SQL = "(SELECT COALESCE(MAX(timeline_sequence), 0) + 1 FROM events)";
 export const STOP_CONFIRMATION_TIMEOUT_MS = 15_000;
 
 /**
@@ -122,45 +113,6 @@ export interface CreateMessageData {
 }
 
 /**
- * Data for creating an event.
- * Note: type is string because sandbox sends additional event types
- * beyond those defined in EventType (e.g., 'heartbeat', 'execution_complete').
- */
-export interface CreateEventData {
-  id: string;
-  type: string;
-  data: string;
-  messageId: string | null;
-  createdAt: number;
-}
-
-/**
- * Options for listing event pages.
- */
-export interface ListEventPageOptions {
-  cursor?: EventListCursor | null;
-  limit: number;
-  type?: string | null;
-  messageId?: string | null;
-}
-
-export interface ListEventTimelinePageOptions {
-  cursor?: EventTimelineCursor | null;
-  excludeTypes?: string[];
-  limit: number;
-}
-
-export interface EventPage {
-  events: EventRow[];
-  hasMore: boolean;
-  nextCursor: EventTimelineCursor | null;
-}
-
-interface QueryEventPageOptions extends ListEventPageOptions {
-  excludeTypes?: string[];
-}
-
-/**
  * Options for listing messages.
  */
 export interface ListMessagesOptions {
@@ -194,7 +146,8 @@ export class SessionRepository {
     private readonly attachments: Pick<
       SessionAttachmentRepository,
       "claimForMessage" | "releaseForMessage"
-    >
+    >,
+    private readonly eventRepository: EventRepository
   ) {}
 
   private rows<T>(result: SqlResult): T[] {
@@ -772,7 +725,7 @@ export class SessionRepository {
     this.transactionSync(() => {
       this.attachments.claimForMessage(data.id, attachmentIds);
       this.createMessage(data);
-      if (event) this.createEvent(event);
+      if (event) this.eventRepository.createEvent(event);
     });
   }
 
@@ -787,7 +740,7 @@ export class SessionRepository {
         startedAt,
         messageId
       );
-      this.createEvent({
+      this.eventRepository.createEvent({
         id: `user_message:${messageId}`,
         type: "user_message",
         data: JSON.stringify(userMessageEvent),
@@ -831,7 +784,7 @@ export class SessionRepository {
         event.success ? null : (event.error ?? null),
         event.messageId
       );
-      this.upsertEventByMessageId("execution_complete", event.messageId, event, completedAt);
+      this.eventRepository.upsertExecutionCompleteEvent(event.messageId, event, completedAt);
 
       return {
         messageId: event.messageId,
@@ -881,137 +834,6 @@ export class SessionRepository {
     );
     const rows = this.rows<MessageRow>(result);
     return rows[0] ?? null;
-  }
-
-  // === EVENTS ===
-
-  createEvent(data: CreateEventData): void {
-    this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})`,
-      data.id,
-      data.type,
-      data.data,
-      data.messageId,
-      data.createdAt
-    );
-  }
-
-  createContextCompactionEvent(data: CreateEventData & { messageId: string }): void {
-    this.transactionSync(() => {
-      this.sql.exec(
-        `UPDATE events SET id = ? WHERE id = ?`,
-        `token:${data.messageId}:${data.id}`,
-        `token:${data.messageId}`
-      );
-      this.createEvent(data);
-    });
-  }
-
-  private upsertEventByMessageId<TType extends UpsertableEventType>(
-    type: TType,
-    messageId: string,
-    event: Extract<SandboxEvent, { type: TType }>,
-    createdAt: number
-  ): void {
-    const id = `${type}:${messageId}`;
-    this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
-       ON CONFLICT(id) DO UPDATE SET
-         data = excluded.data,
-         message_id = excluded.message_id,
-         created_at = excluded.created_at`,
-      id,
-      type,
-      JSON.stringify(event),
-      messageId,
-      createdAt
-    );
-  }
-
-  upsertTokenEvent(messageId: string, event: TokenEvent, createdAt: number): void {
-    this.upsertEventByMessageId("token", messageId, event, createdAt);
-  }
-
-  upsertToolCallEvent(messageId: string, event: ToolCallEvent, createdAt: number): void {
-    const id = `tool_call:${toolCallIdentityKey(event)}`;
-    this.sql.exec(
-      `INSERT INTO events (id, type, data, message_id, created_at, timeline_sequence)
-       VALUES (?, ?, ?, ?, ?, ${NEXT_TIMELINE_SEQUENCE_SQL})
-       ON CONFLICT(id) DO UPDATE SET
-         data = excluded.data,
-         message_id = excluded.message_id`,
-      id,
-      event.type,
-      JSON.stringify(event),
-      messageId,
-      createdAt
-    );
-  }
-
-  listEventPage(options: ListEventPageOptions): EventPage {
-    return this.queryEventPage(options);
-  }
-
-  getEventTimelinePage(options: ListEventTimelinePageOptions): EventPage {
-    const page = this.queryEventPage(options);
-    return {
-      ...page,
-      events: [...page.events].reverse(),
-    };
-  }
-
-  private queryEventPage(options: QueryEventPageOptions): EventPage {
-    let query = `SELECT * FROM events`;
-    const conditions: string[] = [];
-    const params: (string | number)[] = [];
-
-    if (options.type) {
-      conditions.push(`type = ?`);
-      params.push(options.type);
-    }
-
-    if (options.messageId) {
-      conditions.push(`message_id = ?`);
-      params.push(options.messageId);
-    }
-
-    if (options.excludeTypes?.length) {
-      conditions.push(`type NOT IN (${options.excludeTypes.map(() => "?").join(", ")})`);
-      params.push(...options.excludeTypes);
-    }
-
-    const cursor = options.cursor;
-    if (cursor?.kind === "timeline") {
-      if (cursor.sequence !== undefined) {
-        conditions.push(`((created_at < ?) OR (created_at = ? AND timeline_sequence < ?))`);
-        params.push(cursor.createdAt, cursor.createdAt, cursor.sequence);
-      } else {
-        conditions.push(`((created_at < ?) OR (created_at = ? AND id < ?))`);
-        params.push(cursor.createdAt, cursor.createdAt, cursor.id);
-      }
-    } else if (cursor?.kind === "legacy") {
-      conditions.push(`created_at < ?`);
-      params.push(cursor.createdAt);
-    }
-
-    if (conditions.length > 0) {
-      query += ` WHERE ${conditions.join(" AND ")}`;
-    }
-
-    const tieBreaker =
-      cursor?.kind === "timeline" && cursor.sequence === undefined ? "id" : "timeline_sequence";
-    query += ` ORDER BY created_at DESC, ${tieBreaker} DESC LIMIT ?`;
-    params.push(options.limit + 1);
-
-    const result = this.sql.exec(query, ...params);
-    const rows = this.rows<EventRow>(result);
-    const hasMore = rows.length > options.limit;
-    const pageEvents = hasMore ? rows.slice(0, options.limit) : rows;
-    const nextCursor =
-      pageEvents.length > 0 ? eventTimelineCursorFromRow(pageEvents[pageEvents.length - 1]) : null;
-    return { events: pageEvents, hasMore, nextCursor };
   }
 
   // === PR HELPERS ===

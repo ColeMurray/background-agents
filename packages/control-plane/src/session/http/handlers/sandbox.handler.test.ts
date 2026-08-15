@@ -10,6 +10,7 @@ import type { SandboxRow, SessionRow } from "../../types";
 import { createSandboxHandler } from "./sandbox.handler";
 import type { ArtifactRepository } from "../../artifact-repository";
 import type { ParticipantRepository } from "../../participant-repository";
+import type { EventRepository } from "../../event-repository";
 
 function createHandler() {
   const repository = {
@@ -41,6 +42,7 @@ function createHandler() {
 
   const sandboxHandler = createSandboxHandler({
     repository,
+    eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository,
     processSandboxEvent,

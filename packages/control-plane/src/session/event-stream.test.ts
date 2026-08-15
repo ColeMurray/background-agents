@@ -1,16 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_REPLAY_LIMIT,
-  SessionEventStream,
-  type SessionEventStreamRepository,
-} from "./event-stream";
+import { DEFAULT_REPLAY_LIMIT, SessionEventStream } from "./event-stream";
+import type { EventRepository } from "./event-repository";
 import type { EventRow } from "./types";
 
 function createStream() {
   const repository = {
     getEventTimelinePage: vi.fn(),
     listEventPage: vi.fn(),
-  } as unknown as SessionEventStreamRepository;
+  } as unknown as EventRepository;
 
   return {
     stream: new SessionEventStream(repository),

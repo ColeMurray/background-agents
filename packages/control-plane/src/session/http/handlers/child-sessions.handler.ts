@@ -10,6 +10,7 @@ import {
 } from "../../message-queue";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRepository } from "../../artifact-repository";
+import type { EventRepository } from "../../event-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageService } from "../../services/message.service";
 import type { SpawnContext } from "../../spawn-context";
@@ -27,12 +28,9 @@ import {
 export interface ChildSessionsHandlerDeps {
   repository: Pick<
     SessionRepository,
-    | "listEventPage"
-    | "getLatestTerminalMessage"
-    | "getEventTimelinePage"
-    | "getPendingOrProcessingCount"
-    | "getProcessingMessageAuthor"
+    "getLatestTerminalMessage" | "getPendingOrProcessingCount" | "getProcessingMessageAuthor"
   >;
+  eventRepository: EventRepository;
   participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;
   getSession: () => SessionRow | null;
@@ -155,7 +153,7 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       const options = parsedOptions.options;
       const sandbox = deps.getSandbox();
       const artifacts = deps.artifactRepository.listArtifacts();
-      const recentEventRows = deps.repository.listEventPage({
+      const recentEventRows = deps.eventRepository.listEventPage({
         limit: RECENT_EVENT_FETCH_LIMIT,
       }).events;
       let finalResponse: ChildSummaryFinalResponseInput | undefined;
@@ -164,13 +162,13 @@ export function createChildSessionsHandler(deps: ChildSessionsHandlerDeps): Chil
       if (options.includeFinalResponse) {
         const terminalMessage = deps.repository.getLatestTerminalMessage();
         const collectedEvents = terminalMessage
-          ? collectFinalResponseEventRows(deps.repository, terminalMessage.id)
+          ? collectFinalResponseEventRows(deps.eventRepository, terminalMessage.id)
           : { eventRows: [], eventLimitReached: false };
         finalResponse = { message: terminalMessage, ...collectedEvents };
       }
 
       if (options.includeTrajectory) {
-        const page = deps.repository.getEventTimelinePage({
+        const page = deps.eventRepository.getEventTimelinePage({
           limit: options.trajectoryLimit,
           cursor: options.trajectoryCursor ?? undefined,
         });

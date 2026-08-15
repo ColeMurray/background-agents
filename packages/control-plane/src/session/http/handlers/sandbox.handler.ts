@@ -19,6 +19,7 @@ import type { ScmCredentialsResult } from "../../scm-credentials-service";
 import type { SessionMessenger } from "../../messenger";
 import type { SessionRepository } from "../../repository";
 import type { ArtifactRepository } from "../../artifact-repository";
+import type { EventRepository } from "../../event-repository";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { SandboxRow, SessionRow } from "../../types";
 import { assertArtifactType } from "../../artifacts";
@@ -36,7 +37,8 @@ const addParticipantRequestSchema = z.object({
 type AddParticipantRequest = z.infer<typeof addParticipantRequestSchema>;
 
 export interface SandboxHandlerDeps {
-  repository: Pick<SessionRepository, "createEvent" | "getProcessingMessage">;
+  repository: Pick<SessionRepository, "getProcessingMessage">;
+  eventRepository: EventRepository;
   participantRepository: ParticipantRepository;
   artifactRepository: ArtifactRepository;
   processSandboxEvent: (event: SandboxEvent) => Promise<void>;
@@ -143,7 +145,7 @@ export function createSandboxHandler(deps: SandboxHandlerDeps): SandboxHandler {
         timestamp: timestampSeconds,
       };
 
-      deps.repository.createEvent({
+      deps.eventRepository.createEvent({
         id: deps.generateId(),
         type: event.type,
         data: JSON.stringify(event),

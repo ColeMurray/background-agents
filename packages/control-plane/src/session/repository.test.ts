@@ -6,6 +6,7 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { SessionRepository } from "./repository";
+import { EventRepository } from "./event-repository";
 import {
   AttachmentClaimConflictError,
   SessionAttachmentRepository,
@@ -82,7 +83,8 @@ describe("SessionRepository", () => {
         transactionSyncCalls += 1;
         return closure();
       },
-      new SessionAttachmentRepository(mock.sql)
+      new SessionAttachmentRepository(mock.sql),
+      new EventRepository(mock.sql, (closure) => closure())
     );
   });
 
@@ -344,7 +346,8 @@ describe("SessionRepository", () => {
           transactions += 1;
           return closure();
         },
-        new SessionAttachmentRepository(mock.sql)
+        new SessionAttachmentRepository(mock.sql),
+        new EventRepository(mock.sql, (closure) => closure())
       );
 
       repo.setSessionDiffBaselines([
@@ -667,7 +670,8 @@ describe("SessionRepository", () => {
           transactions += 1;
           return closure();
         },
-        new SessionAttachmentRepository(mock.sql)
+        new SessionAttachmentRepository(mock.sql),
+        new EventRepository(mock.sql, (closure) => closure())
       );
       mock.setDefaultRowsWritten(2);
 
@@ -905,270 +909,6 @@ describe("SessionRepository", () => {
         "ORDER BY COALESCE(completed_at, started_at, created_at) DESC"
       );
       expect(mock.calls[0].query).toContain("LIMIT 1");
-    });
-  });
-
-  // === EVENTS ===
-
-  describe("createEvent", () => {
-    it("stores event with all fields", () => {
-      repo.createEvent({
-        id: "evt-1",
-        type: "tool_call",
-        data: '{"tool":"read"}',
-        messageId: "msg-1",
-        createdAt: 1000,
-      });
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].params).toEqual([
-        "evt-1",
-        "tool_call",
-        '{"tool":"read"}',
-        "msg-1",
-        1000,
-      ]);
-    });
-  });
-
-  describe("upsertTokenEvent", () => {
-    it("upserts token event by deterministic message key", () => {
-      const event = {
-        type: "token" as const,
-        content: "partial response",
-        messageId: "msg-1",
-        sandboxId: "sb-1",
-        timestamp: 1,
-      };
-
-      repo.upsertTokenEvent("msg-1", event, 1000);
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("INSERT INTO events");
-      expect(mock.calls[0].query).toContain("timeline_sequence");
-      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
-      expect(mock.calls[0].params).toEqual([
-        "token:msg-1",
-        "token",
-        JSON.stringify(event),
-        "msg-1",
-        1000,
-      ]);
-    });
-
-    it("reuses the same deterministic ID across updates", () => {
-      const firstEvent = {
-        type: "token" as const,
-        content: "first",
-        messageId: "msg-1",
-        sandboxId: "sb-1",
-        timestamp: 1,
-      };
-      const secondEvent = {
-        ...firstEvent,
-        content: "second",
-        timestamp: 2,
-      };
-
-      repo.upsertTokenEvent("msg-1", firstEvent, 1000);
-      repo.upsertTokenEvent("msg-1", secondEvent, 2000);
-
-      expect(mock.calls.length).toBe(2);
-      expect(mock.calls[0].params[0]).toBe("token:msg-1");
-      expect(mock.calls[1].params[0]).toBe("token:msg-1");
-      expect(mock.calls[1].params[1]).toBe("token");
-      expect(mock.calls[1].params[2]).toBe(JSON.stringify(secondEvent));
-      expect(mock.calls[1].params[4]).toBe(2000);
-    });
-  });
-
-  describe("createContextCompactionEvent", () => {
-    it("atomically seals the current token and inserts the compaction marker", () => {
-      repo.createContextCompactionEvent({
-        id: "compaction-1",
-        type: "context_compacted",
-        data: '{"type":"context_compacted"}',
-        messageId: "msg-1",
-        createdAt: 1000,
-      });
-
-      expect(transactionSyncCalls).toBe(1);
-      expect(mock.calls).toHaveLength(2);
-      expect(mock.calls[0].query).toContain("UPDATE events SET id = ? WHERE id = ?");
-      expect(mock.calls[0].params).toEqual(["token:msg-1:compaction-1", "token:msg-1"]);
-      expect(mock.calls[1].query).toContain("INSERT INTO events");
-      expect(mock.calls[1].params).toEqual([
-        "compaction-1",
-        "context_compacted",
-        '{"type":"context_compacted"}',
-        "msg-1",
-        1000,
-      ]);
-    });
-  });
-
-  describe("upsertToolCallEvent", () => {
-    it("scopes child call IDs and preserves the first event position on updates", () => {
-      const event = {
-        type: "tool_call" as const,
-        tool: "bash",
-        args: { command: "npm test" },
-        callId: "call-1",
-        status: "running",
-        messageId: "msg-1",
-        sandboxId: "sb-1",
-        timestamp: 1,
-        isSubtask: true,
-        childSessionId: "child-1",
-        taskCallId: "task-1",
-      };
-
-      repo.upsertToolCallEvent("msg-1", event, 1000);
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toContain("ON CONFLICT(id) DO UPDATE SET");
-      expect(mock.calls[0].query).not.toContain("created_at = excluded.created_at");
-      expect(mock.calls[0].params).toEqual([
-        'tool_call:["msg-1","child-1","call-1"]',
-        "tool_call",
-        JSON.stringify(event),
-        "msg-1",
-        1000,
-      ]);
-    });
-
-    it("uses a different identity for a parent call with the same call ID", () => {
-      const event = {
-        type: "tool_call" as const,
-        tool: "bash",
-        args: {},
-        callId: "call-1",
-        messageId: "msg-1",
-        sandboxId: "sb-1",
-        timestamp: 1,
-      };
-
-      repo.upsertToolCallEvent("msg-1", event, 1000);
-
-      expect(mock.calls[0].params[0]).toBe('tool_call:["msg-1","parent","call-1"]');
-    });
-  });
-
-  describe("listEventPage", () => {
-    it("returns in deterministic descending order", () => {
-      repo.listEventPage({ limit: 50 });
-      expect(mock.calls[0].query).toContain("ORDER BY created_at DESC, timeline_sequence DESC");
-    });
-
-    it("filters by type", () => {
-      repo.listEventPage({ limit: 50, type: "tool_call" });
-      expect(mock.calls[0].query).toContain("type = ?");
-      expect(mock.calls[0].params).toContain("tool_call");
-    });
-
-    it("filters by messageId", () => {
-      repo.listEventPage({ limit: 50, messageId: "msg-1" });
-      expect(mock.calls[0].query).toContain("message_id = ?");
-      expect(mock.calls[0].params).toContain("msg-1");
-    });
-
-    it("keeps legacy timestamp cursors for pagination", () => {
-      repo.listEventPage({ limit: 50, cursor: { kind: "legacy", createdAt: 5000 } });
-      expect(mock.calls[0].query).toContain("created_at < ?");
-      expect(mock.calls[0].params).toContain(5000);
-    });
-
-    it("uses composite cursors for stable pagination across tied timestamps", () => {
-      repo.listEventPage({
-        limit: 50,
-        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
-      });
-      expect(mock.calls[0].query).toContain("((created_at < ?) OR (created_at = ? AND id < ?))");
-      expect(mock.calls[0].params).toEqual([5000, 5000, "cursor-id", 51]);
-    });
-
-    it("returns hasMore and trims overflow", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
-      mock.setData(query, [
-        { id: "e3", created_at: 5000, type: "token", data: "{}" },
-        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
-        { id: "e1", created_at: 3000, type: "token", data: "{}" },
-      ]);
-
-      const result = repo.listEventPage({ limit: 2 });
-
-      expect(result.hasMore).toBe(true);
-      expect(result.events.map((event) => event.id)).toEqual(["e3", "e2"]);
-      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
-    });
-  });
-
-  describe("getEventTimelinePage", () => {
-    it("queries the first timeline page with deterministic descending storage order", () => {
-      repo.getEventTimelinePage({ limit: 50 });
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toBe(
-        "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?"
-      );
-      expect(mock.calls[0].params).toEqual([51]);
-    });
-
-    it("queries timeline pages after a composite cursor", () => {
-      repo.getEventTimelinePage({
-        limit: 50,
-        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
-      });
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toBe(
-        "SELECT * FROM events WHERE ((created_at < ?) OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?"
-      );
-      expect(mock.calls[0].params).toEqual([5000, 5000, "cursor-id", 51]);
-    });
-
-    it("can exclude event types while using the same timeline pager", () => {
-      repo.getEventTimelinePage({
-        limit: 50,
-        cursor: { kind: "timeline", createdAt: 5000, id: "cursor-id" },
-        excludeTypes: ["heartbeat"],
-      });
-
-      expect(mock.calls.length).toBe(1);
-      expect(mock.calls[0].query).toBe(
-        "SELECT * FROM events WHERE type NOT IN (?) AND ((created_at < ?) OR (created_at = ? AND id < ?)) ORDER BY created_at DESC, id DESC LIMIT ?"
-      );
-      expect(mock.calls[0].params).toEqual(["heartbeat", 5000, 5000, "cursor-id", 51]);
-    });
-
-    it("returns hasMore=false when a timeline page fits within the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
-      mock.setData(query, [
-        { id: "e2", created_at: 4000, type: "token", data: "{}" },
-        { id: "e1", created_at: 3000, type: "tool_call", data: "{}" },
-      ]);
-
-      const result = repo.getEventTimelinePage({ limit: 50 });
-
-      expect(result.hasMore).toBe(false);
-      expect(result.events.map((event) => event.id)).toEqual(["e1", "e2"]);
-      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 3000, id: "e1" });
-    });
-
-    it("returns hasMore=true and trims overflow when a timeline page exceeds the limit", () => {
-      const query = "SELECT * FROM events ORDER BY created_at DESC, timeline_sequence DESC LIMIT ?";
-      mock.setData(query, [
-        { id: "e3", created_at: 5000, type: "token", data: "{}" },
-        { id: "e2", created_at: 4000, type: "tool_call", data: "{}" },
-        { id: "e1", created_at: 3000, type: "token", data: "{}" },
-      ]);
-
-      const result = repo.getEventTimelinePage({ limit: 2 });
-
-      expect(result.hasMore).toBe(true);
-      expect(result.events.map((event) => event.id)).toEqual(["e2", "e3"]);
-      expect(result.nextCursor).toEqual({ kind: "timeline", createdAt: 4000, id: "e2" });
     });
   });
 

@@ -3,13 +3,16 @@ import type { ArtifactRow, EventRow, MessageRow } from "../types";
 import type { SessionRepository } from "../repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { ArtifactRepository } from "../artifact-repository";
+import type { EventRepository } from "../event-repository";
 import { MessageService } from "./message.service";
 
 function createService() {
   const repository = {
-    listEventPage: vi.fn(),
     listMessages: vi.fn(),
   } as unknown as SessionRepository;
+  const eventRepository = {
+    listEventPage: vi.fn(),
+  } as unknown as EventRepository;
   const artifactRepository = {
     listArtifacts: vi.fn(),
     getArtifactById: vi.fn(),
@@ -25,12 +28,14 @@ function createService() {
   return {
     service: new MessageService({
       repository,
+      eventRepository,
       artifactRepository,
       messageQueue,
       stopExecution,
       parseArtifactMetadata,
     }),
     repository,
+    eventRepository,
     artifactRepository,
     messageQueue,
     stopExecution,
@@ -69,13 +74,13 @@ describe("MessageService", () => {
   });
 
   it("paginates events with hasMore and cursor", () => {
-    const { service, repository } = createService();
+    const { service, eventRepository } = createService();
     const events: EventRow[] = [
       { id: "e3", type: "token", data: "{}", message_id: "m1", created_at: 3000 },
       { id: "e2", type: "token", data: "{}", message_id: "m1", created_at: 2000 },
       { id: "e1", type: "token", data: "{}", message_id: "m1", created_at: 1000 },
     ];
-    vi.mocked(repository.listEventPage).mockReturnValue({
+    vi.mocked(eventRepository.listEventPage).mockReturnValue({
       events: events.slice(0, 2),
       hasMore: true,
       nextCursor: { kind: "timeline", createdAt: 2000, id: "e2" },
@@ -93,7 +98,7 @@ describe("MessageService", () => {
       messageId: "m1",
       createdAt: 3000,
     });
-    expect(repository.listEventPage).toHaveBeenCalledWith({
+    expect(eventRepository.listEventPage).toHaveBeenCalledWith({
       cursor: null,
       limit: 2,
       type: "token",

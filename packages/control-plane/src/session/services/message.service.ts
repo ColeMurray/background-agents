@@ -4,6 +4,7 @@ import type { ListEventsResponse } from "@open-inspect/shared/types/sandbox-even
 import type { NormalizedArtifactResponse } from "../artifacts";
 import type { SessionRepository } from "../repository";
 import type { ArtifactRepository } from "../artifact-repository";
+import type { EventRepository } from "../event-repository";
 import type { SessionMessageQueue } from "../message-queue";
 import type { EnqueuePromptRequest } from "../enqueue-prompt-contract";
 import { SessionEventStream, type SessionEventListRequest } from "../event-stream";
@@ -19,6 +20,7 @@ export interface ListMessagesRequest {
 
 interface MessageServiceDeps {
   repository: SessionRepository;
+  eventRepository: EventRepository;
   artifactRepository: ArtifactRepository;
   messageQueue: SessionMessageQueue;
   stopExecution: () => Promise<void>;
@@ -31,7 +33,7 @@ export class MessageService {
   private readonly eventStream: SessionEventStream;
 
   constructor(private readonly deps: MessageServiceDeps) {
-    this.eventStream = new SessionEventStream(deps.repository);
+    this.eventStream = new SessionEventStream(deps.eventRepository);
   }
 
   enqueuePrompt(request: EnqueuePromptRequest): Promise<{ messageId: string; status: "queued" }> {
