@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { buildHashedFiles, hashManifest, renderSkillMarkdown } from "./canonical";
+import { buildSkillRevision, hashSessionSkillManifest } from "./content-addressing";
 import {
   MAX_MANAGED_SKILLS_PER_SESSION,
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
@@ -13,7 +13,7 @@ import {
   skillContentInputSchema,
 } from "@open-inspect/shared/types/skills";
 
-describe("managed skill canonicalization", () => {
+describe("managed skill content addressing", () => {
   const golden = JSON.parse(
     readFileSync(
       new URL("../../../shared/test-fixtures/managed-skills-golden.json", import.meta.url),
@@ -23,8 +23,11 @@ describe("managed skill canonicalization", () => {
   const content = skillContentInputSchema.parse(golden.content);
   const goldenManifest = sandboxSkillManifestSchema.parse(golden.manifest);
 
-  it("renders canonical SKILL.md with fixed and sorted frontmatter", () => {
-    expect(renderSkillMarkdown(golden.name, content)).toBe(golden.skillMarkdown);
+  it("renders canonical SKILL.md with fixed and sorted frontmatter", async () => {
+    const revision = await buildSkillRevision(golden.name, content);
+    expect(revision.files.find((file) => file.path === "SKILL.md")?.content).toBe(
+      golden.skillMarkdown
+    );
   });
 
   it("pins cross-runtime content limits", () => {
@@ -40,8 +43,8 @@ describe("managed skill canonicalization", () => {
   });
 
   it("produces stable revision and manifest hashes independent of input ordering", async () => {
-    const first = await buildHashedFiles(golden.name, content);
-    const second = await buildHashedFiles(golden.name, {
+    const first = await buildSkillRevision(golden.name, content);
+    const second = await buildSkillRevision(golden.name, {
       ...content,
       metadata: { alpha: "first", zeta: "last" },
     });
@@ -60,12 +63,14 @@ describe("managed skill canonicalization", () => {
         { id: "assign_global", type: "global" as const },
       ],
     };
-    await expect(hashManifest({ mode: "all" }, [skill])).resolves.toBe(
-      await hashManifest({ mode: "all" }, [
+    await expect(hashSessionSkillManifest({ mode: "all" }, [skill])).resolves.toBe(
+      await hashSessionSkillManifest({ mode: "all" }, [
         { ...skill, assignmentSources: [...skill.assignmentSources].reverse() },
       ])
     );
-    await expect(hashManifest({ mode: "all" }, [skill])).resolves.toBe(golden.manifestSha256);
+    await expect(hashSessionSkillManifest({ mode: "all" }, [skill])).resolves.toBe(
+      golden.manifestSha256
+    );
     expect({
       ...goldenManifest,
       skills: goldenManifest.skills.map((fixtureSkill) => ({

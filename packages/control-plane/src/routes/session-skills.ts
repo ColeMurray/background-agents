@@ -1,6 +1,6 @@
 import { SessionIndexStore } from "../db/session-index";
 import { SessionSkillStore } from "../db/session-skills";
-import { hashManifest } from "../skills/canonical";
+import { hashSessionSkillManifest } from "../skills/content-addressing";
 import type { Env } from "../types";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 
@@ -46,7 +46,7 @@ async function handleSandboxManifest(
     ((await new SessionIndexStore(ctx.db).exists(id))
       ? {
           schemaVersion: 1 as const,
-          manifestSha256: await hashManifest({ mode: "all" }, []),
+          manifestSha256: await hashSessionSkillManifest({ mode: "all" }, []),
           skills: [],
         }
       : null);

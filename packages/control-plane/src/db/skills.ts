@@ -13,7 +13,7 @@ import {
   type UpdateSkillInput,
 } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
-import { buildHashedFiles } from "../skills/canonical";
+import { buildSkillRevision } from "../skills/content-addressing";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const RESERVED_SKILL_NAMES = new Set([
@@ -474,7 +474,7 @@ export class SkillStore {
   }
 
   async validateAndHash(name: string, content: SkillContentInput) {
-    const hashed = await buildHashedFiles(name, content);
+    const hashed = await buildSkillRevision(name, content);
     const oversized = hashed.files.find((file) => file.sizeBytes > MAX_SKILL_FILE_BYTES);
     if (oversized)
       throw new SkillValidationError(`${oversized.path} exceeds the per-file size limit`);
@@ -516,7 +516,7 @@ export class SkillStore {
     skillId: string,
     revisionNumber: number,
     content: SkillContentInput,
-    hashed: Awaited<ReturnType<typeof buildHashedFiles>>,
+    hashed: Awaited<ReturnType<typeof buildSkillRevision>>,
     actorUserId: string,
     now: number,
     expectedCurrentRevisionId: string | null = null

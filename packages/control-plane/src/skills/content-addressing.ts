@@ -1,5 +1,4 @@
 import type {
-  SessionSkillSelection,
   SkillAssignment,
   SkillContentInput,
   SkillFile,
@@ -15,7 +14,7 @@ const MANIFEST_DOMAIN = encoder.encode("OPEN_INSPECT_SKILL_MANIFEST_V1\0");
  */
 export const SKILL_RESOLVER_VERSION = 1;
 
-export interface ManifestHashSkill {
+interface ManifestHashSkill {
   skillId: string;
   revisionId: string;
   name: string;
@@ -32,7 +31,7 @@ function yamlString(value: string): string {
   return JSON.stringify(value);
 }
 
-export function renderSkillMarkdown(name: string, content: SkillContentInput): string {
+function renderSkillMarkdown(name: string, content: SkillContentInput): string {
   const lines = ["---", `name: ${name}`, `description: ${yamlString(content.description)}`];
   if (content.license) lines.push(`license: ${yamlString(content.license)}`);
   if (content.compatibility) {
@@ -51,7 +50,7 @@ export function renderSkillMarkdown(name: string, content: SkillContentInput): s
   return `${lines.join("\n")}\n${content.body}`;
 }
 
-export async function sha256Hex(content: Uint8Array | string): Promise<string> {
+async function sha256Hex(content: Uint8Array | string): Promise<string> {
   const bytes = typeof content === "string" ? encoder.encode(content) : content;
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -65,7 +64,7 @@ function compareBytes(left: Uint8Array, right: Uint8Array): number {
   return left.length - right.length;
 }
 
-export function compareUtf8(left: string, right: string): number {
+function compareUtf8(left: string, right: string): number {
   return compareBytes(encoder.encode(left), encoder.encode(right));
 }
 
@@ -102,7 +101,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
 }
 
 /** Render generated SKILL.md and hash the complete, byte-ordered revision tree. */
-export async function buildHashedFiles(
+export async function buildSkillRevision(
   name: string,
   content: SkillContentInput
 ): Promise<{ files: SkillFile[]; contentSha256: string; totalBytes: number }> {
@@ -148,7 +147,7 @@ function sourceValues(source: SkillAssignment): [string, string, string, string,
 }
 
 /** Hash selection, pinned revisions, and assignment provenance in canonical byte order. */
-export async function hashManifest(
+export async function hashSessionSkillManifest(
   selection: ManifestSelection,
   skills: readonly ManifestHashSkill[]
 ): Promise<string> {
@@ -183,10 +182,4 @@ export async function hashManifest(
     }
   }
   return sha256Hex(concat(parts));
-}
-
-export function selectionWithoutProfileName(selection: ManifestSelection): SessionSkillSelection {
-  return selection.mode === "profile"
-    ? { mode: "profile", profileId: selection.profileId }
-    : selection;
 }

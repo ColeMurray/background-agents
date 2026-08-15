@@ -7,8 +7,11 @@ import {
 import { SkillProfileStore } from "../db/skill-profiles";
 import { SkillStore } from "../db/skills";
 import type { SqlDatabase } from "../db/sql-database";
-import { hashManifest, type ManifestSelection } from "../skills/canonical";
-import { SKILL_RESOLVER_VERSION } from "../skills/canonical";
+import {
+  hashSessionSkillManifest,
+  SKILL_RESOLVER_VERSION,
+  type ManifestSelection,
+} from "../skills/content-addressing";
 
 const MAX_CATALOG_READ_ATTEMPTS = 3;
 
@@ -46,7 +49,7 @@ export async function resolveManagedSkills(
     return {
       selection,
       resolverVersion: SKILL_RESOLVER_VERSION,
-      manifestSha256: await hashManifest(selection, []),
+      manifestSha256: await hashSessionSkillManifest(selection, []),
       resolvedAt: Date.now(),
       skills: [],
       ignoredProfileSkillIds: [],
@@ -100,7 +103,7 @@ export async function resolveManagedSkills(
     return {
       selection: manifestSelection,
       resolverVersion: SKILL_RESOLVER_VERSION,
-      manifestSha256: await hashManifest(manifestSelection, resolved),
+      manifestSha256: await hashSessionSkillManifest(manifestSelection, resolved),
       resolvedAt: Date.now(),
       skills: resolved,
       ignoredProfileSkillIds,
