@@ -40,6 +40,8 @@ export async function resolveManagedSkills(
   enabled = true
 ): Promise<SessionSkillManifestInput> {
   if (!enabled) {
+    // Persist an explicit empty snapshot so the kill switch does not create a
+    // separate session/sandbox lifecycle for disabled deployments.
     const selection = { mode: "none" as const };
     return {
       selection,
@@ -74,6 +76,8 @@ export async function resolveManagedSkills(
       selectedIds = selection.mode === "none" ? new Set() : null;
     }
 
+    // Profiles filter the already-applicable set; membership never bypasses
+    // disabled state or repository/environment assignment scope.
     const resolved = applicable
       .filter((skill) => selectedIds === null || selectedIds.has(skill.id))
       .map<ResolvedSkill>((skill) => ({

@@ -7,6 +7,7 @@ import {
 import { SkillStore } from "./skills";
 import type { SqlDatabase } from "./sql-database";
 
+/** Snapshot rows preserve resolution-time provenance independently of the mutable catalog. */
 interface ManifestRow {
   session_id: string;
   selection_mode: "all" | "none" | "profile";

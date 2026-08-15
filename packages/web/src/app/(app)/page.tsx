@@ -112,6 +112,8 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
+  // Skills are pinned while the session warms, so any identity input change
+  // must discard that session rather than submit a prompt with stale skills.
   useEffect(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();

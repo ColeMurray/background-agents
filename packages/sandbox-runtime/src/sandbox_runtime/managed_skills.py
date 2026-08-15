@@ -186,7 +186,12 @@ def _validate_path(value: Any) -> str:
 
 
 def validate_manifest(raw: bytes) -> ManagedSkillManifest:
-    """Validate the narrow installation contract and all content bounds."""
+    """Validate untrusted installation bytes independently of the control plane.
+
+    The narrow DTO omits selection and assignment provenance, so manifest_sha256
+    is an opaque identifier here. File hashes, paths, sizes, names, and modes are
+    validated locally before any content reaches an OpenCode discovery path.
+    """
     if len(raw) > MAX_MANAGED_SKILL_RESPONSE_BYTES:
         raise ManagedSkillsError(
             "managed skills manifest exceeds the size limit", code="manifest_too_large"
@@ -383,6 +388,7 @@ class ManagedSkillsMaterializer:
     def _check_collisions(
         self, manifest: ManagedSkillManifest, repositories: Sequence[RepoEntry], workdir: Path
     ) -> None:
+        """Reject ambiguous names across every OpenCode skill discovery root."""
         selected = {skill.name for skill in manifest.skills}
         for root in self._collision_roots(repositories, workdir):
             if not root.is_dir():
@@ -445,7 +451,11 @@ class ManagedSkillsMaterializer:
             os.close(descriptor)
 
     def _install(self, manifest: ManagedSkillManifest) -> None:
-        """Replace the complete managed tree using a recoverable same-filesystem swap."""
+        """Replace the complete managed tree using a recoverable same-filesystem swap.
+
+        The durable marker must precede moving the current tree. Recovery keeps
+        an installed destination when present, or restores the backup otherwise.
+        """
         parent = self.destination.parent
         parent.mkdir(parents=True, exist_ok=True)
         staging = parent / ".managed-skills-staging"

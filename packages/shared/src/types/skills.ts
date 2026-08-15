@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { repositoriesInputSchema, repositoryInputSchema } from "./repositories";
 
+/**
+ * Sandbox-visible name, file/path, revision, and manifest limits are mirrored
+ * by sandbox_runtime/managed_skills.py. Keep both runtimes aligned.
+ */
 export const MAX_SKILL_NAME_LENGTH = 64;
 export const MAX_SKILL_DESCRIPTION_LENGTH = 1024;
 export const MAX_SKILL_COMPATIBILITY_LENGTH = 500;

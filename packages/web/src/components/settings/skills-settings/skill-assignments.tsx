@@ -30,6 +30,8 @@ export function buildAssignments(
       result.push({ type: "environment", environmentId: environment.id });
     }
   }
+  // Preserve selected scopes absent from the latest lookups; listing failure,
+  // permission changes, or catalog drift must not make an unrelated save delete them.
   for (const assignment of initialAssignments) {
     if (
       assignmentKeys.has(assignmentKey(assignment)) &&

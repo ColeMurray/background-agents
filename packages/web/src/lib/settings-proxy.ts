@@ -47,6 +47,8 @@ export function settingsProxy<P>(
     const params = await context.params;
 
     try {
+      // The revision ID is an opaque CAS token; forwarding it unchanged keeps
+      // stale web editors from replacing content and assignments.
       const ifMatch = request.headers.get("if-match");
       let init: RequestInit | undefined;
       if (method !== "GET") {

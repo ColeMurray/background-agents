@@ -1369,6 +1369,8 @@ export class SchedulerDO extends DurableObject<Env> {
       scopeMembers,
       target.environmentId
     );
+    // Automation runs use all target-applicable shared skills. Personal
+    // profiles are interactive-user choices and are not automation policy.
     const managedSkillsManifest = await resolveManagedSkills(
       this.db,
       {

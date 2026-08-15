@@ -9,6 +9,10 @@ const encoder = new TextEncoder();
 const REVISION_DOMAIN = encoder.encode("OPEN_INSPECT_SKILL_REVISION_V1\0");
 const MANIFEST_DOMAIN = encoder.encode("OPEN_INSPECT_SKILL_MANIFEST_V1\0");
 
+/**
+ * Domain strings, field ordering, and resolver version define persisted IDs.
+ * Incompatible serialization changes require new domains and a new version.
+ */
 export const SKILL_RESOLVER_VERSION = 1;
 
 export interface ManifestHashSkill {

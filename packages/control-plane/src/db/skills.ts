@@ -294,6 +294,10 @@ export class SkillStore {
     return (results[0]?.meta.changes ?? 0) > 0;
   }
 
+  /**
+   * Return the catalog's monotonic invalidation token. Consumers compare only
+   * for equality; the value is not a count of logical catalog revisions.
+   */
   async catalogGeneration(): Promise<number> {
     const row = await this.db
       .prepare("SELECT generation FROM skills_catalog_state WHERE singleton = 1")
