@@ -258,7 +258,6 @@ function makeSessionEnv(
 function mockSlackFetch(
   order: string[] = [],
   options: {
-    statusResponse?: Response | Promise<Response>;
     threadMessages?: unknown[];
     threadRepliesError?: string;
     /** HTTP status for files.slack.com downloads (default 200 with bytes). */
@@ -269,13 +268,10 @@ function mockSlackFetch(
     const url = typeof input === "string" ? input : input.toString();
     if (url.includes("assistant.threads.setStatus")) {
       order.push("status");
-      return (
-        options.statusResponse ??
-        new Response(JSON.stringify({ ok: true }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        })
-      );
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     if (url.includes("conversations.info")) {
