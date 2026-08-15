@@ -126,12 +126,6 @@ BEGIN
   UPDATE skills_catalog_state SET generation = generation + 1 WHERE singleton = 1;
 END;
 
-CREATE TABLE skill_write_throttle (
-  user_id      TEXT PRIMARY KEY,
-  window_start INTEGER NOT NULL,
-  write_count  INTEGER NOT NULL
-);
-
 CREATE TABLE skill_profiles (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL,

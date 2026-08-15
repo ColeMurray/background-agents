@@ -229,28 +229,6 @@ describe("managed skills persistence and resolution", () => {
     expect(invalid.status).toBe(400);
   });
 
-  it("throttles writes without charging read-only previews", async () => {
-    for (let index = 0; index < 35; index++) {
-      const preview = await serviceFetch("https://test.local/skills/preview", {
-        method: "POST",
-        body: JSON.stringify({ name: "preview-only", content }),
-      });
-      expect(preview.status).toBe(200);
-    }
-    for (let index = 0; index < 30; index++) {
-      const write = await serviceFetch("https://test.local/skills", {
-        method: "POST",
-        body: "{}",
-      });
-      expect(write.status).toBe(400);
-    }
-    const throttled = await serviceFetch("https://test.local/skills", {
-      method: "POST",
-      body: "{}",
-    });
-    expect(throttled.status).toBe(429);
-  });
-
   it("edits content and assignments atomically with a required revision precondition", async () => {
     const skill = await new SkillStore(env.DB).create(
       { name: "atomic-edit", content, assignments: [{ type: "global" }] },

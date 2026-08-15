@@ -20,28 +20,6 @@ import { managedSkillsEnabled } from "../skills/feature";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 
 const log = createLogger("router:skills");
-const SKILL_WRITES_PER_MINUTE = 30;
-
-async function enforceWriteLimit(ctx: RequestContext, userId: string): Promise<Response | null> {
-  const now = Date.now();
-  const windowStart = now - (now % 60_000);
-  await ctx.db
-    .prepare(
-      `INSERT INTO skill_write_throttle (user_id, window_start, write_count) VALUES (?, ?, 1)
-       ON CONFLICT(user_id) DO UPDATE SET
-         window_start = CASE WHEN window_start = excluded.window_start THEN window_start ELSE excluded.window_start END,
-         write_count = CASE WHEN window_start = excluded.window_start THEN write_count + 1 ELSE 1 END`
-    )
-    .bind(userId, windowStart)
-    .run();
-  const row = await ctx.db
-    .prepare("SELECT write_count FROM skill_write_throttle WHERE user_id = ?")
-    .bind(userId)
-    .first<{ write_count: number }>();
-  return (row?.write_count ?? 0) > SKILL_WRITES_PER_MINUTE
-    ? error("Managed skill write rate exceeded", 429)
-    : null;
-}
 
 type SkillAuditEvent =
   | {
@@ -112,8 +90,6 @@ async function handleCreateSkill(
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
   const parsed = createSkillInputSchema.safeParse(body);
@@ -166,8 +142,6 @@ async function handleUpdateSkill(
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
   const parsed = updateSkillInputSchema.safeParse(body);
@@ -191,8 +165,6 @@ async function handleEditSkill(
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const ifMatch = request.headers.get("If-Match")?.replace(/^"|"$/g, "");
   if (!ifMatch) return error("If-Match revision is required", 428);
   const body = await parsedBody(request);
@@ -223,8 +195,6 @@ async function handleDeleteSkill(
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const deleted = await new SkillStore(ctx.db).delete(id, userId);
   if (deleted) audit(ctx, { action: "skill.deleted", skill_id: id });
   return deleted ? json({ ok: true }) : error("Skill not found", 404);
@@ -249,8 +219,6 @@ async function handleCreateProfile(
 ): Promise<Response> {
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
   const parsed = createSkillProfileInputSchema.safeParse(body);
@@ -279,8 +247,6 @@ async function handleUpdateProfile(
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
   const parsed = updateSkillProfileInputSchema.safeParse(body);
@@ -304,8 +270,6 @@ async function handleDeleteProfile(
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
-  const limited = await enforceWriteLimit(ctx, userId);
-  if (limited) return limited;
   const deleted = await new SkillProfileStore(ctx.db).delete(id, userId);
   if (deleted) audit(ctx, { action: "profile.deleted", profile_id: id });
   return deleted ? json({ ok: true }) : error("Skill profile not found", 404);

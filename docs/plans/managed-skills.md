@@ -749,7 +749,8 @@ V1 controls are:
   separate from skills.
 - Fail closed when selected content cannot be verified or installed.
 - Escape skill metadata in the UI and logs; never render authored Markdown as unsanitized HTML.
-- Rate-limit writes and preview validation to bound D1 and parsing work.
+- Bound each request with file, revision, and session limits; V1 adds no feature-specific request
+  throttle for admitted users.
 
 Allowing every admitted user to modify installation-wide executable content follows the product's
 current single-tenant trust model and is an explicit V1 risk acceptance, not an authorization
