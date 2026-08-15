@@ -125,7 +125,9 @@ class RepositoryBoot:
         lines.extend(
             [
                 "To open a pull request, call the `create-pull-request` tool once per repository "
-                f'with changes, passing its `repo` argument (e.g. `repo: "{primary.owner}/{primary.name}"`).',
+                f'with changes, passing its `repo` argument (e.g. `repo: "{primary.owner}/{primary.name}"`). '
+                "Calling it again from the same branch updates that repository's open pull "
+                "request; to open an additional pull request, create a new branch first.",
                 "",
             ]
         )

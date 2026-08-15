@@ -142,6 +142,9 @@ export function createPullRequestHandler(deps: PullRequestHandlerDeps): PullRequ
         prNumber: result.prNumber,
         prUrl: result.prUrl,
         state: result.state,
+        headBranch: result.headBranch,
+        baseBranch: result.baseBranch,
+        updated: result.updated,
       });
     },
 

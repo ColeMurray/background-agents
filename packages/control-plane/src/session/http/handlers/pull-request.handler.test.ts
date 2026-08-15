@@ -366,6 +366,9 @@ describe("createPullRequestHandler", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/repo/pull/42",
       state: "open",
+      headBranch: "feature/pr",
+      baseBranch: "release",
+      updated: true,
     });
 
     const response = await handler.createPr(
@@ -387,6 +390,9 @@ describe("createPullRequestHandler", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/repo/pull/42",
       state: "open",
+      headBranch: "feature/pr",
+      baseBranch: "release",
+      updated: true,
     });
     expect(createPullRequest).toHaveBeenCalledWith(
       {

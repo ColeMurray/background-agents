@@ -94,11 +94,18 @@ export function resolveRepositoryTarget(repo, repositories) {
 }
 
 export function formatPullRequestSuccess(result) {
+  const branches =
+    result?.headBranch && result?.baseBranch
+      ? ` (${result.headBranch} -> ${result.baseBranch})`
+      : "";
+  if (result?.updated) {
+    return `Pull request updated with your latest commits.\n\nPR #${result.prNumber}${branches}: ${result.prUrl}`;
+  }
   const status =
     result?.state === "draft"
       ? "The pull request is in draft mode."
       : "The pull request is now ready for review.";
-  return `Pull request created successfully!\n\nPR #${result.prNumber}: ${result.prUrl}\n\n${status}`;
+  return `Pull request created successfully!\n\nPR #${result.prNumber}${branches}: ${result.prUrl}\n\n${status}`;
 }
 
 async function getCurrentBranch(repoPath) {
@@ -125,7 +132,7 @@ async function getCurrentBranch(repoPath) {
 export default tool({
   name: "create-pull-request",
   description:
-    "Create a pull request for the committed changes. DO NOT use 'gh' CLI - use this tool instead. It handles git push and PR creation automatically with pre-configured authentication. You MUST provide a descriptive title and body that explain what changes were made. Call this after committing your changes.",
+    "Create a pull request for the committed changes. DO NOT use 'gh' CLI - use this tool instead. It handles git push and PR creation automatically with pre-configured authentication. You MUST provide a descriptive title and body that explain what changes were made. Call this after committing your changes. Calling it again from the same branch updates that branch's open pull request with your latest commits. To open a separate, additional pull request (including stacked PRs), create a new branch with 'git checkout -b', commit, and call this tool again.",
   args: {
     title: z
       .string()
@@ -140,7 +147,10 @@ export default tool({
     baseBranch: z
       .string()
       .optional()
-      .describe("Target branch to merge into. Defaults to the session's base branch."),
+      .describe(
+        "Target branch to merge into. Defaults to the session's base branch. For a stacked " +
+          "pull request, pass the head branch of the pull request you are stacking on."
+      ),
     repo: z
       .string()
       .optional()
@@ -238,7 +248,7 @@ export default tool({
         } else if (response.status === 404) {
           userMessage = `Session not found: ${errorMessage}. The session may have been deleted or the ID is incorrect.`;
         } else if (response.status === 409) {
-          userMessage = `Conflict: ${errorMessage}. A PR may already exist for this branch.`;
+          userMessage = `Conflict: ${errorMessage} To open an additional pull request, create a new branch ('git checkout -b'), commit, and call this tool again.`;
         }
 
         console.log(`[create-pull-request] ERROR: HTTP ${response.status} - ${errorMessage}`);

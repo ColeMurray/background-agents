@@ -86,6 +86,16 @@ function createMockProvider() {
       sourceBranch: "open-inspect/session-name-1",
       targetBranch: "main",
     })),
+    getPullRequest: vi.fn(async (config: { owner: string; name: string; number: number }) => ({
+      number: config.number,
+      url: `https://github.com/${config.owner}/${config.name}/pull/${config.number}`,
+      lifecycleState: "open" as const,
+      isDraft: false,
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      repoOwner: config.owner,
+      repoName: config.name,
+    })),
     buildManualPullRequestUrl: vi.fn(
       (config: { sourceBranch: string; targetBranch: string }) =>
         `https://github.com/acme/web/pull/new/${config.targetBranch}...${config.sourceBranch}`
@@ -172,6 +182,14 @@ function createTestHarness(options: { scmSettings?: ScmSettings } = {}) {
         updated_at: data.createdAt,
       } as ArtifactRow);
     },
+    getArtifactById: (id: string) => artifacts.find((artifact) => artifact.id === id) ?? null,
+    updateArtifact: (id: string, data: { url: string; metadata: string; updatedAt: number }) => {
+      const artifact = artifacts.find((row) => row.id === id);
+      if (!artifact) return;
+      artifact.url = data.url;
+      artifact.metadata = data.metadata;
+      artifact.updated_at = data.updatedAt;
+    },
   } as unknown as ArtifactRepository;
 
   const sessionPullRequests = { upsert: vi.fn(async () => ({ applied: true })) };
@@ -245,7 +263,8 @@ describe("SessionPullRequestService", () => {
       status: 409,
       error: "A pull request has already been created for acme/web in this session.",
     });
-    expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+    expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+    expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
   });
 
   it("returns 500 when push to remote fails", async () => {
@@ -275,6 +294,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      updated: false,
     });
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
       .calls[0];
@@ -302,6 +324,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "feature/test",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -407,6 +432,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
     const createPrCall = (harness.provider.createPullRequest as ReturnType<typeof vi.fn>).mock
@@ -499,6 +527,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "feature/test",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.deps.repository.updateSessionBranch).not.toHaveBeenCalled();
     expect(harness.provider.buildGitPushSpec).toHaveBeenCalledWith(
@@ -579,7 +610,7 @@ describe("SessionPullRequestService", () => {
       );
     });
 
-    it("returns 409 for a repo that already has a PR, naming the repo", async () => {
+    it("updates the repo's PR when legacy metadata without a head claims the session branch", async () => {
       harness.artifacts.push({
         id: "artifact-pr-backend",
         type: "pr",
@@ -593,12 +624,11 @@ describe("SessionPullRequestService", () => {
         createInput({ repoOwner: "acme", repoName: "backend" })
       );
 
-      expect(result).toEqual({
-        kind: "error",
-        status: 409,
-        error: "A pull request has already been created for acme/backend in this session.",
-      });
-      expect(harness.provider.generatePushAuth).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ kind: "created", prNumber: 9, updated: true });
+      expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
+        expect.objectContaining({ targetBranch: "open-inspect/session-name-1" })
+      );
+      expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
     });
 
     it("treats a PR artifact without repo metadata as the primary's", async () => {
@@ -612,16 +642,14 @@ describe("SessionPullRequestService", () => {
       });
 
       const primaryResult = await harness.service.createPullRequest(createInput());
-      expect(primaryResult).toEqual({
-        kind: "error",
-        status: 409,
-        error: "A pull request has already been created for acme/web in this session.",
-      });
+      expect(primaryResult).toMatchObject({ kind: "created", prNumber: 1, updated: true });
+      expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
 
       const secondaryResult = await harness.service.createPullRequest(
         createInput({ repoOwner: "acme", repoName: "backend" })
       );
-      expect(secondaryResult.kind).toBe("created");
+      expect(secondaryResult).toMatchObject({ kind: "created", prNumber: 42, updated: false });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
     });
 
     it("defaults the base branch to the target member's base branch", async () => {
@@ -797,6 +825,263 @@ describe("SessionPullRequestService", () => {
     });
   });
 
+  describe("per-branch pull requests", () => {
+    /** A `pr` artifact with modern lifecycle metadata, as creation writes it. */
+    function prArtifact(overrides: {
+      id: string;
+      number: number;
+      head: string;
+      base?: string;
+      lifecycleState?: "open" | "closed" | "merged";
+      repoOwner?: string;
+      repoName?: string;
+    }): ArtifactRow {
+      const lifecycleState = overrides.lifecycleState ?? "open";
+      return {
+        id: overrides.id,
+        type: "pr",
+        url: `https://github.com/acme/web/pull/${overrides.number}`,
+        metadata: JSON.stringify({
+          number: overrides.number,
+          state: lifecycleState,
+          lifecycleState,
+          isDraft: false,
+          head: overrides.head,
+          base: overrides.base ?? "main",
+          repoOwner: overrides.repoOwner ?? "acme",
+          repoName: overrides.repoName ?? "web",
+        }),
+        created_at: 1000,
+        updated_at: 1000,
+      } as ArtifactRow;
+    }
+
+    it("reports the resolved head, base, and updated=false on creation", async () => {
+      const result = await harness.service.createPullRequest(
+        createInput({ headBranch: "feature-x" })
+      );
+
+      expect(result).toEqual({
+        kind: "created",
+        prNumber: 42,
+        prUrl: "https://github.com/acme/web/pull/42",
+        state: "open",
+        headBranch: "feature-x",
+        baseBranch: "main",
+        updated: false,
+      });
+    });
+
+    it("force-pushes and reuses the existing open PR when called again for the same head", async () => {
+      harness.artifacts.push(prArtifact({ id: "artifact-pr-1", number: 7, head: "feature-x" }));
+
+      const result = await harness.service.createPullRequest(
+        createInput({ headBranch: "feature-x" })
+      );
+
+      expect(result).toEqual({
+        kind: "created",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/web/pull/7",
+        state: "open",
+        headBranch: "feature-x",
+        baseBranch: "main",
+        updated: true,
+      });
+      expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
+        expect.objectContaining({ targetBranch: "feature-x", force: true })
+      );
+      expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
+      expect(harness.artifacts.filter((artifact) => artifact.type === "pr")).toHaveLength(1);
+    });
+
+    it("creates a new PR from the same head after the existing one merged, despite stale-open metadata", async () => {
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 7, head: "open-inspect/session-name-1" })
+      );
+      vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
+        number: 7,
+        url: "https://github.com/acme/web/pull/7",
+        lifecycleState: "merged",
+        isDraft: false,
+        headBranch: "open-inspect/session-name-1",
+        baseBranch: "main",
+        repoOwner: "acme",
+        repoName: "web",
+      });
+
+      const result = await harness.service.createPullRequest(createInput());
+
+      expect(result).toMatchObject({ kind: "created", prNumber: 42, updated: false });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("creates without a provider read when stored metadata already shows the PR merged", async () => {
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 7, head: "feature-x", lifecycleState: "merged" })
+      );
+
+      const result = await harness.service.createPullRequest(
+        createInput({ headBranch: "feature-x" })
+      );
+
+      expect(result).toMatchObject({ kind: "created", prNumber: 42, updated: false });
+      expect(harness.provider.getPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("refuses to force-push over a fallback-resolved custom branch holding an open PR", async () => {
+      // The stored session branch records the *last pushed* branch (e.g. the
+      // top of a stack). A request without an explicit head falls back to it;
+      // force-pushing the current checkout over it would destroy that PR.
+      harness.setSession(createSession({ branch_name: "feat/stack-top" }));
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 7, head: "feat/stack-top" })
+      );
+      vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
+        number: 7,
+        url: "https://github.com/acme/web/pull/7",
+        lifecycleState: "open",
+        isDraft: false,
+        headBranch: "feat/stack-top",
+        baseBranch: "main",
+        repoOwner: "acme",
+        repoName: "web",
+      });
+
+      const result = await harness.service.createPullRequest(createInput());
+
+      expect(result.kind).toBe("error");
+      if (result.kind === "error") {
+        expect(result.status).toBe(409);
+        expect(result.error).toContain("#7");
+        expect(result.error).toContain("feat/stack-top");
+      }
+      expect(harness.deps.pushBranchToRemote).not.toHaveBeenCalled();
+      expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("updates the session-branch PR on a follow-up call without an explicit head", async () => {
+      // The v1 single-PR flow: the agent works on the base branch and the
+      // generated session branch carries the PR. A follow-up call must keep
+      // updating that PR, not conflict.
+      harness.setSession(createSession({ branch_name: "open-inspect/session-name-1" }));
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 7, head: "open-inspect/session-name-1" })
+      );
+
+      const result = await harness.service.createPullRequest(createInput());
+
+      expect(result).toMatchObject({
+        kind: "created",
+        prNumber: 7,
+        updated: true,
+        headBranch: "open-inspect/session-name-1",
+      });
+      expect(harness.deps.pushBranchToRemote).toHaveBeenCalledWith(
+        expect.objectContaining({ targetBranch: "open-inspect/session-name-1" })
+      );
+      expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("creates a second PR for the same head when an explicit base differs from the existing PR's", async () => {
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 7, head: "feature-x", base: "main" })
+      );
+      vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
+        number: 7,
+        url: "https://github.com/acme/web/pull/7",
+        lifecycleState: "open",
+        isDraft: false,
+        headBranch: "feature-x",
+        baseBranch: "main",
+        repoOwner: "acme",
+        repoName: "web",
+      });
+
+      const result = await harness.service.createPullRequest(
+        createInput({ headBranch: "feature-x", baseBranch: "release-1.0" })
+      );
+
+      expect(result).toMatchObject({
+        kind: "created",
+        prNumber: 42,
+        updated: false,
+        baseBranch: "release-1.0",
+      });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ sourceBranch: "feature-x", targetBranch: "release-1.0" })
+      );
+    });
+
+    it("reuses the PR from stored metadata when the live provider read fails", async () => {
+      harness.artifacts.push(prArtifact({ id: "artifact-pr-1", number: 7, head: "feature-x" }));
+      vi.mocked(harness.provider.getPullRequest).mockRejectedValue(new Error("rate limited"));
+
+      const result = await harness.service.createPullRequest(
+        createInput({ headBranch: "feature-x" })
+      );
+
+      expect(result).toEqual({
+        kind: "created",
+        prNumber: 7,
+        prUrl: "https://github.com/acme/web/pull/7",
+        state: "open",
+        headBranch: "feature-x",
+        baseBranch: "main",
+        updated: true,
+      });
+      expect(harness.provider.createPullRequest).not.toHaveBeenCalled();
+    });
+
+    it("heals the stale artifact mirror when the live read shows the PR merged", async () => {
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 7, head: "open-inspect/session-name-1" })
+      );
+      vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
+        number: 7,
+        url: "https://github.com/acme/web/pull/7",
+        lifecycleState: "merged",
+        isDraft: false,
+        headBranch: "open-inspect/session-name-1",
+        baseBranch: "main",
+        repoOwner: "acme",
+        repoName: "web",
+      });
+
+      await harness.service.createPullRequest(createInput());
+
+      const updatedBroadcasts = vi
+        .mocked(harness.deps.messenger.broadcast)
+        .mock.calls.map(([message]) => message)
+        .filter((message) => message.type === "artifact_updated");
+      expect(updatedBroadcasts).toHaveLength(1);
+      expect(updatedBroadcasts[0]).toMatchObject({
+        artifact: expect.objectContaining({
+          id: "artifact-pr-1",
+          metadata: expect.objectContaining({ lifecycleState: "merged" }),
+        }),
+      });
+    });
+
+    it("creates a second PR when the head branch differs from the existing PR's", async () => {
+      harness.artifacts.push(
+        prArtifact({ id: "artifact-pr-1", number: 1, head: "open-inspect/session-name-1" })
+      );
+
+      const result = await harness.service.createPullRequest(
+        createInput({ headBranch: "feature-x" })
+      );
+
+      expect(result).toMatchObject({ kind: "created", prNumber: 42 });
+      expect(harness.provider.createPullRequest).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ sourceBranch: "feature-x", targetBranch: "main" })
+      );
+      expect(harness.artifacts.filter((artifact) => artifact.type === "pr")).toHaveLength(2);
+    });
+  });
+
   it("ignores prior manual branch artifact and creates PR", async () => {
     harness.artifacts.push({
       id: "branch-artifact-1",
@@ -818,6 +1103,9 @@ describe("SessionPullRequestService", () => {
       prNumber: 42,
       prUrl: "https://github.com/acme/web/pull/42",
       state: "open",
+      headBranch: "open-inspect/session-name-1",
+      baseBranch: "main",
+      updated: false,
     });
     expect(harness.provider.createPullRequest).toHaveBeenCalledTimes(1);
   });
@@ -961,6 +1249,9 @@ describe("SessionPullRequestService", () => {
         prNumber: 42,
         prUrl: "https://github.com/acme/web/pull/42",
         state: "open",
+        headBranch: "open-inspect/session-name-1",
+        baseBranch: "main",
+        updated: false,
       });
       expect(artifactCreatedBroadcasts(harness.deps)).toHaveLength(1);
       expect(harness.log.error).toHaveBeenCalledWith(

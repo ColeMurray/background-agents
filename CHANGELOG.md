@@ -4,6 +4,13 @@ New features, integrations, and notable improvements to Open-Inspect — newest 
 
 ## August 14, 2026
 
+**Multiple pull requests per session.** The `create-pull-request` tool now opens one PR per head
+branch instead of one per repository: agents can create stacked PRs (each level passing the previous
+branch as `baseBranch`), open a fresh PR after the previous one merges, and calling the tool again
+from the same branch updates that branch's open PR with the latest commits instead of failing. Every
+PR is tracked with full lifecycle state, and stale artifacts heal when the provider reports a PR
+already merged.
+
 **Claude Sonnet 5 and Grok 4.6.** Adds `anthropic/claude-sonnet-5` to the model picker and
 integrations with adaptive thinking and reasoning efforts from low through max, and `xai/grok-4.6`
 to the opt-in xAI / SuperGrok catalog with low, medium, and high efforts.
