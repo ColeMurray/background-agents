@@ -34,7 +34,7 @@ interface RevisionRow {
   assignment_sources: string;
 }
 
-export interface HumanSessionSkills {
+export interface SessionSkillsView {
   manifestSha256: string;
   resolverVersion: number;
   selection: SandboxSkillManifest["selection"];
@@ -51,7 +51,7 @@ export interface HumanSessionSkills {
 export class SessionSkillStore {
   constructor(private readonly db: SqlDatabase) {}
 
-  async getHumanManifest(sessionId: string): Promise<HumanSessionSkills | null> {
+  async getHumanManifest(sessionId: string): Promise<SessionSkillsView | null> {
     const loaded = await this.load(sessionId);
     if (!loaded) return null;
     return {
