@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Logger } from "../logger";
-import type { SourceControlProvider } from "../source-control";
+import type { PullRequestSnapshot, SourceControlProvider } from "../source-control";
 import { buildSessionRepositories } from "./repository-target";
 import type { ArtifactRow, SessionRepositoryRow, SessionRow } from "./types";
 import type { ArtifactRepository, CreateArtifactData } from "./artifact-repository";
@@ -142,6 +142,24 @@ function prArtifact(overrides: {
   } as ArtifactRow;
 }
 
+function prSnapshot(overrides: {
+  number: number;
+  head: string;
+  base?: string;
+  lifecycleState?: "open" | "closed" | "merged";
+}): PullRequestSnapshot {
+  return {
+    number: overrides.number,
+    url: `https://github.com/acme/web/pull/${overrides.number}`,
+    lifecycleState: overrides.lifecycleState ?? "open",
+    isDraft: false,
+    headBranch: overrides.head,
+    baseBranch: overrides.base ?? "main",
+    repoOwner: "acme",
+    repoName: "web",
+  };
+}
+
 function createTestHarness() {
   const log = createMockLogger();
   const provider = createMockProvider();
@@ -273,16 +291,9 @@ describe("per-branch pull requests", () => {
     harness.artifacts.push(
       prArtifact({ id: "artifact-pr-1", number: 7, head: "open-inspect/session-name-1" })
     );
-    vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/web/pull/7",
-      lifecycleState: "merged",
-      isDraft: false,
-      headBranch: "open-inspect/session-name-1",
-      baseBranch: "main",
-      repoOwner: "acme",
-      repoName: "web",
-    });
+    vi.mocked(harness.provider.getPullRequest).mockResolvedValue(
+      prSnapshot({ number: 7, head: "open-inspect/session-name-1", lifecycleState: "merged" })
+    );
 
     const result = await harness.service.createPullRequest(createInput());
 
@@ -309,16 +320,9 @@ describe("per-branch pull requests", () => {
     // force-pushing the current checkout over it would destroy that PR.
     harness.setSession(createSession({ branch_name: "feat/stack-top" }));
     harness.artifacts.push(prArtifact({ id: "artifact-pr-1", number: 7, head: "feat/stack-top" }));
-    vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/web/pull/7",
-      lifecycleState: "open",
-      isDraft: false,
-      headBranch: "feat/stack-top",
-      baseBranch: "main",
-      repoOwner: "acme",
-      repoName: "web",
-    });
+    vi.mocked(harness.provider.getPullRequest).mockResolvedValue(
+      prSnapshot({ number: 7, head: "feat/stack-top" })
+    );
 
     const result = await harness.service.createPullRequest(createInput());
 
@@ -359,16 +363,9 @@ describe("per-branch pull requests", () => {
     harness.artifacts.push(
       prArtifact({ id: "artifact-pr-1", number: 7, head: "feature-x", base: "main" })
     );
-    vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/web/pull/7",
-      lifecycleState: "open",
-      isDraft: false,
-      headBranch: "feature-x",
-      baseBranch: "main",
-      repoOwner: "acme",
-      repoName: "web",
-    });
+    vi.mocked(harness.provider.getPullRequest).mockResolvedValue(
+      prSnapshot({ number: 7, head: "feature-x" })
+    );
 
     const result = await harness.service.createPullRequest(
       createInput({ headBranch: "feature-x", baseBranch: "release-1.0" })
@@ -410,16 +407,9 @@ describe("per-branch pull requests", () => {
     harness.artifacts.push(
       prArtifact({ id: "artifact-pr-1", number: 7, head: "open-inspect/session-name-1" })
     );
-    vi.mocked(harness.provider.getPullRequest).mockResolvedValue({
-      number: 7,
-      url: "https://github.com/acme/web/pull/7",
-      lifecycleState: "merged",
-      isDraft: false,
-      headBranch: "open-inspect/session-name-1",
-      baseBranch: "main",
-      repoOwner: "acme",
-      repoName: "web",
-    });
+    vi.mocked(harness.provider.getPullRequest).mockResolvedValue(
+      prSnapshot({ number: 7, head: "open-inspect/session-name-1", lifecycleState: "merged" })
+    );
 
     await harness.service.createPullRequest(createInput());
 

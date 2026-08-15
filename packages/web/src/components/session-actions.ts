@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { PullRequestDisplayStatus } from "@open-inspect/shared/types/artifacts";
+import { prArtifactBelongsToRepo } from "@open-inspect/shared/types/repositories";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { toast } from "sonner";
 import { truncateBranch } from "@/lib/format";
@@ -30,14 +31,15 @@ export interface SessionPrLink {
 
 function prLinkLabel(artifact: Artifact, primaryRepo?: SessionActionProps["primaryRepo"]): string {
   const { prNumber, head, repoOwner, repoName } = artifact.metadata ?? {};
-  // Identity-less metadata belongs to the primary repo by convention, so only
-  // an explicit, different identity earns a repo prefix.
+  // Ownership follows the shared convention: identity-less metadata belongs
+  // to the primary repo, so only a different explicit identity earns a prefix.
   const isForeignRepo =
     primaryRepo != null &&
-    repoOwner !== undefined &&
-    repoName !== undefined &&
-    (repoOwner.toLowerCase() !== primaryRepo.repoOwner.toLowerCase() ||
-      repoName.toLowerCase() !== primaryRepo.repoName.toLowerCase());
+    !prArtifactBelongsToRepo(
+      repoOwner !== undefined && repoName !== undefined ? { repoOwner, repoName } : null,
+      primaryRepo,
+      true
+    );
   const repoPrefix = isForeignRepo ? `${repoOwner}/${repoName}` : "";
   const name =
     prNumber !== undefined ? `${repoPrefix}#${prNumber}` : repoPrefix ? `${repoPrefix} PR` : "PR";

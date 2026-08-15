@@ -219,7 +219,7 @@ export function MetadataSection({
                     {prNumber ? `#${prNumber}` : "PR"}
                   </a>
                 ) : (
-                  <span className="text-foreground">#{prNumber}</span>
+                  <span className="text-foreground">{prNumber ? `#${prNumber}` : "PR"}</span>
                 )}
                 {prArtifacts.length > 1 && prHead && (
                   <span
@@ -406,7 +406,9 @@ export function MetadataSection({
                               {repoPrNumber ? `#${repoPrNumber}` : "PR"}
                             </a>
                           ) : (
-                            <span className="text-foreground">#{repoPrNumber}</span>
+                            <span className="text-foreground">
+                              {repoPrNumber ? `#${repoPrNumber}` : "PR"}
+                            </span>
                           )}
                           {repoPrState && (
                             <Badge variant={prBadgeVariant(repoPrState)} className="capitalize">
