@@ -10,7 +10,7 @@ import { getScmBranchUrl, getScmRepoUrl } from "@/lib/scm";
 import { NO_REPOSITORY_LABEL } from "@/lib/repo-label";
 import type { Artifact, SandboxEvent } from "@/types/session";
 import type { SessionRepositoryState } from "@open-inspect/shared/types/repositories";
-import { listPrArtifactsForRepo } from "@/lib/pr-artifacts";
+import { listPrArtifacts, listPrArtifactsForRepo } from "@/lib/pr-artifacts";
 import { browserApiFetch } from "@/lib/browser-api-fetch";
 import {
   ClockIcon,
@@ -117,9 +117,7 @@ export function MetadataSection({
 
   // Sessions can hold several PRs (one open PR per head branch); list them
   // all, oldest first — creation order matches PR-number order.
-  const prArtifacts = artifacts
-    .filter((a) => a.type === "pr")
-    .sort((a, b) => a.createdAt - b.createdAt);
+  const prArtifacts = listPrArtifacts(artifacts);
   const manualPrArtifact = artifacts.find(
     (a) => a.type === "branch" && (a.metadata?.mode === "manual_pr" || a.metadata?.createPrUrl)
   );
@@ -194,10 +192,19 @@ export function MetadataSection({
           render exactly as before. Multi-repo sessions use the member list. */}
       {!isMultiRepo && (
         <>
-          {/* PR rows — one per pull request, oldest first */}
-          {prArtifacts.map((artifact, index) => {
+          {/* PR rows — one per pull request, oldest first. A lone PR keeps
+              the sync button inline; several move it to a section header so
+              it clearly refreshes them all. */}
+          {prArtifacts.length > 1 && (
+            <div className="flex items-center gap-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <span>Pull requests</span>
+              {showSyncButton && sessionId && <PullRequestSyncButton sessionId={sessionId} />}
+            </div>
+          )}
+          {prArtifacts.map((artifact) => {
             const prNumber = artifact.metadata?.prNumber;
             const prState = artifact.metadata?.prState;
+            const prHead = artifact.metadata?.head;
             const prUrl = getSafeExternalUrl(artifact.url ?? undefined);
             return (
               <div key={artifact.id} className="flex items-center gap-2 text-sm">
@@ -214,12 +221,20 @@ export function MetadataSection({
                 ) : (
                   <span className="text-foreground">#{prNumber}</span>
                 )}
+                {prArtifacts.length > 1 && prHead && (
+                  <span
+                    className="min-w-0 truncate max-w-[120px] text-muted-foreground"
+                    title={prHead}
+                  >
+                    {truncateBranch(prHead)}
+                  </span>
+                )}
                 {prState && (
                   <Badge variant={prBadgeVariant(prState)} className="capitalize">
                     {prState}
                   </Badge>
                 )}
-                {index === 0 && showSyncButton && sessionId && (
+                {prArtifacts.length === 1 && showSyncButton && sessionId && (
                   <PullRequestSyncButton sessionId={sessionId} />
                 )}
               </div>

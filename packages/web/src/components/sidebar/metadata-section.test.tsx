@@ -307,6 +307,34 @@ describe("PR sync button", () => {
     });
   });
 
+  it("moves to a Pull requests header covering every row when several PRs exist", () => {
+    render(
+      <MetadataSection
+        sessionId="session-1"
+        createdAt={Date.now()}
+        baseBranch="main"
+        artifacts={[
+          prArtifact,
+          {
+            id: "artifact-pr-2",
+            type: "pr" as const,
+            url: "https://github.com/acme/web-app/pull/43",
+            metadata: { prNumber: 43, prState: "merged" as const, head: "feat/second" },
+            createdAt: 1235,
+          },
+        ]}
+      />
+    );
+
+    // One button for the whole section, not one pinned to the first row.
+    const buttons = screen.getAllByRole("button", { name: "Sync PR status" });
+    expect(buttons).toHaveLength(1);
+    const header = screen.getByText("Pull requests");
+    expect(header.parentElement).toContainElement(buttons[0]);
+    // Rows carry their head branch so several PRs stay distinguishable.
+    expect(screen.getByText("feat/second")).toBeInTheDocument();
+  });
+
   it("does not render without a sessionId or without PR artifacts", () => {
     render(<MetadataSection createdAt={Date.now()} baseBranch="main" artifacts={[prArtifact]} />);
     expect(screen.queryByRole("button", { name: "Sync PR status" })).not.toBeInTheDocument();

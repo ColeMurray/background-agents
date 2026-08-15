@@ -9,7 +9,9 @@ branch instead of one per repository: agents can create stacked PRs (each level 
 branch as `baseBranch`), open a fresh PR after the previous one merges, and calling the tool again
 from the same branch updates that branch's open PR with the latest commits instead of failing. Every
 PR is tracked with full lifecycle state and listed in the session sidebar with its live status, and
-stale artifacts heal when the provider reports a PR already merged.
+stale artifacts heal when the provider reports a PR already merged. Sessions holding several PRs get
+a Pull requests sidebar section with one sync control for all of them, and the View PR action
+becomes a picker naming each PR by number and head branch.
 
 **Claude Sonnet 5 and Grok 4.6.** Adds `anthropic/claude-sonnet-5` to the model picker and
 integrations with adaptive thinking and reasoning efforts from low through max, and `xai/grok-4.6`

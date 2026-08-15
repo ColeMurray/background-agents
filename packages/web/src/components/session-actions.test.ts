@@ -13,63 +13,84 @@ function prArtifact(overrides: Partial<Artifact>): Artifact {
 }
 
 describe("resolveSessionActions", () => {
-  it("targets the most recent open PR, not the first artifact", () => {
-    const merged = prArtifact({
-      id: "artifact-merged",
-      url: "https://github.com/acme/web/pull/1",
-      metadata: { prNumber: 1, prState: "merged" },
-      createdAt: 1,
-    });
-    const open = prArtifact({
-      id: "artifact-open",
+  it("links every PR, oldest first, labeled with number and head branch", () => {
+    const second = prArtifact({
+      id: "artifact-2",
       url: "https://github.com/acme/web/pull/2",
-      metadata: { prNumber: 2, prState: "open" },
+      metadata: { prNumber: 2, prState: "open", head: "feat/second" },
       createdAt: 2,
     });
-
-    const actions = resolveSessionActions([merged, open]);
-
-    expect(actions.prUrl).toBe("https://github.com/acme/web/pull/2");
-  });
-
-  it("falls back to the most recent PR when none are open", () => {
-    const older = prArtifact({
-      id: "artifact-older",
+    const first = prArtifact({
+      id: "artifact-1",
       url: "https://github.com/acme/web/pull/1",
-      metadata: { prNumber: 1, prState: "merged" },
+      metadata: { prNumber: 1, prState: "merged", head: "feat/first" },
       createdAt: 1,
     });
-    const newer = prArtifact({
-      id: "artifact-newer",
-      url: "https://github.com/acme/web/pull/2",
-      metadata: { prNumber: 2, prState: "closed" },
-      createdAt: 2,
-    });
 
-    const actions = resolveSessionActions([older, newer]);
+    const { prLinks } = resolveSessionActions([second, first]);
 
-    expect(actions.prUrl).toBe("https://github.com/acme/web/pull/2");
+    expect(prLinks).toEqual([
+      {
+        id: "artifact-1",
+        url: "https://github.com/acme/web/pull/1",
+        label: "#1 · feat/first",
+        prState: "merged",
+      },
+      {
+        id: "artifact-2",
+        url: "https://github.com/acme/web/pull/2",
+        label: "#2 · feat/second",
+        prState: "open",
+      },
+    ]);
   });
 
-  it("scopes the PR to the primary repo when one is given", () => {
+  it("prefixes PRs outside the primary repo with their repository", () => {
     const primaryPr = prArtifact({
       id: "artifact-web",
       url: "https://github.com/acme/web/pull/1",
-      metadata: { prNumber: 1, prState: "open", repoOwner: "acme", repoName: "web" },
+      metadata: { prNumber: 1, repoOwner: "Acme", repoName: "Web" },
       createdAt: 1,
     });
     const otherPr = prArtifact({
       id: "artifact-api",
       url: "https://github.com/acme/api/pull/2",
-      metadata: { prNumber: 2, prState: "open", repoOwner: "acme", repoName: "api" },
+      metadata: { prNumber: 2, repoOwner: "acme", repoName: "api" },
       createdAt: 2,
     });
 
-    const actions = resolveSessionActions([otherPr, primaryPr], {
+    const { prLinks } = resolveSessionActions([primaryPr, otherPr], {
       repoOwner: "acme",
       repoName: "web",
     });
 
-    expect(actions.prUrl).toBe("https://github.com/acme/web/pull/1");
+    expect(prLinks.map((link) => link.label)).toEqual(["#1", "acme/api#2"]);
+  });
+
+  it("drops PR artifacts without a safe external URL", () => {
+    const unlinked = prArtifact({ id: "artifact-unlinked", url: null, createdAt: 1 });
+    const unsafe = prArtifact({
+      id: "artifact-unsafe",
+      url: "javascript:alert(1)",
+      createdAt: 2,
+    });
+    const linked = prArtifact({
+      id: "artifact-linked",
+      url: "https://github.com/acme/web/pull/3",
+      metadata: { prNumber: 3 },
+      createdAt: 3,
+    });
+
+    const { prLinks } = resolveSessionActions([unlinked, unsafe, linked]);
+
+    expect(prLinks.map((link) => link.id)).toEqual(["artifact-linked"]);
+  });
+
+  it("labels legacy artifacts without a number as PR", () => {
+    const legacy = prArtifact({ id: "artifact-legacy", metadata: {}, createdAt: 1 });
+
+    const { prLinks } = resolveSessionActions([legacy]);
+
+    expect(prLinks[0].label).toBe("PR");
   });
 });

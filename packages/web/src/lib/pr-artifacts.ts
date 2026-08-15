@@ -16,44 +16,28 @@ function prArtifactMatchesRepo(
 }
 
 /**
- * All PR artifacts belonging to the target repository, oldest first —
+ * Every PR artifact in the session regardless of repository, oldest first —
  * creation order matches PR-number order, including for legacy artifacts
- * whose metadata carries no number. The ownership convention (identity-less
- * legacy metadata belongs to the primary) is the shared
- * prArtifactBelongsToRepo — the same rule the control plane applies.
+ * whose metadata carries no number.
+ */
+export function listPrArtifacts(artifacts: readonly Artifact[]): Artifact[] {
+  return artifacts
+    .filter((artifact) => artifact.type === "pr")
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+/**
+ * All PR artifacts belonging to the target repository, oldest first. The
+ * ownership convention (identity-less legacy metadata belongs to the primary)
+ * is the shared prArtifactBelongsToRepo — the same rule the control plane
+ * applies.
  */
 export function listPrArtifactsForRepo(
   artifacts: readonly Artifact[],
   targetRepo: { repoOwner: string; repoName: string },
   targetIsPrimary: boolean
 ): Artifact[] {
-  return artifacts
-    .filter((artifact) => prArtifactMatchesRepo(artifact, targetRepo, targetIsPrimary))
-    .sort((a, b) => a.createdAt - b.createdAt);
-}
-
-/** Display states that still accept commits (draft is an open PR). */
-const OPEN_DISPLAY_STATES = new Set(["open", "draft"]);
-
-/**
- * The PR a session-level action should target: the most recently created
- * open (or draft) PR, falling back to the most recent PR of any state —
- * sessions can hold several PRs and only open ones are actionable.
- */
-export function findLatestOpenPrArtifact(
-  artifacts: readonly Artifact[],
-  targetRepo?: { repoOwner: string; repoName: string } | null,
-  targetIsPrimary = true
-): Artifact | undefined {
-  const candidates = artifacts
-    .filter((artifact) =>
-      targetRepo
-        ? prArtifactMatchesRepo(artifact, targetRepo, targetIsPrimary)
-        : artifact.type === "pr"
-    )
-    .sort((a, b) => b.createdAt - a.createdAt);
-  return (
-    candidates.find((artifact) => OPEN_DISPLAY_STATES.has(artifact.metadata?.prState ?? "")) ??
-    candidates[0]
+  return listPrArtifacts(artifacts).filter((artifact) =>
+    prArtifactMatchesRepo(artifact, targetRepo, targetIsPrimary)
   );
 }

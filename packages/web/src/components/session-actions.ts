@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import type { PullRequestDisplayStatus } from "@open-inspect/shared/types/artifacts";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import { toast } from "sonner";
-import { findLatestOpenPrArtifact } from "@/lib/pr-artifacts";
+import { truncateBranch } from "@/lib/format";
+import { listPrArtifacts } from "@/lib/pr-artifacts";
 import { getSafeExternalUrl } from "@/lib/urls";
 import type { Artifact } from "@/types/session";
 
@@ -11,25 +13,62 @@ export interface SessionActionProps {
   sessionId: string;
   sessionStatus: SessionStatus;
   artifacts: Artifact[];
-  /** Scope the PR action to the repository's PRs in multi-repo sessions. */
+  /** Labels PRs on other repositories with their repo in multi-repo sessions. */
   primaryRepo?: { repoOwner: string; repoName: string } | null;
   onArchive?: () => void | Promise<void>;
   onUnarchive?: () => void | Promise<void>;
+}
+
+/** One PR a session-level action can open, ready to render as a link. */
+export interface SessionPrLink {
+  id: string;
+  url: string;
+  /** "#12 · head-branch"; prefixed "owner/name#12" outside the primary repo. */
+  label: string;
+  prState?: PullRequestDisplayStatus;
+}
+
+function prLinkLabel(artifact: Artifact, primaryRepo?: SessionActionProps["primaryRepo"]): string {
+  const { prNumber, head, repoOwner, repoName } = artifact.metadata ?? {};
+  // Identity-less metadata belongs to the primary repo by convention, so only
+  // an explicit, different identity earns a repo prefix.
+  const isForeignRepo =
+    primaryRepo != null &&
+    repoOwner !== undefined &&
+    repoName !== undefined &&
+    (repoOwner.toLowerCase() !== primaryRepo.repoOwner.toLowerCase() ||
+      repoName.toLowerCase() !== primaryRepo.repoName.toLowerCase());
+  const repoPrefix = isForeignRepo ? `${repoOwner}/${repoName}` : "";
+  const name =
+    prNumber !== undefined ? `${repoPrefix}#${prNumber}` : repoPrefix ? `${repoPrefix} PR` : "PR";
+  return head ? `${name} · ${truncateBranch(head)}` : name;
 }
 
 export function resolveSessionActions(
   artifacts: Artifact[],
   primaryRepo?: SessionActionProps["primaryRepo"]
 ) {
-  // Sessions can hold several PRs per repo; the action targets the latest
-  // open one (else the latest overall) — the sidebar lists them all.
-  const prArtifact = findLatestOpenPrArtifact(artifacts, primaryRepo ?? null, true);
+  // Sessions can hold several PRs (one open PR per head branch, across
+  // repos); surface every linkable one, oldest first, and let the caller
+  // render a single button or a picker.
+  const prLinks: SessionPrLink[] = listPrArtifacts(artifacts).flatMap((artifact) => {
+    const url = getSafeExternalUrl(artifact.url);
+    if (!url) return [];
+    return [
+      {
+        id: artifact.id,
+        url,
+        label: prLinkLabel(artifact, primaryRepo),
+        prState: artifact.metadata?.prState,
+      },
+    ];
+  });
   const previewArtifact = artifacts.find((artifact) => artifact.type === "preview");
 
   return {
     previewArtifact,
     previewUrl: getSafeExternalUrl(previewArtifact?.url),
-    prUrl: getSafeExternalUrl(prArtifact?.url),
+    prLinks,
     mediaCount: artifacts.filter(
       (artifact) => artifact.type === "screenshot" || artifact.type === "video"
     ).length,
