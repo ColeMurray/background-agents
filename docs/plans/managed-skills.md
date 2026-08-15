@@ -389,7 +389,7 @@ const resolved = applicable
     skillId: skill.id,
     revisionId: skill.currentRevisionId,
     name: skill.name,
-    contentSha256: skill.contentSha256,
+    revisionSha256: skill.revisionSha256,
     assignmentSources: skill.matchingAssignments,
   }));
 ```
@@ -444,7 +444,7 @@ CREATE TABLE skill_revisions (
   id                  TEXT PRIMARY KEY,       -- skillrev_<opaque-id>
   skill_id            TEXT NOT NULL,
   revision_number     INTEGER NOT NULL,
-  content_sha256      TEXT NOT NULL,
+  revision_sha256     TEXT NOT NULL,
   description         TEXT NOT NULL,
   license             TEXT,
   compatibility       TEXT,
@@ -526,7 +526,7 @@ CREATE TABLE session_skill_revisions (
   skill_id            TEXT NOT NULL,
   revision_id         TEXT NOT NULL,
   skill_name          TEXT NOT NULL,
-  content_sha256      TEXT NOT NULL,
+  revision_sha256     TEXT NOT NULL,
   assignment_sources  TEXT NOT NULL,          -- validated JSON
   PRIMARY KEY(session_id, skill_id),
   UNIQUE(session_id, position),
@@ -917,7 +917,7 @@ Expected code areas include:
 | D1           | New migration under `terraform/d1/migrations/`, integration cleanup                 |
 | Stores       | `packages/control-plane/src/db/skills.ts`, `skill-profiles.ts`                      |
 | Resolution   | `packages/control-plane/src/session/skill-resolution.ts`, session initialization    |
-| Routes       | Human CRUD/profile/preview routes and sandbox manifest route                        |
+| Routes       | Human CRUD/profile/preview routes and sandbox installation route                    |
 | Router/types | Route registration, `Env` only if storage bindings later change                     |
 | Web BFF      | `/api/skills`, `/api/skill-profiles`, and preview proxies                           |
 | Web UI       | Settings category, skill editor, profile editor, session selector, provenance panel |

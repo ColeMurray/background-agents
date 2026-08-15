@@ -1,7 +1,10 @@
-import type {
-  SkillAssignment,
-  SkillContentInput,
-  SkillFile,
+import {
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_REVISION_BYTES,
+  type SessionSkillManifestSelection,
+  type SkillAssignment,
+  type SkillContentInput,
+  type SkillFile,
 } from "@open-inspect/shared/types/skills";
 
 const encoder = new TextEncoder();
@@ -18,14 +21,9 @@ interface ManifestHashSkill {
   skillId: string;
   revisionId: string;
   name: string;
-  contentSha256: string;
+  revisionSha256: string;
   assignmentSources: SkillAssignment[];
 }
-
-export type ManifestSelection =
-  | { mode: "all" }
-  | { mode: "none" }
-  | { mode: "profile"; profileId: string; profileName: string };
 
 function yamlString(value: string): string {
   return JSON.stringify(value);
@@ -104,7 +102,7 @@ function concat(parts: Uint8Array[]): Uint8Array {
 export async function buildSkillRevision(
   name: string,
   content: SkillContentInput
-): Promise<{ files: SkillFile[]; contentSha256: string; totalBytes: number }> {
+): Promise<{ files: SkillFile[]; revisionSha256: string; totalBytes: number }> {
   const sourceFiles = [
     { path: "SKILL.md", content: renderSkillMarkdown(name, content), executable: false },
     ...content.files,
@@ -131,7 +129,7 @@ export async function buildSkillRevision(
   }
   return {
     files,
-    contentSha256: await sha256Hex(concat(parts)),
+    revisionSha256: await sha256Hex(concat(parts)),
     totalBytes: files.reduce((total, file) => total + file.sizeBytes, 0),
   };
 }
@@ -148,7 +146,7 @@ function sourceValues(source: SkillAssignment): [string, string, string, string,
 
 /** Hash selection, pinned revisions, and assignment provenance in canonical byte order. */
 export async function hashSessionSkillManifest(
-  selection: ManifestSelection,
+  selection: SessionSkillManifestSelection,
   skills: readonly ManifestHashSkill[]
 ): Promise<string> {
   const selectionByte = selection.mode === "all" ? 0 : selection.mode === "none" ? 1 : 2;
@@ -165,7 +163,7 @@ export async function hashSessionSkillManifest(
       ...stringBytes(skill.skillId),
       ...stringBytes(skill.revisionId),
       ...stringBytes(skill.name),
-      hexBytes(skill.contentSha256)
+      hexBytes(skill.revisionSha256)
     );
     const sources = [...skill.assignmentSources].sort((left, right) => {
       const leftValues = sourceValues(left);
@@ -182,4 +180,18 @@ export async function hashSessionSkillManifest(
     }
   }
   return sha256Hex(concat(parts));
+}
+
+export class SkillRevisionValidationError extends Error {}
+
+export async function buildValidatedSkillRevision(name: string, content: SkillContentInput) {
+  const revision = await buildSkillRevision(name, content);
+  const oversized = revision.files.find((file) => file.sizeBytes > MAX_SKILL_FILE_BYTES);
+  if (oversized) {
+    throw new SkillRevisionValidationError(`${oversized.path} exceeds the per-file size limit`);
+  }
+  if (revision.totalBytes > MAX_SKILL_REVISION_BYTES) {
+    throw new SkillRevisionValidationError("Rendered skill exceeds the revision size limit");
+  }
+  return revision;
 }

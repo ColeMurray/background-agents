@@ -9,7 +9,6 @@ import {
   MAX_SKILL_PATH_BYTES,
   MAX_SKILL_PATH_DEPTH,
   MAX_SKILL_REVISION_BYTES,
-  sandboxSkillManifestSchema,
   skillContentInputSchema,
 } from "@open-inspect/shared/types/skills";
 
@@ -21,7 +20,6 @@ describe("managed skill content addressing", () => {
     )
   );
   const content = skillContentInputSchema.parse(golden.content);
-  const goldenManifest = sandboxSkillManifestSchema.parse(golden.manifest);
 
   it("renders canonical SKILL.md with fixed and sorted frontmatter", async () => {
     const revision = await buildSkillRevision(golden.name, content);
@@ -48,8 +46,8 @@ describe("managed skill content addressing", () => {
       ...content,
       metadata: { alpha: "first", zeta: "last" },
     });
-    expect(first.contentSha256).toBe(second.contentSha256);
-    expect(first.contentSha256).toBe(golden.revisionSha256);
+    expect(first.revisionSha256).toBe(second.revisionSha256);
+    expect(first.revisionSha256).toBe(golden.revisionSha256);
     expect(first.files[0].content).toBe(golden.skillMarkdown);
     expect(first.files.map((file) => file.path)).toEqual(["SKILL.md", "scripts/deploy.sh"]);
 
@@ -57,7 +55,7 @@ describe("managed skill content addressing", () => {
       skillId: "skill_1",
       revisionId: "skillrev_1",
       name: "acme-deploy",
-      contentSha256: first.contentSha256,
+      revisionSha256: first.revisionSha256,
       assignmentSources: [
         { id: "assign_repo", type: "repository" as const, repoOwner: "acme", repoName: "api" },
         { id: "assign_global", type: "global" as const },
@@ -71,12 +69,6 @@ describe("managed skill content addressing", () => {
     await expect(hashSessionSkillManifest({ mode: "all" }, [skill])).resolves.toBe(
       golden.manifestSha256
     );
-    expect({
-      ...goldenManifest,
-      skills: goldenManifest.skills.map((fixtureSkill) => ({
-        ...fixtureSkill,
-        files: first.files,
-      })),
-    }).toEqual(goldenManifest);
+    expect(first.files).toEqual(golden.files);
   });
 });

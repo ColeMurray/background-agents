@@ -1,8 +1,8 @@
 import {
   sandboxSkillInstallationSchema,
   type SandboxSkillInstallation,
+  type SessionSkillsView,
   skillAssignmentSchema,
-  type SandboxSkillManifest,
 } from "@open-inspect/shared/types/skills";
 import { SkillStore } from "./skills";
 import type { SqlDatabase } from "./sql-database";
@@ -25,18 +25,9 @@ interface RevisionRow {
   skill_name: string;
   description: string;
   revision_number: number;
-  content_sha256: string;
+  revision_sha256: string;
   total_bytes: number;
   assignment_sources: string;
-}
-
-/** Human-facing provenance for the immutable skill revisions pinned to a session. */
-export interface SessionSkillsView {
-  manifestSha256: string;
-  resolverVersion: number;
-  selection: SandboxSkillManifest["selection"];
-  resolvedAt: number;
-  skills: Omit<SandboxSkillManifest["skills"][number], "files">[];
 }
 
 export class SessionSkillStore {
@@ -48,7 +39,7 @@ export class SessionSkillStore {
     if (!loaded) return null;
     return {
       manifestSha256: loaded.manifest.manifest_sha256,
-      resolverVersion: loaded.manifest.resolver_version,
+      resolverVersion: 1,
       selection: this.selection(loaded.manifest),
       resolvedAt: loaded.manifest.resolved_at,
       skills: loaded.revisions.map((row) => this.resolvedSkill(row)),
@@ -66,7 +57,7 @@ export class SessionSkillStore {
     const filesByRevision = await skillStore.filesForRevisions(
       loaded.revisions.map((row) => row.revision_id)
     );
-    const manifest = {
+    const installation = {
       schemaVersion: 1,
       manifestSha256: loaded.manifest.manifest_sha256,
       skills: loaded.revisions.map((row) => {
@@ -77,10 +68,10 @@ export class SessionSkillStore {
         return { name: row.skill_name, files };
       }),
     };
-    const parsed = sandboxSkillInstallationSchema.safeParse(manifest);
+    const parsed = sandboxSkillInstallationSchema.safeParse(installation);
     if (!parsed.success) {
       throw new Error(
-        `Invalid persisted session skill manifest: ${parsed.error.issues[0]?.message}`
+        `Invalid persisted sandbox skill installation: ${parsed.error.issues[0]?.message}`
       );
     }
     return parsed.data;
@@ -101,7 +92,7 @@ export class SessionSkillStore {
     return { manifest, revisions: revisions.results ?? [] };
   }
 
-  private selection(manifest: ManifestRow): SandboxSkillManifest["selection"] {
+  private selection(manifest: ManifestRow): SessionSkillsView["selection"] {
     if (manifest.resolver_version !== 1) {
       throw new Error(`Unsupported managed skill resolver version: ${manifest.resolver_version}`);
     }
@@ -122,7 +113,7 @@ export class SessionSkillStore {
   }
 
   private resolvedSkill(row: RevisionRow) {
-    let assignmentSources: SandboxSkillManifest["skills"][number]["assignmentSources"];
+    let assignmentSources: SessionSkillsView["skills"][number]["assignmentSources"];
     try {
       assignmentSources = skillAssignmentSchema.array().parse(JSON.parse(row.assignment_sources));
     } catch {
@@ -134,7 +125,7 @@ export class SessionSkillStore {
       name: row.skill_name,
       description: row.description,
       revisionNumber: row.revision_number,
-      contentSha256: row.content_sha256,
+      revisionSha256: row.revision_sha256,
       totalBytes: row.total_bytes,
       assignmentSources,
     };

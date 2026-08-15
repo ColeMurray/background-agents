@@ -39,7 +39,7 @@ describe("managed skills persistence and resolution", () => {
     );
     expect(skill.files.find((file) => file.path === "scripts/deploy.sh")?.executable).toBe(true);
 
-    const unchanged = await skills.edit(
+    const unchanged = await skills.replaceContentAndAssignments(
       skill.id,
       {
         content,
@@ -121,10 +121,10 @@ describe("managed skills persistence and resolution", () => {
     expect(child?.skills).toEqual(parent?.skills);
     expect(child?.skills[0].skillId).toBe(skill.id);
 
-    const sandboxManifest = await store.getSandboxInstallation("child");
-    expect(sandboxManifest).not.toHaveProperty("selection");
-    expect(Object.keys(sandboxManifest?.skills[0] ?? {}).sort()).toEqual(["files", "name"]);
-    expect(sandboxManifest?.skills[0].files.map((file) => file.path)).toEqual([
+    const sandboxInstallation = await store.getSandboxInstallation("child");
+    expect(sandboxInstallation).not.toHaveProperty("selection");
+    expect(Object.keys(sandboxInstallation?.skills[0] ?? {}).sort()).toEqual(["files", "name"]);
+    expect(sandboxInstallation?.skills[0].files.map((file) => file.path)).toEqual([
       "SKILL.md",
       "scripts/deploy.sh",
     ]);
@@ -193,6 +193,22 @@ describe("managed skills persistence and resolution", () => {
     const created = await createResponse.json<{ skill: { id: string; createdBy: string } }>();
     expect(created.skill.createdBy).toBe("11111111111111111111111111111111");
 
+    const disabled = await serviceFetch(`https://test.local/skills/${created.skill.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(disabled.status).toBe(200);
+    await expect(disabled.json()).resolves.toMatchObject({ skill: { enabled: false } });
+
+    const assignmentsThroughPatch = await serviceFetch(
+      `https://test.local/skills/${created.skill.id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ assignments: [] }),
+      }
+    );
+    expect(assignmentsThroughPatch.status).toBe(400);
+
     const profileResponse = await serviceFetch("https://test.local/skill-profiles", {
       method: "POST",
       body: JSON.stringify({ name: "My skills", skillIds: [created.skill.id] }),
@@ -254,6 +270,13 @@ describe("managed skills persistence and resolution", () => {
     expect(unchanged?.body).toBe(content.body);
     expect(unchanged?.assignments).toMatchObject([{ type: "global" }]);
 
+    const enabledThroughPut = await serviceFetch(`https://test.local/skills/${skill.id}`, {
+      method: "PUT",
+      headers: { "If-Match": skill.currentRevisionId },
+      body: JSON.stringify({ content, assignments: [], enabled: false }),
+    });
+    expect(enabledThroughPut.status).toBe(400);
+
     const edited = await serviceFetch(`https://test.local/skills/${skill.id}`, {
       method: "PUT",
       headers: { "If-Match": skill.currentRevisionId },
@@ -271,22 +294,22 @@ describe("managed skills persistence and resolution", () => {
       { name: "stale-atomic-edit", content, assignments: [{ type: "global" }] },
       "user_1"
     );
-    const originalValidate = skills.validateAndHash.bind(skills);
+    const originalBatch = env.DB.batch.bind(env.DB);
     let generationAfterWinningEdit = 0;
-    vi.spyOn(skills, "validateAndHash").mockImplementationOnce(async (name, candidate) => {
+    vi.spyOn(env.DB, "batch").mockImplementationOnce(async (statements) => {
       const winningStore = new SkillStore(env.DB);
-      await winningStore.edit(
+      await winningStore.replaceContentAndAssignments(
         skill.id,
         { content: { ...content, body: "winning edit" }, assignments: [{ type: "global" }] },
         "user_2",
         skill.currentRevisionId
       );
       generationAfterWinningEdit = await winningStore.catalogGeneration();
-      return originalValidate(name, candidate);
+      return originalBatch(statements);
     });
 
     await expect(
-      skills.edit(
+      skills.replaceContentAndAssignments(
         skill.id,
         { content: { ...content, body: "stale edit" }, assignments: [] },
         "user_1",

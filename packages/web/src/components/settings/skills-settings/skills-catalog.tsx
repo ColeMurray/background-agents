@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { deleteSkill, updateSkill, useSkill, useSkills } from "@/hooks/use-managed-skills";
+import { deleteSkill, setSkillEnabled, useSkill, useSkills } from "@/hooks/use-managed-skills";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { PlusIcon, SparkleIcon } from "@/components/ui/icons";
@@ -22,7 +22,7 @@ export function SkillsCatalog() {
 
   async function toggleEnabled(id: string, enabled: boolean) {
     try {
-      await updateSkill(id, { enabled });
+      await setSkillEnabled(id, { enabled });
       await mutate();
     } catch (requestError) {
       toast.error(errorMessage(requestError));

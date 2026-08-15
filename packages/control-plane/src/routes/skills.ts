@@ -1,9 +1,9 @@
 import {
   createSkillInputSchema,
   createSkillProfileInputSchema,
-  editSkillInputSchema,
+  replaceSkillContentAndAssignmentsInputSchema,
+  setSkillEnabledInputSchema,
   skillResolutionPreviewInputSchema,
-  updateSkillInputSchema,
   updateSkillProfileInputSchema,
 } from "@open-inspect/shared/types/skills";
 import {
@@ -17,6 +17,10 @@ import { resolveManagedSkills, SkillResolutionError } from "../session/skill-res
 import type { Env } from "../types";
 import { createLogger } from "../logger";
 import { managedSkillsEnabled } from "../skills/feature";
+import {
+  buildValidatedSkillRevision,
+  SkillRevisionValidationError,
+} from "../skills/content-addressing";
 import { error, json, parsePattern, type RequestContext, type Route } from "./shared";
 
 const log = createLogger("router:skills");
@@ -27,7 +31,7 @@ type SkillAuditEvent =
       skill_id: string;
       revision_id: string;
     }
-  | { action: "skill.metadata_updated" | "skill.deleted"; skill_id: string }
+  | { action: "skill.enabled_updated" | "skill.deleted"; skill_id: string }
   | {
       action: "profile.created" | "profile.updated" | "profile.deleted";
       profile_id: string;
@@ -57,8 +61,8 @@ async function parsedBody(request: Request): Promise<unknown | Response> {
   }
 }
 
-function skillId(match: RegExpMatchArray): string | Response {
-  return match.groups?.id ?? error("Skill ID required", 400);
+function resourceId(match: RegExpMatchArray): string | Response {
+  return match.groups?.id ?? error("Resource ID required", 400);
 }
 
 async function handleListSkills(
@@ -76,7 +80,7 @@ async function handleGetSkill(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const id = skillId(match);
+  const id = resourceId(match);
   if (id instanceof Response) return id;
   const skill = await new SkillStore(ctx.db).get(id);
   return skill ? json({ skill }) : error("Skill not found", 404);
@@ -111,57 +115,54 @@ async function handlePreviewSkill(
   request: Request,
   _env: Env,
   _match: RegExpMatchArray,
-  ctx: RequestContext
+  _ctx: RequestContext
 ): Promise<Response> {
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
   const parsed = createSkillInputSchema.pick({ name: true, content: true }).safeParse(body);
   if (!parsed.success) return error("Invalid skill", 400);
   try {
-    const hashed = await new SkillStore(ctx.db).validateAndHash(
-      parsed.data.name,
-      parsed.data.content
-    );
+    const revision = await buildValidatedSkillRevision(parsed.data.name, parsed.data.content);
     return json({
-      skillMarkdown: hashed.files.find((file) => file.path === "SKILL.md")?.content,
-      contentSha256: hashed.contentSha256,
-      totalBytes: hashed.totalBytes,
+      skillMarkdown: revision.files.find((file) => file.path === "SKILL.md")?.content,
+      revisionSha256: revision.revisionSha256,
+      totalBytes: revision.totalBytes,
     });
   } catch (e) {
     return skillWriteError(e);
   }
 }
 
-async function handleUpdateSkill(
+async function handleSetSkillEnabled(
   request: Request,
   _env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const id = skillId(match);
+  const id = resourceId(match);
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
-  const parsed = updateSkillInputSchema.safeParse(body);
+  const parsed = setSkillEnabledInputSchema.safeParse(body);
   if (!parsed.success) return error("Invalid skill update", 400);
   try {
-    const skill = await new SkillStore(ctx.db).updateMetadata(id, parsed.data, userId);
-    if (skill) audit(ctx, { action: "skill.metadata_updated", skill_id: id });
+    const skill = await new SkillStore(ctx.db).setEnabled(id, parsed.data, userId);
+    if (skill) audit(ctx, { action: "skill.enabled_updated", skill_id: id });
     return skill ? json({ skill }) : error("Skill not found", 404);
   } catch (e) {
     return skillWriteError(e);
   }
 }
 
-async function handleEditSkill(
+async function handleReplaceSkillContentAndAssignments(
   request: Request,
   _env: Env,
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const id = skillId(match);
+  const id = resourceId(match);
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
@@ -169,10 +170,15 @@ async function handleEditSkill(
   if (!ifMatch) return error("If-Match revision is required", 428);
   const body = await parsedBody(request);
   if (body instanceof Response) return body;
-  const parsed = editSkillInputSchema.safeParse(body);
+  const parsed = replaceSkillContentAndAssignmentsInputSchema.safeParse(body);
   if (!parsed.success) return error("Invalid skill edit", 400);
   try {
-    const skill = await new SkillStore(ctx.db).edit(id, parsed.data, userId, ifMatch);
+    const skill = await new SkillStore(ctx.db).replaceContentAndAssignments(
+      id,
+      parsed.data,
+      userId,
+      ifMatch
+    );
     if (!skill) return error("Skill not found", 404);
     audit(ctx, {
       action: "skill.edited",
@@ -191,7 +197,7 @@ async function handleDeleteSkill(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const id = skillId(match);
+  const id = resourceId(match);
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
@@ -243,7 +249,7 @@ async function handleUpdateProfile(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const id = skillId(match);
+  const id = resourceId(match);
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
@@ -266,7 +272,7 @@ async function handleDeleteProfile(
   match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
-  const id = skillId(match);
+  const id = resourceId(match);
   if (id instanceof Response) return id;
   const userId = canonicalUserId(ctx);
   if (!userId) return error("Canonical user required", 403);
@@ -323,7 +329,9 @@ async function handleResolvePreview(
 
 function skillWriteError(value: unknown): Response {
   if (value instanceof SkillConflictError) return error(value.message, 409);
-  if (value instanceof SkillValidationError) return error(value.message, 400);
+  if (value instanceof SkillValidationError || value instanceof SkillRevisionValidationError) {
+    return error(value.message, 400);
+  }
   throw value;
 }
 
@@ -354,8 +362,16 @@ export const skillRoutes: Route[] = [
     handler: enabled(handleResolvePreview),
   },
   { method: "GET", pattern: parsePattern("/skills/:id"), handler: enabled(handleGetSkill) },
-  { method: "PATCH", pattern: parsePattern("/skills/:id"), handler: enabled(handleUpdateSkill) },
-  { method: "PUT", pattern: parsePattern("/skills/:id"), handler: enabled(handleEditSkill) },
+  {
+    method: "PATCH",
+    pattern: parsePattern("/skills/:id"),
+    handler: enabled(handleSetSkillEnabled),
+  },
+  {
+    method: "PUT",
+    pattern: parsePattern("/skills/:id"),
+    handler: enabled(handleReplaceSkillContentAndAssignments),
+  },
   { method: "DELETE", pattern: parsePattern("/skills/:id"), handler: enabled(handleDeleteSkill) },
   { method: "GET", pattern: parsePattern("/skill-profiles"), handler: enabled(handleListProfiles) },
   {

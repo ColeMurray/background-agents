@@ -11,11 +11,11 @@ from sandbox_runtime.managed_skills import (
     ManagedSkillsClient,
     ManagedSkillsError,
     ManagedSkillsMaterializer,
-    validate_manifest,
+    validate_installation,
 )
 
 
-def _manifest(*, name="managed", path="SKILL.md", content=None):
+def _installation(*, name="managed", path="SKILL.md", content=None):
     if content is None:
         content = f'---\nname: {name}\ndescription: "Managed skill"\n---\n# Managed\n'
     content_bytes = content.encode()
@@ -42,24 +42,24 @@ def _manifest(*, name="managed", path="SKILL.md", content=None):
 
 
 @pytest.mark.parametrize("path", ["../escape", "scripts/../../escape", "/absolute", "a\\b"])
-def test_manifest_rejects_traversal_paths(path):
+def test_installation_rejects_traversal_paths(path):
     with pytest.raises(ManagedSkillsError, match="path"):
-        validate_manifest(json.dumps(_manifest(path=path)).encode())
+        validate_installation(json.dumps(_installation(path=path)).encode())
 
 
-def test_manifest_rejects_file_hash_mismatch():
-    document = _manifest()
+def test_installation_rejects_file_hash_mismatch():
+    document = _installation()
     document["skills"][0]["files"][0]["sha256"] = "0" * 64
 
     with pytest.raises(ManagedSkillsError, match="SHA-256 mismatch"):
-        validate_manifest(json.dumps(document).encode())
+        validate_installation(json.dumps(document).encode())
 
 
-def test_manifest_rejects_mismatched_frontmatter_name():
-    document = _manifest(content="---\nname: other\n---\n")
+def test_installation_rejects_mismatched_frontmatter_name():
+    document = _installation(content="---\nname: other\n---\n")
 
     with pytest.raises(ManagedSkillsError, match="does not match"):
-        validate_manifest(json.dumps(document).encode())
+        validate_installation(json.dumps(document).encode())
 
 
 @pytest.mark.parametrize(
@@ -69,8 +69,8 @@ def test_manifest_rejects_mismatched_frontmatter_name():
         ("references/guide.md", "references"),
     ],
 )
-def test_manifest_rejects_file_ancestor_conflicts_in_either_order(paths):
-    document = _manifest()
+def test_installation_rejects_file_ancestor_conflicts_in_either_order(paths):
+    document = _installation()
     files = document["skills"][0]["files"]
     for path in paths:
         content = f"content for {path}"
@@ -85,18 +85,18 @@ def test_manifest_rejects_file_ancestor_conflicts_in_either_order(paths):
         )
 
     with pytest.raises(ManagedSkillsError, match="conflicting skill file path"):
-        validate_manifest(json.dumps(document).encode())
+        validate_installation(json.dumps(document).encode())
 
 
-def test_manifest_ignores_additive_contract_fields():
-    document = _manifest()
+def test_installation_ignores_additive_contract_fields():
+    document = _installation()
     document["futureManifestField"] = True
     document["skills"][0]["futureSkillField"] = "value"
     document["skills"][0]["files"][0]["futureFileField"] = 1
 
-    manifest = validate_manifest(json.dumps(document).encode())
+    installation = validate_installation(json.dumps(document).encode())
 
-    assert manifest.skills[0].name == "managed"
+    assert installation.skills[0].name == "managed"
 
 
 async def test_client_uses_session_url_and_sandbox_bearer_auth():
@@ -113,7 +113,7 @@ async def test_client_uses_session_url_and_sandbox_bearer_auth():
         transport=httpx.MockTransport(handler),
     )
 
-    await client.fetch_manifest()
+    await client.fetch_installation()
 
     assert requests[0].url == "https://control.example/sessions/session%2Fone/sandbox-skills"
     assert requests[0].headers["Authorization"] == "Bearer sandbox-token"
@@ -133,15 +133,15 @@ async def test_client_retries_transient_fetch_failures(monkeypatch):
         "https://control.example", "session", "token", transport=httpx.MockTransport(handler)
     )
 
-    assert await client.fetch_manifest() == b"ok"
+    assert await client.fetch_installation() == b"ok"
     assert attempts == 3
     assert sleep.await_count == 2
 
 
 async def test_materializer_replaces_destination(tmp_path):
-    document = _manifest()
+    document = _installation()
     client = MagicMock()
-    client.fetch_manifest = AsyncMock(return_value=json.dumps(document).encode())
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
     destination = tmp_path / "config" / "opencode" / "skills"
     destination.mkdir(parents=True)
     (destination / "stale.txt").write_text("stale")
@@ -160,9 +160,9 @@ async def test_materializer_replaces_destination(tmp_path):
 
 
 async def test_materializer_rejects_bundled_name_collision(tmp_path):
-    document = _manifest(name="conflict")
+    document = _installation(name="conflict")
     client = MagicMock()
-    client.fetch_manifest = AsyncMock(return_value=json.dumps(document).encode())
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
     bundled = tmp_path / "bundled" / "conflict"
     bundled.mkdir(parents=True)
     (bundled / "SKILL.md").write_text("---\nname: conflict\n---\n")

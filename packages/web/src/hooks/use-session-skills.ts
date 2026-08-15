@@ -1,21 +1,16 @@
 import useSWR from "swr";
-import type { ResolvedSkill } from "@open-inspect/shared/types/skills";
+import { sessionSkillsViewSchema, type SessionSkillsView } from "@open-inspect/shared/types/skills";
+import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 
-export interface SessionSkillsProvenance {
-  manifestSha256?: string;
-  resolverVersion?: number;
-  resolvedAt?: number;
-  selection?:
-    | { mode: "all" }
-    | { mode: "none" }
-    | { mode: "profile"; profileId: string; profileName?: string };
-  skills: ResolvedSkill[];
+async function fetchSessionSkills(path: BrowserApiPath): Promise<SessionSkillsView> {
+  const response = await browserApiFetch(path);
+  if (!response.ok) throw new Error("Failed to load session skills");
+  return sessionSkillsViewSchema.parse(await response.json());
 }
 
 export function useSessionSkills(sessionId: string) {
-  const { data, isLoading, error } = useSWR<SessionSkillsProvenance>(
-    `/api/sessions/${sessionId}/skills`
-  );
+  const path = `/api/sessions/${sessionId}/skills` as const;
+  const { data, isLoading, error } = useSWR(path, fetchSessionSkills);
   return {
     provenance: data,
     loading: isLoading,

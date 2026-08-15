@@ -27,7 +27,7 @@ async function handleSessionSkillsView(
   return response;
 }
 
-async function handleSandboxManifest(
+async function handleSandboxInstallation(
   _request: Request,
   _env: Env,
   match: RegExpMatchArray,
@@ -66,6 +66,6 @@ export const sessionSkillRoutes: Route[] = [
   {
     method: "GET",
     pattern: parsePattern("/sessions/:id/sandbox-skills"),
-    handler: handleSandboxManifest,
+    handler: handleSandboxInstallation,
   },
 ];

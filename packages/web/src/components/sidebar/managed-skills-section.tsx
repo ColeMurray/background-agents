@@ -25,9 +25,9 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
   if (!provenance) return null;
 
   const profileLabel =
-    provenance.selection?.mode === "profile"
-      ? (provenance.selection.profileName ?? "Personal profile")
-      : provenance.selection?.mode === "none"
+    provenance.selection.mode === "profile"
+      ? provenance.selection.profileName
+      : provenance.selection.mode === "none"
         ? "None"
         : "All applicable";
   return (
@@ -44,7 +44,7 @@ export function ManagedSkillsSection({ sessionId }: { sessionId: string }) {
                 {skill.name}
               </span>
               <span className="shrink-0 text-[10px] text-muted-foreground">
-                r{skill.revisionNumber} · {skill.contentSha256.slice(0, 8)}
+                r{skill.revisionNumber} · {skill.revisionSha256.slice(0, 8)}
               </span>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">{skill.description}</p>

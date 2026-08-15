@@ -2,22 +2,19 @@ import {
   MAX_MANAGED_SKILLS_PER_SESSION,
   MAX_MANAGED_SKILL_MANIFEST_BYTES,
   type ResolvedSkill,
+  type SessionSkillManifestSelection,
   type SessionSkillSelection,
 } from "@open-inspect/shared/types/skills";
 import { SkillProfileStore } from "../db/skill-profiles";
 import { SkillStore } from "../db/skills";
 import type { SqlDatabase } from "../db/sql-database";
-import {
-  hashSessionSkillManifest,
-  SKILL_RESOLVER_VERSION,
-  type ManifestSelection,
-} from "../skills/content-addressing";
+import { hashSessionSkillManifest, SKILL_RESOLVER_VERSION } from "../skills/content-addressing";
 
 const MAX_CATALOG_READ_ATTEMPTS = 3;
 
 /** Immutable resolver output persisted with a session before sandbox creation. */
 export interface SessionSkillManifestInput {
-  selection: ManifestSelection;
+  selection: SessionSkillManifestSelection;
   resolverVersion: number;
   manifestSha256: string;
   resolvedAt: number;
@@ -25,7 +22,7 @@ export interface SessionSkillManifestInput {
   ignoredProfileSkillIds?: string[];
 }
 
-export interface SkillResolutionTarget {
+interface SkillResolutionTarget {
   repositories: readonly { repoOwner: string; repoName: string }[];
   environmentId: string | null;
 }
@@ -61,7 +58,7 @@ export async function resolveManagedSkills(
   for (let attempt = 0; attempt < MAX_CATALOG_READ_ATTEMPTS; attempt++) {
     const generationBefore = await skills.catalogGeneration();
     const applicable = await skills.listApplicable(target);
-    let manifestSelection: ManifestSelection;
+    let manifestSelection: SessionSkillManifestSelection;
     let selectedIds: Set<string> | null;
     if (selection.mode === "profile") {
       if (!canonicalUserId)
@@ -89,7 +86,7 @@ export async function resolveManagedSkills(
         name: skill.name,
         description: skill.description,
         revisionNumber: skill.revisionNumber,
-        contentSha256: skill.contentSha256,
+        revisionSha256: skill.revisionSha256,
         totalBytes: skill.totalBytes,
         assignmentSources: skill.assignments,
       }));

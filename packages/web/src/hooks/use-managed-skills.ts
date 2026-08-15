@@ -3,37 +3,44 @@ import { z } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
+  listSkillProfilesResponseSchema,
+  listSkillsResponseSchema,
   skillProfileResponseSchema,
   skillResolutionPreviewResponseSchema,
   skillResponseSchema,
 } from "@open-inspect/shared/types/skills";
 import type {
   CreateSkillInput,
-  EditSkillInput,
+  ReplaceSkillContentAndAssignmentsInput,
+  SetSkillEnabledInput,
   Skill,
   SkillContentInput,
   SkillProfile,
-  SkillSummary,
-  UpdateSkillInput,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
 
 export type SkillResolutionPreviewInput = z.infer<typeof skillResolutionPreviewInputSchema>;
 
-export type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
+type SkillResolutionPreviewResponse = z.infer<typeof skillResolutionPreviewResponseSchema>;
 
 const skillContentPreviewSchema = z.strictObject({
   skillMarkdown: z.string(),
-  contentSha256: z.string(),
+  revisionSha256: z.string(),
   totalBytes: z.number().int().nonnegative(),
 });
-export type SkillContentPreview = z.infer<typeof skillContentPreviewSchema>;
+type SkillContentPreview = z.infer<typeof skillContentPreviewSchema>;
 
 const okResponseSchema = z.strictObject({ ok: z.literal(true) });
 const errorResponseSchema = z.object({ error: z.string() });
 
-export const SKILLS_KEY = "/api/skills";
-export const SKILL_PROFILES_KEY = "/api/skill-profiles";
+const SKILLS_KEY = "/api/skills";
+const SKILL_PROFILES_KEY = "/api/skill-profiles";
+
+async function validatedFetcher<T>(path: BrowserApiPath, schema: z.ZodType<T>): Promise<T> {
+  const response = await browserApiFetch(path);
+  if (!response.ok) throw new Error("Managed skills request failed");
+  return schema.parse(await response.json());
+}
 
 async function apiRequest<T>(
   path: BrowserApiPath,
@@ -54,8 +61,8 @@ async function apiRequest<T>(
 
 export function useSkills() {
   const { data: session, status } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR<{ skills: SkillSummary[] }>(
-    session ? SKILLS_KEY : null
+  const { data, isLoading, error, mutate } = useSWR(session ? SKILLS_KEY : null, (path) =>
+    validatedFetcher(path, listSkillsResponseSchema)
   );
   return {
     skills: data?.skills ?? [],
@@ -67,16 +74,17 @@ export function useSkills() {
 
 export function useSkill(id: string | null) {
   const { data: session } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR<{ skill: Skill }>(
-    session && id ? `${SKILLS_KEY}/${id}` : null
+  const { data, isLoading, error, mutate } = useSWR(
+    session && id ? (`${SKILLS_KEY}/${id}` as const) : null,
+    (path) => validatedFetcher(path, skillResponseSchema)
   );
   return { skill: data?.skill, loading: isLoading, error, mutate };
 }
 
 export function useSkillProfiles() {
   const { data: session, status } = useAuthSession();
-  const { data, isLoading, error, mutate } = useSWR<{ profiles: SkillProfile[] }>(
-    session ? SKILL_PROFILES_KEY : null
+  const { data, isLoading, error, mutate } = useSWR(session ? SKILL_PROFILES_KEY : null, (path) =>
+    validatedFetcher(path, listSkillProfilesResponseSchema)
   );
   return {
     profiles: data?.profiles ?? [],
@@ -95,7 +103,7 @@ export async function createSkill(input: CreateSkillInput): Promise<Skill> {
   ).skill;
 }
 
-export async function updateSkill(id: string, input: UpdateSkillInput): Promise<Skill> {
+export async function setSkillEnabled(id: string, input: SetSkillEnabledInput): Promise<Skill> {
   return (
     await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {
       method: "PATCH",
@@ -104,10 +112,10 @@ export async function updateSkill(id: string, input: UpdateSkillInput): Promise<
   ).skill;
 }
 
-export async function editSkill(
+export async function replaceSkillContentAndAssignments(
   id: string,
   revisionId: string,
-  input: EditSkillInput
+  input: ReplaceSkillContentAndAssignmentsInput
 ): Promise<Skill> {
   return (
     await apiRequest(`${SKILLS_KEY}/${id}`, skillResponseSchema, {

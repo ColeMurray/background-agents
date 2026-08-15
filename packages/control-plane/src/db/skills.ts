@@ -1,19 +1,17 @@
 import {
-  MAX_SKILL_FILE_BYTES,
-  MAX_SKILL_REVISION_BYTES,
   skillMetadataSchema,
   type CreateSkillInput,
-  type EditSkillInput,
+  type ReplaceSkillContentAndAssignmentsInput,
+  type SetSkillEnabledInput,
   type Skill,
   type SkillAssignment,
   type SkillAssignmentInput,
   type SkillContentInput,
   type SkillFile,
   type SkillSummary,
-  type UpdateSkillInput,
 } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
-import { buildSkillRevision } from "../skills/content-addressing";
+import { buildValidatedSkillRevision } from "../skills/content-addressing";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const RESERVED_SKILL_NAMES = new Set([
@@ -35,7 +33,7 @@ interface SkillRow {
   created_at: number;
   updated_at: number;
   revision_number: number;
-  content_sha256: string;
+  revision_sha256: string;
   description: string;
   body: string;
   license: string | null;
@@ -68,8 +66,7 @@ interface FileRow {
 
 export class SkillConflictError extends Error {}
 export class SkillValidationError extends Error {}
-
-export interface ApplicableSkill extends SkillSummary {
+interface ApplicableSkill extends SkillSummary {
   totalBytes: number;
 }
 
@@ -90,11 +87,11 @@ export class SkillStore {
     return Promise.all(rows.map((row) => this.toSummary(row, assignments.get(row.id) ?? [])));
   }
 
-  async get(id: string, includeDeleted = false): Promise<Skill | null> {
+  async get(id: string): Promise<Skill | null> {
     const row = await this.db
       .prepare(
         `${this.currentSkillSelect()}
-         WHERE s.id = ? ${includeDeleted ? "" : "AND s.deleted_at IS NULL"}`
+         WHERE s.id = ? AND s.deleted_at IS NULL`
       )
       .bind(id)
       .first<SkillRow>();
@@ -124,7 +121,7 @@ export class SkillStore {
     if (existing) throw new SkillConflictError("A skill with this name already exists");
 
     await this.validateAssignments(input.assignments);
-    const hashed = await this.validateAndHash(input.name, input.content);
+    const revision = await buildValidatedSkillRevision(input.name, input.content);
     const id = `skill_${generateId()}`;
     const revisionId = `skillrev_${generateId()}`;
     const now = Date.now();
@@ -136,8 +133,8 @@ export class SkillStore {
            VALUES (?, ?, NULL, 1, NULL, ?, ?, ?, ?)`
         )
         .bind(id, input.name, actorUserId, actorUserId, now, now),
-      this.revisionInsert(revisionId, id, 1, input.content, hashed, actorUserId, now),
-      ...this.fileInserts(revisionId, hashed.files),
+      this.revisionInsert(revisionId, id, 1, input.content, revision, actorUserId, now),
+      ...this.fileInserts(revisionId, revision.files),
       this.db
         .prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
         .bind(revisionId, id),
@@ -147,37 +144,22 @@ export class SkillStore {
     return (await this.get(id))!;
   }
 
-  async updateMetadata(
+  async setEnabled(
     id: string,
-    input: UpdateSkillInput,
+    input: SetSkillEnabledInput,
     actorUserId: string
   ): Promise<Skill | null> {
     const current = await this.get(id);
     if (!current) return null;
-    if (input.assignments !== undefined) await this.validateAssignments(input.assignments);
     const now = Date.now();
-    const statements: SqlStatement[] = [];
-    if (input.enabled !== undefined || input.assignments !== undefined) {
-      statements.push(
-        this.db
-          .prepare(
-            "UPDATE skills SET enabled = ?, updated_by = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
-          )
-          .bind(
-            input.enabled === undefined ? (current.enabled ? 1 : 0) : input.enabled ? 1 : 0,
-            actorUserId,
-            now,
-            id
-          )
-      );
-    }
-    if (input.assignments !== undefined) {
-      statements.push(
-        this.db.prepare("DELETE FROM skill_assignments WHERE skill_id = ?").bind(id),
-        ...this.assignmentInserts(id, input.assignments, actorUserId, now)
-      );
-    }
-    if (statements.length > 0) await this.db.batch([...statements, this.bumpGeneration()]);
+    await this.db.batch([
+      this.db
+        .prepare(
+          "UPDATE skills SET enabled = ?, updated_by = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+        )
+        .bind(input.enabled ? 1 : 0, actorUserId, now, id),
+      this.bumpGeneration(),
+    ]);
     return this.get(id);
   }
 
@@ -185,9 +167,9 @@ export class SkillStore {
    * Atomically replace content and assignments under one revision precondition.
    * Every statement is guarded so a stale editor cannot partially mutate scope.
    */
-  async edit(
+  async replaceContentAndAssignments(
     id: string,
-    input: EditSkillInput,
+    input: ReplaceSkillContentAndAssignmentsInput,
     actorUserId: string,
     expectedRevisionId: string
   ): Promise<Skill | null> {
@@ -197,27 +179,21 @@ export class SkillStore {
       throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
     }
     await this.validateAssignments(input.assignments);
-    const hashed = await this.validateAndHash(current.name, input.content);
+    const revision = await buildValidatedSkillRevision(current.name, input.content);
     const now = Date.now();
     const statements: SqlStatement[] = [];
     let updateResultIndex: number;
     let resultingRevisionId = expectedRevisionId;
 
-    if (hashed.contentSha256 === current.contentSha256) {
+    if (revision.revisionSha256 === current.revisionSha256) {
       updateResultIndex = statements.length;
       statements.push(
         this.db
           .prepare(
-            `UPDATE skills SET enabled = ?, updated_by = ?, updated_at = ?
+            `UPDATE skills SET updated_by = ?, updated_at = ?
              WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
           )
-          .bind(
-            (input.enabled ?? current.enabled) ? 1 : 0,
-            actorUserId,
-            now,
-            id,
-            expectedRevisionId
-          )
+          .bind(actorUserId, now, id, expectedRevisionId)
       );
     } else {
       const revisionId = `skillrev_${generateId()}`;
@@ -228,28 +204,21 @@ export class SkillStore {
           id,
           current.revisionNumber + 1,
           input.content,
-          hashed,
+          revision,
           actorUserId,
           now,
           expectedRevisionId
         ),
-        ...this.fileInserts(revisionId, hashed.files)
+        ...this.fileInserts(revisionId, revision.files)
       );
       updateResultIndex = statements.length;
       statements.push(
         this.db
           .prepare(
-            `UPDATE skills SET current_revision_id = ?, enabled = ?, updated_by = ?, updated_at = ?
+            `UPDATE skills SET current_revision_id = ?, updated_by = ?, updated_at = ?
              WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
           )
-          .bind(
-            revisionId,
-            (input.enabled ?? current.enabled) ? 1 : 0,
-            actorUserId,
-            now,
-            id,
-            expectedRevisionId
-          )
+          .bind(revisionId, actorUserId, now, id, expectedRevisionId)
       );
     }
     statements.push(
@@ -395,7 +364,7 @@ export class SkillStore {
   }
 
   private currentSkillSelect(): string {
-    return `SELECT s.*, r.revision_number, r.content_sha256, r.description, r.body,
+    return `SELECT s.*, r.revision_number, r.revision_sha256, r.description, r.body,
        r.license, r.compatibility, r.metadata_json, r.total_bytes,
        r.created_by AS revision_created_by,
        creator.display_name AS creator_display_name,
@@ -414,10 +383,9 @@ export class SkillStore {
       name: row.name,
       description: row.description,
       enabled: row.enabled === 1,
-      deleted: row.deleted_at !== null,
       currentRevisionId: row.current_revision_id,
       revisionNumber: row.revision_number,
-      contentSha256: row.content_sha256,
+      revisionSha256: row.revision_sha256,
       revisionCreatedBy: row.revision_created_by,
       creatorDisplayName: row.creator_display_name,
       lastEditorDisplayName: row.last_editor_display_name,
@@ -473,17 +441,6 @@ export class SkillStore {
     return assignments;
   }
 
-  async validateAndHash(name: string, content: SkillContentInput) {
-    const hashed = await buildSkillRevision(name, content);
-    const oversized = hashed.files.find((file) => file.sizeBytes > MAX_SKILL_FILE_BYTES);
-    if (oversized)
-      throw new SkillValidationError(`${oversized.path} exceeds the per-file size limit`);
-    if (hashed.totalBytes > MAX_SKILL_REVISION_BYTES) {
-      throw new SkillValidationError("Rendered skill exceeds the revision size limit");
-    }
-    return hashed;
-  }
-
   private async validateAssignments(assignments: SkillAssignmentInput[]): Promise<void> {
     const keys = assignments.map((assignment) => {
       if (assignment.type === "global") return "global";
@@ -516,7 +473,7 @@ export class SkillStore {
     skillId: string,
     revisionNumber: number,
     content: SkillContentInput,
-    hashed: Awaited<ReturnType<typeof buildSkillRevision>>,
+    revision: Awaited<ReturnType<typeof buildValidatedSkillRevision>>,
     actorUserId: string,
     now: number,
     expectedCurrentRevisionId: string | null = null
@@ -524,7 +481,7 @@ export class SkillStore {
     return this.db
       .prepare(
         `INSERT INTO skill_revisions
-         (id, skill_id, revision_number, content_sha256, description, body, license,
+         (id, skill_id, revision_number, revision_sha256, description, body, license,
           compatibility, metadata_json, total_bytes, created_by, created_at)
           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
           WHERE ? IS NULL OR EXISTS (
@@ -536,13 +493,13 @@ export class SkillStore {
         revisionId,
         skillId,
         revisionNumber,
-        hashed.contentSha256,
+        revision.revisionSha256,
         content.description,
         content.body,
         content.license ?? null,
         content.compatibility ?? null,
         JSON.stringify(content.metadata),
-        hashed.totalBytes,
+        revision.totalBytes,
         actorUserId,
         now,
         expectedCurrentRevisionId,

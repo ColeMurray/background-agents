@@ -9,7 +9,11 @@ import {
   type SkillContentInput,
   type SkillFileInput,
 } from "@open-inspect/shared/types/skills";
-import { createSkill, editSkill, previewSkill } from "@/hooks/use-managed-skills";
+import {
+  createSkill,
+  previewSkill,
+  replaceSkillContentAndAssignments,
+} from "@/hooks/use-managed-skills";
 import { useEnvironments } from "@/hooks/use-environments";
 import { useRepos } from "@/hooks/use-repos";
 import { Button } from "@/components/ui/button";
@@ -145,7 +149,7 @@ export function SkillEditor({
         toast.success("Skill created");
         onSaved(created.id);
       } else if (skill) {
-        const revised = await editSkill(skill.id, skill.currentRevisionId, {
+        const revised = await replaceSkillContentAndAssignments(skill.id, skill.currentRevisionId, {
           content: saveContent,
           assignments,
         });
@@ -164,7 +168,7 @@ export function SkillEditor({
       const result = await previewSkill(name, { ...content, metadata: parsedMetadata() });
       setValidation({
         markdown: result.skillMarkdown,
-        sha256: result.contentSha256,
+        sha256: result.revisionSha256,
         totalBytes: result.totalBytes,
       });
       toast.success("Skill content is valid");

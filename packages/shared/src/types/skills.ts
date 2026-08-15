@@ -146,15 +146,11 @@ export const createSkillInputSchema = z.strictObject({
   assignments: z.array(skillAssignmentInputSchema).optional().default([]),
 });
 
-export const updateSkillInputSchema = z.strictObject({
-  enabled: z.boolean().optional(),
-  assignments: z.array(skillAssignmentInputSchema).optional(),
-});
+export const setSkillEnabledInputSchema = z.strictObject({ enabled: z.boolean() });
 
-export const editSkillInputSchema = z.strictObject({
+export const replaceSkillContentAndAssignmentsInputSchema = z.strictObject({
   content: skillContentInputSchema,
   assignments: z.array(skillAssignmentInputSchema),
-  enabled: z.boolean().optional(),
 });
 
 export const skillFileSchema = z.strictObject({
@@ -186,10 +182,9 @@ export const skillSummarySchema = z.strictObject({
   name: skillNameSchema,
   description: z.string(),
   enabled: z.boolean(),
-  deleted: z.boolean(),
   currentRevisionId: z.string(),
   revisionNumber: z.number().int().positive(),
-  contentSha256: z.string(),
+  revisionSha256: z.string(),
   revisionCreatedBy: z.string(),
   creatorDisplayName: z.string().nullable(),
   lastEditorDisplayName: z.string().nullable(),
@@ -274,7 +269,7 @@ export const resolvedSkillSchema = z.strictObject({
   name: skillNameSchema,
   description: z.string(),
   revisionNumber: z.number().int().positive(),
-  contentSha256: z.string(),
+  revisionSha256: z.string(),
   totalBytes: z.number().int().nonnegative(),
   assignmentSources: z.array(skillAssignmentSchema),
 });
@@ -285,24 +280,22 @@ export const skillResolutionPreviewResponseSchema = z.strictObject({
   ignoredProfileSkillIds: z.array(z.string()),
 });
 
-export const sandboxSkillManifestSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  resolverVersion: z.literal(1),
+const sessionSkillManifestSelectionSchema = z.union([
+  z.strictObject({ mode: z.literal("all") }),
+  z.strictObject({ mode: z.literal("none") }),
+  z.strictObject({
+    mode: z.literal("profile"),
+    profileId: z.string(),
+    profileName: z.string(),
+  }),
+]);
+
+export const sessionSkillsViewSchema = z.strictObject({
   manifestSha256: z.string(),
-  selection: z.union([
-    z.strictObject({ mode: z.literal("all") }),
-    z.strictObject({ mode: z.literal("none") }),
-    z.strictObject({
-      mode: z.literal("profile"),
-      profileId: z.string(),
-      profileName: z.string(),
-    }),
-  ]),
-  skills: z.array(
-    resolvedSkillSchema.extend({
-      files: z.array(skillFileSchema),
-    })
-  ),
+  resolverVersion: z.literal(1),
+  selection: sessionSkillManifestSelectionSchema,
+  resolvedAt: z.number(),
+  skills: z.array(resolvedSkillSchema),
 });
 
 /** Narrow sandbox DTO: installation files only; provenance stays on the user-facing view. */
@@ -321,14 +314,17 @@ export type SkillFileInput = z.infer<typeof skillFileInputSchema>;
 export type SkillContentInput = z.infer<typeof skillContentInputSchema>;
 export type SkillAssignmentInput = z.infer<typeof skillAssignmentInputSchema>;
 export type CreateSkillInput = z.infer<typeof createSkillInputSchema>;
-export type UpdateSkillInput = z.infer<typeof updateSkillInputSchema>;
-export type EditSkillInput = z.infer<typeof editSkillInputSchema>;
+export type SetSkillEnabledInput = z.infer<typeof setSkillEnabledInputSchema>;
+export type ReplaceSkillContentAndAssignmentsInput = z.infer<
+  typeof replaceSkillContentAndAssignmentsInputSchema
+>;
 export type SkillFile = z.infer<typeof skillFileSchema>;
 export type SkillAssignment = z.infer<typeof skillAssignmentSchema>;
 export type SkillSummary = z.infer<typeof skillSummarySchema>;
 export type Skill = z.infer<typeof skillSchema>;
 export type SkillProfile = z.infer<typeof skillProfileSchema>;
 export type SessionSkillSelection = z.infer<typeof sessionSkillSelectionSchema>;
+export type SessionSkillManifestSelection = z.infer<typeof sessionSkillManifestSelectionSchema>;
 export type ResolvedSkill = z.infer<typeof resolvedSkillSchema>;
-export type SandboxSkillManifest = z.infer<typeof sandboxSkillManifestSchema>;
+export type SessionSkillsView = z.infer<typeof sessionSkillsViewSchema>;
 export type SandboxSkillInstallation = z.infer<typeof sandboxSkillInstallationSchema>;

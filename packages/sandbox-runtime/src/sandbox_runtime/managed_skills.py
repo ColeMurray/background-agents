@@ -66,7 +66,7 @@ class ManagedSkill:
 
 
 @dataclass(frozen=True)
-class ManagedSkillManifest:
+class ManagedSkillInstallation:
     manifest_sha256: str
     skills: tuple[ManagedSkill, ...]
 
@@ -92,7 +92,7 @@ class ManagedSkillsClient:
         session_id = quote(self._session_id, safe="")
         return f"{self._base_url}/sessions/{session_id}/sandbox-skills"
 
-    async def fetch_manifest(self) -> bytes:
+    async def fetch_installation(self) -> bytes:
         """Fetch the session-bound installation DTO with bounded retries and response size."""
         last_error: Exception | None = None
         for attempt in range(MANAGED_SKILLS_REQUEST_ATTEMPTS):
@@ -113,8 +113,8 @@ class ManagedSkillsClient:
                         size += len(chunk)
                         if size > MAX_MANAGED_SKILL_RESPONSE_BYTES:
                             raise ManagedSkillsError(
-                                "managed skills manifest exceeds the size limit",
-                                code="manifest_too_large",
+                                "managed skills installation exceeds the size limit",
+                                code="installation_too_large",
                             )
                         chunks.append(chunk)
                     return b"".join(chunks)
@@ -138,30 +138,32 @@ def _retryable_error(error: Exception) -> bool:
 
 def _require_object(value: Any, keys: set[str], context: str) -> Mapping[str, Any]:
     if not isinstance(value, dict) or not keys.issubset(value):
-        raise ManagedSkillsError(f"invalid {context} object", code="manifest_invalid")
+        raise ManagedSkillsError(f"invalid {context} object", code="installation_invalid")
     return value
 
 
 def _require_string(value: Any, context: str, *, allow_empty: bool = False) -> str:
     if not isinstance(value, str) or (not value and not allow_empty):
-        raise ManagedSkillsError(f"invalid {context}", code="manifest_invalid")
+        raise ManagedSkillsError(f"invalid {context}", code="installation_invalid")
     try:
         value.encode("utf-8")
     except UnicodeEncodeError as error:
-        raise ManagedSkillsError(f"invalid UTF-8 in {context}", code="manifest_invalid") from error
+        raise ManagedSkillsError(
+            f"invalid UTF-8 in {context}", code="installation_invalid"
+        ) from error
     return value
 
 
 def _require_int(value: Any, context: str, *, minimum: int = 0) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ManagedSkillsError(f"invalid {context}", code="manifest_invalid")
+        raise ManagedSkillsError(f"invalid {context}", code="installation_invalid")
     return value
 
 
 def _validate_sha256(value: Any, context: str) -> str:
     digest = _require_string(value, context)
     if not _SHA256_RE.fullmatch(digest):
-        raise ManagedSkillsError(f"invalid {context}", code="manifest_invalid")
+        raise ManagedSkillsError(f"invalid {context}", code="installation_invalid")
     return digest
 
 
@@ -185,7 +187,7 @@ def _validate_path(value: Any) -> str:
     return path
 
 
-def validate_manifest(raw: bytes) -> ManagedSkillManifest:
+def validate_installation(raw: bytes) -> ManagedSkillInstallation:
     """Validate untrusted installation bytes independently of the control plane.
 
     The narrow DTO omits selection and assignment provenance, so manifest_sha256
@@ -194,31 +196,31 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
     """
     if len(raw) > MAX_MANAGED_SKILL_RESPONSE_BYTES:
         raise ManagedSkillsError(
-            "managed skills manifest exceeds the size limit", code="manifest_too_large"
+            "managed skills installation exceeds the size limit", code="installation_too_large"
         )
     try:
         document = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ManagedSkillsError(
-            "managed skills manifest is not valid JSON", code="manifest_invalid"
+            "managed skills installation is not valid JSON", code="installation_invalid"
         ) from error
-    manifest = _require_object(
+    installation = _require_object(
         document,
         {"schemaVersion", "manifestSha256", "skills"},
-        "manifest",
+        "installation",
     )
-    if type(manifest["schemaVersion"]) is not int or manifest["schemaVersion"] != 1:
+    if type(installation["schemaVersion"]) is not int or installation["schemaVersion"] != 1:
         raise ManagedSkillsError(
-            "unsupported managed skills schema version", code="manifest_invalid"
+            "unsupported managed skills schema version", code="installation_invalid"
         )
-    manifest_sha256 = _validate_sha256(manifest["manifestSha256"], "manifest SHA-256")
-    raw_skills = manifest["skills"]
+    manifest_sha256 = _validate_sha256(installation["manifestSha256"], "manifest SHA-256")
+    raw_skills = installation["skills"]
     if not isinstance(raw_skills, list) or len(raw_skills) > MAX_MANAGED_SKILLS_PER_SESSION:
-        raise ManagedSkillsError("invalid managed skills list", code="manifest_invalid")
+        raise ManagedSkillsError("invalid managed skills list", code="installation_invalid")
 
     skills: list[ManagedSkill] = []
     names: set[str] = set()
-    manifest_content_bytes = 0
+    installation_content_bytes = 0
     for raw_skill in raw_skills:
         skill = _require_object(
             raw_skill,
@@ -227,15 +229,15 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
         )
         name = _require_string(skill["name"], "skill name")
         if len(name) > MAX_SKILL_NAME_LENGTH or not _SKILL_NAME_RE.fullmatch(name):
-            raise ManagedSkillsError(f"invalid skill name: {name!r}", code="manifest_invalid")
+            raise ManagedSkillsError(f"invalid skill name: {name!r}", code="installation_invalid")
         if name in names:
             raise ManagedSkillsError(
-                f"duplicate managed skill name: {name}", code="manifest_invalid"
+                f"duplicate managed skill name: {name}", code="installation_invalid"
             )
         names.add(name)
         raw_files = skill["files"]
         if not isinstance(raw_files, list) or not raw_files or len(raw_files) > MAX_SKILL_FILES:
-            raise ManagedSkillsError("invalid skill files list", code="manifest_invalid")
+            raise ManagedSkillsError("invalid skill files list", code="installation_invalid")
         files: list[ManagedSkillFile] = []
         paths: set[str] = set()
         revision_bytes = 0
@@ -246,7 +248,7 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
             path = _validate_path(file["path"])
             if path in paths:
                 raise ManagedSkillsError(
-                    f"duplicate skill file path: {path}", code="manifest_invalid"
+                    f"duplicate skill file path: {path}", code="installation_invalid"
                 )
             if any(
                 path.startswith(f"{existing}/") or existing.startswith(f"{path}/")
@@ -261,7 +263,7 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
             size_bytes = _require_int(file["sizeBytes"], "skill file size")
             if len(content_bytes) > MAX_SKILL_FILE_BYTES or size_bytes != len(content_bytes):
                 raise ManagedSkillsError(
-                    f"invalid size for skill file {path}", code="manifest_invalid"
+                    f"invalid size for skill file {path}", code="installation_invalid"
                 )
             digest = _validate_sha256(file["sha256"], "skill file SHA-256")
             if not hashlib.sha256(content_bytes).hexdigest() == digest:
@@ -271,7 +273,7 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
             executable = file["executable"]
             if not isinstance(executable, bool):
                 raise ManagedSkillsError(
-                    f"invalid executable flag for {path}", code="manifest_invalid"
+                    f"invalid executable flag for {path}", code="installation_invalid"
                 )
             if executable and not path.startswith("scripts/"):
                 raise ManagedSkillsError(
@@ -281,26 +283,26 @@ def validate_manifest(raw: bytes) -> ManagedSkillManifest:
             files.append(ManagedSkillFile(path, content, digest, size_bytes, executable))
         if "SKILL.md" not in paths:
             raise ManagedSkillsError(
-                f"managed skill {name} has no SKILL.md", code="manifest_invalid"
+                f"managed skill {name} has no SKILL.md", code="installation_invalid"
             )
         skill_markdown = next(file.content for file in files if file.path == "SKILL.md")
         if _canonical_frontmatter_name(skill_markdown) != name:
             raise ManagedSkillsError(
-                f"SKILL.md name does not match managed skill {name}", code="manifest_invalid"
+                f"SKILL.md name does not match managed skill {name}", code="installation_invalid"
             )
         if revision_bytes > MAX_SKILL_REVISION_BYTES:
             raise ManagedSkillsError(
-                f"invalid total size for managed skill {name}", code="manifest_invalid"
+                f"invalid total size for managed skill {name}", code="installation_invalid"
             )
-        manifest_content_bytes += revision_bytes
+        installation_content_bytes += revision_bytes
         skills.append(ManagedSkill(name, tuple(files)))
 
-    if manifest_content_bytes > MAX_MANAGED_SKILL_MANIFEST_BYTES:
+    if installation_content_bytes > MAX_MANAGED_SKILL_MANIFEST_BYTES:
         raise ManagedSkillsError(
-            "managed skills content exceeds the session size limit", code="manifest_too_large"
+            "managed skills content exceeds the session size limit", code="installation_too_large"
         )
 
-    return ManagedSkillManifest(manifest_sha256, tuple(skills))
+    return ManagedSkillInstallation(manifest_sha256, tuple(skills))
 
 
 def _canonical_frontmatter_name(markdown: str) -> str | None:
@@ -316,7 +318,7 @@ def _canonical_frontmatter_name(markdown: str) -> str | None:
 
 
 class ManagedSkillsMaterializer:
-    """Install a fetched manifest into the platform-owned global skills directory."""
+    """Install a fetched installation DTO into the platform-owned global skills directory."""
 
     def __init__(
         self,
@@ -386,10 +388,13 @@ class ManagedSkillsMaterializer:
                 yield root
 
     def _check_collisions(
-        self, manifest: ManagedSkillManifest, repositories: Sequence[RepoEntry], workdir: Path
+        self,
+        installation: ManagedSkillInstallation,
+        repositories: Sequence[RepoEntry],
+        workdir: Path,
     ) -> None:
         """Reject ambiguous names across every OpenCode skill discovery root."""
-        selected = {skill.name for skill in manifest.skills}
+        selected = {skill.name for skill in installation.skills}
         for root in self._collision_roots(repositories, workdir):
             if not root.is_dir():
                 continue
@@ -450,7 +455,7 @@ class ManagedSkillsMaterializer:
         finally:
             os.close(descriptor)
 
-    def _install(self, manifest: ManagedSkillManifest) -> None:
+    def _install(self, installation: ManagedSkillInstallation) -> None:
         """Replace the complete managed tree using a recoverable same-filesystem swap.
 
         The durable marker must precede moving the current tree. Recovery keeps
@@ -471,7 +476,7 @@ class ManagedSkillsMaterializer:
 
         staging.mkdir(mode=0o700)
         try:
-            for skill in sorted(manifest.skills, key=lambda item: item.name.encode("utf-8")):
+            for skill in sorted(installation.skills, key=lambda item: item.name.encode("utf-8")):
                 skill_dir = staging / skill.name
                 skill_dir.mkdir(mode=0o700)
                 for file in sorted(skill.files, key=lambda item: item.path.encode("utf-8")):
@@ -495,10 +500,10 @@ class ManagedSkillsMaterializer:
     async def materialize(self, repositories: Sequence[RepoEntry], workdir: Path) -> None:
         """Fetch, validate, collision-check, and install skills before OpenCode starts."""
         try:
-            raw = await self.client.fetch_manifest()
-            manifest = validate_manifest(raw)
-            self._check_collisions(manifest, repositories, workdir)
-            self._install(manifest)
+            raw = await self.client.fetch_installation()
+            installation = validate_installation(raw)
+            self._check_collisions(installation, repositories, workdir)
+            self._install(installation)
         except ManagedSkillsError:
             raise
         except Exception as error:
@@ -508,6 +513,6 @@ class ManagedSkillsMaterializer:
 
         self.log.info(
             "managed_skills.materialized",
-            manifest_sha256=manifest.manifest_sha256,
-            skill_count=len(manifest.skills),
+            manifest_sha256=installation.manifest_sha256,
+            skill_count=len(installation.skills),
         )
