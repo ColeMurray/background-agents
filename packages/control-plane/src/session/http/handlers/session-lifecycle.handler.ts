@@ -8,7 +8,7 @@ import type {
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import type { SessionRepository } from "../../repository";
+import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
@@ -23,7 +23,7 @@ import { z } from "zod";
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
 export interface SessionLifecycleHandlerDeps {
-  repository: Pick<SessionRepository, "upsertSession" | "replaceSessionRepositories">;
+  sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   messageRepository: MessageRepository;
   participantRepository: ParticipantRepository;
@@ -239,7 +239,7 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      deps.repository.upsertSession({
+      deps.sessionCoreRepository.upsertSession({
         id: sessionId,
         sessionName,
         title: body.title ?? null,
@@ -271,7 +271,7 @@ export function createSessionLifecycleHandler(
           : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
             ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
             : [];
-      deps.repository.replaceSessionRepositories(
+      deps.sessionCoreRepository.replaceSessionRepositories(
         memberRepositories.map((repo, position) => ({
           position,
           repoOwner: repo.repoOwner,

@@ -60,7 +60,7 @@ import type { SessionRepositoryState } from "@open-inspect/shared/types/reposito
 import type { Env, ClientInfo } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
 import type { SessionRow, ArtifactRow, SandboxRow } from "./types";
-import { SessionRepository } from "./repository";
+import { SessionCoreRepository } from "./session-core-repository";
 import { SandboxRepository } from "./sandbox-repository";
 import { SessionAttachmentRepository } from "./session-attachment-repository";
 import { ArtifactRepository } from "./artifact-repository";
@@ -170,7 +170,7 @@ export class SessionDO extends DurableObject<Env> {
    * binding at runtime. Distinct from `this.sql`, the DO-embedded SQLite.
    */
   private readonly db: SqlDatabase | null;
-  private repository: SessionRepository;
+  private sessionCoreRepository: SessionCoreRepository;
   private sandboxRepository: SandboxRepository;
   private attachmentRepository: SessionAttachmentRepository;
   private artifactRepository: ArtifactRepository;
@@ -301,7 +301,7 @@ export class SessionDO extends DurableObject<Env> {
     this.participantRepository = new ParticipantRepository(this.sql);
     this.wsClientMappingRepository = new WsClientMappingRepository(this.sql);
     this.sandboxRepository = new SandboxRepository(this.sql);
-    this.repository = new SessionRepository(this.sql, (closure) =>
+    this.sessionCoreRepository = new SessionCoreRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
@@ -361,7 +361,7 @@ export class SessionDO extends DurableObject<Env> {
         : undefined;
 
       this._callbackService = new CallbackNotificationService({
-        repository: this.repository,
+        repository: this.sessionCoreRepository,
         messageRepository: this.messageRepository,
         env: {
           ...this.env,
@@ -416,7 +416,7 @@ export class SessionDO extends DurableObject<Env> {
   private get executionTimeoutMs(): number {
     try {
       const sandboxTimeoutMs = parsePersistedSandboxSettings(
-        this.repository.getSession()?.sandbox_settings ?? null
+        this.sessionCoreRepository.getSession()?.sandbox_settings ?? null
       ).sandboxTimeoutMs;
       // This watchdog starts before bridge setup, so it must not race the
       // bridge's earlier snapshot-reserved prompt deadline.
@@ -442,7 +442,7 @@ export class SessionDO extends DurableObject<Env> {
       this._messageQueue = new SessionMessageQueue(
         this.ctx,
         this.log,
-        this.repository,
+        this.sessionCoreRepository,
         this.messageRepository,
         this.participantRepository,
         this.attachmentRepository,
@@ -600,7 +600,7 @@ export class SessionDO extends DurableObject<Env> {
   private get sessionLifecycleHandler(): SessionLifecycleHandler {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
-        repository: this.repository,
+        sessionCoreRepository: this.sessionCoreRepository,
         sandboxRepository: this.sandboxRepository,
         messageRepository: this.messageRepository,
         participantRepository: this.participantRepository,
@@ -634,7 +634,7 @@ export class SessionDO extends DurableObject<Env> {
     if (!this._pullRequestHandler) {
       this._pullRequestHandler = createPullRequestHandler({
         getSession: () => this.getSession(),
-        getSessionRepositories: () => this.repository.getSessionRepositories(),
+        getSessionRepositories: () => this.sessionCoreRepository.getSessionRepositories(),
         getPromptingParticipantForPR: () => this.participantService.getPromptingParticipantForPR(),
         resolveAuthForPR: (participant) => this.participantService.resolveAuthForPR(participant),
         getSessionUrl: (session) => {
@@ -644,7 +644,7 @@ export class SessionDO extends DurableObject<Env> {
         },
         createPullRequest: async (input, log) => {
           const pullRequestService = new SessionPullRequestService({
-            repository: this.repository,
+            repository: this.sessionCoreRepository,
             artifactRepository: this.artifactRepository,
             claims: this.prCreationClaims,
             sourceControlProvider: this.sourceControlProvider,
@@ -675,7 +675,7 @@ export class SessionDO extends DurableObject<Env> {
   private schedulePullRequestRefresh(trigger: "open" | "manual"): void {
     this.ctx.waitUntil(
       refreshSessionPullRequests(
-        this.repository,
+        this.sessionCoreRepository,
         this.artifactRepository,
         this.sourceControlProvider,
         this.db ? new SessionPullRequestStore(this.db) : null
@@ -748,7 +748,7 @@ export class SessionDO extends DurableObject<Env> {
       this._sandboxEventProcessor = new SessionSandboxEventProcessor(
         this.ctx,
         () => this.log,
-        this.repository,
+        this.sessionCoreRepository,
         this.sandboxRepository,
         this.messageRepository,
         this.eventRepository,
@@ -786,7 +786,7 @@ export class SessionDO extends DurableObject<Env> {
       this._statusService = new SessionStatusService(
         this.ctx,
         this.log,
-        this.repository,
+        this.sessionCoreRepository,
         this.messageRepository,
         this.artifactRepository,
         this.messenger,
@@ -817,9 +817,9 @@ export class SessionDO extends DurableObject<Env> {
     const storage: SandboxStorage = {
       getSandbox: () => this.sandboxRepository.getSandbox(),
       getSandboxWithCircuitBreaker: () => this.sandboxRepository.getSandboxWithCircuitBreaker(),
-      getSession: () => this.repository.getSession(),
+      getSession: () => this.sessionCoreRepository.getSession(),
       getSessionRepositories: () =>
-        this.repository.getSessionRepositories().map((entry) => ({
+        this.sessionCoreRepository.getSessionRepositories().map((entry) => ({
           repoOwner: entry.repoOwner,
           repoName: entry.repoName,
           baseBranch: entry.baseBranch ?? "main",
@@ -893,7 +893,7 @@ export class SessionDO extends DurableObject<Env> {
       `https://open-inspect-control-plane.${this.env.CF_ACCOUNT_ID || "workers"}.workers.dev`;
 
     // Resolve sessionId for lifecycle manager logging context
-    const session = this.repository.getSession();
+    const session = this.sessionCoreRepository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
 
     // Create D1-backed lookups if database is available
@@ -983,7 +983,7 @@ export class SessionDO extends DurableObject<Env> {
     if (this.initialized) return;
     initSchema(this.sql);
     this.initialized = true;
-    const session = this.repository.getSession();
+    const session = this.sessionCoreRepository.getSession();
     const sessionId = session?.session_name || session?.id || this.ctx.id.toString();
     this.log = createLogger(
       "session-do",
@@ -996,7 +996,7 @@ export class SessionDO extends DurableObject<Env> {
     this.messenger = new SessionMessengerImpl(this.wsManager);
     this.diffService = new SessionDiffService(
       new SessionDiffStore(this.sql),
-      this.repository,
+      this.sessionCoreRepository,
       this.messenger,
       this.log
     );
@@ -1786,12 +1786,16 @@ export class SessionDO extends DurableObject<Env> {
 
     const updatedAt = Math.max(Date.now(), session.updated_at + 1);
     if (options.onlyIfUnset) {
-      const didUpdate = this.repository.updateSessionTitleIfUnset(session.id, titleText, updatedAt);
+      const didUpdate = this.sessionCoreRepository.updateSessionTitleIfUnset(
+        session.id,
+        titleText,
+        updatedAt
+      );
       if (!didUpdate) {
         return { ok: false, reason: "already_set", error: "Session title is already set" };
       }
     } else {
-      this.repository.updateSessionTitle(session.id, titleText, updatedAt);
+      this.sessionCoreRepository.updateSessionTitle(session.id, titleText, updatedAt);
     }
 
     const publicSessionId = this.getPublicSessionId(session);
@@ -1965,7 +1969,7 @@ export class SessionDO extends DurableObject<Env> {
    */
   private getSessionRepositoryStates(session: SessionRow | null): SessionRepositoryState[] {
     const prUrlForRepo = this.getPrUrlLookup();
-    return this.repository.getSessionRepositories().map((member) => ({
+    return this.sessionCoreRepository.getSessionRepositories().map((member) => ({
       position: member.position,
       repoOwner: member.repoOwner,
       repoName: member.repoName,
@@ -2020,7 +2024,7 @@ export class SessionDO extends DurableObject<Env> {
   // Database helpers
 
   private getSession(): SessionRow | null {
-    return this.repository.getSession();
+    return this.sessionCoreRepository.getSession();
   }
 
   private getSandbox(): SandboxRow | null {
@@ -2043,7 +2047,7 @@ export class SessionDO extends DurableObject<Env> {
       throw new Error("Repository is not accessible for the configured SCM provider");
     }
 
-    this.repository.updateSessionRepoId(result.repoId);
+    this.sessionCoreRepository.updateSessionRepoId(result.repoId);
     return result.repoId;
   }
 
@@ -2069,7 +2073,7 @@ export class SessionDO extends DurableObject<Env> {
 
     const repoStore = new RepoSecretsStore(this.db, encryptionKey);
     const environmentSecretsStore = new EnvironmentSecretsStore(this.db, encryptionKey);
-    const members = this.repository.getSessionRepositories();
+    const members = this.sessionCoreRepository.getSessionRepositories();
     const sources = await buildSessionTargetSecretSources({
       environmentId: session.environment_id,
       globalSecrets,

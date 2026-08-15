@@ -5,7 +5,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
@@ -86,7 +86,7 @@ function createProcessor() {
   const processor = new SessionSandboxEventProcessor(
     { waitUntil } as unknown as DurableObjectState,
     () => log,
-    repository as unknown as SessionRepository,
+    repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,
     repository as unknown as MessageRepository,
     eventRepository,

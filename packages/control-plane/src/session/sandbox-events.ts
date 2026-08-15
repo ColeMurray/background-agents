@@ -4,7 +4,7 @@ import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
@@ -41,7 +41,7 @@ export class SessionSandboxEventProcessor {
     // a getter keeps this singleton reading the current logger instead of
     // capturing one by value at construction time.
     private readonly getLog: () => Logger,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,

@@ -13,7 +13,7 @@ import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
 import type { SessionStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionRow } from "./types";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
@@ -25,7 +25,7 @@ export class SessionStatusService {
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly log: Logger,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
     private readonly artifactRepository: ArtifactRepository,
     private readonly messenger: SessionMessenger,

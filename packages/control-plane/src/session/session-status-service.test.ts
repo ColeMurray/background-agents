@@ -4,7 +4,7 @@ import { buildSessionInternalUrl, SessionInternalPaths } from "./contracts";
 import type { Logger } from "../logger";
 import type { SessionIndexStore } from "../db/session-index";
 import type { SessionRow, ArtifactRow, MessageRow } from "./types";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionMessenger } from "./messenger";
@@ -89,7 +89,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   const service = new SessionStatusService(
     ctx,
     log as unknown as Logger,
-    repository as unknown as SessionRepository,
+    repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
     artifactRepository,
     messenger,

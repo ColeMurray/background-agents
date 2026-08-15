@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
-import type { SessionRepository } from "../repository";
+import type { SessionCoreRepository } from "../session-core-repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";
 import {
   DiffBaselineMismatchError,
@@ -97,7 +97,7 @@ function harness() {
       },
     ],
     setSessionDiffBaselines: vi.fn(),
-  } as unknown as SessionRepository;
+  } as unknown as SessionCoreRepository;
   const messenger: SessionMessenger = {
     broadcast: vi.fn(),
     sendToSandbox: vi.fn(() => true),

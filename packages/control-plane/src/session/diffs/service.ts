@@ -10,7 +10,7 @@ import {
 import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
-import type { SessionRepository } from "../repository";
+import type { SessionCoreRepository } from "../session-core-repository";
 import { repoIdentityEquals, type SessionRepositoryEntry } from "../repository-target";
 import {
   DiffBaselineMismatchError,
@@ -36,7 +36,7 @@ function shaEquals(a: string, b: string): boolean {
 export class SessionDiffService {
   constructor(
     private readonly store: SessionDiffStore,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly messenger: SessionMessenger,
     private readonly log: Logger,
     private readonly generateRevisionId: () => string = () => generateId(),

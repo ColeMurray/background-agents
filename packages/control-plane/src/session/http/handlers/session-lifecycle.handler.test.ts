@@ -6,6 +6,7 @@ import type { SessionStatusService } from "../../session-status-service";
 import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
+import type { SessionCoreRepository } from "../../session-core-repository";
 import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -120,7 +121,7 @@ function createHandler() {
   const updateSandboxStatus = vi.fn();
 
   const lifecycleHandler = createSessionLifecycleHandler({
-    repository,
+    sessionCoreRepository: repository as unknown as SessionCoreRepository,
     sandboxRepository,
     messageRepository: repository as unknown as MessageRepository,
     participantRepository: repository as unknown as ParticipantRepository,

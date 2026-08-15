@@ -1,11 +1,11 @@
 /**
- * Unit tests for SessionRepository.
+ * Unit tests for SessionCoreRepository.
  *
  * Uses a mock SqlStorage to verify SQL operations are called correctly.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionRepository } from "./repository";
+import { SessionCoreRepository } from "./session-core-repository";
 import type { SqlResult, SqlStorage } from "./sql-storage";
 
 /**
@@ -64,13 +64,13 @@ function createMockSql() {
   };
 }
 
-describe("SessionRepository", () => {
+describe("SessionCoreRepository", () => {
   let mock: ReturnType<typeof createMockSql>;
-  let repo: SessionRepository;
+  let repo: SessionCoreRepository;
 
   beforeEach(() => {
     mock = createMockSql();
-    repo = new SessionRepository(mock.sql, (closure) => closure());
+    repo = new SessionCoreRepository(mock.sql, (closure) => closure());
   });
 
   // === SESSION ===
@@ -325,7 +325,7 @@ describe("SessionRepository", () => {
 
     it("applies all baseline updates in one transaction", () => {
       let transactions = 0;
-      repo = new SessionRepository(mock.sql, (closure) => {
+      repo = new SessionCoreRepository(mock.sql, (closure) => {
         transactions += 1;
         return closure();
       });

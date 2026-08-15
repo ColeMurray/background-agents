@@ -18,7 +18,7 @@ import type { ClientInfo } from "../types";
 import type { SourceControlProviderName } from "../source-control";
 import type { AlarmScheduler, SandboxLifecycle } from "../sandbox/lifecycle/manager";
 import type { ParticipantRow, PromptGitIdentity, SandboxCommand, SessionRow } from "./types";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import { STOP_CONFIRMATION_TIMEOUT_MS, type MessageRepository } from "./message-repository";
 import {
@@ -142,7 +142,7 @@ export class SessionMessageQueue {
   constructor(
     private readonly ctx: DurableObjectState,
     private readonly log: Logger,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
     private readonly participantRepository: ParticipantRepository,
     private readonly attachmentRepository: SessionAttachmentRepository,
