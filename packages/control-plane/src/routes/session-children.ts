@@ -124,8 +124,12 @@ export async function handlePromptChild(
   if (response.ok) {
     let messageId: string | undefined;
     try {
-      const payload = (await response.clone().json()) as { messageId?: unknown };
-      if (typeof payload.messageId === "string") messageId = payload.messageId;
+      const payload = await response.clone().json();
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        if ("messageId" in payload && typeof payload.messageId === "string") {
+          messageId = payload.messageId;
+        }
+      }
     } catch {
       // The child response remains authoritative; logging is best-effort.
     }

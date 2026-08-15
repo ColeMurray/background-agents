@@ -12,12 +12,14 @@ import {
   type ServerMessage,
   type SessionTimelineEvent,
 } from "@open-inspect/shared/types/server-messages";
+import { z } from "zod";
 
 export const DEFAULT_REPLAY_LIMIT = 500;
 const DEFAULT_HISTORY_LIMIT = 200;
 const MIN_HISTORY_LIMIT = 1;
 const MAX_HISTORY_LIMIT = 500;
 const HISTORY_EXCLUDED_TYPES = ["heartbeat"];
+const persistedEventDataSchema = z.record(z.string(), z.unknown());
 
 export type EventStreamCursor = NonNullable<
   Extract<ClientMessage, { type: "fetch_history" }>["cursor"]
@@ -114,10 +116,17 @@ function toEventResponse(event: EventRow): EventResponse {
   return {
     id: event.id,
     type: event.type,
-    data: JSON.parse(event.data) as Record<string, unknown>,
+    data: parsePersistedEventData(event.data),
     messageId: event.message_id,
     createdAt: event.created_at,
   };
+}
+
+function parsePersistedEventData(raw: string): Record<string, unknown> {
+  const parsed = JSON.parse(raw) as unknown;
+  const result = persistedEventDataSchema.safeParse(parsed);
+  if (!result.success) throw new Error("Invalid persisted event data");
+  return result.data;
 }
 
 function clampHistoryLimit(limit: number | undefined): number {

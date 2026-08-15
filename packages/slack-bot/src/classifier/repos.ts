@@ -11,6 +11,7 @@ import { normalizeRepoId } from "../utils/repo";
 import {
   normalizeRoutingRules,
   slackIntegrationSettingsRoutingResponseSchema,
+  slackRoutingRuleSchema,
   type SlackRoutingRule,
 } from "@open-inspect/shared/types/integrations";
 import {
@@ -219,8 +220,10 @@ const routingRules = createCachedResource<SlackRoutingRule[]>({
       parsed.success ? parsed.data.settings?.defaults?.routingRules : []
     );
   },
-  deserialize: (cached) =>
-    Array.isArray(cached) ? normalizeRoutingRules(cached as SlackRoutingRule[]) : null,
+  deserialize: (cached) => {
+    const parsed = z.array(slackRoutingRuleSchema).safeParse(cached);
+    return parsed.success ? normalizeRoutingRules(parsed.data) : null;
+  },
   fallback: [],
 });
 
