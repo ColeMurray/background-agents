@@ -6,7 +6,7 @@ import { settingsProxy } from "./settings-proxy";
 vi.mock("./control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 
 describe("settingsProxy", () => {
-  const { GET } = settingsProxy(() => "/settings", "settings");
+  const { GET, POST } = settingsProxy(() => "/settings", "settings");
 
   beforeEach(() => vi.resetAllMocks());
 
@@ -23,6 +23,24 @@ describe("settingsProxy", () => {
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", undefined);
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+  });
+
+  it("delegates authentication before malformed mutation JSON is interpreted", async () => {
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ error: "Unauthorized" }, { status: 401 })
+    );
+    const request = new NextRequest("http://localhost/api/settings", {
+      method: "POST",
+      body: "{malformed",
+    });
+
+    const response = await POST(request, { params: Promise.resolve(undefined) });
+
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/settings", {
+      method: "POST",
+      body: "{malformed",
+    });
+    expect(response.status).toBe(401);
   });
 
   it("keeps resource request failures distinct from unauthorized responses", async () => {

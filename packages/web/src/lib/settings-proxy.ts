@@ -47,7 +47,7 @@ export function settingsProxy<P>(
       let init: RequestInit | undefined;
       if (method !== "GET") {
         init = { method };
-        if (method !== "DELETE") init.body = JSON.stringify(await request.json());
+        if (method !== "DELETE") init.body = await request.text();
         if (ifMatch) init.headers = { "If-Match": ifMatch };
       }
       const response = await controlPlaneUserFetch(buildPath(params, request), init);
