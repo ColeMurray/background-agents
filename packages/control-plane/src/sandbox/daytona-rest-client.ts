@@ -37,6 +37,7 @@ const TIMEOUT_CREATE_MS = 90_000;
 const TIMEOUT_START_MS = 60_000;
 const TIMEOUT_RECOVER_MS = 60_000;
 const TIMEOUT_STOP_MS = 30_000;
+const TIMEOUT_DELETE_MS = 30_000;
 const TIMEOUT_GET_MS = 15_000;
 const TIMEOUT_PREVIEW_URL_MS = 15_000;
 
@@ -151,6 +152,10 @@ export class DaytonaRestClient {
     await this.requestVoid("POST", `/sandbox/${id}/stop`, TIMEOUT_STOP_MS);
   }
 
+  async deleteSandbox(id: string): Promise<void> {
+    await this.requestVoid("DELETE", `/sandbox/${id}`, TIMEOUT_DELETE_MS);
+  }
+
   async recoverSandbox(id: string): Promise<void> {
     await this.requestVoid("POST", `/sandbox/${id}/recover`, TIMEOUT_RECOVER_MS);
   }
@@ -203,7 +208,7 @@ export class DaytonaRestClient {
    * discarded, so neither shape can fail the call.
    */
   private requestVoid(
-    method: "GET" | "POST",
+    method: "DELETE" | "GET" | "POST",
     path: string,
     timeoutMs: number,
     options?: { body?: unknown }
@@ -237,7 +242,7 @@ export class DaytonaRestClient {
    * `consume`. The timeout stays armed while `consume` reads the body.
    */
   private async send<T>(
-    method: "GET" | "POST",
+    method: "DELETE" | "GET" | "POST",
     path: string,
     timeoutMs: number,
     options: { body?: unknown } | undefined,
