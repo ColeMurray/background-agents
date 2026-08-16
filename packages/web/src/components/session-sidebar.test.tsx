@@ -80,7 +80,6 @@ beforeEach(() => {
     sessionCreatorFilter: "all",
     setSessionCreatorFilter: vi.fn(),
     handleSessionArchived: vi.fn(),
-    handleSessionRenamed: vi.fn(),
     handleMarkLatestMessageRead: vi.fn(),
   });
 });

@@ -158,17 +158,17 @@ describe("isArchivedSessionListKey", () => {
 });
 
 describe("applyTitleUpdate", () => {
-  it("replaces the title and updatedAt of the matching session", () => {
+  it("replaces only the title of the matching session", () => {
     const before: SessionListResponse = {
       sessions: [session("a"), session("b"), session("c")],
       hasMore: false,
     };
 
-    const after = applyTitleUpdate(before, "b", "Renamed", 9999);
+    const after = applyTitleUpdate(before, "b", "Renamed");
 
     expect(after?.sessions).toEqual([
       session("a"),
-      session("b", { title: "Renamed", updatedAt: 9999 }),
+      session("b", { title: "Renamed" }),
       session("c"),
     ]);
   });
@@ -179,13 +179,13 @@ describe("applyTitleUpdate", () => {
       hasMore: true,
     };
 
-    const after = applyTitleUpdate(before, "a", "New", 1);
+    const after = applyTitleUpdate(before, "a", "New");
 
     expect(after?.hasMore).toBe(true);
   });
 
   it("returns undefined when data is undefined (cache miss)", () => {
-    expect(applyTitleUpdate(undefined, "a", "New", 1)).toBeUndefined();
+    expect(applyTitleUpdate(undefined, "a", "New")).toBeUndefined();
   });
 
   it("leaves the list unchanged when sessionId does not match", () => {
@@ -194,7 +194,7 @@ describe("applyTitleUpdate", () => {
       hasMore: false,
     };
 
-    const after = applyTitleUpdate(before, "missing", "New", 9999);
+    const after = applyTitleUpdate(before, "missing", "New");
 
     expect(after?.sessions).toEqual(before.sessions);
   });
@@ -206,7 +206,7 @@ describe("applyTitleUpdate", () => {
     };
     const beforeSnapshot = structuredClone(before);
 
-    applyTitleUpdate(before, "a", "Mutated", 9999);
+    applyTitleUpdate(before, "a", "Mutated");
 
     expect(before).toEqual(beforeSnapshot);
   });

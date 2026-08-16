@@ -90,7 +90,6 @@ export function SessionSidebar({
     sessionCreatorFilter,
     setSessionCreatorFilter,
     handleSessionArchived,
-    handleSessionRenamed,
     handleMarkLatestMessageRead,
   } = useSidebarSessions();
 
@@ -162,7 +161,6 @@ export function SessionSidebar({
             isMobile={isMobile}
             onArchive={handleArchivedSession}
             onSessionSelect={onSessionSelect}
-            onSessionRenamed={handleSessionRenamed}
             onMarkLatestMessageRead={handleMarkLatestMessageRead}
           />
         ))}

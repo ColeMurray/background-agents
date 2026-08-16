@@ -64,14 +64,13 @@ export function isArchivedSessionListKey(key: unknown): key is string {
 export function applyTitleUpdate(
   data: SessionListResponse | undefined,
   sessionId: string,
-  title: string,
-  updatedAt: number
+  title: string | null
 ): SessionListResponse | undefined {
   if (!data) return data;
   return {
     ...data,
     sessions: data.sessions.map((session) =>
-      session.id === sessionId ? { ...session, title, updatedAt } : session
+      session.id === sessionId ? { ...session, title } : session
     ),
   };
 }

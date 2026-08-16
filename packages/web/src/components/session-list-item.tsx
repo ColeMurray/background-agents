@@ -9,7 +9,7 @@ import { PullRequestStateIcon } from "@/components/pr-state-icon";
 import { formatRelativeTime } from "@/lib/time";
 import { MoreIcon, ArchiveIcon, BranchIcon, BoxIcon } from "@/components/ui/icons";
 import { formatSessionRepositoriesLabel } from "@/lib/repo-label";
-import { browserApiFetch } from "@/lib/browser-api-fetch";
+import { useSessionRename } from "@/hooks/use-session-rename";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,7 +29,6 @@ export function SessionListItem({
   isMobile,
   onArchive,
   onSessionSelect,
-  onSessionRenamed,
   onMarkLatestMessageRead,
 }: {
   session: SessionItem;
@@ -38,7 +37,6 @@ export function SessionListItem({
   isMobile: boolean;
   onArchive: (sessionId: string) => Promise<void>;
   onSessionSelect?: () => void;
-  onSessionRenamed: (sessionId: string, title: string) => void;
   onMarkLatestMessageRead: (sessionId: string) => Promise<void>;
 }) {
   const timestamp = session.updatedAt || session.createdAt;
@@ -49,7 +47,11 @@ export function SessionListItem({
     session.repositories
   );
   const prDisplay = pullRequestSummaryDisplay(session.pullRequestSummary);
-  const displayTitle = session.title || repoInfo;
+  const { optimisticTitle, renameSession } = useSessionRename({
+    sessionId: session.id,
+    currentTitle: session.title,
+  });
+  const displayTitle = optimisticTitle ?? session.title ?? repoInfo;
   // Orphan child (parent filtered out) — show a subtle badge
   const isOrphanChild = session.parentSessionId && session.spawnSource === "agent";
   const [isRenaming, setIsRenaming] = useState(false);
@@ -133,21 +135,10 @@ export function SessionListItem({
       return;
     }
 
-    const previousTitle = displayTitle;
     setIsRenaming(false);
 
-    try {
-      const response = await browserApiFetch(`/api/sessions/${session.id}/title`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: trimmed }),
-      });
-      if (!response.ok) {
-        throw new Error("Failed to update session title");
-      }
-      onSessionRenamed(session.id, trimmed);
-    } catch {
-      setTitle(previousTitle);
+    const success = await renameSession(trimmed);
+    if (!success) {
       setIsRenaming(true);
     }
   };

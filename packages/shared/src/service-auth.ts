@@ -6,9 +6,8 @@
  * full request (method, path, query, body hash, asserted actor) so a captured
  * credential cannot be replayed against a different request.
  *
- * The canonical request string layout is a cross-language contract with
- * `sandbox_runtime/auth/service_auth.py`, pinned by the golden vectors in
- * `test-fixtures/service-auth-vectors.json`. Any change to the layout or the
+ * The canonical request string layout is pinned by the immutable golden vectors
+ * in `test-fixtures/service-auth-vectors.json`. Any change to the layout or the
  * canonicalization rules requires a new format tag (`sig2`), not an edit here.
  */
 
@@ -38,8 +37,8 @@ export type ServiceSignatureResult =
   | { ok: false; reason: ServiceSignatureFailure };
 
 const NONCE_PATTERN = /^[0-9a-f]{1,64}$/;
-// Strict ASCII decimal, mirrored by service_auth.py. Number()'s wider grammar
-// ("1e3", "0x10", padding) must not classify differently across languages.
+// Strict ASCII decimal. Number()'s wider grammar ("1e3", "0x10", padding)
+// must not broaden the accepted wire format.
 const TIMESTAMP_PATTERN = /^[0-9]{1,16}$/;
 
 /**

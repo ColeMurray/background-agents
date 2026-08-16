@@ -305,12 +305,7 @@ export function useSidebarSessions() {
     },
     [refreshInbox]
   );
-  const handleSessionRenamed = useCallback(
-    (_sessionId: string, _title: string) => {
-      void refreshInbox();
-    },
-    [refreshInbox]
-  );
+
   const handleMarkLatestMessageRead = useCallback(
     async (sessionId: string) => {
       const result = await markLatestMessageRead(sessionId);
@@ -335,7 +330,6 @@ export function useSidebarSessions() {
     sessionCreatorFilter,
     setSessionCreatorFilter,
     handleSessionArchived,
-    handleSessionRenamed,
     handleMarkLatestMessageRead,
   };
 }
