@@ -1,5 +1,6 @@
 """Behavior matrix for shared fresh, repository-image, and snapshot launches."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -12,6 +13,7 @@ from sandbox_runtime.constants import (
     TTYD_PROXY_PORT_ENV_VAR,
     VNC_PASSWORD_ENV_VAR,
 )
+from sandbox_runtime.types import SessionConfig
 from src.sandbox.manager import SandboxConfig, SandboxManager
 
 
@@ -76,7 +78,12 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         "user_env_vars": {
             "CONTROL_PLANE_URL": "https://user.example",
             "CUSTOM_ENV": "preserved",
-            "RESTORED_FROM_SNAPSHOT": "false",
+            "RESTORED_FROM_SNAPSHOT": "true",
+            "FROM_REPO_IMAGE": "false",
+            "IMAGE_BUILD_MODE": "true",
+            "TERMINAL_ENABLED": "false",
+            "AGENT_SLACK_NOTIFY_ENABLED": "false",
+            "SESSION_CONFIG": "malicious",
             VNC_PASSWORD_ENV_VAR: "user-vnc-password",
             NOVNC_PORT_ENV_VAR: "9999",
         },
@@ -104,6 +111,12 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
             SandboxConfig(
                 repo_owner="acme",
                 repo_name="repo",
+                session_config=SessionConfig(
+                    session_id="session-1",
+                    repo_owner="acme",
+                    repo_name="repo",
+                    branch="feature/shared-launch",
+                ),
                 repo_image_id="repo-image-1" if image_source == "repository" else None,
                 repo_image_sha="abc123" if image_source == "repository" else None,
                 **common,
@@ -129,6 +142,8 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
     assert env[TTYD_PROXY_PORT_ENV_VAR] == "9002"
     assert env[EXPECTED_TUNNEL_PORTS_ENV_VAR] == "3000"
     assert env["AGENT_SLACK_NOTIFY_ENABLED"] == "true"
+    assert env["TERMINAL_ENABLED"] == "true"
+    assert "IMAGE_BUILD_MODE" not in env
 
     if image_source == "repository":
         assert env["FROM_REPO_IMAGE"] == "true"
@@ -143,8 +158,10 @@ async def test_launch_matrix_preserves_common_and_source_specific_behavior(
         assert env["GITHUB_TOKEN"] == "legacy-clone-token"
         assert env["GITHUB_APP_TOKEN"] == "legacy-clone-token"
     else:
-        assert env["RESTORED_FROM_SNAPSHOT"] == "false"
+        assert "RESTORED_FROM_SNAPSHOT" not in env
         assert "VCS_CLONE_TOKEN" not in env
+        session_config = json.loads(env["SESSION_CONFIG"])
+        assert session_config["branch"] == "feature/shared-launch"
 
     assert handle.sandbox_id == "sandbox-1"
     assert handle.modal_object_id == "modal-object-1"

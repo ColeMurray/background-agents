@@ -45,6 +45,17 @@ log = get_logger("manager")
 SNAPSHOT_FILESYSTEM_TIMEOUT_SECONDS = 300
 MAX_TUNNEL_PORTS = 10
 DEFAULT_VNC_ENABLED = False
+_RESERVED_LAUNCH_ENV_VARS = {
+    "RESTORED_FROM_SNAPSHOT",
+    "FROM_REPO_IMAGE",
+    "REPO_IMAGE_SHA",
+    "IMAGE_BUILD_MODE",
+    "TERMINAL_ENABLED",
+    "AGENT_SLACK_NOTIFY_ENABLED",
+    "SESSION_CONFIG",
+    VNC_PASSWORD_ENV_VAR,
+    NOVNC_PORT_ENV_VAR,
+}
 
 
 def _has_repository(repo_owner: str | None, repo_name: str | None) -> bool:
@@ -85,7 +96,7 @@ class SandboxConfig:
     repo_owner: str | None
     repo_name: str | None
     sandbox_id: str | None = None  # Expected sandbox ID from control plane
-    session_config: SessionConfig | None = None
+    session_config: SessionConfig | dict[str, Any] | None = None
     control_plane_url: str = ""
     sandbox_auth_token: str = ""
     timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
@@ -128,27 +139,32 @@ class SandboxHandle:
         self.modal_sandbox.terminate()
 
 
-@dataclass
-class _SandboxLaunchSpec:
-    """Internal inputs shared by fresh and snapshot sandbox launches."""
+@dataclass(frozen=True)
+class _BaseImageSource:
+    pass
 
-    image: Any
-    repo_owner: str | None
-    repo_name: str | None
-    sandbox_id: str | None = None
-    control_plane_url: str = ""
-    sandbox_auth_token: str = ""
-    timeout_seconds: int = DEFAULT_SANDBOX_TIMEOUT_SECONDS
-    user_env_vars: dict[str, str] | None = None
-    system_env_vars: dict[str, str] | None = None
-    session_config_json: str | None = None
-    clone_token: str | None = None
-    include_github_cli_aliases: bool = False
-    code_server_enabled: bool = False
-    vnc_enabled: bool = DEFAULT_VNC_ENABLED
-    agent_slack_notify_enabled: bool = False
-    settings: dict[str, Any] | None = None
-    snapshot_id: str | None = None
+
+@dataclass(frozen=True)
+class _RepositoryImageSource:
+    image_id: str
+    sha: str | None
+
+
+@dataclass(frozen=True)
+class _SnapshotImageSource:
+    image_id: str
+    clone_token: str | None
+
+
+type _SandboxImageSource = _BaseImageSource | _RepositoryImageSource | _SnapshotImageSource
+
+
+@dataclass(frozen=True)
+class _SandboxLaunchSpec:
+    """Canonical launch configuration paired with one image source variant."""
+
+    config: SandboxConfig
+    source: _SandboxImageSource
 
 
 class SandboxManager:
@@ -347,67 +363,90 @@ class SandboxManager:
 
     async def _launch_sandbox(self, spec: _SandboxLaunchSpec) -> SandboxHandle:
         """Launch a Modal sandbox from a normalized create or restore specification."""
-        has_repository = bool(spec.repo_owner)
-        sandbox_id = spec.sandbox_id
+        config = spec.config
+        has_repository = bool(config.repo_owner)
+        sandbox_id = config.sandbox_id
         if not sandbox_id:
             sandbox_name = (
-                f"{spec.repo_owner}-{spec.repo_name}" if has_repository else "no-repository"
+                f"{config.repo_owner}-{config.repo_name}" if has_repository else "no-repository"
             )
             sandbox_id = f"sandbox-{sandbox_name}-{int(time.time() * 1000)}"
 
-        env_vars = dict(spec.user_env_vars or {})
-        env_vars.pop(VNC_PASSWORD_ENV_VAR, None)
-        env_vars.pop(NOVNC_PORT_ENV_VAR, None)
+        env_vars = {
+            key: value
+            for key, value in (config.user_env_vars or {}).items()
+            if key not in _RESERVED_LAUNCH_ENV_VARS
+        }
         env_vars.update(
             {
                 "PYTHONUNBUFFERED": "1",
                 "SANDBOX_ID": sandbox_id,
-                "CONTROL_PLANE_URL": spec.control_plane_url,
-                "SANDBOX_AUTH_TOKEN": spec.sandbox_auth_token,
-                SANDBOX_TIMEOUT_ENV_VAR: str(spec.timeout_seconds),
-                "REPO_OWNER": spec.repo_owner or "",
-                "REPO_NAME": spec.repo_name or "",
-                **(spec.system_env_vars or {}),
+                "CONTROL_PLANE_URL": config.control_plane_url,
+                "SANDBOX_AUTH_TOKEN": config.sandbox_auth_token,
+                SANDBOX_TIMEOUT_ENV_VAR: str(config.timeout_seconds),
+                "REPO_OWNER": config.repo_owner or "",
+                "REPO_NAME": config.repo_name or "",
             }
         )
-        if spec.session_config_json is not None:
-            env_vars["SESSION_CONFIG"] = spec.session_config_json
+
+        clone_token: str | None = None
+        include_github_cli_aliases = False
+        snapshot_id: str | None = None
+        if isinstance(spec.source, _BaseImageSource):
+            image = base_image
+        elif isinstance(spec.source, _RepositoryImageSource):
+            image = modal.Image.from_id(spec.source.image_id)
+            env_vars["FROM_REPO_IMAGE"] = "true"
+            env_vars["REPO_IMAGE_SHA"] = spec.source.sha or ""
+        else:
+            image = modal.Image.from_id(spec.source.image_id)
+            env_vars["RESTORED_FROM_SNAPSHOT"] = "true"
+            clone_token = spec.source.clone_token
+            include_github_cli_aliases = True
+            snapshot_id = spec.source.image_id
+
+        if config.session_config is not None:
+            env_vars["SESSION_CONFIG"] = (
+                json.dumps(config.session_config)
+                if isinstance(config.session_config, dict)
+                else config.session_config.model_dump_json()
+            )
 
         inject_vcs_env_vars(
             env_vars,
-            clone_token=spec.clone_token if has_repository else None,
-            include_github_cli_aliases=spec.include_github_cli_aliases,
+            clone_token=clone_token if has_repository else None,
+            include_github_cli_aliases=include_github_cli_aliases,
         )
 
         code_server_password: str | None = None
-        if spec.code_server_enabled:
+        if config.code_server_enabled:
             code_server_password = self._generate_code_server_password()
             env_vars["CODE_SERVER_PASSWORD"] = code_server_password
 
         vnc_password: str | None = None
-        if spec.vnc_enabled:
+        if config.vnc_enabled:
             vnc_password = self._generate_vnc_password()
             env_vars[VNC_PASSWORD_ENV_VAR] = vnc_password
 
-        terminal_enabled = bool((spec.settings or {}).get("terminalEnabled", False))
+        terminal_enabled = bool((config.settings or {}).get("terminalEnabled", False))
         if terminal_enabled:
             env_vars["TERMINAL_ENABLED"] = "true"
-        if spec.agent_slack_notify_enabled:
+        if config.agent_slack_notify_enabled:
             env_vars["AGENT_SLACK_NOTIFY_ENABLED"] = "true"
 
-        code_server_port, novnc_port, ttyd_proxy_port = self._resolve_service_ports(spec.settings)
-        if spec.code_server_enabled:
+        code_server_port, novnc_port, ttyd_proxy_port = self._resolve_service_ports(config.settings)
+        if config.code_server_enabled:
             env_vars[CODE_SERVER_PORT_ENV_VAR] = str(code_server_port)
-        if spec.vnc_enabled:
+        if config.vnc_enabled:
             env_vars[NOVNC_PORT_ENV_VAR] = str(novnc_port)
         if terminal_enabled:
             env_vars[TTYD_PROXY_PORT_ENV_VAR] = str(ttyd_proxy_port)
 
         exposed_ports, tunnel_ports = self._collect_exposed_ports(
-            spec.code_server_enabled,
-            spec.vnc_enabled,
+            config.code_server_enabled,
+            config.vnc_enabled,
             terminal_enabled,
-            spec.settings,
+            config.settings,
             code_server_port,
             novnc_port,
             ttyd_proxy_port,
@@ -416,13 +455,13 @@ class SandboxManager:
             env_vars[EXPECTED_TUNNEL_PORTS_ENV_VAR] = ",".join(str(p) for p in tunnel_ports)
 
         create_kwargs: dict[str, Any] = {
-            "image": spec.image,
+            "image": image,
             "app": app,
             "secrets": [llm_secrets],
-            "timeout": spec.timeout_seconds,
+            "timeout": config.timeout_seconds,
             "workdir": "/workspace",
             "env": env_vars,
-            **_resource_kwargs(spec.settings),
+            **_resource_kwargs(config.settings),
         }
         if exposed_ports:
             create_kwargs["encrypted_ports"] = exposed_ports
@@ -442,8 +481,8 @@ class SandboxManager:
         ) = await self._resolve_and_setup_tunnels(
             sandbox,
             sandbox_id,
-            spec.code_server_enabled,
-            spec.vnc_enabled,
+            config.code_server_enabled,
+            config.vnc_enabled,
             terminal_enabled,
             tunnel_ports,
             code_server_port,
@@ -456,7 +495,7 @@ class SandboxManager:
             modal_sandbox=sandbox,
             status=SandboxStatus.WARMING,
             created_at=time.time(),
-            snapshot_id=spec.snapshot_id,
+            snapshot_id=snapshot_id,
             modal_object_id=modal_object_id,
             code_server_url=code_server_url,
             code_server_password=code_server_password,
@@ -486,37 +525,15 @@ class SandboxManager:
         start_time = time.time()
         _has_repository(config.repo_owner, config.repo_name)
 
-        # Determine image to use (priority: repo image > base image)
-        system_env_vars: dict[str, str] = {}
         if config.repo_image_id:
-            image = modal.Image.from_id(config.repo_image_id)
-            system_env_vars = {
-                "FROM_REPO_IMAGE": "true",
-                "REPO_IMAGE_SHA": config.repo_image_sha or "",
-            }
-        else:
-            image = base_image
-
-        handle = await self._launch_sandbox(
-            _SandboxLaunchSpec(
-                image=image,
-                repo_owner=config.repo_owner,
-                repo_name=config.repo_name,
-                sandbox_id=config.sandbox_id,
-                control_plane_url=config.control_plane_url,
-                sandbox_auth_token=config.sandbox_auth_token,
-                timeout_seconds=config.timeout_seconds,
-                user_env_vars=config.user_env_vars,
-                system_env_vars=system_env_vars,
-                session_config_json=(
-                    config.session_config.model_dump_json() if config.session_config else None
-                ),
-                code_server_enabled=config.code_server_enabled,
-                vnc_enabled=config.vnc_enabled,
-                agent_slack_notify_enabled=config.agent_slack_notify_enabled,
-                settings=config.settings,
+            source: _SandboxImageSource = _RepositoryImageSource(
+                image_id=config.repo_image_id,
+                sha=config.repo_image_sha,
             )
-        )
+        else:
+            source = _BaseImageSource()
+
+        handle = await self._launch_sandbox(_SandboxLaunchSpec(config=config, source=source))
 
         duration_ms = int((time.time() - start_time) * 1000)
         log.info(
@@ -605,7 +622,7 @@ class SandboxManager:
     async def restore_from_snapshot(
         self,
         snapshot_image_id: str,
-        session_config: SessionConfig | dict,
+        session_config: SessionConfig | dict[str, Any],
         sandbox_id: str | None = None,
         control_plane_url: str = "",
         sandbox_auth_token: str = "",
@@ -639,15 +656,10 @@ class SandboxManager:
         if isinstance(session_config, dict):
             repo_owner = session_config.get("repo_owner")
             repo_name = session_config.get("repo_name")
-            session_config_json = json.dumps(session_config)
         else:
             repo_owner = session_config.repo_owner
             repo_name = session_config.repo_name
-            session_config_json = session_config.model_dump_json()
         _has_repository(repo_owner, repo_name)
-
-        # Lookup the image by ID
-        image = modal.Image.from_id(snapshot_image_id)
 
         # Snapshot restore still passes the clone token through for
         # repo-backed sandboxes. Snapshots taken before the credential-helper
@@ -659,23 +671,24 @@ class SandboxManager:
         # credentials are explicitly requested only by the restore path.
         handle = await self._launch_sandbox(
             _SandboxLaunchSpec(
-                image=image,
-                repo_owner=repo_owner,
-                repo_name=repo_name,
-                sandbox_id=sandbox_id,
-                control_plane_url=control_plane_url,
-                sandbox_auth_token=sandbox_auth_token,
-                timeout_seconds=timeout_seconds,
-                user_env_vars=user_env_vars,
-                system_env_vars={"RESTORED_FROM_SNAPSHOT": "true"},
-                session_config_json=session_config_json,
-                clone_token=clone_token,
-                include_github_cli_aliases=True,
-                code_server_enabled=code_server_enabled,
-                vnc_enabled=vnc_enabled,
-                agent_slack_notify_enabled=agent_slack_notify_enabled,
-                settings=settings,
-                snapshot_id=snapshot_image_id,
+                config=SandboxConfig(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    sandbox_id=sandbox_id,
+                    session_config=session_config,
+                    control_plane_url=control_plane_url,
+                    sandbox_auth_token=sandbox_auth_token,
+                    timeout_seconds=timeout_seconds,
+                    user_env_vars=user_env_vars,
+                    code_server_enabled=code_server_enabled,
+                    vnc_enabled=vnc_enabled,
+                    agent_slack_notify_enabled=agent_slack_notify_enabled,
+                    settings=settings,
+                ),
+                source=_SnapshotImageSource(
+                    image_id=snapshot_image_id,
+                    clone_token=clone_token,
+                ),
             )
         )
 
