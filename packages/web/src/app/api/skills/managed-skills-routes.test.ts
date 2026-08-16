@@ -15,6 +15,7 @@ describe("managed skills BFF routes", () => {
     );
     const request = new NextRequest("http://localhost/api/skills/skill-1", {
       method: "PUT",
+      headers: { Cookie: "__Secure-openinspect.session_token=session.signature" },
       body: JSON.stringify({ description: "A skill", body: "Use it" }),
     });
 
@@ -52,7 +53,10 @@ describe("managed skills BFF routes", () => {
     };
     const request = new NextRequest("http://localhost/api/skills/skill%2Fone", {
       method: "PUT",
-      headers: { "If-Match": "revision-3" },
+      headers: {
+        Cookie: "__Secure-openinspect.session_token=session.signature",
+        "If-Match": "revision-3",
+      },
       body: JSON.stringify(body),
     });
 
