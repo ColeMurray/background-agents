@@ -1,5 +1,5 @@
-/** Minimum client identity needed by platform-neutral protocol and lifecycle code. */
-export interface SessionRuntimeClient {
+/** Mutable state associated with one authenticated browser connection. */
+export interface SessionClientConnectionState {
   participantId: string;
   userId: string;
   lastFetchHistoryAtMs?: number;

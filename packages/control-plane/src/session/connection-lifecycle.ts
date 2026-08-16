@@ -2,9 +2,12 @@ import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { Logger } from "../logger";
 import { isSandboxReconnectBlockedStatus } from "../sandbox/lifecycle/decisions";
-import type { SessionConnectionKind, SessionRuntimeClient } from "./runtime-contracts";
+import type { SessionClientConnectionState, SessionConnectionKind } from "./connection-types";
 
-export interface SessionConnectionLifecycleDeps<Connection, Client extends SessionRuntimeClient> {
+export interface SessionConnectionLifecycleDeps<
+  Connection,
+  Client extends SessionClientConnectionState,
+> {
   getLogger: () => Logger;
   classifyConnection: (connection: Connection) => SessionConnectionKind;
   close: (connection: Connection, code: number, reason: string) => void;
@@ -19,7 +22,7 @@ export interface SessionConnectionLifecycleDeps<Connection, Client extends Sessi
 }
 
 /** Applies disconnect policy independently of the underlying socket runtime. */
-export class SessionConnectionLifecycle<Connection, Client extends SessionRuntimeClient> {
+export class SessionConnectionLifecycle<Connection, Client extends SessionClientConnectionState> {
   constructor(private readonly deps: SessionConnectionLifecycleDeps<Connection, Client>) {}
 
   async handleClose(

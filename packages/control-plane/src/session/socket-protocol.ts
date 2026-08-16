@@ -3,8 +3,8 @@ import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
+import type { SessionClientConnectionState, SessionConnectionKind } from "./connection-types";
 import type { SessionHistoryPage } from "./event-stream";
-import type { SessionConnectionKind, SessionRuntimeClient } from "./runtime-contracts";
 
 const FETCH_HISTORY_MIN_INTERVAL_MS = 200;
 
@@ -23,7 +23,10 @@ type BoundarySchema<T> = {
 // Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
 type ParsedMessage<T> = { valid: true; data: T } | { valid: false; raw?: unknown };
 
-export interface SessionSocketProtocolDeps<Connection, Client extends SessionRuntimeClient> {
+export interface SessionSocketProtocolDeps<
+  Connection,
+  Client extends SessionClientConnectionState,
+> {
   getLogger: () => Logger;
   classifyConnection: (connection: Connection) => SessionConnectionKind;
   send: (connection: Connection, message: ServerMessage) => boolean;
@@ -43,7 +46,7 @@ export interface SessionSocketProtocolDeps<Connection, Client extends SessionRun
 }
 
 /** Validates and dispatches the session WebSocket protocol. */
-export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClient> {
+export class SessionSocketProtocol<Connection, Client extends SessionClientConnectionState> {
   constructor(private readonly deps: SessionSocketProtocolDeps<Connection, Client>) {}
 
   async handleMessage(connection: Connection, message: string | ArrayBuffer): Promise<void> {

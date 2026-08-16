@@ -1,9 +1,9 @@
 import type { SessionConnectionLifecycle } from "./connection-lifecycle";
+import type { SessionClientConnectionState } from "./connection-types";
 import type { SessionHttpDispatcher } from "./http/dispatcher";
-import type { SessionRuntimeClient } from "./runtime-contracts";
 import type { SessionSocketProtocol } from "./socket-protocol";
 
-export interface SessionEngineDeps<Connection, Client extends SessionRuntimeClient> {
+export interface SessionEngineDeps<Connection, Client extends SessionClientConnectionState> {
   initialize: () => void;
   http: SessionHttpDispatcher;
   socketProtocol: SessionSocketProtocol<Connection, Client>;
@@ -18,7 +18,7 @@ export interface SessionEngineDeps<Connection, Client extends SessionRuntimeClie
  * directly. Initialization stays here so callbacks after eviction or
  * hibernation restore repositories and session-scoped services before use.
  */
-export class SessionEngine<Connection, Client extends SessionRuntimeClient> {
+export class SessionEngine<Connection, Client extends SessionClientConnectionState> {
   constructor(private readonly deps: SessionEngineDeps<Connection, Client>) {}
 
   fetch(request: Request): Promise<Response> {
