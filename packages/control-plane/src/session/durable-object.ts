@@ -137,6 +137,7 @@ import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { parseArtifactMetadataJson } from "./artifact-metadata";
+import { DurableObjectSessionStore } from "./durable-object-session-store";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -181,6 +182,7 @@ export class SessionDO extends DurableObject<Env> {
   private messageRepository: MessageRepository;
   private participantRepository: ParticipantRepository;
   private wsClientMappingRepository: WsClientMappingRepository;
+  private sessionStore: DurableObjectSessionStore;
   private initialized = false;
   // Session-scoped logger. Assigned during initialization only — never
   // per-request. Request-serving code receives a request-scoped child
@@ -308,6 +310,15 @@ export class SessionDO extends DurableObject<Env> {
     this.sandboxRepository = new SandboxRepository(this.sql);
     this.sessionCoreRepository = new SessionCoreRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
+    );
+    this.sessionStore = new DurableObjectSessionStore(
+      {
+        sessionCore: this.sessionCoreRepository,
+        sandbox: this.sandboxRepository,
+        participants: this.participantRepository,
+        messages: this.messageRepository,
+      },
+      () => generateId()
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
     // Note: session_id context is set in ensureInitialized() once DB is ready
@@ -612,16 +623,13 @@ export class SessionDO extends DurableObject<Env> {
   private get sessionLifecycleHandler(): SessionLifecycleHandler {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
-        sessionCoreRepository: this.sessionCoreRepository,
-        sandboxRepository: this.sandboxRepository,
+        sessionStore: this.sessionStore,
         messageRepository: this.messageRepository,
-        participantRepository: this.participantRepository,
         getDurableObjectId: () => this.ctx.id.toString(),
         tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,
         encryptToken: (token, encryptionKey) => encryptToken(token, encryptionKey),
         validateReasoningEffort: (model, effort) =>
           validateReasoningEffort(model, effort, this.log),
-        generateId: (bytes) => generateId(bytes),
         now: () => Date.now(),
         scheduleWarmSandbox: () => this.backgroundJobs.submit(this.warmSandbox()),
         getSession: () => this.getSession(),

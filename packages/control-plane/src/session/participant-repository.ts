@@ -1,22 +1,8 @@
-import type { ParticipantRole } from "@open-inspect/shared/types/sessions";
+import type { CreateParticipantData } from "./session-store";
 import type { SqlStorage } from "./sql-storage";
 import type { ParticipantRow } from "./types";
 
-/** Data for creating a participant. */
-export interface CreateParticipantData {
-  id: string;
-  userId: string;
-  canonicalUserId?: string | null;
-  scmUserId?: string | null;
-  scmLogin?: string | null;
-  scmName?: string | null;
-  scmEmail?: string | null;
-  scmAccessTokenEncrypted?: string | null;
-  scmRefreshTokenEncrypted?: string | null;
-  scmTokenExpiresAt?: number | null;
-  role: ParticipantRole;
-  joinedAt: number;
-}
+export type { CreateParticipantData } from "./session-store";
 
 /** Data for updating a participant with COALESCE (only non-null values update). */
 export interface UpdateParticipantData {

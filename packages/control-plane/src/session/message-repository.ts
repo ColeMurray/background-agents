@@ -1,7 +1,8 @@
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { PromptQueueItem } from "@open-inspect/shared/types/server-messages";
-import type { MessageSource, MessageStatus } from "@open-inspect/shared/types/sessions";
-import type { CreateEventData, EventRepository } from "./event-repository";
+import type { MessageStatus } from "@open-inspect/shared/types/sessions";
+import type { EventRepository } from "./event-repository";
+import type { CreateEventData, CreateMessageData } from "./session-store";
 import type { SessionAttachmentRepository } from "./session-attachment-repository";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
 import type { MessageRow } from "./types";
@@ -18,21 +19,7 @@ interface RecordedMessageCompletion {
   status: "completed" | "failed";
 }
 
-/** Data for creating a message. */
-export interface CreateMessageData {
-  id: string;
-  authorId: string;
-  content: string;
-  source: MessageSource;
-  model?: string | null;
-  reasoningEffort?: string | null;
-  attachments?: string | null;
-  callbackContext?: string | null;
-  clientRequestId?: string | null;
-  requestFingerprint?: string | null;
-  status: MessageStatus;
-  createdAt: number;
-}
+export type { CreateMessageData } from "./session-store";
 
 /** Options for listing messages. */
 export interface ListMessagesOptions {

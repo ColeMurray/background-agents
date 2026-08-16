@@ -8,10 +8,8 @@ import type {
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import type { SessionCoreRepository } from "../../session-core-repository";
-import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
-import type { ParticipantRepository } from "../../participant-repository";
+import type { SessionInitializationStore } from "../../session-initialization-store";
 import type { SessionStatusService } from "../../session-status-service";
 import {
   normalizeSessionTitle,
@@ -23,15 +21,12 @@ import { z } from "zod";
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
 export interface SessionLifecycleHandlerDeps {
-  sessionCoreRepository: SessionCoreRepository;
-  sandboxRepository: SandboxRepository;
+  sessionStore: SessionInitializationStore;
   messageRepository: MessageRepository;
-  participantRepository: ParticipantRepository;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
   encryptToken: (token: string, encryptionKey: string) => Promise<string>;
   validateReasoningEffort: (model: string, effort: string | undefined) => string | null;
-  generateId: (bytes?: number) => string;
   now: () => number;
   scheduleWarmSandbox: () => void;
   getSession: () => SessionRow | null;
@@ -239,30 +234,6 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      deps.sessionCoreRepository.upsertSession({
-        id: sessionId,
-        sessionName,
-        title: body.title ?? null,
-        repoOwner,
-        repoName,
-        repoId: hasRepoOwner ? body.repoId : null,
-        baseBranch,
-        model,
-        reasoningEffort,
-        status: "created",
-        parentSessionId: body.parentSessionId ?? null,
-        spawnSource: body.spawnSource ?? "user",
-        spawnDepth: body.spawnDepth ?? 0,
-        codeServerEnabled: body.codeServerEnabled ?? false,
-        vncEnabled: body.vncEnabled ?? false,
-        sandboxSettings: body.sandboxSettings
-          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
-          : null,
-        environmentId: body.environmentId ?? null,
-        createdAt: now,
-        updatedAt: now,
-      });
-
       // Legacy scalar producers (spawn paths not yet list-aware) still get a
       // member row so spawn/read paths have one source of truth.
       const memberRepositories: RepositoryRef[] =
@@ -271,37 +242,55 @@ export function createSessionLifecycleHandler(
           : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
             ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
             : [];
-      deps.sessionCoreRepository.replaceSessionRepositories(
-        memberRepositories.map((repo, position) => ({
+      await deps.sessionStore.initializeSession({
+        session: {
+          id: sessionId,
+          sessionName,
+          title: body.title ?? null,
+          repoOwner,
+          repoName,
+          repoId: hasRepoOwner ? body.repoId : null,
+          baseBranch,
+          model,
+          reasoningEffort,
+          status: "created",
+          parentSessionId: body.parentSessionId ?? null,
+          spawnSource: body.spawnSource ?? "user",
+          spawnDepth: body.spawnDepth ?? 0,
+          codeServerEnabled: body.codeServerEnabled ?? false,
+          vncEnabled: body.vncEnabled ?? false,
+          sandboxSettings: body.sandboxSettings
+            ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+            : null,
+          environmentId: body.environmentId ?? null,
+          createdAt: now,
+          updatedAt: now,
+        },
+        repositories: memberRepositories.map((repo, position) => ({
           position,
           repoOwner: repo.repoOwner,
           repoName: repo.repoName,
           repoId: repo.repoId,
           baseBranch: repo.baseBranch,
-        }))
-      );
-      const sandboxId = deps.generateId();
-      deps.sandboxRepository.createSandbox({
-        id: sandboxId,
-        status: "pending",
-        gitSyncStatus: "pending",
-        createdAt: 0,
-      });
-
-      const participantId = deps.generateId();
-      deps.participantRepository.createParticipant({
-        id: participantId,
-        userId: body.userId,
-        ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
-        scmUserId: body.scmUserId ?? null,
-        scmLogin: body.scmLogin ?? null,
-        scmName: body.scmName ?? null,
-        scmEmail: body.scmEmail ?? null,
-        scmAccessTokenEncrypted: encryptedToken,
-        scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
-        scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
-        role: "owner",
-        joinedAt: now,
+        })),
+        sandbox: {
+          status: "pending",
+          gitSyncStatus: "pending",
+          createdAt: 0,
+        },
+        owner: {
+          userId: body.userId,
+          ...(body.canonicalUserId ? { canonicalUserId: body.canonicalUserId } : {}),
+          scmUserId: body.scmUserId ?? null,
+          scmLogin: body.scmLogin ?? null,
+          scmName: body.scmName ?? null,
+          scmEmail: body.scmEmail ?? null,
+          scmAccessTokenEncrypted: encryptedToken,
+          scmRefreshTokenEncrypted: body.scmRefreshTokenEncrypted ?? null,
+          scmTokenExpiresAt: body.scmTokenExpiresAt ?? null,
+          role: "owner",
+          joinedAt: now,
+        },
       });
 
       log.info("Triggering sandbox spawn for new session");

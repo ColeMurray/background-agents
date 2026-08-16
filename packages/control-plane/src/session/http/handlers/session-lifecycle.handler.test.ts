@@ -3,10 +3,9 @@ import type { Logger } from "../../../logger";
 import type { ParticipantRow, SandboxRow, SessionRow } from "../../types";
 import { createSessionLifecycleHandler } from "./session-lifecycle.handler";
 import type { SessionStatusService } from "../../session-status-service";
-import type { ParticipantRepository } from "../../participant-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
-import type { SessionCoreRepository } from "../../session-core-repository";
+import type { SessionInitializationStore } from "../../session-initialization-store";
 import { getValidModelOrDefault } from "@open-inspect/shared/models";
 
 function createSession(overrides: Partial<SessionRow> = {}): SessionRow {
@@ -95,10 +94,19 @@ function createHandler() {
     getMessageCount: vi.fn(() => 0),
   };
   const sandboxRepository = { createSandbox: vi.fn() } as unknown as SandboxRepository;
+  const generateId = vi.fn();
+  const initializeSession = vi.fn<SessionInitializationStore["initializeSession"]>(async (data) => {
+    repository.upsertSession(data.session);
+    repository.replaceSessionRepositories(data.repositories);
+    sandboxRepository.createSandbox({ id: generateId(), ...data.sandbox });
+    repository.createParticipant({ id: generateId(), ...data.owner });
+  });
+  const sessionStore = {
+    initializeSession,
+  } as unknown as SessionInitializationStore;
   const getDurableObjectId = vi.fn(() => "session-do-id");
   const encryptToken = vi.fn();
   const validateReasoningEffort = vi.fn();
-  const generateId = vi.fn();
   const now = vi.fn(() => 1234);
   const scheduleWarmSandbox = vi.fn();
   const log = {
@@ -127,15 +135,12 @@ function createHandler() {
   const updateSandboxStatus = vi.fn();
 
   const lifecycleHandler = createSessionLifecycleHandler({
-    sessionCoreRepository: repository as unknown as SessionCoreRepository,
-    sandboxRepository,
+    sessionStore,
     messageRepository: repository as unknown as MessageRepository,
-    participantRepository: repository as unknown as ParticipantRepository,
     getDurableObjectId,
     tokenEncryptionKey: "encryption-key",
     encryptToken,
     validateReasoningEffort,
-    generateId,
     now,
     scheduleWarmSandbox,
     getSession,
@@ -161,6 +166,7 @@ function createHandler() {
     handler,
     repository,
     sandboxRepository,
+    initializeSession,
     getDurableObjectId,
     encryptToken,
     validateReasoningEffort,
