@@ -378,12 +378,22 @@ export class SessionMessageQueue {
       ),
     };
 
+    const claimed = this.messageRepository.startMessageProcessing(
+      message.id,
+      now,
+      userMessageEvent
+    );
+    if (!claimed) {
+      this.log.debug("processMessageQueue: prompt claim lost", { message_id: message.id });
+      return;
+    }
+
     const sent = this.wsManager.send(sandboxWs, command);
 
     if (!sent) {
+      this.messageRepository.updateMessageToPending(message.id);
       await this.sandboxLifecycle.terminateUnresponsiveSandbox("prompt_dispatch_send_failed");
     } else {
-      this.messageRepository.startMessageProcessing(message.id, now, userMessageEvent);
       this.messenger.broadcast({ type: "sandbox_event", event: userMessageEvent });
       this.messenger.broadcast({ type: "processing_status", isProcessing: true });
       this.broadcastPromptQueue();

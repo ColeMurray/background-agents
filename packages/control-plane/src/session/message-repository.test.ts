@@ -10,6 +10,7 @@ import type { SqlResult, SqlStorage } from "./sql-storage";
 function createMockSql() {
   const calls: Array<{ query: string; params: unknown[] }> = [];
   const data = new Map<string, unknown[]>();
+  let defaultData: unknown[] = [];
   let oneValue: unknown = null;
   let rowsWritten = 0;
   const sql: SqlStorage = {
@@ -19,7 +20,7 @@ function createMockSql() {
       return {
         toArray: () => {
           consumed = true;
-          return data.get(query) ?? [];
+          return data.get(query) ?? defaultData;
         },
         one: () => oneValue,
         get rowsWritten() {
@@ -33,7 +34,10 @@ function createMockSql() {
     calls,
     setData: (query: string, rows: unknown[]) => data.set(query, rows),
     setOne: (value: unknown) => (oneValue = value),
-    setRowsWritten: (value: number) => (rowsWritten = value),
+    setRowsWritten: (value: number) => {
+      rowsWritten = value;
+      defaultData = Array.from({ length: value }, () => ({}));
+    },
   };
 }
 
@@ -212,22 +216,42 @@ describe("MessageRepository", () => {
   });
 
   it("atomically starts processing and creates the canonical user event", () => {
-    repository.startMessageProcessing("msg-1", 2000, {
-      type: "user_message",
-      content: "Hello",
-      messageId: "msg-1",
-      timestamp: 2,
-      author: { participantId: "p-1", userId: "u-1", name: "User" },
-    });
+    mock.setRowsWritten(1);
+    expect(
+      repository.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      })
+    ).toBe(true);
     expect(transactionSyncCalls).toBe(1);
     expect(mock.calls[0].query).toContain("status = 'processing'");
+    expect(mock.calls[0].query).toContain("status = 'pending'");
+    expect(mock.calls[0].query).toContain("NOT EXISTS");
     expect(mock.calls[1].params[0]).toBe("user_message:msg-1");
   });
 
-  it("returns a processing message to pending", () => {
+  it("does not create a user event when the processing claim is lost", () => {
+    expect(
+      repository.startMessageProcessing("msg-1", 2000, {
+        type: "user_message",
+        content: "Hello",
+        messageId: "msg-1",
+        timestamp: 2,
+        author: { participantId: "p-1", userId: "u-1", name: "User" },
+      })
+    ).toBe(false);
+    expect(mock.calls).toHaveLength(1);
+  });
+
+  it("returns an undispatched processing message to pending and removes its user event", () => {
+    mock.setRowsWritten(1);
     repository.updateMessageToPending("msg-1");
     expect(mock.calls[0].query).toContain("status = 'pending'");
     expect(mock.calls[0].params).toEqual(["msg-1"]);
+    expect(mock.calls[1].params).toEqual(["user_message:msg-1"]);
   });
 
   it("atomically records message completion and its canonical event", () => {

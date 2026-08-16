@@ -410,6 +410,7 @@ describe("applyMigrations", () => {
           "idx_messages_status",
           "idx_messages_author",
           "idx_messages_client_request_id",
+          "idx_messages_one_processing",
         ])
       );
       expectClientRequestIdIndex(db);
@@ -426,5 +427,30 @@ describe("applyMigrations", () => {
     expect(MIGRATIONS.find((entry) => entry.id === 41)?.run).toContain(
       "ADD COLUMN stop_confirmation_deadline INTEGER"
     );
+  });
+
+  it("allows only one processing message per session", () => {
+    const migration = MIGRATIONS.find((entry) => entry.id === 42);
+    expect(migration?.run).toContain("idx_messages_one_processing");
+    expect(migration?.run).toContain("WHERE status = 'processing'");
+
+    const db = new DatabaseSync(":memory:");
+    const sql = createDatabaseSql(db);
+    try {
+      db.exec("CREATE TABLE messages (id TEXT PRIMARY KEY, status TEXT NOT NULL)");
+      (migration!.run as string)
+        .split(";")
+        .filter(Boolean)
+        .forEach((statement) => sql.exec(statement));
+      db.prepare("INSERT INTO messages (id, status) VALUES (?, ?)").run("first", "processing");
+      expect(() =>
+        db.prepare("INSERT INTO messages (id, status) VALUES (?, ?)").run("second", "processing")
+      ).toThrow();
+      expect(() =>
+        db.prepare("INSERT INTO messages (id, status) VALUES (?, ?)").run("queued", "pending")
+      ).not.toThrow();
+    } finally {
+      db.close();
+    }
   });
 });
