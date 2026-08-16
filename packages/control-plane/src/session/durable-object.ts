@@ -9,14 +9,12 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { initSchema } from "./schema";
-import { clientMessageSchema } from "@open-inspect/shared/types/websocket";
-import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import {
   sessionSnapshotSchema,
   type ServerMessage,
   type SessionSnapshotState,
 } from "@open-inspect/shared/types/server-messages";
-import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
+import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { SandboxStatus } from "@open-inspect/shared/types/sessions";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import type { ScmSettings } from "@open-inspect/shared/types/integrations";
@@ -135,6 +133,7 @@ import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { parseArtifactMetadataJson } from "./artifact-metadata";
+import { SessionEngine } from "./engine";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -150,12 +149,6 @@ const WS_AUTH_TIMEOUT_MS = 30000; // 30 seconds
  * the client to fetch a fresh token on reconnect.
  */
 const WS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-
-type BoundarySchema<T> = {
-  safeParse(
-    input: unknown
-  ): { success: true; data: T } | { success: false; error: { issues: unknown } };
-};
 
 interface SessionSnapshotEnrichment {
   environmentId: string | null;
@@ -231,6 +224,7 @@ export class SessionDO extends DurableObject<Env> {
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
   private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
+  private readonly engine: SessionEngine<WebSocket, ClientInfo>;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -305,6 +299,38 @@ export class SessionDO extends DurableObject<Env> {
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
+    this.engine = new SessionEngine({
+      initialize: () => this.ensureInitialized(),
+      getLogger: () => this.log,
+      routes: this.routes,
+      handleWebSocketUpgrade: (request, url, log) => this.handleWebSocketUpgrade(request, url, log),
+      classifyConnection: (ws) => this.wsManager.classify(ws),
+      send: (ws, message) => this.safeSend(ws, message),
+      close: (ws, code, reason) => this.wsManager.close(ws, code, reason),
+      closeOnError: (ws) => ws.close(1011, "Internal error"),
+      getClient: (ws) => this.getClientInfo(ws),
+      handleSubscribe: (ws, message) => this.handleSubscribe(ws, message),
+      handlePrompt: (ws, client, message) => this.handlePromptMessage(ws, client, message),
+      cancelPrompt: (ws, message) => this.messageQueue.cancelQueuedPrompt(ws, message),
+      stopExecution: () => this.stopExecution(),
+      handleTyping: () => this.presenceService.handleTyping(),
+      updatePresence: (client, message) => this.presenceService.updatePresence(client, message),
+      getHistoryPage: (message) => this.eventStream.getHistoryPage(message),
+      processSandboxEvent: (event) => this.processSandboxEvent(event),
+      clearSandboxConnectionIfMatch: (ws) => this.wsManager.clearSandboxSocketIfMatch(ws),
+      getSandboxStatus: () => this.getSandbox()?.status,
+      scheduleDisconnectCheck: () => this.lifecycleManager.scheduleDisconnectCheck(),
+      removeClient: (ws) => this.wsManager.removeClient(ws),
+      hasAuthenticatedParticipant: (participantId) =>
+        Array.from(this.wsManager.getAuthenticatedClients()).some(
+          (client) => client.participantId === participantId
+        ),
+      broadcastPresence: () => this.presenceService.broadcastPresence(),
+      broadcast: (message) => this.broadcast(message),
+      handleAlarm: () => this.alarmHandler.handle(),
+      now: () => Date.now(),
+      monotonicNow: () => performance.now(),
+    });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
 
@@ -1008,66 +1034,7 @@ export class SessionDO extends DurableObject<Env> {
    * Handle incoming HTTP requests.
    */
   async fetch(request: Request): Promise<Response> {
-    const fetchStart = performance.now();
-
-    this.ensureInitialized();
-    const initMs = performance.now() - fetchStart;
-
-    // Derive a request-scoped logger from correlation headers and thread it
-    // explicitly to request-serving code. `this.log` stays session-scoped —
-    // it is never reassigned per request, so nothing that captures it can
-    // pin another request's correlation ids.
-    const traceId = request.headers.get("x-trace-id");
-    const requestId = request.headers.get("x-request-id");
-    let requestLog = this.log;
-    if (traceId || requestId) {
-      const correlationCtx: Record<string, unknown> = {};
-      if (traceId) correlationCtx.trace_id = traceId;
-      if (requestId) correlationCtx.request_id = requestId;
-      requestLog = this.log.child(correlationCtx);
-    }
-
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // WebSocket upgrade (special case - header-based, not path-based)
-    if (request.headers.get("Upgrade") === "websocket") {
-      return this.handleWebSocketUpgrade(request, url, requestLog);
-    }
-
-    // Match route from table
-    const route = this.routes.find((r) => r.path === path && r.method === request.method);
-
-    if (route) {
-      const handlerStart = performance.now();
-      let status = 500;
-      let outcome: "success" | "error" = "error";
-      try {
-        const response = await route.handler(request, url, requestLog);
-        status = response.status;
-        outcome = status >= 500 ? "error" : "success";
-        return response;
-      } catch (e) {
-        status = 500;
-        outcome = "error";
-        throw e;
-      } finally {
-        const handlerMs = performance.now() - handlerStart;
-        const totalMs = performance.now() - fetchStart;
-        requestLog.info("do.request", {
-          event: "do.request",
-          http_method: request.method,
-          http_path: path,
-          http_status: status,
-          duration_ms: Math.round(totalMs * 100) / 100,
-          init_ms: Math.round(initMs * 100) / 100,
-          handler_ms: Math.round(handlerMs * 100) / 100,
-          outcome,
-        });
-      }
-    }
-
-    return new Response("Not Found", { status: 404 });
+    return this.engine.fetch(request);
   }
 
   /**
@@ -1203,15 +1170,7 @@ export class SessionDO extends DurableObject<Env> {
    * Handle WebSocket message (with hibernation support).
    */
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    this.ensureInitialized();
-    if (typeof message !== "string") return;
-
-    const { kind } = this.wsManager.classify(ws);
-    if (kind === "sandbox") {
-      await this.handleSandboxMessage(ws, message);
-    } else {
-      await this.handleClientMessage(ws, message);
-    }
+    await this.engine.webSocketMessage(ws, message);
   }
 
   /**
@@ -1223,64 +1182,14 @@ export class SessionDO extends DurableObject<Env> {
     reason: string,
     wasClean: boolean
   ): Promise<void> {
-    this.ensureInitialized();
-    const connection = this.wsManager.classify(ws);
-
-    try {
-      if (connection.kind === "sandbox") {
-        const wasActive = this.wsManager.clearSandboxSocketIfMatch(ws);
-        if (!wasActive) {
-          // sandboxWs points to a different socket — this close is for a replaced connection.
-          this.log.debug("Ignoring close for replaced sandbox socket", { code });
-          return;
-        }
-
-        const sandboxStatus = this.getSandbox()?.status;
-        const reconnectBlocked =
-          sandboxStatus !== undefined && isSandboxReconnectBlockedStatus(sandboxStatus);
-        if (!reconnectBlocked) {
-          // A close frame only ends this transport connection. Explicit lifecycle
-          // paths persist stopped/stale before closing the socket; otherwise the
-          // bridge must be allowed to reconnect regardless of the peer close code.
-          this.log.warn("Sandbox WebSocket disconnected; awaiting reconnect", {
-            event: "sandbox.disconnected",
-            code,
-            reason,
-            was_clean: wasClean,
-            sandbox_status: sandboxStatus,
-            sandbox_id: connection.sandboxId,
-          });
-          await this.lifecycleManager.scheduleDisconnectCheck();
-        }
-      } else {
-        const client = this.wsManager.removeClient(ws);
-        if (client) {
-          // If the participant still has other authenticated sockets (e.g. another
-          // browser tab), don't send presence_leave — the client filters by userId
-          // and would remove them entirely. Broadcast a refresh instead.
-          const stillPresent = Array.from(this.wsManager.getAuthenticatedClients()).some(
-            (c) => c.participantId === client.participantId
-          );
-          if (stillPresent) {
-            this.presenceService.broadcastPresence();
-          } else {
-            this.broadcast({ type: "presence_leave", userId: client.userId });
-          }
-        }
-      }
-    } finally {
-      // Reciprocate the peer close to complete the WebSocket close handshake.
-      this.wsManager.close(ws, code, reason);
-    }
+    await this.engine.webSocketClose(ws, code, reason, wasClean);
   }
 
   /**
    * Handle WebSocket error.
    */
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
-    this.ensureInitialized();
-    this.log.error("WebSocket error", { error });
-    ws.close(1011, "Internal error");
+    this.engine.webSocketError(ws, error);
   }
 
   /**
@@ -1292,8 +1201,7 @@ export class SessionDO extends DurableObject<Env> {
    * is already dead and handleAlarm() returns early.
    */
   async alarm(): Promise<void> {
-    this.ensureInitialized();
-    await this.alarmHandler.handle();
+    await this.engine.alarm();
   }
 
   /**
@@ -1318,137 +1226,6 @@ export class SessionDO extends DurableObject<Env> {
    */
   private async triggerSnapshot(reason: string): Promise<void> {
     await this.lifecycleManager.triggerSnapshot(reason);
-  }
-
-  /**
-   * Handle messages from sandbox.
-   */
-  private async handleSandboxMessage(ws: WebSocket, message: string): Promise<void> {
-    const event = this.parseWebSocketMessage(message, "sandbox", sandboxEventSchema);
-    if (!event) return;
-
-    try {
-      await this.processSandboxEvent(event);
-    } catch (e) {
-      this.log.error("Error processing sandbox message", {
-        error: e instanceof Error ? e : String(e),
-      });
-    }
-  }
-
-  /**
-   * Handle messages from clients.
-   */
-  private async handleClientMessage(ws: WebSocket, message: string): Promise<void> {
-    try {
-      const data = this.parseWebSocketMessage(message, "client", clientMessageSchema);
-      if (!data) {
-        const invalidRequest = this.readInvalidCorrelatedRequest(message);
-        this.safeSend(ws, {
-          type: "error",
-          code: invalidRequest?.type === "prompt" ? "INVALID_PROMPT" : "INVALID_MESSAGE",
-          message:
-            invalidRequest?.type === "prompt" ? "Invalid prompt" : "Failed to process message",
-          ...(invalidRequest?.clientRequestId
-            ? { clientRequestId: invalidRequest.clientRequestId }
-            : {}),
-        });
-        return;
-      }
-
-      if (data.type === "ping") {
-        this.safeSend(ws, { type: "pong", timestamp: Date.now() });
-        return;
-      }
-
-      if (data.type === "subscribe") {
-        await this.handleSubscribe(ws, data);
-        return;
-      }
-
-      const client = this.getClientInfo(ws);
-      if (!client) return;
-
-      switch (data.type) {
-        case "prompt":
-          await this.handlePromptMessage(ws, client, data);
-          break;
-
-        case "cancel_prompt":
-          await this.messageQueue.cancelQueuedPrompt(ws, data);
-          break;
-
-        case "stop":
-          await this.stopExecution();
-          break;
-
-        case "typing":
-          await this.presenceService.handleTyping();
-          break;
-
-        case "fetch_history":
-          this.handleFetchHistory(ws, client, data);
-          break;
-
-        case "presence":
-          this.presenceService.updatePresence(client, data);
-          break;
-      }
-    } catch (e) {
-      this.log.error("Error processing client message", {
-        error: e instanceof Error ? e : String(e),
-      });
-      this.safeSend(ws, {
-        type: "error",
-        code: "INVALID_MESSAGE",
-        message: "Failed to process message",
-      });
-    }
-  }
-
-  private parseWebSocketMessage<T>(
-    message: string,
-    boundary: "client" | "sandbox",
-    schema: BoundarySchema<T>
-  ): T | null {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(message);
-    } catch (e) {
-      this.log.error("Invalid WebSocket JSON", {
-        boundary,
-        error: e instanceof Error ? e.message : String(e),
-      });
-      return null;
-    }
-
-    const result = schema.safeParse(raw);
-    if (!result.success) {
-      this.log.warn("Invalid WebSocket message", {
-        boundary,
-        issues: result.error.issues,
-      });
-      return null;
-    }
-
-    return result.data;
-  }
-
-  private readInvalidCorrelatedRequest(
-    message: string
-  ): { type: "prompt" | "cancel_prompt"; clientRequestId?: string } | null {
-    try {
-      const raw = JSON.parse(message) as unknown;
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-      const candidate = raw as Record<string, unknown>;
-      if (candidate.type !== "prompt" && candidate.type !== "cancel_prompt") return null;
-      const clientRequestId = clientRequestIdSchema.safeParse(candidate.clientRequestId);
-      return clientRequestId.success
-        ? { type: candidate.type, clientRequestId: clientRequestId.data }
-        : { type: candidate.type };
-    } catch {
-      return null;
-    }
   }
 
   /**
@@ -1640,54 +1417,6 @@ export class SessionDO extends DurableObject<Env> {
     }
   ): Promise<void> {
     await this.messageQueue.handlePromptMessage(ws, client, data);
-  }
-
-  /**
-   * Handle fetch_history request from client for paginated history loading.
-   */
-  private handleFetchHistory(
-    ws: WebSocket,
-    client: ClientInfo,
-    data: { cursor?: { timestamp: number; id: string; sequence?: number }; limit?: number }
-  ): void {
-    // Validate cursor
-    if (
-      !data.cursor ||
-      typeof data.cursor.timestamp !== "number" ||
-      typeof data.cursor.id !== "string" ||
-      (data.cursor.sequence !== undefined &&
-        (!Number.isSafeInteger(data.cursor.sequence) || data.cursor.sequence < 0))
-    ) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "INVALID_CURSOR",
-        message: "Invalid cursor",
-      });
-      return;
-    }
-
-    // Rate limit: reject if < 200ms since last fetch
-    const now = Date.now();
-    if (client.lastFetchHistoryAt && now - client.lastFetchHistoryAt < 200) {
-      this.safeSend(ws, {
-        type: "error",
-        code: "RATE_LIMITED",
-        message: "Too many requests",
-      });
-      return;
-    }
-    client.lastFetchHistoryAt = now;
-
-    const page = this.eventStream.getHistoryPage({
-      cursor: data.cursor,
-      limit: data.limit,
-    });
-    this.safeSend(ws, {
-      type: "history_page",
-      items: page.items,
-      hasMore: page.hasMore,
-      cursor: page.cursor,
-    } satisfies ServerMessage);
   }
 
   /**
