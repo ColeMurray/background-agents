@@ -158,6 +158,33 @@ describe("VercelSandboxClient", () => {
     expect(result).toEqual({ commandId: "cmd-1", exitCode: null });
   });
 
+  it.each([
+    ["createSandbox", () => createClient().createSandbox({ name: "sandbox-1" })],
+    [
+      "startCommand",
+      () => createClient().startCommand({ sessionId: "session-1", command: "true" }),
+    ],
+    ["snapshotSession", () => createClient().snapshotSession("session-1")],
+    ["listSnapshots", () => createClient().listSnapshots()],
+  ])("rejects a valid JSON error envelope from %s", async (_endpoint, request) => {
+    const responseBody = JSON.stringify({ error: { code: "provider_drift" } });
+    fetchSpy.mockResolvedValue(new Response(responseBody, { status: 200 }));
+
+    await expect(request()).rejects.toMatchObject({
+      name: "VercelSandboxApiError",
+      status: 200,
+      responseText: responseBody,
+    });
+  });
+
+  it("rejects invalid JSON from a JSON endpoint", async () => {
+    fetchSpy.mockResolvedValue(new Response("not-json", { status: 200 }));
+
+    await expect(createClient().listSnapshots()).rejects.toThrow(
+      "Vercel Sandbox API returned invalid JSON"
+    );
+  });
+
   it("parses NDJSON output from a waited command", async () => {
     fetchSpy.mockResolvedValue(
       new Response(

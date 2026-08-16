@@ -8,6 +8,7 @@
 
 import { createLogger } from "../../../logger";
 import type { CorrelationContext } from "../../../logger";
+import { z } from "zod";
 
 const log = createLogger("vercel-sandbox-client");
 
@@ -21,29 +22,45 @@ export interface VercelSandboxClientConfig {
   apiBaseUrl?: string;
 }
 
-export interface VercelSandboxRoute {
-  url?: string;
-  subdomain: string;
-  port: number;
-}
+const vercelSandboxStatusSchema = z.enum([
+  "pending",
+  "running",
+  "stopping",
+  "stopped",
+  "failed",
+  "aborted",
+  "snapshotting",
+]);
 
-export interface VercelSandboxSession {
-  id: string;
-  status: "pending" | "running" | "stopping" | "stopped" | "failed" | "aborted" | "snapshotting";
-  createdAt: number;
-  cwd: string;
-  timeout: number;
-}
+const vercelSandboxRouteSchema = z.object({
+  url: z.string().optional(),
+  subdomain: z.string(),
+  port: z.number(),
+});
+
+export type VercelSandboxRoute = z.infer<typeof vercelSandboxRouteSchema>;
+
+const vercelSandboxSessionSchema = z.object({
+  id: z.string(),
+  status: vercelSandboxStatusSchema,
+  createdAt: z.number(),
+  cwd: z.string(),
+  timeout: z.number(),
+});
+
+export type VercelSandboxSession = z.infer<typeof vercelSandboxSessionSchema>;
 
 export type VercelVcpus = 1 | 2 | 4 | 8;
 
-export interface VercelSandboxMetadata {
-  name: string;
-  currentSessionId: string;
-  currentSnapshotId?: string;
-  createdAt: number;
-  status: VercelSandboxSession["status"];
-}
+const vercelSandboxMetadataSchema = z.object({
+  name: z.string(),
+  currentSessionId: z.string(),
+  currentSnapshotId: z.string().optional(),
+  createdAt: z.number(),
+  status: vercelSandboxStatusSchema,
+});
+
+export type VercelSandboxMetadata = z.infer<typeof vercelSandboxMetadataSchema>;
 
 export interface VercelCreateSandboxRequest {
   name: string;
@@ -56,11 +73,13 @@ export interface VercelCreateSandboxRequest {
   sourceSnapshotId?: string;
 }
 
-export interface VercelCreateSandboxResponse {
-  sandbox: VercelSandboxMetadata;
-  session: VercelSandboxSession;
-  routes: VercelSandboxRoute[];
-}
+const vercelCreateSandboxResponseSchema = z.object({
+  sandbox: vercelSandboxMetadataSchema,
+  session: vercelSandboxSessionSchema,
+  routes: z.array(vercelSandboxRouteSchema),
+});
+
+export type VercelCreateSandboxResponse = z.infer<typeof vercelCreateSandboxResponseSchema>;
 
 export interface VercelRunCommandRequest {
   sessionId: string;
@@ -89,28 +108,45 @@ export interface VercelCommandResult {
   exitCode: number | null;
 }
 
-export interface VercelSnapshotMetadata {
-  id: string;
-  sourceSessionId: string;
-  status: "created" | "deleted" | "failed";
-  region: string;
-  sizeBytes: number;
-  createdAt: number;
-  updatedAt: number;
-  expiresAt?: number;
-  lastUsedAt?: number;
-  creationMethod?: string;
-  parentId?: string;
-}
+const vercelSnapshotStatusSchema = z.enum(["created", "deleted", "failed"]);
 
-export interface VercelSnapshotResponse {
-  snapshot: {
-    id: string;
-    status: "created" | "deleted" | "failed";
-    createdAt: number;
-  };
-  session: VercelSandboxSession;
-}
+const vercelSnapshotMetadataSchema = z.object({
+  id: z.string(),
+  sourceSessionId: z.string(),
+  status: vercelSnapshotStatusSchema,
+  region: z.string(),
+  sizeBytes: z.number(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  expiresAt: z.number().optional(),
+  lastUsedAt: z.number().optional(),
+  creationMethod: z.string().optional(),
+  parentId: z.string().optional(),
+});
+
+export type VercelSnapshotMetadata = z.infer<typeof vercelSnapshotMetadataSchema>;
+
+const vercelSnapshotResponseSchema = z.object({
+  snapshot: z.object({
+    id: z.string(),
+    status: vercelSnapshotStatusSchema,
+    createdAt: z.number(),
+  }),
+  session: vercelSandboxSessionSchema,
+});
+
+export type VercelSnapshotResponse = z.infer<typeof vercelSnapshotResponseSchema>;
+
+const vercelStartCommandResponseSchema = z.object({
+  command: z.object({
+    id: z.string(),
+    exitCode: z.number().nullable(),
+  }),
+});
+
+const vercelListSnapshotsResponseSchema = z.object({
+  snapshots: z.array(vercelSnapshotMetadataSchema),
+});
 
 export class VercelSandboxApiError extends Error {
   constructor(
@@ -136,7 +172,7 @@ export class VercelSandboxClient {
     request: VercelCreateSandboxRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCreateSandboxResponse> {
-    const response = await this.request<VercelCreateSandboxResponse>(
+    const response = await this.request(
       "/v2/sandboxes",
       {
         method: "POST",
@@ -154,6 +190,7 @@ export class VercelSandboxClient {
             : undefined,
         }),
       },
+      vercelCreateSandboxResponseSchema,
       correlation,
       "createSandbox"
     );
@@ -165,7 +202,7 @@ export class VercelSandboxClient {
     request: VercelRunCommandRequest,
     correlation?: CorrelationContext
   ): Promise<VercelCommandResult> {
-    const response = await this.request<{ command: { id: string; exitCode: number | null } }>(
+    const response = await this.request(
       `/v2/sandboxes/sessions/${encodeURIComponent(request.sessionId)}/cmd`,
       {
         method: "POST",
@@ -178,6 +215,7 @@ export class VercelSandboxClient {
           timeout: request.timeoutMs,
         }),
       },
+      vercelStartCommandResponseSchema,
       correlation,
       "startCommand"
     );
@@ -236,9 +274,10 @@ export class VercelSandboxClient {
       opts.expirationMs === undefined
         ? undefined
         : JSON.stringify({ expiration: opts.expirationMs });
-    return this.request<VercelSnapshotResponse>(
+    return this.request(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/snapshot`,
       { method: "POST", body, signal: opts.signal },
+      vercelSnapshotResponseSchema,
       correlation,
       "snapshotSession"
     );
@@ -248,7 +287,7 @@ export class VercelSandboxClient {
     request: VercelListSnapshotsRequest = {},
     correlation?: CorrelationContext
   ): Promise<VercelSnapshotMetadata[]> {
-    const response = await this.request<{ snapshots: VercelSnapshotMetadata[] }>(
+    const response = await this.request(
       buildQueryPath("/v2/sandboxes/snapshots", {
         project: this.config.projectId,
         name: request.name,
@@ -256,6 +295,7 @@ export class VercelSandboxClient {
         sortOrder: request.sortOrder,
       }),
       { method: "GET" },
+      vercelListSnapshotsResponseSchema,
       correlation,
       "listSnapshots"
     );
@@ -267,7 +307,7 @@ export class VercelSandboxClient {
     correlation?: CorrelationContext,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.request<unknown>(
+    await this.requestText(
       `/v2/sandboxes/sessions/${encodeURIComponent(sessionId)}/stop`,
       { method: "POST", signal },
       correlation,
@@ -280,7 +320,7 @@ export class VercelSandboxClient {
     correlation?: CorrelationContext,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.request<unknown>(
+    await this.requestText(
       `/v2/sandboxes/snapshots/${encodeURIComponent(snapshotId)}`,
       { method: "DELETE", signal },
       correlation,
@@ -291,13 +331,23 @@ export class VercelSandboxClient {
   private async request<T>(
     path: string,
     init: RequestInit,
+    schema: z.ZodType<T>,
     correlation: CorrelationContext | undefined,
     endpoint: string
   ): Promise<T> {
     const text = await this.requestText(path, init, correlation, endpoint);
     try {
-      return JSON.parse(text || "{}") as T;
+      const parsed = schema.safeParse(JSON.parse(text));
+      if (!parsed.success) {
+        throw new VercelSandboxApiError(
+          `Vercel Sandbox API returned an invalid ${endpoint} response: ${z.prettifyError(parsed.error)}`,
+          200,
+          text
+        );
+      }
+      return parsed.data;
     } catch (error) {
+      if (error instanceof VercelSandboxApiError) throw error;
       throw new VercelSandboxApiError(
         `Vercel Sandbox API returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
         200,
