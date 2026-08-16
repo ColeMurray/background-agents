@@ -21,7 +21,7 @@ import { z } from "zod";
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
 export interface SessionLifecycleHandlerDeps {
-  sessionStore: SessionInitializationStore;
+  sessionInitializationStore: SessionInitializationStore;
   messageRepository: MessageRepository;
   getDurableObjectId: () => string;
   tokenEncryptionKey?: string;
@@ -249,7 +249,7 @@ export function createSessionLifecycleHandler(
         repoId: repo.repoId,
         baseBranch: repo.baseBranch,
       }));
-      await deps.sessionStore.initializeSession({
+      await deps.sessionInitializationStore.initializeSession({
         sessionId,
         sessionName,
         title: body.title ?? null,
@@ -262,7 +262,7 @@ export function createSessionLifecycleHandler(
         codeServerEnabled: body.codeServerEnabled ?? false,
         vncEnabled: body.vncEnabled ?? false,
         sandboxSettings: body.sandboxSettings
-          ? JSON.stringify(normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" }))
+          ? normalizeSandboxSettings(body.sandboxSettings, { invalid: "omit" })
           : null,
         environmentId: body.environmentId ?? null,
         owner: {

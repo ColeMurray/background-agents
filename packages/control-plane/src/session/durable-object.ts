@@ -137,7 +137,7 @@ import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { parseArtifactMetadataJson } from "./artifact-metadata";
-import { DurableObjectSessionStore } from "./durable-object-session-store";
+import { DurableObjectSessionInitializationStore } from "./durable-object-session-initialization-store";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -182,7 +182,7 @@ export class SessionDO extends DurableObject<Env> {
   private messageRepository: MessageRepository;
   private participantRepository: ParticipantRepository;
   private wsClientMappingRepository: WsClientMappingRepository;
-  private sessionStore: DurableObjectSessionStore;
+  private sessionInitializationStore: DurableObjectSessionInitializationStore;
   private initialized = false;
   // Session-scoped logger. Assigned during initialization only — never
   // per-request. Request-serving code receives a request-scoped child
@@ -311,7 +311,7 @@ export class SessionDO extends DurableObject<Env> {
     this.sessionCoreRepository = new SessionCoreRepository(this.sql, (closure) =>
       ctx.storage.transactionSync(closure)
     );
-    this.sessionStore = new DurableObjectSessionStore(
+    this.sessionInitializationStore = new DurableObjectSessionInitializationStore(
       {
         sessionCore: this.sessionCoreRepository,
         sandbox: this.sandboxRepository,
@@ -622,7 +622,7 @@ export class SessionDO extends DurableObject<Env> {
   private get sessionLifecycleHandler(): SessionLifecycleHandler {
     if (!this._sessionLifecycleHandler) {
       this._sessionLifecycleHandler = createSessionLifecycleHandler({
-        sessionStore: this.sessionStore,
+        sessionInitializationStore: this.sessionInitializationStore,
         messageRepository: this.messageRepository,
         getDurableObjectId: () => this.ctx.id.toString(),
         tokenEncryptionKey: this.env.TOKEN_ENCRYPTION_KEY,

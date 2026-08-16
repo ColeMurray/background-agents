@@ -92,7 +92,7 @@ function createHandler() {
   const initializeSession = vi
     .fn<SessionInitializationStore["initializeSession"]>()
     .mockResolvedValue(undefined);
-  const sessionStore = {
+  const sessionInitializationStore = {
     initializeSession,
   } as unknown as SessionInitializationStore;
   const getDurableObjectId = vi.fn(() => "session-do-id");
@@ -126,7 +126,7 @@ function createHandler() {
   const updateSandboxStatus = vi.fn();
 
   const lifecycleHandler = createSessionLifecycleHandler({
-    sessionStore,
+    sessionInitializationStore,
     messageRepository: repository as unknown as MessageRepository,
     getDurableObjectId,
     tokenEncryptionKey: "encryption-key",
@@ -452,7 +452,7 @@ describe("createSessionLifecycleHandler", () => {
       })
     );
     const initialization = initializeSession.mock.calls[0]![0];
-    expect(JSON.parse(initialization.sandboxSettings!)).toEqual({
+    expect(initialization.sandboxSettings).toEqual({
       cpuCores: null,
       memoryMib: null,
       tunnelPorts: [3000],
@@ -490,7 +490,7 @@ describe("createSessionLifecycleHandler", () => {
       })
     );
     const initialization = initializeSession.mock.calls[0]![0];
-    expect(JSON.parse(initialization.sandboxSettings!)).toEqual({
+    expect(initialization.sandboxSettings).toEqual({
       sandboxTimeoutMs: 14_400_000,
       vncPort: 6080,
     });

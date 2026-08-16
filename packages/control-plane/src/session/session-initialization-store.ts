@@ -1,3 +1,4 @@
+import type { SandboxSettings } from "@open-inspect/shared/types/integrations";
 import type { SpawnSource } from "@open-inspect/shared/types/sessions";
 
 export interface SessionInitializationRepository {
@@ -33,7 +34,7 @@ export interface InitializeSessionInput {
   spawnDepth: number;
   codeServerEnabled: boolean;
   vncEnabled: boolean;
-  sandboxSettings: string | null;
+  sandboxSettings: SandboxSettings | null;
   environmentId: string | null;
   owner: SessionInitializationOwner;
   createdAt: number;

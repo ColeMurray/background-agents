@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DurableObjectSessionStore } from "./durable-object-session-store";
+import { DurableObjectSessionInitializationStore } from "./durable-object-session-initialization-store";
 import type { ParticipantRepository } from "./participant-repository";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { SessionCoreRepository } from "./session-core-repository";
@@ -25,7 +25,7 @@ function initializationInput(): InitializeSessionInput {
     spawnDepth: 0,
     codeServerEnabled: false,
     vncEnabled: true,
-    sandboxSettings: null,
+    sandboxSettings: { vncPort: 6080 },
     environmentId: "environment-1",
     owner: {
       userId: "user-1",
@@ -35,7 +35,7 @@ function initializationInput(): InitializeSessionInput {
   };
 }
 
-describe("DurableObjectSessionStore", () => {
+describe("DurableObjectSessionInitializationStore", () => {
   it("maps initialization to the existing repositories in the original order", async () => {
     const calls: string[] = [];
     const upsertSession = vi.fn(() => calls.push("session"));
@@ -52,7 +52,7 @@ describe("DurableObjectSessionStore", () => {
         calls.push("owner-id");
         return "participant-1";
       });
-    const store = new DurableObjectSessionStore(
+    const store = new DurableObjectSessionInitializationStore(
       {
         sessionCore: {
           upsertSession,
@@ -92,7 +92,7 @@ describe("DurableObjectSessionStore", () => {
       spawnDepth: 0,
       codeServerEnabled: false,
       vncEnabled: true,
-      sandboxSettings: null,
+      sandboxSettings: JSON.stringify({ vncPort: 6080 }),
       environmentId: "environment-1",
       createdAt: 100,
       updatedAt: 100,
@@ -123,7 +123,7 @@ describe("DurableObjectSessionStore", () => {
 
   it("maps repository-free initialization without scalar repository state", async () => {
     const upsertSession = vi.fn();
-    const store = new DurableObjectSessionStore(
+    const store = new DurableObjectSessionInitializationStore(
       {
         sessionCore: {
           upsertSession,
@@ -158,7 +158,7 @@ describe("DurableObjectSessionStore", () => {
     const createSandbox = vi.fn();
     const createParticipant = vi.fn();
     const generateId = vi.fn(() => "unused-id");
-    const store = new DurableObjectSessionStore(
+    const store = new DurableObjectSessionInitializationStore(
       {
         sessionCore: {
           upsertSession,

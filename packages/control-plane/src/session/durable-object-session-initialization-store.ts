@@ -6,16 +6,16 @@ import type {
   SessionInitializationStore,
 } from "./session-initialization-store";
 
-export interface DurableObjectSessionStoreRepositories {
+export interface DurableObjectSessionInitializationStoreRepositories {
   sessionCore: SessionCoreRepository;
   sandbox: SandboxRepository;
   participants: ParticipantRepository;
 }
 
 /** Async adapter over the existing Durable Object SQLite repositories. */
-export class DurableObjectSessionStore implements SessionInitializationStore {
+export class DurableObjectSessionInitializationStore implements SessionInitializationStore {
   constructor(
-    private readonly repositories: DurableObjectSessionStoreRepositories,
+    private readonly repositories: DurableObjectSessionInitializationStoreRepositories,
     private readonly generateId: () => string
   ) {}
 
@@ -39,7 +39,7 @@ export class DurableObjectSessionStore implements SessionInitializationStore {
       spawnDepth: input.spawnDepth,
       codeServerEnabled: input.codeServerEnabled,
       vncEnabled: input.vncEnabled,
-      sandboxSettings: input.sandboxSettings,
+      sandboxSettings: input.sandboxSettings ? JSON.stringify(input.sandboxSettings) : null,
       environmentId: input.environmentId,
       createdAt: input.createdAt,
       updatedAt: input.createdAt,
