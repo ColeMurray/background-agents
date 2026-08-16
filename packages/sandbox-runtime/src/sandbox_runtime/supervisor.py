@@ -105,10 +105,10 @@ class SandboxSupervisor:
             return False
         return True
 
-    async def _handle_opencode_exit(self, restart_count: int) -> tuple[int, bool]:
+    async def _handle_opencode_exit(self, restart_count: int) -> int:
         exit_code = self.opencode_server.exit_code()
         if exit_code is None:
-            return restart_count, False
+            return restart_count
 
         restart_count += 1
         self.log.error(
@@ -120,7 +120,7 @@ class SandboxSupervisor:
             self.log.error("opencode.max_restarts", restart_count=restart_count)
             await self._report_fatal_error(f"OpenCode crashed {restart_count} times, giving up")
             self.shutdown_event.set()
-            return restart_count, True
+            return restart_count
 
         delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
         self.log.info(
@@ -129,23 +129,23 @@ class SandboxSupervisor:
             restart_count=restart_count,
         )
         if await self._wait_for_shutdown(delay):
-            return restart_count, True
+            return restart_count
         if self._repository_boot_result is None:
             raise RuntimeError("OpenCode restart requested before repository boot")
         await self.opencode_server.start(
             self._repository_boot_result.repositories,
             self._repository_boot_result.workdir,
         )
-        return restart_count, False
+        return restart_count
 
-    async def _handle_bridge_exit(self, restart_count: int) -> tuple[int, bool]:
+    async def _handle_bridge_exit(self, restart_count: int) -> int:
         exit_code = self.agent_bridge.exit_code()
         if exit_code is None:
-            return restart_count, False
+            return restart_count
         if exit_code == 0:
             self.log.info("bridge.graceful_exit", exit_code=exit_code)
             self.shutdown_event.set()
-            return restart_count, True
+            return restart_count
 
         restart_count += 1
         self.log.error(
@@ -157,7 +157,7 @@ class SandboxSupervisor:
             self.log.error("bridge.max_restarts", restart_count=restart_count)
             await self._report_fatal_error(f"Bridge crashed {restart_count} times, giving up")
             self.shutdown_event.set()
-            return restart_count, True
+            return restart_count
 
         delay = min(self.BACKOFF_BASE**restart_count, self.BACKOFF_MAX)
         self.log.info(
@@ -166,9 +166,9 @@ class SandboxSupervisor:
             restart_count=restart_count,
         )
         if await self._wait_for_shutdown(delay):
-            return restart_count, True
+            return restart_count
         await self.agent_bridge.start()
-        return restart_count, False
+        return restart_count
 
     async def _handle_code_server_exit(self, restart_count: int) -> int:
         exit_code = self.code_server.exit_code()
@@ -257,11 +257,11 @@ class SandboxSupervisor:
         desktop_restarts = 0
 
         while not self.shutdown_event.is_set():
-            opencode_restarts, should_stop = await self._handle_opencode_exit(opencode_restarts)
-            if should_stop:
+            opencode_restarts = await self._handle_opencode_exit(opencode_restarts)
+            if self.shutdown_event.is_set():
                 break
-            bridge_restarts, should_stop = await self._handle_bridge_exit(bridge_restarts)
-            if should_stop:
+            bridge_restarts = await self._handle_bridge_exit(bridge_restarts)
+            if self.shutdown_event.is_set():
                 break
             code_server_restarts = await self._handle_code_server_exit(code_server_restarts)
             if self.shutdown_event.is_set():

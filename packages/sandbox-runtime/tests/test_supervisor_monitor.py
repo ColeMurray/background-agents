@@ -1,5 +1,6 @@
 """Tests for SandboxSupervisor.monitor_processes bridge restart logic."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sandbox_runtime.supervisor import SandboxSupervisor
@@ -169,6 +170,20 @@ class TestOpenCodeCrashRestart:
 
         with patch.object(supervisor, "_wait_for_shutdown", AsyncMock(return_value=True)):
             await supervisor.monitor_processes()
+
+        supervisor.opencode_server.start.assert_not_called()
+        supervisor._report_fatal_error.assert_not_called()
+
+    async def test_real_shutdown_event_interrupts_opencode_backoff(self):
+        supervisor = _make_supervisor()
+        supervisor.opencode_server._opencode_process = _fake_process(returncode=1)
+        supervisor.opencode_server.start = AsyncMock()
+        supervisor._report_fatal_error = AsyncMock()
+
+        monitor_task = asyncio.create_task(supervisor.monitor_processes())
+        await asyncio.sleep(0)
+        supervisor.shutdown_event.set()
+        await asyncio.wait_for(monitor_task, timeout=0.5)
 
         supervisor.opencode_server.start.assert_not_called()
         supervisor._report_fatal_error.assert_not_called()
