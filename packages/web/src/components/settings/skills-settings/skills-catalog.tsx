@@ -27,6 +27,8 @@ export function SkillsCatalog() {
     error: skillError,
     mutate: mutateSkill,
   } = useSkill(selectedId);
+  const hasPreviousPage = cursorHistory.length > 0;
+  const showPagination = hasPreviousPage || (!loading && !error && skills.length > 0);
 
   async function toggleEnabled(id: string, enabled: boolean) {
     try {
@@ -104,7 +106,7 @@ export function SkillsCatalog() {
         <p className="text-sm text-destructive">Failed to load managed skills.</p>
       ) : loading ? (
         <p className="text-sm text-muted-foreground">Loading skills...</p>
-      ) : skills.length === 0 ? (
+      ) : skills.length === 0 && !hasPreviousPage ? (
         <div className="rounded border border-dashed border-border p-8 text-center">
           <SparkleIcon className="mx-auto h-6 w-6 text-muted-foreground" />
           <p className="mt-2 text-sm text-foreground">No shared skills yet</p>
@@ -112,66 +114,68 @@ export function SkillsCatalog() {
             Create one to give agents consistent workflows and context.
           </p>
         </div>
+      ) : skills.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No skills on this page.</p>
       ) : (
-        <>
-          <div className="divide-y divide-border-muted rounded border border-border-muted">
-            {skills.map((item) => (
-              <div key={item.id} className="flex items-start gap-3 p-4">
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(item.id)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="truncate font-mono text-sm font-medium text-foreground">
-                      {item.name}
-                    </span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                      r{item.revisionNumber}
-                    </span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                    {item.description}
-                  </p>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
-                  </p>
-                </button>
-                <Switch
-                  checked={item.enabled}
-                  onCheckedChange={(value) => toggleEnabled(item.id, value)}
-                  aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}
-                />
-                <Button variant="ghost" size="xs" onClick={() => remove(item.id, item.name)}>
-                  Delete
-                </Button>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <p className="text-xs text-muted-foreground">Page {cursorHistory.length + 1}</p>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={cursorHistory.length === 0}
-                onClick={() => setCursorHistory((history) => history.slice(0, -1))}
+        <div className="divide-y divide-border-muted rounded border border-border-muted">
+          {skills.map((item) => (
+            <div key={item.id} className="flex items-start gap-3 p-4">
+              <button
+                type="button"
+                onClick={() => setSelectedId(item.id)}
+                className="min-w-0 flex-1 text-left"
               >
-                Previous
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={!hasMore || !nextCursor}
-                onClick={() => {
-                  if (nextCursor) setCursorHistory((history) => [...history, nextCursor]);
-                }}
-              >
-                Next
+                <div className="flex items-center gap-2">
+                  <span className="truncate font-mono text-sm font-medium text-foreground">
+                    {item.name}
+                  </span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    r{item.revisionNumber}
+                  </span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                  {item.description}
+                </p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {item.assignments.length} assignment{item.assignments.length === 1 ? "" : "s"}
+                </p>
+              </button>
+              <Switch
+                checked={item.enabled}
+                onCheckedChange={(value) => toggleEnabled(item.id, value)}
+                aria-label={`${item.enabled ? "Disable" : "Enable"} ${item.name}`}
+              />
+              <Button variant="ghost" size="xs" onClick={() => remove(item.id, item.name)}>
+                Delete
               </Button>
             </div>
+          ))}
+        </div>
+      )}
+      {showPagination && (
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">Page {cursorHistory.length + 1}</p>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!hasPreviousPage}
+              onClick={() => setCursorHistory((history) => history.slice(0, -1))}
+            >
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading || Boolean(error) || !hasMore || !nextCursor}
+              onClick={() => {
+                if (nextCursor) setCursorHistory((history) => [...history, nextCursor]);
+              }}
+            >
+              Next
+            </Button>
           </div>
-        </>
+        </div>
       )}
     </div>
   );

@@ -88,4 +88,53 @@ describe("SkillsCatalog", () => {
     expect(screen.getByText("first-skill")).toBeInTheDocument();
     expect(useSkillCatalogPageMock).toHaveBeenLastCalledWith(null);
   });
+
+  it.each([
+    [
+      "empty",
+      {
+        skills: [],
+        hasMore: false,
+        nextCursor: null,
+        loading: false,
+        error: undefined,
+      },
+      "No skills on this page.",
+    ],
+    [
+      "failed",
+      {
+        skills: [],
+        hasMore: false,
+        nextCursor: null,
+        loading: false,
+        error: new Error("request failed"),
+      },
+      "Failed to load managed skills.",
+    ],
+  ])("can navigate back when a later page is %s", async (_state, page, message) => {
+    useSkillCatalogPageMock.mockImplementation((cursor: string | null) =>
+      cursor
+        ? page
+        : {
+            skills: [skill("1", "first-skill")],
+            hasMore: true,
+            nextCursor: "first-skill",
+            loading: false,
+            error: undefined,
+          }
+    );
+    const user = userEvent.setup();
+    render(<SkillsCatalog />);
+
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+
+    expect(screen.getByText("first-skill")).toBeInTheDocument();
+    expect(useSkillCatalogPageMock).toHaveBeenLastCalledWith(null);
+  });
 });

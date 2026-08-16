@@ -108,8 +108,11 @@ export function useSkillCatalogPage(cursor: string | null) {
   };
 }
 
-export function revalidateSkillCatalogPage(cursor: string | null): Promise<unknown> {
-  return mutateSWR(skillCatalogPageKey(cursor));
+export async function revalidateSkillCatalogPage(cursor: string | null): Promise<void> {
+  await Promise.all([
+    mutateSWR(SKILLS_KEY, undefined, { revalidate: false }),
+    mutateSWR(skillCatalogPageKey(cursor)),
+  ]);
 }
 
 export function useSkill(id: string | null) {
