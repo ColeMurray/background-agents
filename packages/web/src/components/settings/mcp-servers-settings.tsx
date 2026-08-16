@@ -34,7 +34,9 @@ import {
 } from "@/components/ui/alert-dialog";
 
 type ScopeMode = "global" | "selected";
-type Editor = { kind: "new" } | { kind: "existing"; id: string; revision: number };
+type Editor =
+  | { kind: "new"; draftId: string }
+  | { kind: "existing"; draftId: string; id: string; revision: number };
 
 type EnvRow = { id: string; key: string; value: string };
 
@@ -446,7 +448,7 @@ export function McpServersSettings() {
 
   function startNew() {
     setForm(emptyForm);
-    setEditor({ kind: "new" });
+    setEditor({ kind: "new", draftId: crypto.randomUUID() });
   }
 
   function startEdit(server: McpServerMetadata) {
@@ -454,7 +456,12 @@ export function McpServersSettings() {
       setEditor(null);
     } else {
       setForm(metadataToForm(server));
-      setEditor({ kind: "existing", id: server.id, revision: server.revision });
+      setEditor({
+        kind: "existing",
+        draftId: crypto.randomUUID(),
+        id: server.id,
+        revision: server.revision,
+      });
     }
   }
 
@@ -518,7 +525,7 @@ export function McpServersSettings() {
         toast.success("MCP server updated");
       }
 
-      setEditor((current) => (current === saveOwner ? null : current));
+      setEditor((current) => (current?.draftId === saveOwner.draftId ? null : current));
       mutate();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save");

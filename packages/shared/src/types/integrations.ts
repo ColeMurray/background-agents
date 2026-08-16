@@ -455,9 +455,15 @@ export const updateMcpServerInputSchema = z
   .strict();
 
 export type CreateMcpServerRequest = z.input<typeof createMcpServerInputSchema>;
-export type UpdateMcpServerRequest = z.input<typeof updateMcpServerInputSchema>;
+export type UpdateMcpServerRequest = Omit<
+  z.input<typeof updateMcpServerInputSchema>,
+  "revision"
+> & { revision: number };
 export type ValidatedCreateMcpServerInput = z.output<typeof createMcpServerInputSchema>;
-export type ValidatedUpdateMcpServerInput = z.output<typeof updateMcpServerInputSchema>;
+export type ValidatedUpdateMcpServerInput = Omit<
+  z.output<typeof updateMcpServerInputSchema>,
+  "revision"
+>;
 
 /** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {

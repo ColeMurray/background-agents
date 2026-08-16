@@ -298,6 +298,37 @@ describe("MCP Servers API", () => {
       });
     });
 
+    it("rejects stale revisions before validating against newer row state", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "stale-validation",
+          type: "remote",
+          url: "https://original.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const typeChange = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          type: "local",
+          command: ["npx", "tool"],
+          revision: created.revision,
+        }),
+      });
+      expect(typeChange.status).toBe(200);
+
+      const staleUpdate = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          url: "https://stale.example.com",
+          revision: created.revision,
+        }),
+      });
+      expect(staleUpdate.status).toBe(409);
+    });
+
     it("returns 404 for missing server", async () => {
       const response = await serviceFetch("https://test.local/mcp-servers/nonexistent", {
         method: "PUT",

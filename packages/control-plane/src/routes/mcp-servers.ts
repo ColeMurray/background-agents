@@ -113,7 +113,8 @@ async function handleUpdateMcpServer(
 
   try {
     const store = new McpServerStore(ctx.db, env.REPO_SECRETS_ENCRYPTION_KEY);
-    const updated = await store.update(id, parsed.data);
+    const { revision, ...patch } = parsed.data;
+    const updated = await store.update(id, patch, revision);
     if (!updated) return error("MCP server not found", 404);
 
     logger.info("MCP server updated", {
