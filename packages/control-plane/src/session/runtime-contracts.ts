@@ -1,3 +1,4 @@
+/** Minimum client identity needed by platform-neutral protocol and lifecycle code. */
 export interface SessionRuntimeClient {
   participantId: string;
   userId: string;

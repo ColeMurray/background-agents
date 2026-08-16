@@ -33,6 +33,7 @@ export class SessionConnectionLifecycle<Connection, Client extends SessionRuntim
     try {
       if (classified.kind === "sandbox") {
         if (!this.deps.clearSandboxConnectionIfMatch(connection)) {
+          // A newer sandbox socket is active; this close must not schedule its termination.
           this.deps.getLogger().debug("Ignoring close for replaced sandbox socket", { code });
           return;
         }
@@ -54,6 +55,7 @@ export class SessionConnectionLifecycle<Connection, Client extends SessionRuntim
       } else {
         const client = this.deps.removeClient(connection);
         if (client) {
+          // Presence is participant-scoped, so another tab keeps the participant present.
           if (this.deps.hasAuthenticatedParticipant(client.participantId)) {
             this.deps.broadcastPresence();
           } else {
@@ -62,6 +64,7 @@ export class SessionConnectionLifecycle<Connection, Client extends SessionRuntim
         }
       }
     } finally {
+      // Always reciprocate the peer close, including when reconnect scheduling fails.
       this.deps.close(connection, code, reason);
     }
   }

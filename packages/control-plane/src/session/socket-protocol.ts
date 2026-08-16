@@ -20,6 +20,7 @@ type BoundarySchema<T> = {
   ): { success: true; data: T } | { success: false; error: { issues: unknown } };
 };
 
+// Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
 type ParsedMessage<T> = { valid: true; data: T } | { valid: false; raw?: unknown };
 
 export interface SessionSocketProtocolDeps<Connection, Client extends SessionRuntimeClient> {
@@ -46,6 +47,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClie
   constructor(private readonly deps: SessionSocketProtocolDeps<Connection, Client>) {}
 
   async handleMessage(connection: Connection, message: string | ArrayBuffer): Promise<void> {
+    // The wire protocol is JSON text; binary frames have always been ignored.
     if (typeof message !== "string") return;
 
     if (this.deps.classifyConnection(connection).kind === "sandbox") {
@@ -86,6 +88,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClie
       }
 
       const data = parsed.data;
+      // Ping and subscribe are the only messages valid before client authentication.
       if (data.type === "ping") {
         this.deps.send(connection, { type: "pong", timestamp: this.deps.now() });
         return;
@@ -118,6 +121,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClie
           this.deps.updatePresence(client, data);
           break;
         default:
+          // Adding a shared ClientMessage variant must also add an explicit handler here.
           data satisfies never;
       }
     } catch (error) {
@@ -188,6 +192,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClie
         boundary,
         issues: result.error.issues,
       });
+      // Keep the parsed object for clientRequestId correlation on invalid prompts.
       return { valid: false, raw };
     }
     return { valid: true, data: result.data };

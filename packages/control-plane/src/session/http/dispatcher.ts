@@ -20,6 +20,7 @@ export class SessionHttpDispatcher {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // Preserve the existing contract: upgrades and unmatched routes are not route metrics.
     if (request.headers.get("Upgrade") === "websocket") {
       return this.deps.handleWebSocketUpgrade(request, url, log);
     }
@@ -58,6 +59,7 @@ export class SessionHttpDispatcher {
   }
 
   private requestLogger(request: Request): Logger {
+    // Never mutate the session logger with request correlation shared by later callbacks.
     const sessionLog = this.deps.getLogger();
     const traceId = request.headers.get("x-trace-id");
     const requestId = request.headers.get("x-request-id");

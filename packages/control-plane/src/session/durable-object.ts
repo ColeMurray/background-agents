@@ -309,6 +309,7 @@ export class SessionDO extends DurableObject<Env> {
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
+    // Cloudflare composition root: adapt DO callbacks and hibernating sockets to the engine.
     this.engine = new SessionEngine({
       initialize: () => this.ensureInitialized(),
       http: new SessionHttpDispatcher({
