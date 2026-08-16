@@ -2,6 +2,12 @@ import {
   parseSessionListQuery,
   SESSION_LIST_CURRENT_USER,
 } from "@open-inspect/shared/session-list-query";
+import {
+  sessionInboxCategorySchema,
+  type SessionInboxCategory,
+  type SessionInboxPage,
+  type SessionInboxSnapshot,
+} from "@open-inspect/shared/types/session-inbox";
 import { sessionReadActionSchema } from "@open-inspect/shared/types/sessions";
 import { isCanonicalUserId } from "@open-inspect/shared/user-id";
 import { SessionIndexStore } from "../db/session-index";
@@ -15,8 +21,10 @@ import {
 } from "./shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
+import { encodeSessionInboxCursor, parseSessionInboxCursor } from "../db/session-inbox-cursor";
 
 const log = createLogger("session-read-state");
+const SESSION_INBOX_LIMIT = 20;
 
 function parseCreatedByFilters(
   values: readonly string[],
@@ -96,6 +104,88 @@ async function handleListSessions(
   return response;
 }
 
+async function handleListSessionInbox(
+  request: Request,
+  _env: Env,
+  _match: RegExpMatchArray,
+  ctx: RequestContext
+): Promise<Response> {
+  if (ctx.principal?.kind !== "user") {
+    return error("Human user authentication required", 403);
+  }
+  const searchParams = new URL(request.url).searchParams;
+  const categoryValue = searchParams.get("category");
+  const category =
+    categoryValue === null ? null : sessionInboxCategorySchema.safeParse(categoryValue);
+  if (category && !category.success) return error("Invalid category", 400);
+  const cursor = searchParams.get("cursor");
+  if (cursor === "") return error("Invalid cursor", 400);
+  if (cursor !== null && category === null) return error("Category required for pagination", 400);
+  const mine = searchParams.get("mine");
+  if (mine !== null && mine !== "true") return error("Invalid mine", 400);
+  const parsedCursor = parseSessionInboxCursor(cursor);
+  if (!parsedCursor.ok) return error(parsedCursor.error, 400);
+
+  const startedAt = Date.now();
+  const store = new SessionIndexStore(ctx.db);
+  const commonOptions = {
+    limit: SESSION_INBOX_LIMIT,
+    createdByUserIds: mine === "true" ? [ctx.principal.userId] : [],
+    excludeAutomationLineage: mine === "true",
+    viewerUserId: ctx.principal.userId,
+  };
+
+  if (category === null) {
+    const snapshot = await store.listInboxSnapshot(commonOptions);
+    const categories = Object.fromEntries(
+      (Object.keys(snapshot) as SessionInboxCategory[]).map((inboxCategory) => [
+        inboxCategory,
+        encodeInboxPage(snapshot[inboxCategory]),
+      ])
+    ) as Record<SessionInboxCategory, SessionInboxPage>;
+    const body: SessionInboxSnapshot = { categories };
+    const response = json(body);
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
+  }
+
+  const result = await store.listInbox({
+    ...commonOptions,
+    category: category.data,
+    cursor: parsedCursor.cursor,
+  });
+  const nextCursor = result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null;
+  const response = json({
+    items: result.items,
+    hasMore: result.hasMore,
+    nextCursor,
+  });
+  response.headers.set("Cache-Control", "private, no-store");
+  log.info("session_inbox.listed", {
+    event: "session_inbox.listed",
+    category: category.data,
+    hierarchy_count: result.items.length,
+    session_count: result.items.reduce(
+      (count, item) => count + 1 + item.descendantSessions.length,
+      0
+    ),
+    duration_ms: Date.now() - startedAt,
+    request_id: ctx.request_id,
+    trace_id: ctx.trace_id,
+  });
+  return response;
+}
+
+function encodeInboxPage(
+  result: Awaited<ReturnType<SessionIndexStore["listInbox"]>>
+): SessionInboxPage {
+  return {
+    items: result.items,
+    hasMore: result.hasMore,
+    nextCursor: result.nextCursor ? encodeSessionInboxCursor(result.nextCursor) : null,
+  };
+}
+
 async function handlePatchReadState(
   request: Request,
   _env: Env,
@@ -152,6 +242,7 @@ async function handleDeleteSession(
 
 export const sessionIndexRoutes: Route[] = [
   { method: "GET", pattern: parsePattern("/sessions"), handler: handleListSessions },
+  { method: "GET", pattern: parsePattern("/sessions/inbox"), handler: handleListSessionInbox },
   {
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/read-state"),

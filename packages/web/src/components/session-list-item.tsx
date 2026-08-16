@@ -263,7 +263,7 @@ export function SessionListItem({
             className="block pr-8"
           >
             <div className="flex items-center gap-1.5 text-sm text-foreground">
-              {session.readState?.unread && (
+              {session.readState.unread && (
                 <>
                   <span
                     aria-hidden="true"
@@ -276,10 +276,13 @@ export function SessionListItem({
                 <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />
               )}
               <span
-                className={`truncate ${session.readState?.unread ? "font-semibold" : "font-medium"}`}
+                className={`truncate ${session.readState.unread ? "font-semibold" : "font-medium"}`}
               >
                 {displayTitle}
               </span>
+              {session.status === "failed" && (
+                <span className="shrink-0 text-xs font-medium text-destructive">Failed</span>
+              )}
             </div>
             <div className="flex items-center gap-1 mt-0.5 text-xs text-muted-foreground">
               <span>{relativeTime}</span>
@@ -315,11 +318,11 @@ export function SessionListItem({
               <button
                 type="button"
                 aria-label="Session actions"
-                aria-hidden={isMobile && !session.readState?.unread ? "true" : undefined}
-                tabIndex={isMobile && !session.readState?.unread ? -1 : undefined}
+                aria-hidden={isMobile && !session.readState.unread ? "true" : undefined}
+                tabIndex={isMobile && !session.readState.unread ? -1 : undefined}
                 className={`items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition data-[state=open]:opacity-100 ${
                   isMobile
-                    ? session.readState?.unread
+                    ? session.readState.unread
                       ? "flex h-10 w-10"
                       : "pointer-events-none flex h-6 w-6 opacity-0"
                     : "flex h-6 w-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -338,7 +341,7 @@ export function SessionListItem({
               }}
             >
               <DropdownMenuItem onSelect={handleStartRename}>Rename</DropdownMenuItem>
-              {session.readState?.unread && (
+              {session.readState.unread && (
                 <DropdownMenuItem
                   onSelect={handleMarkLatestMessageRead}
                   disabled={isMarkingLatestRead}
@@ -409,7 +412,7 @@ export function ChildSessionListItem({
         style={{ paddingLeft: `${paddingLeftRem}rem` }}
       >
         <div className="flex items-center gap-1.5 text-xs">
-          {session.readState?.unread && (
+          {session.readState.unread && (
             <>
               <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
               <span className="sr-only">Unread</span>
@@ -418,13 +421,16 @@ export function ChildSessionListItem({
           <span className="shrink-0 text-muted-foreground">{relativeTime}</span>
           {prDisplay && <PullRequestStateIcon state={prDisplay.state} label={prDisplay.label} />}
           <span
-            className={`truncate text-foreground ${session.readState?.unread ? "font-semibold" : "font-medium"}`}
+            className={`truncate text-foreground ${session.readState.unread ? "font-semibold" : "font-medium"}`}
           >
             {displayTitle}
           </span>
+          {session.status === "failed" && (
+            <span className="shrink-0 font-medium text-destructive">Failed</span>
+          )}
         </div>
       </Link>
-      {session.readState?.unread && (
+      {session.readState.unread && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

@@ -7,6 +7,8 @@ import userEvent from "@testing-library/user-event";
 import * as matchers from "@testing-library/jest-dom/matchers";
 import { DEFAULT_MODEL } from "@open-inspect/shared/models";
 import Home from "./page";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
+import { isUnarchivedSessionListKey } from "@/lib/session-list";
 
 expect.extend(matchers);
 
@@ -250,6 +252,8 @@ describe("Home", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    expect(mocks.mutateMock).toHaveBeenCalledWith(isUnarchivedSessionListKey);
+    expect(mocks.mutateMock).toHaveBeenCalledWith(isSessionInboxKey);
     expect(sessionCreateBody()).toMatchObject({
       repoOwner: null,
       repoName: null,

@@ -131,7 +131,9 @@ export function buildSessionSearchValue(session: Session): string {
  * query params so the destination page can render its header before the
  * session payload loads.
  */
-export function buildSessionHref(session: Session) {
+export function buildSessionHref(
+  session: Pick<Session, "id" | "title" | "repoOwner" | "repoName">
+) {
   const query: Record<string, string> = {};
   if (session.repoOwner && session.repoName) {
     query.repoOwner = session.repoOwner;

@@ -12,6 +12,12 @@ import {
 } from "@open-inspect/shared/session-list-query";
 import type { SessionListRepository } from "@open-inspect/shared/types/repositories";
 import type { SessionSkillManifestInput } from "../session/skill-resolution";
+import type {
+  SessionInboxCategory,
+  SessionInboxItem,
+  SessionListItem,
+} from "@open-inspect/shared/types/session-inbox";
+import type { SessionInboxCursor } from "./session-inbox-cursor";
 import { SessionPullRequestStore } from "./session-pull-request-store";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
@@ -141,6 +147,30 @@ export interface ListSessionsResult {
   hasMore: boolean;
 }
 
+export interface ListSessionInboxOptions {
+  category: SessionInboxCategory;
+  createdByUserIds?: readonly string[];
+  excludeAutomationLineage?: boolean;
+  viewerUserId: string;
+  limit: number;
+  cursor: SessionInboxCursor | null;
+}
+
+export interface ListSessionInboxResult {
+  items: SessionInboxItem[];
+  hasMore: boolean;
+  nextCursor: SessionInboxCursor | null;
+}
+
+export type ListSessionInboxSnapshotResult = Record<SessionInboxCategory, ListSessionInboxResult>;
+
+interface SessionInboxCandidate {
+  rootId: string;
+  rootSession: SessionListItem;
+  group: SessionListItem[];
+  latestUpdatedAt: number;
+}
+
 interface ViewerReadStateRow {
   unread: number;
   latest_terminal_message_id: string | null;
@@ -197,6 +227,23 @@ function toEntry(row: SessionRow): SessionEntry {
     environmentId: row.environment_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function toListItem(row: ViewerSessionRow): SessionListItem {
+  return {
+    id: row.id,
+    title: row.title,
+    repoOwner: row.repo_owner,
+    repoName: row.repo_name,
+    baseBranch: row.base_branch,
+    status: row.status,
+    parentSessionId: row.parent_session_id,
+    spawnSource: row.spawn_source,
+    environmentId: row.environment_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    readState: readStateFromRow(row),
   };
 }
 
@@ -521,6 +568,226 @@ export class SessionIndexStore {
     };
   }
 
+  async listInbox(options: ListSessionInboxOptions): Promise<ListSessionInboxResult> {
+    const sessions = await this.loadInboxSessions(options);
+    const grouped = this.groupInboxSessionsByEffectiveRoot(sessions);
+    const candidates = this.buildInboxCandidatesByCategory(grouped)
+      [options.category].filter((entry) => this.isInboxCandidateAfterCursor(entry, options.cursor))
+      .slice(0, options.limit + 1);
+    const page = candidates.slice(0, options.limit);
+    const items = await this.decorateInboxCandidates(page);
+    const hasMore = candidates.length > options.limit;
+    const last = page.at(-1);
+
+    return {
+      items,
+      hasMore,
+      nextCursor:
+        hasMore && last
+          ? { latestUpdatedAt: last.latestUpdatedAt, rootSessionId: last.rootId }
+          : null,
+    };
+  }
+
+  async listInboxSnapshot(
+    options: Omit<ListSessionInboxOptions, "category" | "cursor">
+  ): Promise<ListSessionInboxSnapshotResult> {
+    const sessions = await this.loadInboxSessions(options);
+    const grouped = this.groupInboxSessionsByEffectiveRoot(sessions);
+    const candidatesByCategory = this.buildInboxCandidatesByCategory(grouped);
+    const pages = Object.fromEntries(
+      Object.entries(candidatesByCategory).map(([category, candidates]) => [
+        category,
+        candidates.slice(0, options.limit),
+      ])
+    ) as Record<SessionInboxCategory, SessionInboxCandidate[]>;
+    const decorated = await this.decorateInboxCandidates(Object.values(pages).flat());
+    const decoratedByRoot = new Map(decorated.map((item) => [item.rootSession.id, item]));
+
+    return Object.fromEntries(
+      (Object.keys(pages) as SessionInboxCategory[]).map((category) => {
+        const candidates = candidatesByCategory[category];
+        const page = pages[category];
+        const last = page.at(-1);
+        const hasMore = candidates.length > options.limit;
+        return [
+          category,
+          {
+            items: page.map((candidate) => decoratedByRoot.get(candidate.rootId)!),
+            hasMore,
+            nextCursor:
+              hasMore && last
+                ? { latestUpdatedAt: last.latestUpdatedAt, rootSessionId: last.rootId }
+                : null,
+          },
+        ];
+      })
+    ) as ListSessionInboxSnapshotResult;
+  }
+
+  private async loadInboxSessions(
+    options: Pick<
+      ListSessionInboxOptions,
+      "createdByUserIds" | "excludeAutomationLineage" | "viewerUserId"
+    >
+  ): Promise<SessionListItem[]> {
+    const conditions = ["sessions.status != 'archived'"];
+    const params: unknown[] = [];
+    if (options.excludeAutomationLineage) {
+      conditions.push(
+        "sessions.automation_id IS NULL AND sessions.spawn_source NOT IN ('automation', 'github-bot')"
+      );
+    }
+    if (options.createdByUserIds?.length) {
+      conditions.push(
+        `sessions.user_id IN (${options.createdByUserIds.map(() => "?").join(", ")})`
+      );
+      params.push(...options.createdByUserIds);
+    }
+
+    const result = await this.db
+      .prepare(
+        `SELECT sessions.*, ${unreadSql("sessions")} AS unread
+         FROM sessions
+         LEFT JOIN users viewer ON viewer.id = ?
+         LEFT JOIN session_read_states read_state
+           ON read_state.session_id = sessions.id
+          AND read_state.user_id = viewer.id
+         WHERE ${conditions.join(" AND ")}`
+      )
+      .bind(options.viewerUserId, ...params)
+      .all<ViewerSessionRow>();
+    return (result.results ?? []).map(toListItem);
+  }
+
+  private groupInboxSessionsByEffectiveRoot(
+    sessions: SessionListItem[]
+  ): Map<string, SessionListItem[]> {
+    const sessionById = new Map(sessions.map((session) => [session.id, session]));
+    const rootBySessionId = new Map<string, string>();
+
+    for (const session of sessions) {
+      if (rootBySessionId.has(session.id)) continue;
+      const path: string[] = [];
+      const pathIndex = new Map<string, number>();
+      let current: SessionListItem | undefined = session;
+      let rootId: string;
+
+      while (current) {
+        const knownRoot = rootBySessionId.get(current.id);
+        if (knownRoot) {
+          rootId = knownRoot;
+          break;
+        }
+        const cycleStart = pathIndex.get(current.id);
+        if (cycleStart !== undefined) {
+          rootId = [...path.slice(cycleStart)].sort()[0];
+          break;
+        }
+        pathIndex.set(current.id, path.length);
+        path.push(current.id);
+        const parent: SessionListItem | undefined = current.parentSessionId
+          ? sessionById.get(current.parentSessionId)
+          : undefined;
+        if (!parent) {
+          rootId = current.id;
+          break;
+        }
+        current = parent;
+      }
+
+      for (const sessionId of path) rootBySessionId.set(sessionId, rootId!);
+    }
+
+    const grouped = new Map<string, SessionListItem[]>();
+    for (const session of sessions) {
+      const rootId = rootBySessionId.get(session.id) ?? session.id;
+      const group = grouped.get(rootId) ?? [];
+      group.push(session);
+      grouped.set(rootId, group);
+    }
+    return grouped;
+  }
+
+  private buildInboxCandidatesByCategory(
+    grouped: Map<string, SessionListItem[]>
+  ): Record<SessionInboxCategory, SessionInboxCandidate[]> {
+    const categoryRank: Record<SessionInboxCategory, number> = {
+      needs_attention: 0,
+      in_progress: 1,
+      finished: 2,
+    };
+    const classify = (session: SessionListItem): SessionInboxCategory => {
+      // Attention is an unacknowledged event, never a property of the row. A failure
+      // that produced output already sets `unread` and clears when read; keying on
+      // `status === "failed"` as well only ever added what could not be cleared —
+      // failures with no terminal message, and failures already read and dismissed.
+      if (session.readState?.unread) return "needs_attention";
+      // Only `active` is in progress. `created` is a draft: the homepage warms a
+      // session on the first keystroke, so a session whose prompt was never sent
+      // stays `created` for good — nothing advances it once its sandbox idles out.
+      if (session.status === "active") return "in_progress";
+      return "finished";
+    };
+    const compareIdDescending = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
+    const candidates = [...grouped.entries()].map(([rootId, group]) => {
+      const rootSession = group.find((session) => session.id === rootId) ?? group[0];
+      const groupCategory = group.reduce<SessionInboxCategory>((highest, item) => {
+        const itemCategory = classify(item);
+        return categoryRank[itemCategory] < categoryRank[highest] ? itemCategory : highest;
+      }, classify(rootSession));
+      return {
+        rootId,
+        rootSession,
+        group,
+        category: groupCategory,
+        latestUpdatedAt: Math.max(...group.map((item) => item.updatedAt)),
+      };
+    });
+    const result: Record<SessionInboxCategory, SessionInboxCandidate[]> = {
+      needs_attention: [],
+      in_progress: [],
+      finished: [],
+    };
+    for (const candidate of candidates) result[candidate.category].push(candidate);
+    for (const categoryCandidates of Object.values(result)) {
+      categoryCandidates.sort(
+        (a, b) => b.latestUpdatedAt - a.latestUpdatedAt || compareIdDescending(a.rootId, b.rootId)
+      );
+    }
+    return result;
+  }
+
+  private isInboxCandidateAfterCursor(
+    candidate: SessionInboxCandidate,
+    cursor: SessionInboxCursor | null
+  ): boolean {
+    if (!cursor) return true;
+    return (
+      candidate.latestUpdatedAt < cursor.latestUpdatedAt ||
+      (candidate.latestUpdatedAt === cursor.latestUpdatedAt &&
+        candidate.rootId < cursor.rootSessionId)
+    );
+  }
+
+  private async decorateInboxCandidates(
+    candidates: SessionInboxCandidate[]
+  ): Promise<SessionInboxItem[]> {
+    const compareIdDescending = (a: string, b: string) => (a < b ? 1 : a > b ? -1 : 0);
+    const compareNewest = (a: SessionListItem, b: SessionListItem) =>
+      b.updatedAt - a.updatedAt || compareIdDescending(a.id, b.id);
+    const selectedSessions = await this.decorateEntries(candidates.flatMap((entry) => entry.group));
+    const decoratedById = new Map(selectedSessions.map((session) => [session.id, session]));
+    return candidates.map((entry) => {
+      const rootSession = decoratedById.get(entry.rootSession.id)!;
+      const descendantSessions = entry.group
+        .filter((session) => session.id !== rootSession.id)
+        .sort(compareNewest)
+        .map((session) => decoratedById.get(session.id)!);
+      return { rootSession, descendantSessions };
+    });
+  }
+
   /**
    * Attach repository lists and PR status summaries to the paged
    * entries. The two lookups are independent — each is one grouped query
@@ -529,7 +796,7 @@ export class SessionIndexStore {
    * the field: consumers fall back to the scalar repo columns, and PR state
    * never influences session ordering (this only decorates paged rows).
    */
-  private async decorateEntries(sessions: SessionEntry[]): Promise<SessionEntry[]> {
+  private async decorateEntries<T extends { id: string }>(sessions: T[]): Promise<T[]> {
     if (sessions.length === 0) return sessions;
     const sessionIds = sessions.map((session) => session.id);
 

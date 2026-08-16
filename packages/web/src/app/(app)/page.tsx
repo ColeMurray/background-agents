@@ -11,6 +11,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { formatModelNameLower } from "@/lib/format";
 import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
+import { isSessionInboxKey } from "@/lib/session-inbox-api";
 import { APP_NAME } from "@/lib/site-config";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
 import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
@@ -315,6 +316,7 @@ export default function Home() {
       if (res.ok) {
         sessionAttachments.clearAttachments();
         mutate(isUnarchivedSessionListKey);
+        mutate(isSessionInboxKey);
         router.push(`/session/${sessionId}`);
       } else {
         const data = await res.json();
