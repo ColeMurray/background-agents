@@ -40,12 +40,14 @@ function ComposerHarness({
   initialValue = "",
   isProcessing = false,
   isUploading = false,
+  connecting = false,
   status = "active",
   submitError = null,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
   isUploading?: boolean;
+  connecting?: boolean;
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
 }) {
@@ -65,6 +67,7 @@ function ComposerHarness({
         value,
         isProcessing,
         draftLocked: isUploading,
+        sendBlocked: connecting,
         submitError,
         inputRef,
         onSubmit: vi.fn(),
@@ -102,6 +105,19 @@ describe("SessionPromptComposer", () => {
       "maxlength",
       String(MAX_WEB_PROMPT_CHARS)
     );
+  });
+
+  it("allows drafting while the session connection is not ready", () => {
+    render(<ComposerHarness initialValue="Draft while connecting" connecting />);
+
+    const input = screen.getByDisplayValue("Draft while connecting");
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "Updated while connecting" } });
+    expect(screen.getByDisplayValue("Updated while connecting")).toBeEnabled();
+    expect(screen.getByTitle("Attach images")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Model" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reasoning" })).toBeEnabled();
+    expect(screen.getByTitle(/Send/)).toBeDisabled();
   });
 
   it("starts with one row and grows and shrinks with its content", () => {

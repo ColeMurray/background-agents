@@ -135,7 +135,8 @@ export default function SessionPage() {
     selectedModel,
     reasoningEffort,
     loadingEnabledModels,
-    sessionState?.status ?? "created"
+    sessionState?.status ?? "created",
+    ready
   );
   const [cancellingPromptIds, setCancellingPromptIds] = useState<ReadonlySet<string>>(new Set());
   const cancellingPromptIdsRef = useRef(new Set<string>());
@@ -359,7 +360,8 @@ export default function SessionPage() {
         prompt={{
           value: prompt,
           isProcessing: ready && isProcessing,
-          draftLocked: !ready || isSubmitting || sessionAttachments.isUploading,
+          draftLocked: isSubmitting || sessionAttachments.isUploading,
+          sendBlocked: !ready,
           submitError,
           inputRef,
           onSubmit: handleSubmit,
@@ -700,7 +702,8 @@ function usePromptInput(
   selectedModel: string,
   reasoningEffort: string | undefined,
   loadingEnabledModels: boolean,
-  sessionStatus: NonNullable<SessionState>["status"]
+  sessionStatus: NonNullable<SessionState>["status"],
+  canSubmit: boolean
 ) {
   const [prompt, setPromptState] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -738,6 +741,7 @@ function usePromptInput(
     const hasAttachments = sessionAttachments.attachments.length > 0;
     if (
       submitInFlightRef.current ||
+      !canSubmit ||
       (!prompt.trim() && !hasAttachments) ||
       sessionStatus === "archived" ||
       sessionStatus === "cancelled" ||

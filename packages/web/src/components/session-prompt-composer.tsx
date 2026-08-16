@@ -27,6 +27,7 @@ type SessionPromptComposerProps = {
     value: string;
     isProcessing: boolean;
     draftLocked: boolean;
+    sendBlocked: boolean;
     submitError: string | null;
     inputRef: React.RefObject<HTMLTextAreaElement | null>;
     onSubmit: (e: React.FormEvent) => void;
@@ -59,7 +60,8 @@ export function SessionPromptComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasContent = prompt.value.trim().length > 0 || attachments.items.length > 0;
   const sessionPromptable = session.status !== "archived" && session.status !== "cancelled";
-  const sendDisabled = !hasContent || prompt.draftLocked || !sessionPromptable;
+  const sendDisabled =
+    !hasContent || prompt.draftLocked || prompt.sendBlocked || !sessionPromptable;
   // Keep the complete draft stable while its attachments upload and until
   // the server confirms that the matching prompt was queued.
   const attachmentsLocked = prompt.draftLocked;
