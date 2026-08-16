@@ -635,6 +635,7 @@ describe("terminal message visibility", () => {
     const outcomeTarget = observedTargets.find(
       (target) => target.getAttribute("data-terminal-message-id") === "message-1"
     );
+    expect(outcomeTarget).toHaveClass("space-y-2");
     expect(outcomeTarget).toHaveTextContent("The complete agent result");
     expect(outcomeTarget).toHaveTextContent("Execution complete");
   });
