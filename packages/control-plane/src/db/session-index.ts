@@ -704,20 +704,20 @@ export class SessionIndexStore {
   }
 
   /**
-   * Correct a status projection that drifted away from its Durable Object.
+   * Correct a draft status projection that drifted away from its Durable Object.
    *
    * Deliberately not `updateStatus`, which carries an `updated_at` and refuses
    * writes that would move it backwards. That guard keeps concurrent transitions
    * ordered, but it silently drops a repair: the Durable Object sends its own
    * timestamp, which is behind D1's whenever `touchUpdatedAt` has run, so the
-   * write matches no rows and reports success as `false`. A repair asserts
-   * nothing about recency — the Durable Object is simply the authority on its
-   * own status — so only that column is written, leaving `updated_at` to keep
-   * meaning "last real activity".
+   * write matches no rows and reports success as `false`. This repair asserts
+   * only the stale shape the draft sweep selected: D1 still says `created`, and
+   * the Durable Object says otherwise. Only that status column is written,
+   * leaving `updated_at` to keep meaning "last real activity".
    */
   async repairStatus(id: string, status: SessionStatus): Promise<boolean> {
     const result = await this.db
-      .prepare("UPDATE sessions SET status = ? WHERE id = ? AND status != ?")
+      .prepare("UPDATE sessions SET status = ? WHERE id = ? AND status = 'created' AND status != ?")
       .bind(status, id, status)
       .run();
 

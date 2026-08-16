@@ -432,7 +432,7 @@ describe("DO internal sub-session routes", () => {
     async function seedMessage(
       stub: DurableObjectStub,
       id: string,
-      status: "pending" | "completed"
+      status: "pending" | "completed" | "failed"
     ): Promise<void> {
       const [{ id: participantId }] = await queryDO<{ id: string }>(
         stub,
@@ -478,6 +478,18 @@ describe("DO internal sub-session routes", () => {
       expect(await res.json()).toEqual({ outcome: "has_work", status: "completed" });
       const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
       expect(rows[0].status).toBe("completed");
+    });
+
+    it("settles a draft whose latest terminal message failed", async () => {
+      const { stub } = await initSession();
+      await seedMessage(stub, "msg-draft-4", "failed");
+
+      const res = await stub.fetch("http://internal/internal/expire-draft", { method: "POST" });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ outcome: "has_work", status: "failed" });
+      const rows = await queryDO<{ status: string }>(stub, "SELECT status FROM session LIMIT 1");
+      expect(rows[0].status).toBe("failed");
     });
 
     it("never archives a draft that holds work", async () => {

@@ -936,5 +936,14 @@ describe("D1 SessionIndexStore", () => {
 
       expect(await store.repairStatus("agreed", "created")).toBe(false);
     });
+
+    it("does not overwrite a newer non-draft projection", async () => {
+      const store = new SessionIndexStore(env.DB);
+      await seedDraft(store, "advanced", Date.now() - 48 * HOUR_MS);
+      expect(await store.updateStatus("advanced", "active", Date.now())).toBe(true);
+
+      expect(await store.repairStatus("advanced", "completed")).toBe(false);
+      expect((await store.get("advanced"))!.status).toBe("active");
+    });
   });
 });

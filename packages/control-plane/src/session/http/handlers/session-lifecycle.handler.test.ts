@@ -113,7 +113,12 @@ function createHandler() {
   const getParticipantByUserId = vi.fn<(userId: string) => ParticipantRow | null>();
   const transition = vi.fn<(status: SessionRow["status"]) => Promise<boolean>>();
   const repairIndexStatus = vi.fn<() => Promise<void>>();
-  const statusService = { transition, repairIndexStatus } as unknown as SessionStatusService;
+  const settleFromMessageState = vi.fn<() => Promise<SessionRow["status"]>>();
+  const statusService = {
+    transition,
+    repairIndexStatus,
+    settleFromMessageState,
+  } as unknown as SessionStatusService;
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const cancelSession = vi.fn();
   const getSandboxSocket = vi.fn<() => WebSocket | null>();
@@ -168,6 +173,7 @@ function createHandler() {
     getParticipantByUserId,
     transition,
     repairIndexStatus,
+    settleFromMessageState,
     applySessionTitleUpdate,
     cancelSession,
     getSandboxSocket,
@@ -875,28 +881,31 @@ describe("createSessionLifecycleHandler", () => {
   // pin the head of the sweep's oldest-first batch forever, so the invariant
   // under test is that every one of these branches leaves `created` behind.
   it("settles a draft that still holds queued work", async () => {
-    const { handler, getSession, repository, transition } = createHandler();
+    const { handler, getSession, repository, transition, settleFromMessageState } = createHandler();
     getSession.mockReturnValue(createSession({ status: "created" }));
     repository.getPendingOrProcessingCount.mockReturnValue(1);
+    settleFromMessageState.mockResolvedValue("active");
 
     const response = await handler.expireDraft();
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ outcome: "has_work", status: "active" });
-    expect(transition).toHaveBeenCalledWith("active");
+    expect(settleFromMessageState).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalledWith("archived");
   });
 
-  it("settles a draft whose messages have all finished", async () => {
-    const { handler, getSession, repository, transition } = createHandler();
+  it("settles a draft whose latest terminal message failed", async () => {
+    const { handler, getSession, repository, settleFromMessageState } = createHandler();
     getSession.mockReturnValue(createSession({ status: "created" }));
     repository.getMessageCount.mockReturnValue(2);
     repository.getPendingOrProcessingCount.mockReturnValue(0);
+    settleFromMessageState.mockResolvedValue("failed");
 
     const response = await handler.expireDraft();
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ outcome: "has_work", status: "completed" });
-    expect(transition).toHaveBeenCalledWith("completed");
+    expect(await response.json()).toEqual({ outcome: "has_work", status: "failed" });
+    expect(settleFromMessageState).toHaveBeenCalled();
   });
 
   it("never archives a draft that holds work", async () => {
@@ -909,6 +918,14 @@ describe("createSessionLifecycleHandler", () => {
     await handler.expireDraft();
 
     expect(transition).not.toHaveBeenCalledWith("archived");
+  });
+
+  it("reports failure when stale index repair fails", async () => {
+    const { handler, getSession, repairIndexStatus } = createHandler();
+    getSession.mockReturnValue(createSession({ status: "archived" }));
+    repairIndexStatus.mockRejectedValue(new Error("d1 down"));
+
+    await expect(handler.expireDraft()).rejects.toThrow(/d1 down/);
   });
 
   it("does not expire a session that has left the draft status", async () => {

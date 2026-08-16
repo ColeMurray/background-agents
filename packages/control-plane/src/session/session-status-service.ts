@@ -88,7 +88,7 @@ export class SessionStatusService {
           session.updated_at,
           error
         );
-        return false;
+        throw error;
       });
 
     if (repaired && session.status === "active") {
@@ -147,13 +147,22 @@ export class SessionStatusService {
 
   async reconcileAfterQueueRemoval(): Promise<void> {
     if (this.messageRepository.getPendingOrProcessingCount() > 0) return;
-    const latestMessage = this.messageRepository.getLatestTerminalMessage();
-    const nextStatus: SessionStatus = latestMessage
-      ? latestMessage.status === "failed"
-        ? "failed"
-        : "completed"
-      : "created";
+    const nextStatus = this.getIdleStatusFromTerminalMessages();
     await this.transition(nextStatus);
+  }
+
+  async settleFromMessageState(): Promise<SessionStatus> {
+    const nextStatus: SessionStatus =
+      this.messageRepository.getPendingOrProcessingCount() > 0
+        ? "active"
+        : this.getIdleStatusFromTerminalMessages();
+    await this.transition(nextStatus);
+    return nextStatus;
+  }
+
+  private getIdleStatusFromTerminalMessages(): SessionStatus {
+    const latestMessage = this.messageRepository.getLatestTerminalMessage();
+    return latestMessage ? (latestMessage.status === "failed" ? "failed" : "completed") : "created";
   }
 
   /**

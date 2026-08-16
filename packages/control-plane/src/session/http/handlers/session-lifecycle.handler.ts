@@ -462,8 +462,10 @@ export function createSessionLifecycleHandler(
         return Response.json({ outcome: "not_draft", status: session.status });
       }
 
-      const pendingOrProcessing = deps.messageRepository.getPendingOrProcessingCount();
-      if (pendingOrProcessing > 0 || deps.messageRepository.getMessageCount() > 0) {
+      if (
+        deps.messageRepository.getPendingOrProcessingCount() > 0 ||
+        deps.messageRepository.getMessageCount() > 0
+      ) {
         // A session holding messages while still `created` is a broken aggregate:
         // enqueueing a prompt inserts the message and transitions to `active` in
         // the same Durable Object turn, so current code cannot produce this. It
@@ -473,8 +475,7 @@ export function createSessionLifecycleHandler(
         // instead. A queued prompt is left for the dispatch timeout rather than
         // archived: archiving discards a real request, and `archived` is not
         // promptable, so the author could not resume it either.
-        const settled: SessionStatus = pendingOrProcessing > 0 ? "active" : "completed";
-        await deps.statusService.transition(settled);
+        const settled = await deps.statusService.settleFromMessageState();
         return Response.json({ outcome: "has_work", status: settled });
       }
 
