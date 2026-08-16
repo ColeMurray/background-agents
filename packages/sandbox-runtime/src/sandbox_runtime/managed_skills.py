@@ -360,18 +360,20 @@ class ManagedSkillsMaterializer:
         skill_file = skill_dir / "SKILL.md"
         if skill_file.is_file() and not skill_file.is_symlink():
             try:
-                text = skill_file.read_text(encoding="utf-8")[:65536]
-                if text.startswith("---\n"):
-                    for line in text.splitlines()[1:]:
-                        if line == "---":
+                with skill_file.open("rb") as file:
+                    content = file.read(65536)
+                if content.startswith(b"---\n"):
+                    for raw_line in content.splitlines()[1:]:
+                        if raw_line == b"---":
                             break
+                        line = raw_line.decode("utf-8")
                         match = _YAML_NAME_RE.match(line)
                         if match:
                             name = next(value for value in match.groups() if value is not None)
                             if _SKILL_NAME_RE.fullmatch(name):
                                 names.add(name)
                             break
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 pass
         return names
 

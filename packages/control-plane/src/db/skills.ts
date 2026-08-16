@@ -12,6 +12,7 @@ import {
 } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
 import { buildValidatedSkillRevision } from "../skills/content-addressing";
+import { isUniqueConstraintError } from "./errors";
 import type { SqlDatabase, SqlStatement } from "./sql-database";
 
 const RESERVED_SKILL_NAMES = new Set([
@@ -125,22 +126,33 @@ export class SkillStore {
     const id = `skill_${generateId()}`;
     const revisionId = `skillrev_${generateId()}`;
     const now = Date.now();
-    await this.db.batch([
-      this.db
-        .prepare(
-          `INSERT INTO skills
-           (id, name, current_revision_id, enabled, deleted_at, created_by, updated_by, created_at, updated_at)
-           VALUES (?, ?, NULL, 1, NULL, ?, ?, ?, ?)`
-        )
-        .bind(id, input.name, actorUserId, actorUserId, now, now),
-      this.revisionInsert(revisionId, id, 1, input.content, revision, actorUserId, now),
-      ...this.fileInserts(revisionId, revision.files),
-      this.db
-        .prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
-        .bind(revisionId, id),
-      ...this.assignmentInserts(id, input.assignments, actorUserId, now),
-      this.bumpGeneration(),
-    ]);
+    try {
+      await this.db.batch([
+        this.db
+          .prepare(
+            `INSERT INTO skills
+             (id, name, current_revision_id, enabled, deleted_at, created_by, updated_by, created_at, updated_at)
+             VALUES (?, ?, NULL, 1, NULL, ?, ?, ?, ?)`
+          )
+          .bind(id, input.name, actorUserId, actorUserId, now, now),
+        this.revisionInsert(revisionId, id, 1, input.content, revision, actorUserId, now),
+        ...this.fileInserts(revisionId, revision.files),
+        this.db
+          .prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
+          .bind(revisionId, id),
+        ...this.assignmentInserts(id, input.assignments, actorUserId, now),
+        this.bumpGeneration(),
+      ]);
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        const conflicting = await this.db
+          .prepare("SELECT id FROM skills WHERE lower(name) = lower(?)")
+          .bind(input.name)
+          .first<{ id: string }>();
+        if (conflicting) throw new SkillConflictError("A skill with this name already exists");
+      }
+      throw error;
+    }
     return (await this.get(id))!;
   }
 

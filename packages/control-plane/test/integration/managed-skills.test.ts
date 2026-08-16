@@ -3,7 +3,7 @@ import { env, SELF } from "cloudflare:test";
 import { SkillProfileStore } from "../../src/db/skill-profiles";
 import { SessionIndexStore } from "../../src/db/session-index";
 import { SessionSkillStore } from "../../src/db/session-skills";
-import { SkillStore } from "../../src/db/skills";
+import { SkillConflictError, SkillStore } from "../../src/db/skills";
 import { EnvironmentStore } from "../../src/db/environments";
 import { resolveManagedSkills } from "../../src/session/skill-resolution";
 import { cleanD1Tables } from "./cleanup";
@@ -80,6 +80,18 @@ describe("managed skills persistence and resolution", () => {
         "user_2"
       )
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("reports concurrent same-name creation as a conflict", async () => {
+    const skills = new SkillStore(env.DB);
+    const results = await Promise.allSettled([
+      skills.create({ name: "same-name", content, assignments: [] }, "user_1"),
+      skills.create({ name: "same-name", content, assignments: [] }, "user_2"),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({ reason: expect.any(SkillConflictError) });
   });
 
   it("persists a resolved manifest atomically and copies it verbatim to a child", async () => {

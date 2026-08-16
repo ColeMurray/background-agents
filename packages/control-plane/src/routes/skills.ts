@@ -16,7 +16,6 @@ import { EnvironmentStore } from "../db/environments";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
-import { managedSkillsEnabled } from "../skills/feature";
 import {
   buildValidatedSkillRevision,
   SkillRevisionValidationError,
@@ -283,7 +282,7 @@ async function handleDeleteProfile(
 
 async function handleResolvePreview(
   request: Request,
-  env: Env,
+  _env: Env,
   _match: RegExpMatchArray,
   ctx: RequestContext
 ): Promise<Response> {
@@ -313,8 +312,7 @@ async function handleResolvePreview(
       ctx.db,
       { repositories, environmentId: parsed.data.environmentId ?? null },
       parsed.data.selection,
-      canonicalUserId(ctx),
-      managedSkillsEnabled(env)
+      canonicalUserId(ctx)
     );
     return json({
       skills: manifest.skills,
@@ -341,52 +339,45 @@ function profileWriteError(value: unknown): Response {
   throw value;
 }
 
-function enabled(handler: Route["handler"]): Route["handler"] {
-  return (request, env, match, ctx) =>
-    managedSkillsEnabled(env)
-      ? handler(request, env, match, ctx)
-      : Promise.resolve(error("Managed skills are disabled", 503));
-}
-
 export const skillRoutes: Route[] = [
-  { method: "GET", pattern: parsePattern("/skills"), handler: enabled(handleListSkills) },
-  { method: "POST", pattern: parsePattern("/skills"), handler: enabled(handleCreateSkill) },
+  { method: "GET", pattern: parsePattern("/skills"), handler: handleListSkills },
+  { method: "POST", pattern: parsePattern("/skills"), handler: handleCreateSkill },
   {
     method: "POST",
     pattern: parsePattern("/skills/preview"),
-    handler: enabled(handlePreviewSkill),
+    handler: handlePreviewSkill,
   },
   {
     method: "POST",
     pattern: parsePattern("/skills/resolve-preview"),
-    handler: enabled(handleResolvePreview),
+    handler: handleResolvePreview,
   },
-  { method: "GET", pattern: parsePattern("/skills/:id"), handler: enabled(handleGetSkill) },
+  { method: "GET", pattern: parsePattern("/skills/:id"), handler: handleGetSkill },
   {
     method: "PATCH",
     pattern: parsePattern("/skills/:id"),
-    handler: enabled(handleSetSkillEnabled),
+    handler: handleSetSkillEnabled,
   },
   {
     method: "PUT",
     pattern: parsePattern("/skills/:id"),
-    handler: enabled(handleReplaceSkillContentAndAssignments),
+    handler: handleReplaceSkillContentAndAssignments,
   },
-  { method: "DELETE", pattern: parsePattern("/skills/:id"), handler: enabled(handleDeleteSkill) },
-  { method: "GET", pattern: parsePattern("/skill-profiles"), handler: enabled(handleListProfiles) },
+  { method: "DELETE", pattern: parsePattern("/skills/:id"), handler: handleDeleteSkill },
+  { method: "GET", pattern: parsePattern("/skill-profiles"), handler: handleListProfiles },
   {
     method: "POST",
     pattern: parsePattern("/skill-profiles"),
-    handler: enabled(handleCreateProfile),
+    handler: handleCreateProfile,
   },
   {
     method: "PATCH",
     pattern: parsePattern("/skill-profiles/:id"),
-    handler: enabled(handleUpdateProfile),
+    handler: handleUpdateProfile,
   },
   {
     method: "DELETE",
     pattern: parsePattern("/skill-profiles/:id"),
-    handler: enabled(handleDeleteProfile),
+    handler: handleDeleteProfile,
   },
 ];

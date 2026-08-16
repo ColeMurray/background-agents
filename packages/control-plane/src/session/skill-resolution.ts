@@ -36,22 +36,8 @@ export async function resolveManagedSkills(
   db: SqlDatabase,
   target: SkillResolutionTarget,
   selection: SessionSkillSelection,
-  canonicalUserId: string | null,
-  enabled = true
+  canonicalUserId: string | null
 ): Promise<SessionSkillManifestInput> {
-  if (!enabled) {
-    // Persist an explicit empty snapshot so the kill switch does not create a
-    // separate session/sandbox lifecycle for disabled deployments.
-    const selection = { mode: "none" as const };
-    return {
-      selection,
-      resolverVersion: SKILL_RESOLVER_VERSION,
-      manifestSha256: await hashSessionSkillManifest(selection, []),
-      resolvedAt: Date.now(),
-      skills: [],
-      ignoredProfileSkillIds: [],
-    };
-  }
   const skills = new SkillStore(db);
   const profiles = new SkillProfileStore(db);
 

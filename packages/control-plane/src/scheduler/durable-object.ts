@@ -57,7 +57,6 @@ import type { SqlDatabase } from "../db/sql-database";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills } from "../session/skill-resolution";
-import { managedSkillsEnabled } from "../skills/feature";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
@@ -1369,8 +1368,7 @@ export class SchedulerDO extends DurableObject<Env> {
         environmentId: target.environmentId,
       },
       { mode: "all" },
-      userId,
-      managedSkillsEnabled(this.env)
+      userId
     );
 
     await initializeSession(

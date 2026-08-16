@@ -177,6 +177,26 @@ async def test_materializer_rejects_bundled_name_collision(tmp_path):
         await materializer.materialize((), tmp_path / "workspace")
 
 
+async def test_materializer_ignores_invalid_utf8_during_collision_scan(tmp_path):
+    document = _installation()
+    client = MagicMock()
+    client.fetch_installation = AsyncMock(return_value=json.dumps(document).encode())
+    bundled = tmp_path / "bundled" / "unrelated"
+    bundled.mkdir(parents=True)
+    (bundled / "SKILL.md").write_bytes(b"---\nname: \xff\n---\n")
+    destination = tmp_path / "global" / "skills"
+    materializer = ManagedSkillsMaterializer(
+        client,
+        destination,
+        MagicMock(),
+        bundled_skills_path=tmp_path / "bundled",
+    )
+
+    await materializer.materialize((), tmp_path / "workspace")
+
+    assert (destination / "managed" / "SKILL.md").exists()
+
+
 def test_materializer_repairs_interrupted_swap(tmp_path):
     destination = tmp_path / "skills"
     backup = tmp_path / ".managed-skills-backup"

@@ -258,10 +258,3 @@ changed assignments, or newly enabled skills.
 A managed skill cannot have the same name as another skill available in the sandbox, including one
 provided by a repository. Rename or remove the other skill, or create a new managed skill with a
 different canonical name and update its assignments and profiles.
-
-### The Skills page fails to load
-
-Managed skills may be disabled for the deployment. Ask the operator of your Open-Inspect instance to
-confirm that the Terraform setting `managed_skills_enabled` is `true` (the default). Disabling this
-setting prevents skill management and gives new sessions no managed skills; existing sessions keep
-their pinned skills.

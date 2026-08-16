@@ -14,7 +14,6 @@ import { initializeSession, type SessionInitInput } from "../session/initialize"
 import { resolveGitHubEnrichmentForRequest } from "../session/identity";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
 import { resolveManagedSkills, SkillResolutionError } from "../session/skill-resolution";
-import { managedSkillsEnabled } from "../skills/feature";
 import type { Env } from "../types";
 import {
   normalizeOptionalRepositoryPair,
@@ -194,8 +193,7 @@ async function handleCreateSession(
         environmentId,
       },
       body.skillSelection ?? { mode: "all" },
-      resolvedUserId,
-      managedSkillsEnabled(env)
+      resolvedUserId
     );
   } catch (e) {
     if (e instanceof SkillResolutionError) return error(e.message, e.status);

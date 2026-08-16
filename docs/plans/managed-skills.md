@@ -880,7 +880,6 @@ Build `@open-inspect/shared` before dependent packages.
 - Add D1 tables, stores, shared schemas, control-plane routes, web BFF routes, and settings UI.
 - Support internal immutable revisions while showing only the current one.
 - Record authorship and validate all content.
-- Keep session injection behind a disabled feature flag.
 
 ### Phase 2: Assignments, profiles, and preview
 
@@ -895,8 +894,6 @@ Build `@open-inspect/shared` before dependent packages.
 - Add the sandbox endpoint and runtime materializer across every supported provider.
 - Enable for internal sessions first, then opt-in installations, then by default.
 - Monitor boot failure rate, download latency, collision errors, and bytes per manifest.
-- Keep a kill switch that disables managed-skill resolution for new sessions. It must not silently
-  remove skills from sessions that already have non-empty pinned manifests.
 
 ### Phase 4: Governance and distribution
 
