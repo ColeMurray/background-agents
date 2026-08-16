@@ -1071,7 +1071,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timeout = new Promise<never>((_, reject) => {
+      const stopTimeoutPromise = new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
           controller.abort();
           reject(new Error("Provider stop timed out before sandbox replacement"));
@@ -1079,7 +1079,7 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       });
       await Promise.race([
         this.stopProviderSandbox("respawn", controller.signal, providerObjectId),
-        timeout,
+        stopTimeoutPromise,
       ]);
       this.storage.updateSandboxModalObjectId(null);
     } catch (error) {

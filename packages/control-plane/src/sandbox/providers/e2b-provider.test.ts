@@ -223,6 +223,20 @@ describe("E2BSandboxProvider", () => {
     }
   );
 
+  it("forwards the caller signal when killing a replaced sandbox", async () => {
+    const client = mockClient();
+    const signal = AbortSignal.timeout(1_000);
+
+    await new E2BSandboxProvider(client, providerConfig).stopSandbox({
+      providerObjectId: "x",
+      sessionId: "s",
+      reason: "respawn",
+      signal,
+    });
+
+    expect(client.killSandbox).toHaveBeenCalledWith("x", signal);
+  });
+
   it("resumeSandbox: 404 during connect (post-GET race) returns shouldSpawnFresh", async () => {
     const client = mockClient({
       getSandbox: vi.fn(async () => ({ sandboxID: "e2b-id", templateID: "tmpl", state: "paused" })),

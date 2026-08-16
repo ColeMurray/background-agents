@@ -187,7 +187,10 @@ export class DaytonaSandboxProvider implements SandboxProvider {
     try {
       try {
         if (config.reason === "respawn") {
-          await this.client.deleteSandbox(config.providerObjectId);
+          await this.client.deleteSandbox(
+            config.providerObjectId,
+            ...(config.signal ? [config.signal] : [])
+          );
         } else {
           await this.client.stopSandbox(config.providerObjectId);
         }

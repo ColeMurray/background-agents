@@ -568,11 +568,12 @@ describe("DaytonaSandboxProvider", () => {
     it("deletes sandbox on replacement", async () => {
       const client = createMockClient();
       const provider = new DaytonaSandboxProvider(client, defaultProviderConfig);
+      const signal = AbortSignal.timeout(1_000);
 
-      const result = await provider.stopSandbox({ ...baseStopConfig, reason: "respawn" });
+      const result = await provider.stopSandbox({ ...baseStopConfig, reason: "respawn", signal });
 
       expect(result.success).toBe(true);
-      expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-sandbox-id");
+      expect(client.deleteSandbox).toHaveBeenCalledWith("daytona-sandbox-id", signal);
       expect(client.stopSandbox).not.toHaveBeenCalled();
     });
 

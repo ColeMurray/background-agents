@@ -258,7 +258,10 @@ export class E2BSandboxProvider implements SandboxProvider {
     try {
       try {
         if (terminal) {
-          await this.client.killSandbox(config.providerObjectId);
+          await this.client.killSandbox(
+            config.providerObjectId,
+            ...(config.signal ? [config.signal] : [])
+          );
         } else {
           await this.client.pauseSandbox(config.providerObjectId);
         }

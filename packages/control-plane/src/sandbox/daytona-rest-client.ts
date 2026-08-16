@@ -152,8 +152,8 @@ export class DaytonaRestClient {
     await this.requestVoid("POST", `/sandbox/${id}/stop`, TIMEOUT_STOP_MS);
   }
 
-  async deleteSandbox(id: string): Promise<void> {
-    await this.requestVoid("DELETE", `/sandbox/${id}`, TIMEOUT_DELETE_MS);
+  async deleteSandbox(id: string, signal?: AbortSignal): Promise<void> {
+    await this.requestVoid("DELETE", `/sandbox/${id}`, TIMEOUT_DELETE_MS, { signal });
   }
 
   async recoverSandbox(id: string): Promise<void> {
@@ -195,7 +195,7 @@ export class DaytonaRestClient {
     path: string,
     timeoutMs: number,
     schema: z.ZodType<T>,
-    options?: { body?: unknown }
+    options?: { body?: unknown; signal?: AbortSignal }
   ): Promise<T> {
     return this.send(method, path, timeoutMs, options, async (response) =>
       this.parseJson(schema, await response.text(), response.status)
@@ -211,7 +211,7 @@ export class DaytonaRestClient {
     method: "DELETE" | "GET" | "POST",
     path: string,
     timeoutMs: number,
-    options?: { body?: unknown }
+    options?: { body?: unknown; signal?: AbortSignal }
   ): Promise<void> {
     return this.send<void>(method, path, timeoutMs, options, () => {});
   }
@@ -245,7 +245,7 @@ export class DaytonaRestClient {
     method: "DELETE" | "GET" | "POST",
     path: string,
     timeoutMs: number,
-    options: { body?: unknown } | undefined,
+    options: { body?: unknown; signal?: AbortSignal } | undefined,
     consume: (response: Response) => T | Promise<T>
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
@@ -256,7 +256,9 @@ export class DaytonaRestClient {
       const init: RequestInit = {
         method,
         headers: this.getHeaders(),
-        signal: controller.signal,
+        signal: options?.signal
+          ? AbortSignal.any([controller.signal, options.signal])
+          : controller.signal,
       };
       if (options?.body !== undefined) {
         init.body = JSON.stringify(options.body);
