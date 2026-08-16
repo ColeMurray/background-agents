@@ -16,13 +16,13 @@ Env:
   E2B_TEMPLATE_MEM  (optional) — memory MB, even number (default 1024).
 """
 
+import atexit
+import json
 import os
 import shutil
 import sys
-import urllib.request
 import urllib.error
-import json
-import atexit
+import urllib.request
 from pathlib import Path
 
 from e2b import Template, default_build_logger
@@ -82,7 +82,8 @@ dockerfile = (SCRIPT_DIR / "e2b.Dockerfile").read_text()
 print(f"Building E2B template: {TEMPLATE_ID} (cpu={CPU}, mem={MEM})")
 
 template = (
-    Template().from_dockerfile(dockerfile)
+    Template()
+    .from_dockerfile(dockerfile)
     # Staged into this dir above; imported via PYTHONPATH=/app as `sandbox_runtime`.
     .copy("sandbox_runtime", "/app/sandbox_runtime")
     # E2B's non-root runtime cannot install this into /usr/local/bin itself.

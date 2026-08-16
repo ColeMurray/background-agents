@@ -115,7 +115,7 @@ jobs:
         run: ruff format --check src/ tests/
 
   lint-python:
-    name: Lint & Format (Python - modal-infra)
+    name: Lint & Format (Python - provider infra)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -138,10 +138,10 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run Ruff linter
-        run: ruff check src/
+        run: ruff check --config pyproject.toml src/ ../e2b-infra/ ../daytona-infra/
 
       - name: Run Ruff formatter check
-        run: ruff format --check src/
+        run: ruff format --config pyproject.toml --check src/ ../e2b-infra/ ../daytona-infra/
 
   typecheck-python:
     name: TypeCheck (Python)
