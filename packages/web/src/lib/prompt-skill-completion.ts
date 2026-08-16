@@ -14,7 +14,6 @@ export type ActiveSkillCompletion = {
 };
 
 const SKILL_CHARACTER = /^[a-z0-9-]$/i;
-const UNBOUNDED_PROMPT_LENGTH = Number.POSITIVE_INFINITY;
 
 function isSkillCharacter(character: string | undefined): boolean {
   return character !== undefined && SKILL_CHARACTER.test(character);
@@ -59,12 +58,12 @@ export function applySkillCompletion(
   value: string,
   completion: ActiveSkillCompletion,
   skillName: string,
-  maxLength = UNBOUNDED_PROMPT_LENGTH
+  maxLength?: number
 ): { value: string; caret: number } | null {
   const suffix = completion.end === value.length ? " " : "";
   const replacement = `${completion.trigger}${skillName}${suffix}`;
   const nextValue = `${value.slice(0, completion.start)}${replacement}${value.slice(completion.end)}`;
-  if (nextValue.length > maxLength) return null;
+  if (maxLength !== undefined && nextValue.length > maxLength) return null;
   return {
     value: nextValue,
     caret: completion.start + replacement.length,

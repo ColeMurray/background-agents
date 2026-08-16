@@ -79,6 +79,9 @@ describe("PromptSkillTextarea", () => {
 
     expect(input).toHaveValue("/rev");
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await user.type(input, "i");
+    expect(screen.getByRole("listbox", { name: "Managed skills" })).toBeInTheDocument();
   });
 
   it("preserves the existing submission shortcut", async () => {

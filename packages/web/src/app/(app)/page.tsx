@@ -492,7 +492,6 @@ function HomeContent({
                     suggestions={skillSuggestions}
                     onValueChange={handlePromptChange}
                     onKeyDown={handleKeyDown}
-                    direction="up"
                     maxLength={MAX_WEB_PROMPT_CHARS}
                     disabled={creating}
                     placeholder="What do you want to build?"

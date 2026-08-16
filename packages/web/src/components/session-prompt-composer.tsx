@@ -130,7 +130,6 @@ export function SessionPromptComposer({
               suggestions={skillSuggestions}
               onValueChange={prompt.onValueChange}
               onKeyDown={prompt.onKeyDown}
-              direction="up"
               maxLength={MAX_WEB_PROMPT_CHARS}
               disabled={prompt.draftLocked}
               onPaste={handlePaste}

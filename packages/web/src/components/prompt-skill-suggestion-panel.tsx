@@ -9,7 +9,6 @@ import type {
 type PromptSkillSuggestionPanelProps = {
   id: string;
   optionId: (skillId: string) => string;
-  direction: "up" | "down";
   completion: ActiveSkillCompletion;
   source: PromptSkillSuggestionSource;
   matchingSkills: PromptSkillSuggestion[];
@@ -22,7 +21,6 @@ type PromptSkillSuggestionPanelProps = {
 export function PromptSkillSuggestionPanel({
   id,
   optionId,
-  direction,
   completion,
   source,
   matchingSkills,
@@ -31,7 +29,6 @@ export function PromptSkillSuggestionPanel({
   onActivate,
   onSelect,
 }: PromptSkillSuggestionPanelProps) {
-  const position = direction === "up" ? "bottom-full mb-3" : "top-full mt-3";
   return (
     <div
       id={id}
@@ -39,7 +36,7 @@ export function PromptSkillSuggestionPanel({
       aria-label="Managed skills"
       aria-busy={source.status === "loading"}
       data-testid="prompt-skill-suggestions"
-      className={`absolute ${position} left-0 right-0 z-50 overflow-hidden rounded-xl border border-border bg-background p-2 shadow-2xl`}
+      className="absolute bottom-full left-0 right-0 z-50 mb-3 overflow-hidden rounded-xl border border-border bg-background p-2 shadow-2xl"
     >
       <div className="flex items-center justify-between gap-4 px-3 py-2">
         <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
