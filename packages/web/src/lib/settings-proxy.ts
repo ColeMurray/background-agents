@@ -1,5 +1,7 @@
+import { readBodyCapped } from "@open-inspect/shared/http-body";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
+import { serializeBrowserSessionCookies } from "@/lib/browser-session-cookie";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
 type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -18,6 +20,15 @@ type RouteHandler<P> = (
 ) => Promise<NextResponse>;
 
 type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
+
+/** JSON mutation budget kept below portable web-function request limits. */
+export const SETTINGS_PROXY_MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+async function readMutationBody(request: NextRequest): Promise<Uint8Array | null> {
+  const contentLength = Number(request.headers.get("Content-Length"));
+  if (Number.isFinite(contentLength) && contentLength > SETTINGS_PROXY_MAX_BODY_BYTES) return null;
+  return readBodyCapped(request.body, SETTINGS_PROXY_MAX_BODY_BYTES);
+}
 
 async function proxyResponse(response: Response): Promise<NextResponse> {
   const text = await response.text();
@@ -47,7 +58,17 @@ export function settingsProxy<P>(
       let init: RequestInit | undefined;
       if (method !== "GET") {
         init = { method };
-        if (method !== "DELETE") init.body = await request.text();
+        if (method !== "DELETE") {
+          const cookieHeader = serializeBrowserSessionCookies(request.cookies.getAll());
+          if (!cookieHeader) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+          }
+          const body = await readMutationBody(request);
+          if (!body) {
+            return NextResponse.json({ error: "Request body is too large" }, { status: 413 });
+          }
+          init.body = new TextDecoder().decode(body);
+        }
         if (ifMatch) init.headers = { "If-Match": ifMatch };
       }
       const response = await controlPlaneUserFetch(buildPath(params, request), init);
