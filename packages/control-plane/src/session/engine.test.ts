@@ -20,7 +20,7 @@ function createHarness() {
   let currentClient: TestClient | null = client;
   let connectionKind: "client" | "sandbox" = "client";
   let now = 1000;
-  const monotonicTimes = [0, 2, 5, 8];
+  const monotonicTimes = [0, 2, 5, 8, 10];
   const classifyConnection = vi.fn(() =>
     connectionKind === "sandbox"
       ? { kind: "sandbox" as const, sandboxId: "sandbox-1" }
@@ -38,7 +38,11 @@ function createHarness() {
       },
     ],
     handleWebSocketUpgrade: vi.fn(async () => new Response(null, { status: 200 })),
-    monotonicNow: vi.fn(() => monotonicTimes.shift() ?? 8),
+    monotonicNow: vi.fn(() => {
+      const nowMs = monotonicTimes.shift();
+      if (nowMs === undefined) throw new Error("Unexpected monotonic clock read");
+      return nowMs;
+    }),
   };
   const protocolDeps: SessionSocketProtocolDeps<string, TestClient> = {
     getLogger: () => log,
@@ -141,7 +145,7 @@ describe("SessionEngine", () => {
       http_method: "GET",
       http_path: SessionInternalPaths.state,
       http_status: 200,
-      duration_ms: 8,
+      duration_ms: 10,
       init_ms: 2,
       handler_ms: 3,
       outcome: "success",
