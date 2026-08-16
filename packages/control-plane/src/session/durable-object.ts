@@ -72,6 +72,7 @@ import { resolveParticipantName } from "./participant-name";
 import { validateReasoningEffort } from "./reasoning-effort";
 import { parseTunnelUrls } from "./tunnel-urls";
 import { SessionWebSocketManagerImpl, type SessionWebSocketManager } from "./websocket-manager";
+import { DurableObjectSessionConnections } from "./durable-object-session-connections";
 import { SessionPullRequestStore } from "../db/session-pull-request-store";
 import { PullRequestCreationClaims, SessionPullRequestService } from "./pull-request-service";
 import { refreshSessionPullRequests } from "./pull-request-refresh";
@@ -185,6 +186,7 @@ export class SessionDO extends DurableObject<Env> {
   private log: Logger;
   // WebSocket manager (lazily initialized like lifecycleManager)
   private _wsManager: SessionWebSocketManager | null = null;
+  private _connections: DurableObjectSessionConnections | null = null;
   // Session messenger (constructed in ensureInitialized once the session logger exists)
   private messenger!: SessionMessenger;
   // Session diff service (constructed in ensureInitialized once the session logger exists)
@@ -411,6 +413,13 @@ export class SessionDO extends DurableObject<Env> {
       );
     }
     return this._wsManager;
+  }
+
+  private get connections(): DurableObjectSessionConnections {
+    if (!this._connections) {
+      this._connections = new DurableObjectSessionConnections(this.ctx, this.wsManager);
+    }
+    return this._connections;
   }
 
   private get executionTimeoutMs(): number {
@@ -993,7 +1002,7 @@ export class SessionDO extends DurableObject<Env> {
     // Constructed here rather than in the constructor so they (and the
     // WebSocket manager they force) capture the session-scoped logger,
     // never the request-scoped child installed by fetch().
-    this.messenger = new SessionMessengerImpl(this.wsManager);
+    this.messenger = new SessionMessengerImpl(this.connections);
     this.diffService = new SessionDiffService(
       new SessionDiffStore(this.sql),
       this.sessionCoreRepository,
@@ -1001,7 +1010,6 @@ export class SessionDO extends DurableObject<Env> {
       this.log
     );
     this.diffsHandler = new SessionDiffsHandler(this.diffService);
-    this.wsManager.enableAutoPingPong();
   }
 
   /**
@@ -1138,8 +1146,7 @@ export class SessionDO extends DurableObject<Env> {
     }
 
     try {
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
+      const { client, server } = this.connections.createUpgradeSockets();
 
       const sandboxId = request.headers.get("X-Sandbox-ID");
 
@@ -1151,7 +1158,6 @@ export class SessionDO extends DurableObject<Env> {
           server,
           sandboxId ?? undefined
         );
-
         // Notify manager that sandbox connected so it can reset the spawning flag
         this.lifecycleManager.onSandboxConnected();
         this.updateSandboxStatus("ready");
@@ -1280,7 +1286,7 @@ export class SessionDO extends DurableObject<Env> {
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
     this.ensureInitialized();
     this.log.error("WebSocket error", { error });
-    ws.close(1011, "Internal error");
+    this.wsManager.close(ws, 1011, "Internal error");
   }
 
   /**
@@ -1469,7 +1475,7 @@ export class SessionDO extends DurableObject<Env> {
         outcome: "auth_failed",
         reject_reason: "no_token",
       });
-      ws.close(4001, "Authentication required");
+      this.wsManager.close(ws, 4001, "Authentication required");
       return;
     }
 
@@ -1491,7 +1497,7 @@ export class SessionDO extends DurableObject<Env> {
           outcome: "auth_failed",
           reject_reason: "invalid_token",
         });
-        ws.close(4001, "Invalid authentication token");
+        this.wsManager.close(ws, 4001, "Invalid authentication token");
         return;
       }
 
@@ -1508,7 +1514,7 @@ export class SessionDO extends DurableObject<Env> {
           participant_id: participant.id,
           user_id: participant.user_id,
         });
-        ws.close(4001, "Token expired");
+        this.wsManager.close(ws, 4001, "Token expired");
         return;
       }
 

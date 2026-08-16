@@ -64,7 +64,7 @@ function createProcessor() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
   const projectTerminalMessage = vi.fn(async () => {});

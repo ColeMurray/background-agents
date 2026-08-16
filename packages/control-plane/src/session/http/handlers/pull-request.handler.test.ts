@@ -92,7 +92,7 @@ function createHandler() {
   const getArtifactById = vi.fn<(artifactId: string) => ArtifactRow | null>(() => null);
   const updateArtifact = vi.fn();
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const now = vi.fn(() => 5000);
   const triggerPullRequestRefresh = vi.fn();
   const log = {

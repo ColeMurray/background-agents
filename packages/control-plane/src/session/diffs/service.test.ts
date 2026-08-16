@@ -101,7 +101,7 @@ function harness() {
   } as unknown as SessionCoreRepository;
   const messenger: SessionMessenger = {
     broadcast: vi.fn(),
-    sendToSandbox: vi.fn(() => true),
+    sendToSandbox: vi.fn(async () => {}),
   };
   const log: Logger = {
     debug: vi.fn(),
@@ -200,13 +200,13 @@ describe("SessionDiffService", () => {
     expect(() => service.resolveFile("revision-1", "missing")).toThrow(DiffFileNotFoundError);
   });
 
-  it("requests a refresh only while the sandbox is connected", () => {
+  it("requests a refresh only while the sandbox is connected", async () => {
     const { service, messenger } = harness();
 
-    service.requestRefresh();
+    await service.requestRefresh();
     expect(messenger.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
 
-    vi.mocked(messenger.sendToSandbox).mockReturnValue(false);
-    expect(() => service.requestRefresh()).toThrow(SandboxNotConnectedError);
+    vi.mocked(messenger.sendToSandbox).mockRejectedValue(new Error("disconnected"));
+    await expect(service.requestRefresh()).rejects.toThrow(SandboxNotConnectedError);
   });
 });

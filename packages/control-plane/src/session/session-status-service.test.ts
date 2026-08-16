@@ -57,7 +57,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   } as unknown as ArtifactRepository;
 
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) } as SessionMessenger;
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) } as SessionMessenger;
 
   const sessionIndex =
     options.sessionIndex === null

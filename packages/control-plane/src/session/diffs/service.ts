@@ -157,8 +157,10 @@ export class SessionDiffService {
   }
 
   /** Request a non-blocking refresh from the connected session sandbox. */
-  requestRefresh(): void {
-    if (!this.messenger.sendToSandbox({ type: "refresh_diff" })) {
+  async requestRefresh(): Promise<void> {
+    try {
+      await this.messenger.sendToSandbox({ type: "refresh_diff" });
+    } catch {
       throw new SandboxNotConnectedError();
     }
   }
