@@ -6,6 +6,9 @@ locals {
   use_opencomputer_backend = var.sandbox_provider == "opencomputer"
   use_e2b_backend          = var.sandbox_provider == "e2b"
 
+  slack_classifier_uses_anthropic = var.slack_classification_model == "anthropic/claude-haiku-4-5"
+  slack_classifier_uses_openai    = var.slack_classification_model == "openai/gpt-5.6-luna"
+
   # A complete OAuth credential pair is the deployment's provider enablement
   # declaration. Runtime validation mirrors these plan-time invariants.
   github_oauth_enabled = trimspace(var.github_client_id) != "" && trimspace(var.github_client_secret) != ""

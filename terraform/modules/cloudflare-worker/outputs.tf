@@ -33,6 +33,17 @@ output "plain_text_binding_names" {
   value       = [for binding in var.plain_text_bindings : binding.name]
 }
 
+output "plain_text_binding_values" {
+  description = "Configured plain-text binding values keyed by binding name."
+  value       = { for binding in var.plain_text_bindings : binding.name => binding.value }
+  sensitive   = true
+}
+
+output "vpc_network_binding_network_ids" {
+  description = "Configured Workers VPC Network binding IDs keyed by binding name."
+  value       = { for binding in var.vpc_networks : binding.binding_name => binding.network_id }
+}
+
 output "secret_binding_names" {
   description = "Names of configured secret bindings; secret values are not exposed."
   value       = nonsensitive([for binding in var.secrets : binding.name])
