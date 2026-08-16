@@ -17,6 +17,7 @@ import { createSessionRuntimeClient } from "./session/runtime-client";
 
 import { createRequestMetrics, instrumentD1 } from "./db/instrumented-d1";
 import { createLogger } from "./logger";
+import type { BackgroundJobDispatcher } from "./platform-ports";
 import {
   type Route,
   type RequestContext,
@@ -39,6 +40,7 @@ import { imageBuildRoutes } from "./routes/image-builds";
 import { automationRoutes } from "./routes/automations";
 import { mcpServerRoutes } from "./routes/mcp-servers";
 import { analyticsRoutes } from "./routes/analytics";
+import { skillRoutes } from "./routes/skills";
 import { sessionRoutes } from "./routes/sessions";
 import { handleSlackNotify } from "./routes/slack-notify";
 import { webhookRoutes } from "./webhooks";
@@ -93,6 +95,7 @@ const SANDBOX_AUTH_ONLY_ROUTES: RegExp[] = [
   /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/, // Parent agent follow-up to a direct child
   /^\/sessions\/[^/]+\/openai-token-refresh$/, // OpenAI access-token broker
   /^\/sessions\/[^/]+\/xai-token-refresh$/, // xAI access-token broker
+  /^\/sessions\/[^/]+\/sandbox-skills$/,
 ];
 
 /** Diff endpoints the sandbox needs, constrained by both path and method. */
@@ -162,7 +165,7 @@ function isSandboxAuthOnlyRoute(path: string): boolean {
   return SANDBOX_AUTH_ONLY_ROUTES.some((pattern) => pattern.test(path));
 }
 
-function isWebServiceAuthRoute(method: string, path: string): boolean {
+export function isWebServiceAuthRoute(method: string, path: string): boolean {
   return (
     isBrowserAuthProxyRoute(method, path) ||
     (method === "GET" && path === "/internal/auth/sign-in-providers")
@@ -174,9 +177,11 @@ export function isScmAgnosticRoute(method: string, path: string): boolean {
     isWebServiceAuthRoute(method, path) ||
     /^\/scm-settings(?:\/.*)?$/.test(path) ||
     /^\/analytics\/(summary|timeseries|breakdown|pull-requests)$/.test(path) ||
+    /^\/skills(?:\/.*)?$/.test(path) ||
+    /^\/skill-profiles(?:\/.*)?$/.test(path) ||
     (method === "GET" && /^\/sessions\/[^/]+$/.test(path)) ||
     (method === "PATCH" && /^\/sessions\/[^/]+\/read-state$/.test(path)) ||
-    /^\/sessions\/[^/]+\/(sandbox-access|tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh)$/.test(
+    /^\/sessions\/[^/]+\/(sandbox-access|tunnel-urls|commit-signing|participant-profiles|openai-token-refresh|xai-token-refresh|skills|sandbox-skills)$/.test(
       path
     ) ||
     /^\/sessions\/[^/]+\/children\/[^/]+\/prompt$/.test(path) ||
@@ -374,6 +379,9 @@ const routes: Route[] = [
   // Analytics
   ...analyticsRoutes,
 
+  // Installation-wide managed skills and personal profiles
+  ...skillRoutes,
+
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
 ];
@@ -384,7 +392,7 @@ const routes: Route[] = [
 export async function handleRequest(
   request: Request,
   env: Env,
-  executionCtx?: ExecutionContext
+  executionCtx: BackgroundJobDispatcher
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;

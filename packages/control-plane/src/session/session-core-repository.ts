@@ -1,19 +1,9 @@
-/**
- * SessionRepository - Core session aggregate persistence.
- *
- * Feature-specific persistence can live in focused repositories that share
- * the same session-local SQL store. Cross-repository transactions remain
- * coordinated here when they also create or update core session records.
- */
-
-import type { SessionRow, SessionRepositoryRow } from "./types";
 import type { SessionStatus, SpawnSource } from "@open-inspect/shared/types/sessions";
 import { buildSessionRepositories, type SessionRepositoryEntry } from "./repository-target";
 import type { SqlResult, SqlStorage, TransactionSync } from "./sql-storage";
+import type { SessionRepositoryRow, SessionRow } from "./types";
 
-/**
- * Data for upserting a session.
- */
+/** Data for upserting a session. */
 export interface UpsertSessionData {
   id: string;
   sessionName: string;
@@ -38,9 +28,8 @@ export interface UpsertSessionData {
 }
 
 /**
- * Data for writing a session's member repository set — mirrors the
- * session_repositories columns the init path populates (per-repo git state
- * is written separately, by push handling).
+ * Data for writing a session's member repository set. Per-repository git state
+ * is written separately by push handling.
  */
 export interface SessionRepositoryData {
   position: number;
@@ -50,10 +39,8 @@ export interface SessionRepositoryData {
   baseBranch: string;
 }
 
-/**
- * Core database operations for a session Durable Object.
- */
-export class SessionRepository {
+/** Persistence for the session and its member repositories. */
+export class SessionCoreRepository {
   constructor(
     private readonly sql: SqlStorage,
     private readonly transactionSync: TransactionSync
@@ -62,8 +49,6 @@ export class SessionRepository {
   private rows<T>(result: SqlResult): T[] {
     return result.toArray() as T[];
   }
-
-  // === SESSION ===
 
   getSession(): SessionRow | null {
     const result = this.sql.exec(`SELECT * FROM session LIMIT 1`);
@@ -118,7 +103,7 @@ export class SessionRepository {
   }
 
   updateSessionCurrentSha(sha: string): void {
-    // Each session DO has exactly one session row
+    // Each session DO has exactly one session row.
     this.sql.exec(
       `UPDATE session SET current_sha = ? WHERE id = (SELECT id FROM session LIMIT 1)`,
       sha
@@ -143,7 +128,7 @@ export class SessionRepository {
       sessionId
     );
 
-    // Intentionally consume result before reading rowsWritten so the count is final.
+    // Consume the result before reading rowsWritten so the count is final.
     result.toArray();
     return (result.rowsWritten ?? 0) > 0;
   }
@@ -167,12 +152,9 @@ export class SessionRepository {
     );
   }
 
-  // === SESSION REPOSITORIES ===
-
   /**
-   * Replace the session's member repository set (DELETE + INSERT).
-   * Per-repo git state columns (branch_name, base_sha, current_sha) reset
-   * with the set — they describe work on the replaced members.
+   * Replace the session's member repository set. Per-repository git state
+   * resets with the set because it describes work on the replaced members.
    */
   replaceSessionRepositories(repositories: SessionRepositoryData[]): void {
     this.sql.exec(`DELETE FROM session_repositories`);
@@ -195,9 +177,8 @@ export class SessionRepository {
   }
 
   /**
-   * The session's repositories (see buildSessionRepositories for the
-   * scalar-mirror fallback). Empty only for sessions without a repository
-   * context.
+   * Returns the session's repositories, using the scalar mirror fallback for
+   * older sessions. Empty only for sessions without repository context.
    */
   getSessionRepositories(): SessionRepositoryEntry[] {
     const session = this.getSession();

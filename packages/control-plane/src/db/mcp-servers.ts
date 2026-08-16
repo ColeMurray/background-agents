@@ -1,4 +1,9 @@
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
+import type {
+  McpServerConfig,
+  McpServerMetadata,
+  ValidatedCreateMcpServerInput,
+  ValidatedUpdateMcpServerInput,
+} from "@open-inspect/shared/types/integrations";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
 import { isUniqueConstraintError } from "./errors";
@@ -64,8 +69,8 @@ function rowToConfig(row: McpServerRow, payload: Record<string, string>): McpSer
     id: row.id,
     name: row.name,
     type: row.type as "local" | "remote",
-    command: safeJsonParseCommand(row.command),
-    url: row.url ?? undefined,
+    command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
+    url: row.type === "remote" ? (row.url ?? undefined) : undefined,
     ...envOrHeaders,
     repoScopes: parseRepoScopes(row.repo_scope),
     enabled: row.enabled === 1,
@@ -78,8 +83,8 @@ function rowToMetadata(row: McpServerRow): McpServerMetadata {
     id: row.id,
     name: row.name,
     type: row.type as "local" | "remote",
-    command: safeJsonParseCommand(row.command),
-    url: row.url ?? undefined,
+    command: row.type === "local" ? safeJsonParseCommand(row.command) : undefined,
+    url: row.type === "remote" ? (row.url ?? undefined) : undefined,
     hasEnv: row.type === "local" && hasCredentials,
     hasHeaders: row.type === "remote" && hasCredentials,
     repoScopes: parseRepoScopes(row.repo_scope),
@@ -147,7 +152,7 @@ export class McpServerStore {
     return row ? rowToMetadata(row) : null;
   }
 
-  async create(config: Omit<McpServerConfig, "id">): Promise<McpServerMetadata> {
+  async create(config: ValidatedCreateMcpServerInput): Promise<McpServerMetadata> {
     const id = generateId();
     const now = Date.now();
 
@@ -172,8 +177,8 @@ export class McpServerStore {
           id,
           config.name,
           config.type,
-          config.command ? JSON.stringify(config.command) : null,
-          config.url ?? null,
+          config.type === "local" ? JSON.stringify(config.command) : null,
+          config.type === "remote" ? config.url : null,
           encryptedEnv,
           config.repoScopes?.length
             ? JSON.stringify(config.repoScopes.map((r) => r.toLowerCase()))
@@ -199,18 +204,21 @@ export class McpServerStore {
 
   async update(
     id: string,
-    patch: Partial<
-      Pick<
-        McpServerConfig,
-        "name" | "type" | "command" | "url" | "env" | "headers" | "repoScopes" | "enabled"
-      >
-    >
+    patch: ValidatedUpdateMcpServerInput
   ): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
     if (!row) return null;
+
+    const mergedType = patch.type ?? (row.type as "local" | "remote");
+    if (mergedType === "local" && (patch.url !== undefined || patch.headers !== undefined)) {
+      throw new McpServerValidationError("Local MCP servers do not support url or headers");
+    }
+    if (mergedType === "remote" && (patch.command !== undefined || patch.env !== undefined)) {
+      throw new McpServerValidationError("Remote MCP servers do not support command or env");
+    }
 
     const credentialsChanged =
       patch.env !== undefined || patch.headers !== undefined || patch.type !== undefined;
@@ -228,7 +236,6 @@ export class McpServerStore {
       encryptedEnv = row.env;
     }
 
-    const mergedType = patch.type ?? (row.type as "local" | "remote");
     const mergedCommand =
       patch.command !== undefined ? patch.command : safeJsonParseCommand(row.command);
     const mergedUrl = patch.url !== undefined ? patch.url : (row.url ?? undefined);
@@ -251,8 +258,8 @@ export class McpServerStore {
         .bind(
           patch.name ?? row.name,
           mergedType,
-          mergedCommand ? JSON.stringify(mergedCommand) : null,
-          mergedUrl ?? null,
+          mergedType === "local" && mergedCommand ? JSON.stringify(mergedCommand) : null,
+          mergedType === "remote" ? (mergedUrl ?? null) : null,
           encryptedEnv,
           patch.repoScopes !== undefined
             ? patch.repoScopes?.length

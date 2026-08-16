@@ -412,6 +412,52 @@ export interface McpServerConfig {
   enabled: boolean;
 }
 
+export const DEFAULT_MCP_SERVER_ENABLED = true;
+
+const mcpServerCommonFields = {
+  name: z.string().trim().min(1),
+  repoScopes: z.array(z.string()).nullable().optional(),
+  enabled: z.boolean().optional(),
+};
+
+export const createMcpServerInputSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      ...mcpServerCommonFields,
+      type: z.literal("local"),
+      command: z.array(z.string()).min(1),
+      env: z.record(z.string(), z.string()).optional(),
+      enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
+    })
+    .strict(),
+  z
+    .object({
+      ...mcpServerCommonFields,
+      type: z.literal("remote"),
+      url: z.url(),
+      headers: z.record(z.string(), z.string()).optional(),
+      enabled: mcpServerCommonFields.enabled.default(DEFAULT_MCP_SERVER_ENABLED),
+    })
+    .strict(),
+]);
+
+export const updateMcpServerInputSchema = z
+  .object({
+    ...mcpServerCommonFields,
+    type: z.enum(["local", "remote"]),
+    command: z.array(z.string()),
+    url: z.url(),
+    env: z.record(z.string(), z.string()),
+    headers: z.record(z.string(), z.string()),
+  })
+  .partial()
+  .strict();
+
+export type CreateMcpServerRequest = z.input<typeof createMcpServerInputSchema>;
+export type UpdateMcpServerRequest = z.input<typeof updateMcpServerInputSchema>;
+export type ValidatedCreateMcpServerInput = z.output<typeof createMcpServerInputSchema>;
+export type ValidatedUpdateMcpServerInput = z.output<typeof updateMcpServerInputSchema>;
+
 /** MCP server metadata for API responses — no decrypted credentials. */
 export interface McpServerMetadata {
   id: string;

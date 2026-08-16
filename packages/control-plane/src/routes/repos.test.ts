@@ -4,6 +4,7 @@ import type { Env } from "../types";
 import { reposRoutes } from "./repos";
 import type * as SharedRoutes from "./shared";
 import type { RequestContext } from "./shared";
+import { TEST_BACKGROUND_TASK_CONTEXT } from "../router.test-support";
 
 const {
   mockCacheDelete,
@@ -52,6 +53,7 @@ function createContext(): RequestContext {
     request_id: "request-1",
     principal: { kind: "user", userId: "user-1" },
     db: {} as SqlDatabase,
+    executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
     metrics: {
       d1Queries: [],
       spans: {},
@@ -124,10 +126,7 @@ describe("repository list route", () => {
       match,
       {
         ...ctx,
-        executionCtx: {
-          waitUntil,
-          passThroughOnException: vi.fn(),
-        } as unknown as ExecutionContext,
+        executionCtx: { submit: waitUntil },
       }
     );
 

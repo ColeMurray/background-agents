@@ -50,8 +50,10 @@ import {
   type ImageBuildLookup,
   type SelectedImageBuild,
 } from "./image-selection";
+import type { AlarmScheduler } from "../../platform-ports";
 
 export type { ImageBuildLookup } from "./image-selection";
+export type { AlarmScheduler } from "../../platform-ports";
 
 const log = createLogger("lifecycle-manager");
 
@@ -156,14 +158,6 @@ export interface WebSocketManager {
   sendToSandbox(message: object): boolean;
   /** Get count of connected client WebSockets (excludes sandbox) */
   getConnectedClientCount(): number;
-}
-
-/**
- * Alarm scheduler for timeouts.
- */
-export interface AlarmScheduler {
-  /** Schedule an alarm no later than the given timestamp */
-  scheduleAlarm(timestamp: number): Promise<void>;
 }
 
 /**

@@ -54,8 +54,10 @@ import { createLogger, parseLogLevel } from "../logger";
 import type { Logger } from "../logger";
 import type { Env } from "../types";
 import type { SqlDatabase } from "../db/sql-database";
+import { createCloudflareBackgroundJobDispatcher } from "../cloudflare/background-job-dispatcher";
 import { initializeSession } from "../session/initialize";
 import { resolveSessionScopedSettings } from "../session/integration-settings-resolution";
+import { resolveManagedSkills } from "../session/skill-resolution";
 import type { EnqueuePromptRequest } from "../session/enqueue-prompt-contract";
 import { resolveAutomationRepositories } from "../automation/repository";
 import { resolveAutomationSessionTarget } from "../automation/session-target";
@@ -1337,6 +1339,7 @@ export class SchedulerDO extends DurableObject<Env> {
       request_id: run.id,
       metrics: createRequestMetrics(),
       db: this.db,
+      executionCtx: createCloudflareBackgroundJobDispatcher(this.ctx),
     };
 
     // What the session opens — the run's repository snapshot or, for
@@ -1358,6 +1361,17 @@ export class SchedulerDO extends DurableObject<Env> {
       scopeMembers,
       target.environmentId
     );
+    // Automation runs use all target-applicable shared skills. Personal
+    // profiles are interactive-user choices and are not automation policy.
+    const managedSkillsManifest = await resolveManagedSkills(
+      this.db,
+      {
+        repositories: scopeMembers,
+        environmentId: target.environmentId,
+      },
+      { mode: "all" },
+      userId
+    );
 
     await initializeSession(
       this.env,
@@ -1378,6 +1392,7 @@ export class SchedulerDO extends DurableObject<Env> {
         spawnDepth: 0,
         automationId: automation.id,
         automationRunId: run.id,
+        managedSkillsManifest,
       },
       ctx
     );

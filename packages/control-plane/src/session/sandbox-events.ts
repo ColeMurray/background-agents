@@ -4,7 +4,7 @@ import type { Logger } from "../logger";
 import type { GitPushSpec } from "../source-control";
 import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import { assertArtifactType } from "./artifacts";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
@@ -15,6 +15,7 @@ import type { SessionMessenger } from "./messenger";
 import type { SessionStatusService } from "./session-status-service";
 import type { SessionWebSocketManager } from "./websocket-manager";
 import type { SessionTitleUpdateOptions, SessionTitleUpdateResult } from "./title";
+import type { BackgroundJobDispatcher } from "../platform-ports";
 
 type PushResolver = { resolve: () => void; reject: (err: Error) => void };
 type SandboxEventWithAck = SandboxEvent & { ackId?: string };
@@ -36,12 +37,12 @@ export class SessionSandboxEventProcessor {
   private pendingPushResolvers = new Map<string, PushResolver>();
 
   constructor(
-    private readonly ctx: DurableObjectState,
+    private readonly backgroundJobs: BackgroundJobDispatcher,
     // The DO swaps its logger for a request-scoped child during fetch();
     // a getter keeps this singleton reading the current logger instead of
     // capturing one by value at construction time.
     private readonly getLog: () => Logger,
-    private readonly repository: SessionRepository,
+    private readonly repository: SessionCoreRepository,
     private readonly sandboxRepository: SandboxRepository,
     private readonly messageRepository: MessageRepository,
     private readonly eventRepository: EventRepository,
@@ -186,7 +187,7 @@ export class SessionSandboxEventProcessor {
       this.messenger.broadcast({ type: "sandbox_event", event });
 
       if (messageId) {
-        this.ctx.waitUntil(
+        this.backgroundJobs.submit(
           this.callbackService.notifyToolCall(messageId, event).catch((error) => {
             this.log.error("callback.tool_call.background_error", {
               message_id: messageId,
@@ -243,7 +244,7 @@ export class SessionSandboxEventProcessor {
           isProcessing: this.messageRepository.getProcessingMessage() !== null,
         });
         this.broadcastPromptQueue();
-        this.ctx.waitUntil(
+        this.backgroundJobs.submit(
           this.callbackService.notifyComplete(event.messageId, event.success, event.error)
         );
         await this.statusService.reconcileAfterExecution(event.success);
@@ -256,7 +257,7 @@ export class SessionSandboxEventProcessor {
         });
       }
 
-      this.ctx.waitUntil(
+      this.backgroundJobs.submit(
         this.triggerSnapshot("execution_complete").catch((error) => {
           this.log.error("snapshot.trigger.background_error", {
             reason: "execution_complete",

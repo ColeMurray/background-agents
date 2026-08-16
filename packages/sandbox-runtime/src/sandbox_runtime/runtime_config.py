@@ -64,6 +64,13 @@ class OpenCodeConfig:
 
 
 @dataclass(frozen=True)
+class ManagedSkillsConfig:
+    control_plane_url: str
+    sandbox_token: str
+    session_id: str
+
+
+@dataclass(frozen=True)
 class BridgeProcessConfig:
     sandbox_id: str
     control_plane_url: str
@@ -155,6 +162,13 @@ class RuntimeConfig:
     def bridge_process_config(self) -> BridgeProcessConfig:
         return BridgeProcessConfig(
             sandbox_id=self.sandbox_id,
+            control_plane_url=self.control_plane_url,
+            sandbox_token=self.sandbox_token,
+            session_id=str(self.session_config.get("session_id") or ""),
+        )
+
+    def managed_skills_config(self) -> ManagedSkillsConfig:
+        return ManagedSkillsConfig(
             control_plane_url=self.control_plane_url,
             sandbox_token=self.sandbox_token,
             session_id=str(self.session_config.get("session_id") or ""),

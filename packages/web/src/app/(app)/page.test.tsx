@@ -173,6 +173,31 @@ describe("Home", () => {
     await waitFor(() => expect(screen.queryByText("Warming sandbox...")).not.toBeInTheDocument());
   });
 
+  it("invalidates a warmed session when the managed skill selection changes", async () => {
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.type(screen.getByPlaceholderText("What do you want to build?"), "Use no skills");
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/sessions")
+      ).toHaveLength(1)
+    );
+
+    await user.click(screen.getByRole("button", { name: /all skills/i }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: /^None/ }));
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(mocks.routerPush).toHaveBeenCalledWith("/session/session-1"));
+    const createCalls = vi
+      .mocked(fetch)
+      .mock.calls.filter(([input]) => String(input) === "/api/sessions");
+    expect(createCalls).toHaveLength(2);
+    expect(JSON.parse(String(createCalls[1][1]?.body))).toMatchObject({
+      skillSelection: { mode: "none" },
+    });
+  });
+
   it("can start a new session without a repository from the primary selector", async () => {
     const user = userEvent.setup();
     render(<Home />);

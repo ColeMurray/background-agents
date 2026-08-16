@@ -17,7 +17,6 @@ launcher only runs for a fresh spawn.
 
 import json
 import os
-import sys
 import time
 
 SESSION_ENV_PATH = "/tmp/oi-session.env"

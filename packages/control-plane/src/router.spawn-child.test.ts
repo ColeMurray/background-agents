@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
 import { getEffectiveEnabledModels } from "./db/model-preferences";
 import { SessionIndexStore } from "./db/session-index";
 import { SessionInternalPaths } from "./session/contracts";
@@ -106,7 +110,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         body: JSON.stringify(body),
         service: "linear-bot",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
   }
 
@@ -462,7 +467,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
           model: "not-a-real-model",
         }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);
@@ -520,7 +526,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
         service: "linear-bot",
         body: JSON.stringify({ title: "Child task" }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);
@@ -660,7 +667,8 @@ describe("handleSpawnChild prompt enqueue handling", () => {
           model: "",
         }),
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
 
     expect(response.status).toBe(400);

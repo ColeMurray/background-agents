@@ -6,7 +6,7 @@ import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { MAX_UNFINISHED_PROMPTS } from "@open-inspect/shared/types/prompts";
 import type { ClientInfo } from "../types";
 import type { MessageRow, ParticipantRow, SessionRow, SessionAttachmentRow } from "./types";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { ParticipantRepository } from "./participant-repository";
 import type { MessageRepository } from "./message-repository";
 import type { SessionWebSocketManager } from "./websocket-manager";
@@ -182,7 +182,7 @@ function buildQueue() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const sessionStatus = {
     transition: vi.fn(async (_status: string) => true),
     reconcileAfterExecution: vi.fn(async (_success: boolean) => {}),
@@ -194,14 +194,15 @@ function buildQueue() {
     terminateUnresponsiveSandbox: vi.fn(async () => {}),
   };
   const waitUntil = vi.fn();
+  const backgroundJobs = { submit: waitUntil };
   const getAlarm = vi.fn(async () => null as number | null);
   const setAlarm = vi.fn(async (_timestamp: number) => {});
   const projectTerminalMessage = vi.fn(async () => {});
 
   const queue = new SessionMessageQueue(
-    { waitUntil, storage: { getAlarm, setAlarm } } as unknown as DurableObjectState,
+    backgroundJobs,
     log,
-    repository as unknown as SessionRepository,
+    repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
     repository as unknown as ParticipantRepository,
     attachmentRepository as unknown as SessionAttachmentRepository,

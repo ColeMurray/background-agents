@@ -8,7 +8,7 @@ import type {
   SessionStatus,
   SpawnSource,
 } from "@open-inspect/shared/types/sessions";
-import type { SessionRepository } from "../../repository";
+import type { SessionCoreRepository } from "../../session-core-repository";
 import type { SandboxRepository } from "../../sandbox-repository";
 import type { MessageRepository } from "../../message-repository";
 import type { ParticipantRepository } from "../../participant-repository";
@@ -23,7 +23,7 @@ import { z } from "zod";
 const TERMINAL_STATUSES = new Set<SessionStatus>(["completed", "archived", "cancelled", "failed"]);
 
 export interface SessionLifecycleHandlerDeps {
-  repository: Pick<SessionRepository, "upsertSession" | "replaceSessionRepositories">;
+  sessionCoreRepository: SessionCoreRepository;
   sandboxRepository: SandboxRepository;
   messageRepository: MessageRepository;
   participantRepository: ParticipantRepository;
@@ -239,7 +239,7 @@ export function createSessionLifecycleHandler(
         );
       }
 
-      deps.repository.upsertSession({
+      deps.sessionCoreRepository.upsertSession({
         id: sessionId,
         sessionName,
         title: body.title ?? null,
@@ -271,7 +271,7 @@ export function createSessionLifecycleHandler(
           : repoOwner !== null && repoName !== null && body.repoId != null && baseBranch !== null
             ? [{ repoOwner, repoName, repoId: body.repoId, baseBranch }]
             : [];
-      deps.repository.replaceSessionRepositories(
+      deps.sessionCoreRepository.replaceSessionRepositories(
         memberRepositories.map((repo, position) => ({
           position,
           repoOwner: repo.repoOwner,
@@ -456,17 +456,28 @@ export function createSessionLifecycleHandler(
         // Reaching here means the index still reads `created` while this session
         // has moved on — which is exactly what happens when an earlier
         // transition's D1 projection failed (they are logged and swallowed).
-        // Re-projecting the current status repairs the mirror, so the row stops
-        // being selected instead of being retried every sweep forever.
-        await deps.statusService.transition(session.status);
+        // Repairing the mirror is what stops the row being selected instead of
+        // being retried every sweep forever.
+        await deps.statusService.repairIndexStatus();
         return Response.json({ outcome: "not_draft", status: session.status });
       }
 
       if (
-        deps.messageRepository.getMessageCount() > 0 ||
-        deps.messageRepository.getPendingOrProcessingCount() > 0
-      )
-        return Response.json({ outcome: "has_work", status: session.status });
+        deps.messageRepository.getPendingOrProcessingCount() > 0 ||
+        deps.messageRepository.getMessageCount() > 0
+      ) {
+        // A session holding messages while still `created` is a broken aggregate:
+        // enqueueing a prompt inserts the message and transitions to `active` in
+        // the same Durable Object turn, so current code cannot produce this. It
+        // survives only on rows predating that guarantee, and answering without
+        // changing anything is what let them pin the head of the sweep's
+        // oldest-first batch forever. Settle the status to what the messages say
+        // instead. A queued prompt is left for the dispatch timeout rather than
+        // archived: archiving discards a real request, and `archived` is not
+        // promptable, so the author could not resume it either.
+        const settled = await deps.statusService.settleFromMessageState();
+        return Response.json({ outcome: "has_work", status: settled });
+      }
 
       await deps.statusService.transition("archived");
 

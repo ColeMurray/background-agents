@@ -5,7 +5,7 @@ import type { SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
 import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import type { CallbackNotificationService } from "./callback-notification-service";
 import type { SessionDiffService } from "./diffs/service";
-import type { SessionRepository } from "./repository";
+import type { SessionCoreRepository } from "./session-core-repository";
 import type { SandboxRepository } from "./sandbox-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { EventRepository } from "./event-repository";
@@ -64,7 +64,7 @@ function createProcessor() {
   };
 
   const broadcast = vi.fn((_message: ServerMessage) => {});
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const diffService = { pinBaselines: vi.fn() };
   const triggerSnapshot = vi.fn(async (_reason: string) => {});
   const projectTerminalMessage = vi.fn(async () => {});
@@ -75,6 +75,7 @@ function createProcessor() {
   const updateLastActivity = vi.fn();
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const waitUntil = vi.fn();
+  const backgroundJobs = { submit: waitUntil };
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -84,9 +85,9 @@ function createProcessor() {
   };
 
   const processor = new SessionSandboxEventProcessor(
-    { waitUntil } as unknown as DurableObjectState,
+    backgroundJobs,
     () => log,
-    repository as unknown as SessionRepository,
+    repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,
     repository as unknown as MessageRepository,
     eventRepository,

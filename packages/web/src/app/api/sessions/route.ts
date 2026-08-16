@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
       // side): a named environment or an ad-hoc repository list.
       environmentId: body.environmentId,
       repositories: body.repositories,
+      skillSelection: body.skillSelection,
     };
 
     const response = await controlPlaneUserFetch("/sessions", {

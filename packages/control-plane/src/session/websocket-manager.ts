@@ -86,7 +86,6 @@ export interface SessionWebSocketManager {
   ): void;
 
   enforceAuthTimeout(ws: WebSocket, wsId: string): Promise<void>;
-  enableAutoPingPong(): void;
   getAuthenticatedClients(): IterableIterator<ClientInfo>;
   getConnectedClientCount(): number;
 }
@@ -358,15 +357,6 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
       timeout_ms: this.config.authTimeoutMs,
     });
     this.close(ws, 4008, "Authentication timeout");
-  }
-
-  enableAutoPingPong(): void {
-    this.ctx.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair(
-        JSON.stringify({ type: "ping" }),
-        JSON.stringify({ type: "pong", timestamp: Date.now() })
-      )
-    );
   }
 
   getAuthenticatedClients(): IterableIterator<ClientInfo> {

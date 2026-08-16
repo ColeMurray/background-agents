@@ -205,6 +205,62 @@ export {
 } from "./commit-signing";
 export type { CommitSigningMetadata, CommitSigningWriteRequest } from "./commit-signing";
 
+export {
+  MAX_SKILL_NAME_LENGTH,
+  MAX_SKILL_DESCRIPTION_LENGTH,
+  MAX_SKILL_COMPATIBILITY_LENGTH,
+  MAX_SKILL_FILES,
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_REVISION_BYTES,
+  MAX_SKILL_PATH_BYTES,
+  MAX_SKILL_PATH_DEPTH,
+  MAX_MANAGED_SKILLS_PER_SESSION,
+  MAX_MANAGED_SKILL_MANIFEST_BYTES,
+  skillNameSchema,
+  skillFileInputSchema,
+  skillMetadataSchema,
+  skillContentInputSchema,
+  skillAssignmentInputSchema,
+  createSkillInputSchema,
+  setSkillEnabledInputSchema,
+  replaceSkillContentAndAssignmentsInputSchema,
+  skillFileSchema,
+  skillAssignmentSchema,
+  skillSummarySchema,
+  skillSchema,
+  listSkillsResponseSchema,
+  skillResponseSchema,
+  createSkillProfileInputSchema,
+  updateSkillProfileInputSchema,
+  skillProfileSchema,
+  listSkillProfilesResponseSchema,
+  skillProfileResponseSchema,
+  sessionSkillSelectionSchema,
+  skillResolutionPreviewInputSchema,
+  resolvedSkillSchema,
+  skillResolutionPreviewResponseSchema,
+  sessionSkillsViewSchema,
+  sandboxSkillInstallationSchema,
+} from "./skills";
+export type {
+  SkillFileInput,
+  SkillContentInput,
+  SkillAssignmentInput,
+  CreateSkillInput,
+  SetSkillEnabledInput,
+  ReplaceSkillContentAndAssignmentsInput,
+  SkillFile,
+  SkillAssignment,
+  SkillSummary,
+  Skill,
+  SkillProfile,
+  SessionSkillSelection,
+  SessionSkillManifestSelection,
+  ResolvedSkill,
+  SessionSkillsView,
+  SandboxSkillInstallation,
+} from "./skills";
+
 export { formatGitHubNoreplyEmail, githubLoginSchema } from "./github-identity";
 
 export * from "./integrations";

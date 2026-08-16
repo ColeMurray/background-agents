@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { cleanD1Tables } from "./cleanup";
 import { serviceFetch } from "./helpers";
 
@@ -89,6 +89,42 @@ describe("MCP Servers API", () => {
         method: "POST",
         body: JSON.stringify({ name: "test", type: "remote" }),
       });
+      expect(response.status).toBe(400);
+    });
+
+    it.each([
+      ["non-string URL", { url: 42 }],
+      ["malformed URL", { url: "not a url" }],
+      ["non-string environment value", { env: { DEBUG: true } }],
+      ["environment on a remote server", { env: { TOKEN: "secret" } }],
+      ["non-object headers", { headers: ["Authorization"] }],
+      ["non-boolean enabled", { enabled: "yes" }],
+      ["unknown fields", { unexpected: true }],
+    ])("returns 400 for %s", async (_description, invalidField) => {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "invalid",
+          type: "remote",
+          url: "https://test.example.com",
+          ...invalidField,
+        }),
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 400 for headers on a local server", async () => {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "invalid-local-headers",
+          type: "local",
+          command: ["npx", "x"],
+          headers: { Authorization: "secret" },
+        }),
+      });
+
       expect(response.status).toBe(400);
     });
 
@@ -248,6 +284,99 @@ describe("MCP Servers API", () => {
         method: "PUT",
         body: JSON.stringify({ type: "local" }),
       });
+      expect(response.status).toBe(400);
+    });
+
+    it("changes a local server to remote without retaining command", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({ name: "local-to-remote", type: "local", command: ["npx", "x"] }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ type: "remote", url: "https://remote.example.com" }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json<McpServerMetadata>();
+      expect(body.type).toBe("remote");
+      expect(body.url).toBe("https://remote.example.com");
+      expect(body.command).toBeUndefined();
+      const row = await env.DB.prepare("SELECT command FROM mcp_servers WHERE id = ?")
+        .bind(created.id)
+        .first<{ command: string | null }>();
+      expect(row?.command).toBeNull();
+    });
+
+    it("changes a remote server to local without retaining URL", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "remote-to-local",
+          type: "remote",
+          url: "https://remote.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ type: "local", command: ["npx", "x"] }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json<McpServerMetadata>();
+      expect(body.type).toBe("local");
+      expect(body.command).toEqual(["npx", "x"]);
+      expect(body.url).toBeUndefined();
+      const row = await env.DB.prepare("SELECT url FROM mcp_servers WHERE id = ?")
+        .bind(created.id)
+        .first<{ url: string | null }>();
+      expect(row?.url).toBeNull();
+    });
+
+    it.each([
+      ["invalid type", { type: "stdio" }],
+      ["non-string URL", { url: 42 }],
+      ["malformed URL", { url: "not a url" }],
+      ["non-object environment", { env: ["DEBUG=1"] }],
+      ["environment on a remote server", { env: { DEBUG: "1" } }],
+      ["non-string header value", { headers: { Authorization: 123 } }],
+      ["non-boolean enabled", { enabled: 1 }],
+      ["unknown fields", { id: "replacement" }],
+    ])("returns 400 for %s", async (_description, patch) => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: `invalid-update-${_description}`,
+          type: "remote",
+          url: "https://test.example.com",
+        }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 400 for headers on an existing local server", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({ name: "local-update", type: "local", command: ["npx", "x"] }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ headers: { Authorization: "secret" } }),
+      });
+
       expect(response.status).toBe(400);
     });
   });

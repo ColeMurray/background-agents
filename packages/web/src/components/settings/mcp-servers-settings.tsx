@@ -2,7 +2,11 @@
 
 import { useState, useCallback, type ClipboardEvent } from "react";
 import { toast } from "sonner";
-import type { McpServerConfig, McpServerMetadata } from "@open-inspect/shared/types/integrations";
+import type {
+  CreateMcpServerRequest,
+  McpServerMetadata,
+} from "@open-inspect/shared/types/integrations";
+import { DEFAULT_MCP_SERVER_ENABLED } from "@open-inspect/shared/types/integrations";
 import {
   useMcpServers,
   createMcpServer,
@@ -65,7 +69,7 @@ const emptyForm: FormState = {
   envRows: [createEnvRow()],
   repoScopes: [],
   scopeMode: "global",
-  enabled: true,
+  enabled: DEFAULT_MCP_SERVER_ENABLED,
 };
 
 function metadataToForm(metadata: McpServerMetadata): FormState {
@@ -471,9 +475,8 @@ export function McpServersSettings() {
     setSaving(true);
 
     try {
-      const payload: Partial<McpServerConfig> = {
+      const common = {
         name: form.name.trim(),
-        type: form.type,
         enabled: form.enabled,
         repoScopes:
           form.scopeMode === "selected" && form.repoScopes.length > 0 ? form.repoScopes : null,
@@ -481,21 +484,24 @@ export function McpServersSettings() {
 
       const envRecord = envRowsToRecord(form.envRows);
       const hasEnvValues = Object.keys(envRecord).length > 0;
-
-      if (form.type === "remote") {
-        payload.url = form.url.trim();
-        if (hasEnvValues || editing === "new") {
-          payload.headers = envRecord;
-        }
-      } else {
-        payload.command = parseCommand(form.command);
-        if (hasEnvValues || editing === "new") {
-          payload.env = envRecord;
-        }
-      }
+      const includeCredentials = hasEnvValues || editing === "new";
+      const payload: CreateMcpServerRequest =
+        form.type === "remote"
+          ? {
+              ...common,
+              type: "remote",
+              url: form.url.trim(),
+              ...(includeCredentials ? { headers: envRecord } : {}),
+            }
+          : {
+              ...common,
+              type: "local",
+              command: parseCommand(form.command),
+              ...(includeCredentials ? { env: envRecord } : {}),
+            };
 
       if (editing === "new") {
-        await createMcpServer(payload as Omit<McpServerConfig, "id">);
+        await createMcpServer(payload);
         toast.success("MCP server created");
       } else if (editing) {
         await updateMcpServer(editing, payload);

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
+import { SandboxDeliveryUnavailableError } from "../connections";
 import type { SessionMessenger } from "../messenger";
-import type { SessionRepository } from "../repository";
+import type { SessionCoreRepository } from "../session-core-repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";
+import type { SessionRow } from "../types";
 import {
   DiffBaselineMismatchError,
   DiffFileNotFoundError,
@@ -97,10 +99,10 @@ function harness() {
       },
     ],
     setSessionDiffBaselines: vi.fn(),
-  } as unknown as SessionRepository;
+  } as unknown as SessionCoreRepository;
   const messenger: SessionMessenger = {
     broadcast: vi.fn(),
-    sendToSandbox: vi.fn(() => true),
+    sendToSandbox: vi.fn(async () => {}),
   };
   const log: Logger = {
     debug: vi.fn(),
@@ -133,6 +135,27 @@ describe("SessionDiffService", () => {
       type: "diff_state_changed",
       revisionId: "revision-1",
       updatedAt: 200,
+    });
+  });
+
+  it("uses the scalar baseline for a legacy session without repository rows", () => {
+    const { service, repository } = harness();
+    repository.getSessionRepositories = vi.fn(() => [
+      {
+        position: 0,
+        repoOwner: "acme",
+        repoName: "web",
+        baseBranch: null,
+        isPrimary: true,
+        row: null,
+      },
+    ]);
+    repository.getSession = vi.fn(() => ({ base_sha: "a".repeat(40) }) as unknown as SessionRow);
+
+    expect(service.publishBundle(upload)).toBe("revision-1");
+    expect(service.getPublicState()).toMatchObject({
+      current: { revisionId: "revision-1" },
+      unavailableReason: null,
     });
   });
 
@@ -178,13 +201,16 @@ describe("SessionDiffService", () => {
     expect(() => service.resolveFile("revision-1", "missing")).toThrow(DiffFileNotFoundError);
   });
 
-  it("requests a refresh only while the sandbox is connected", () => {
+  it("requests a refresh only while the sandbox is connected", async () => {
     const { service, messenger } = harness();
 
-    service.requestRefresh();
+    await service.requestRefresh();
     expect(messenger.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
 
-    vi.mocked(messenger.sendToSandbox).mockReturnValue(false);
-    expect(() => service.requestRefresh()).toThrow(SandboxNotConnectedError);
+    vi.mocked(messenger.sendToSandbox).mockRejectedValue(new SandboxDeliveryUnavailableError());
+    await expect(service.requestRefresh()).rejects.toThrow(SandboxNotConnectedError);
+
+    vi.mocked(messenger.sendToSandbox).mockRejectedValue(new TypeError("adapter bug"));
+    await expect(service.requestRefresh()).rejects.toThrow(TypeError);
   });
 });

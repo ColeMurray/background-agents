@@ -330,13 +330,16 @@ export async function buildOutboundAuthHeaders(
 }
 
 /**
- * Minimal interface for the control-plane service binding. Compatible with
+ * Minimal interface for an HTTP service binding. Compatible with
  * Cloudflare Workers' `Fetcher` type without depending on
  * `@cloudflare/workers-types`.
  */
-export interface ControlPlaneFetcher {
+export interface FetchClient {
   fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
 }
+
+/** Destination-specific name retained for control-plane API consumers. */
+export type ControlPlaneFetcher = FetchClient;
 
 /** Options a signed control-plane fetch accepts beyond the request being signed. */
 export interface SignedFetchInit {
@@ -353,7 +356,7 @@ export interface SignedFetchInit {
  */
 export async function signedControlPlaneFetch(
   service: ServiceName,
-  env: OutboundCredentialEnv & { CONTROL_PLANE: ControlPlaneFetcher },
+  env: OutboundCredentialEnv & { CONTROL_PLANE: FetchClient },
   request: OutboundRequestToSign,
   init?: SignedFetchInit
 ): Promise<Response> {

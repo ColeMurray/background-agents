@@ -213,6 +213,16 @@ export function formatToolCall(event: ToolCallEvent): FormattedToolCall {
       };
     }
 
+    case "skill": {
+      const name = getStringArg(args, "name");
+      return {
+        toolName: "skill",
+        summary: name ? `"${name}"` : "",
+        icon: null,
+        getDetails: () => ({ args, output }),
+      };
+    }
+
     case "webfetch": {
       const url = getStringArg(args, "url");
       return {

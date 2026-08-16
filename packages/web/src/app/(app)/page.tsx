@@ -35,9 +35,31 @@ import { SessionTargetPicker } from "@/components/session-target-picker";
 import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
+import { SessionSkillSelector } from "@/components/session-skill-selector";
+import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
+import type { SkillResolutionPreviewInput } from "@/hooks/use-managed-skills";
+import type { SessionTargetRequestFields } from "@/lib/session-target";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
 const LAST_SELECTED_REASONING_EFFORT_STORAGE_KEY = "open-inspect-last-selected-reasoning-effort";
+
+function skillPreviewTarget(
+  fields: SessionTargetRequestFields | null
+): Omit<SkillResolutionPreviewInput, "selection"> | null {
+  if (!fields) return null;
+  if ("environmentId" in fields) return { environmentId: fields.environmentId };
+  if ("repositories" in fields) {
+    return {
+      repositories: fields.repositories.map((repository) => ({
+        ...repository,
+        baseBranch: null,
+      })),
+    };
+  }
+  return fields.repoOwner && fields.repoName
+    ? { repoOwner: fields.repoOwner, repoName: fields.repoName }
+    : {};
+}
 
 export default function Home() {
   const { data: session } = useAuthSession();
@@ -50,6 +72,9 @@ export default function Home() {
   });
   const [modelPreferenceDraft, setModelPreferenceDraft] = useState<ModelPreference | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [skillSelection, setSkillSelection] = useState<SessionSkillSelection>({ mode: "all" });
+  const skillSelectionKey =
+    skillSelection.mode === "profile" ? `profile:${skillSelection.profileId}` : skillSelection.mode;
   const sessionAttachments = useSessionAttachments();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
@@ -65,6 +90,7 @@ export default function Home() {
     model: string;
     reasoningEffort?: string;
     branch: string;
+    skills: string;
   } | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
@@ -86,6 +112,8 @@ export default function Home() {
     loadingEnabledModels ? undefined : enabledModels
   );
 
+  // Skills are pinned while the session warms, so any identity input change
+  // must discard that session rather than submit a prompt with stale skills.
   useEffect(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -95,7 +123,7 @@ export default function Home() {
     setIsCreatingSession(false);
     sessionCreationPromise.current = null;
     pendingConfigRef.current = null;
-  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch]);
+  }, [sessionTarget, selectedModel, reasoningEffort, selectedBranch, skillSelectionKey]);
 
   const createSessionForWarming = useCallback(async () => {
     if (loadingEnabledModels) return null;
@@ -110,6 +138,7 @@ export default function Home() {
       model: selectedModel,
       reasoningEffort,
       branch: sessionTarget?.kind === "repo" ? selectedBranch : "",
+      skills: skillSelectionKey,
     };
     pendingConfigRef.current = currentConfig;
 
@@ -125,6 +154,7 @@ export default function Home() {
             ...targetRequestFields,
             model: selectedModel,
             reasoningEffort,
+            skillSelection,
           }),
           signal: abortController.signal,
         });
@@ -135,7 +165,8 @@ export default function Home() {
             pendingConfigRef.current?.target === currentConfig.target &&
             pendingConfigRef.current?.model === currentConfig.model &&
             pendingConfigRef.current?.reasoningEffort === currentConfig.reasoningEffort &&
-            pendingConfigRef.current?.branch === currentConfig.branch
+            pendingConfigRef.current?.branch === currentConfig.branch &&
+            pendingConfigRef.current?.skills === currentConfig.skills
           ) {
             setPendingSessionId(data.sessionId);
             return data.sessionId as string;
@@ -167,6 +198,8 @@ export default function Home() {
     buildRequestFields,
     selectedModel,
     reasoningEffort,
+    skillSelection,
+    skillSelectionKey,
     pendingSessionId,
     loadingEnabledModels,
   ]);
@@ -305,6 +338,9 @@ export default function Home() {
       error={error}
       handleSubmit={handleSubmit}
       modelOptions={enabledModelOptions}
+      skillSelection={skillSelection}
+      setSkillSelection={setSkillSelection}
+      skillPreviewTarget={skillPreviewTarget(buildRequestFields())}
     />
   );
 }
@@ -324,6 +360,9 @@ function HomeContent({
   error,
   handleSubmit,
   modelOptions,
+  skillSelection,
+  setSkillSelection,
+  skillPreviewTarget,
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
@@ -345,6 +384,9 @@ function HomeContent({
   error: string;
   handleSubmit: (e: React.FormEvent) => void;
   modelOptions: ModelCategory[];
+  skillSelection: SessionSkillSelection;
+  setSkillSelection: (value: SessionSkillSelection) => void;
+  skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
 }) {
   const { isOpen } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -506,6 +548,13 @@ function HomeContent({
                       selectedModel={selectedModel}
                       reasoningEffort={reasoningEffort}
                       onSelect={setReasoningEffort}
+                      disabled={creating}
+                    />
+
+                    <SessionSkillSelector
+                      value={skillSelection}
+                      onChange={setSkillSelection}
+                      target={skillPreviewTarget}
                       disabled={creating}
                     />
                   </div>

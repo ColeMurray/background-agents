@@ -220,6 +220,7 @@ async function handleSpawnChild(
     spawnDepth: childDepth,
     automationId: parentSession?.automationId ?? null,
     automationRunId: parentSession?.automationRunId ?? null,
+    managedSkillsSourceSessionId: parentId,
   };
 
   const admissionLease = await sessionStore.acquireChildAdmissionLease(
@@ -285,7 +286,7 @@ async function handleSpawnChild(
     return error("Failed to enqueue child session prompt", 500);
   }
 
-  ctx.executionCtx?.waitUntil(
+  ctx.executionCtx.submit(
     ctx.sessionRuntime
       .fetch(parentId, SessionInternalPaths.childSessionUpdate, {
         method: "POST",

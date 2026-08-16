@@ -32,6 +32,16 @@ AGENT_TOOLS_GATED_ON_ENV = {"slack-notify.js": "AGENT_SLACK_NOTIFY_ENABLED"}
 AGENT_TOOLS_REQUIRING_REPOSITORY: set[str] = set()
 
 
+def resolve_opencode_global_config_dir() -> Path:
+    """Resolve OpenCode's global config directory using its xdg-basedir rules."""
+    override = os.environ.get("OPENCODE_CONFIG_DIR")
+    if override:
+        return Path(override)
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "opencode"
+
+
 class OpenCodeServer:
     HEALTH_CHECK_TIMEOUT = 30.0
     MCP_PACKAGE_INSTALL_TIMEOUT_SECONDS = 180
@@ -196,20 +206,6 @@ class OpenCodeServer:
             installed.add("node_modules/")
         return installed
 
-    @staticmethod
-    def _resolve_opencode_global_config_dir() -> Path:
-        """Resolve OpenCode's global config directory the way OpenCode does.
-
-        OpenCode (via xdg-basedir) uses OPENCODE_CONFIG_DIR when set, otherwise
-        $XDG_CONFIG_HOME/opencode, otherwise ~/.config/opencode.
-        """
-        override = os.environ.get("OPENCODE_CONFIG_DIR")
-        if override:
-            return Path(override)
-        xdg = os.environ.get("XDG_CONFIG_HOME")
-        base = Path(xdg) if xdg else Path.home() / ".config"
-        return base / "opencode"
-
     def _seed_global_opencode_deps(self) -> None:
         """Fallback seed of OpenCode's global config dir with the staged plugin tree.
 
@@ -225,7 +221,7 @@ class OpenCodeServer:
         deps_cache = Path("/app/opencode-deps")
         if not deps_cache.is_dir():
             return
-        config_dir = self._resolve_opencode_global_config_dir()
+        config_dir = resolve_opencode_global_config_dir()
         # Only seed a pristine dir — never mix our modules into a user's manifest. The image
         # bakes this tree in (base.py), so node_modules is normally already present and we skip.
         nm_exists = (config_dir / "node_modules").exists()
@@ -504,7 +500,6 @@ class OpenCodeServer:
         # Working directory: the repo for single-repo sessions, /workspace
         # for multi-repo (every member visible) and repo-less sessions.
         installed_runtime_paths = self._prepare_opencode_filesystem(workdir, repositories)
-
         # Deploy auth proxy plugins for control-plane-managed subscriptions.
         opencode_dir = workdir / ".opencode"
         managed_plugins = (

@@ -3,10 +3,15 @@ import type { Principal } from "./auth/principal";
 import { SessionIndexStore } from "./db/session-index";
 import { UserStore } from "./db/user-store";
 import { handleRequest } from "./router";
-import { signedServiceRequest, TEST_SERVICE_SECRETS } from "./router.test-support";
+import {
+  signedServiceRequest,
+  TEST_BACKGROUND_TASK_CONTEXT,
+  TEST_SERVICE_SECRETS,
+} from "./router.test-support";
 import { sessionCreateRoutes } from "./routes/session-create";
 import { HttpError, resolveRepoOrError } from "./routes/shared";
 import { SessionInternalPaths } from "./session/contracts";
+import { resolveManagedSkills } from "./session/skill-resolution";
 
 vi.mock("./db/session-index", () => ({
   SessionIndexStore: vi.fn(),
@@ -15,6 +20,14 @@ vi.mock("./db/session-index", () => ({
 vi.mock("./db/user-store", () => ({
   UserStore: vi.fn(),
 }));
+
+vi.mock("./session/skill-resolution", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    resolveManagedSkills: vi.fn(),
+  };
+});
 
 vi.mock("./routes/shared", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -32,6 +45,13 @@ const USER_PRINCIPAL: Principal = {
 describe("handleCreateSession D1 ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(resolveManagedSkills).mockResolvedValue({
+      selection: { mode: "all" },
+      resolverVersion: 1,
+      manifestSha256: "0".repeat(64),
+      resolvedAt: 1,
+      skills: [],
+    });
     vi.mocked(resolveRepoOrError).mockResolvedValue({
       repoId: 12345,
       defaultBranch: "main",
@@ -60,7 +80,8 @@ describe("handleCreateSession D1 ordering", () => {
         service: "slack-bot",
         actor: "slack:U0123",
       }),
-      env as never
+      env as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
   }
 
@@ -81,7 +102,8 @@ describe("handleCreateSession D1 ordering", () => {
         service: "slack-bot",
         actor: "slack:U0123",
       }),
-      createEnv(vi.fn()) as never
+      createEnv(vi.fn()) as never,
+      TEST_BACKGROUND_TASK_CONTEXT
     );
   }
 
@@ -431,6 +453,7 @@ describe("handleCreateSession D1 ordering", () => {
         trace_id: "test-trace",
         principal: USER_PRINCIPAL,
         db: testEnv["DB"] as never,
+        executionCtx: TEST_BACKGROUND_TASK_CONTEXT,
         metrics: {
           d1Queries: [],
           spans: {},

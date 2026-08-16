@@ -75,7 +75,7 @@ function createParticipant(overrides: Partial<ParticipantRow> = {}): Participant
 function createHandler() {
   const getSession = vi.fn<() => SessionRow | null>();
   let repositoryRows: SessionRepositoryRow[] = [];
-  // Mirrors SessionRepository.getSessionRepositories: members derive from the
+  // Mirrors SessionCoreRepository.getSessionRepositories: members derive from the
   // session scalars plus whatever rows the test seeds.
   const getSessionRepositories = vi.fn<() => SessionRepositoryEntry[]>(() => {
     const session = getSession();
@@ -92,7 +92,7 @@ function createHandler() {
   const getArtifactById = vi.fn<(artifactId: string) => ArtifactRow | null>(() => null);
   const updateArtifact = vi.fn();
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const now = vi.fn(() => 5000);
   const triggerPullRequestRefresh = vi.fn();
   const log = {

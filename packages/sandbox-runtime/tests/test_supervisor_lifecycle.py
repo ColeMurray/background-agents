@@ -41,6 +41,8 @@ def _supervisor(tmp_path, events):
     desktop.crash.return_value = None
     desktop.start = AsyncMock(side_effect=lambda: events.append("desktop"))
     desktop.stop = AsyncMock()
+    managed_skills = MagicMock()
+    managed_skills.materialize = AsyncMock(side_effect=lambda *_args: events.append("skills"))
 
     supervisor = SandboxSupervisor(
         config,
@@ -50,6 +52,7 @@ def _supervisor(tmp_path, events):
         code_server,
         terminal,
         desktop,
+        managed_skills,
         asyncio.Event(),
         MagicMock(),
     )
@@ -69,6 +72,7 @@ async def test_regular_boot_phase_order(tmp_path, monkeypatch):
     assert events == [
         "desktop",
         "repository:fresh",
+        "skills",
         "code_server",
         "terminal",
         "opencode",
@@ -91,6 +95,7 @@ async def test_regular_boot_passes_repository_workspace_to_services(tmp_path, mo
     await supervisor.run()
 
     opencode_server.start.assert_awaited_once_with(repositories, workdir)
+    supervisor.managed_skills.materialize.assert_awaited_once_with(repositories, workdir)
     code_server.start.assert_awaited_once_with(workdir)
     terminal.start.assert_awaited_once_with(workdir)
 
@@ -112,6 +117,7 @@ async def test_build_boot_excludes_runtime_services(tmp_path, monkeypatch):
     assert await supervisor.run(callback) is True
     repository.boot.assert_awaited_once_with(BootMode.BUILD, [])
     desktop.start.assert_not_awaited()
+    supervisor.managed_skills.materialize.assert_not_awaited()
     opencode_server.start.assert_not_awaited()
     agent_bridge.start.assert_not_awaited()
 
@@ -137,6 +143,19 @@ async def test_bridge_restart_exhaustion_is_fatal(tmp_path, monkeypatch):
     assert agent_bridge.start.await_count == supervisor.MAX_RESTARTS
     supervisor._report_fatal_error.assert_awaited_once()
     assert supervisor.shutdown_event.is_set()
+
+
+async def test_opencode_restarts_do_not_rematerialize_managed_skills(tmp_path, monkeypatch):
+    supervisor, _repository, opencode_server, *_ = _supervisor(tmp_path, [])
+    supervisor._repository_boot_result = RepositoryBootResult(True, [], True, True, (), tmp_path)
+    opencode_server.exit_code.return_value = 1
+    supervisor._report_fatal_error = AsyncMock()
+    monkeypatch.setattr("sandbox_runtime.supervisor.asyncio.sleep", AsyncMock())
+
+    await SandboxSupervisor.monitor_processes(supervisor)
+
+    assert opencode_server.start.await_count == supervisor.MAX_RESTARTS
+    supervisor.managed_skills.materialize.assert_not_awaited()
 
 
 async def test_code_server_restart_exhaustion_is_nonfatal(tmp_path, monkeypatch):

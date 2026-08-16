@@ -156,13 +156,13 @@ async function handleListRepos(
   if (cached) {
     const isFresh = cached.freshUntil && Date.now() < cached.freshUntil;
 
-    if (!isFresh && ctx.executionCtx) {
+    if (!isFresh) {
       // Stale — serve immediately but refresh in background
       logger.info("Serving stale repos cache, refreshing in background", {
         trace_id: ctx.trace_id,
         cached_at: cached.cachedAt,
       });
-      ctx.executionCtx.waitUntil(refreshReposCache(env, ctx.db, ctx.trace_id));
+      ctx.executionCtx.submit(refreshReposCache(env, ctx.db, ctx.trace_id));
     }
 
     return json({
@@ -181,7 +181,7 @@ async function handleListRepos(
   const refresh = refreshReposCache(env, ctx.db, ctx.trace_id, (fn) =>
     ctx.metrics.time("scm_api", fn)
   );
-  ctx.executionCtx?.waitUntil(refresh);
+  ctx.executionCtx.submit(refresh);
 
   const result = await refresh;
   if (!result.ok) {

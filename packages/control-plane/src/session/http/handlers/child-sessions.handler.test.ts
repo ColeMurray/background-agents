@@ -162,7 +162,7 @@ function createHandler() {
     artifact.metadata ? (JSON.parse(artifact.metadata) as Record<string, unknown>) : null
   );
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const enqueuePrompt = vi.fn(async () => ({
     messageId: "message-follow-up",
     status: "queued" as const,
@@ -170,7 +170,7 @@ function createHandler() {
   const messageService = { enqueuePrompt };
 
   const handler = createChildSessionsHandler({
-    repository: repository as unknown as MessageRepository,
+    messageRepository: repository as unknown as MessageRepository,
     eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository: artifactRepository as unknown as ArtifactRepository,

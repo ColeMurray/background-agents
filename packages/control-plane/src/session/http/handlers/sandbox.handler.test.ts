@@ -29,7 +29,7 @@ function createHandler() {
   const isManagedSecretsConfigured = vi.fn();
   const getScmCredentials = vi.fn();
   const broadcast = vi.fn();
-  const messenger = { broadcast, sendToSandbox: vi.fn(() => true) };
+  const messenger = { broadcast, sendToSandbox: vi.fn(async () => {}) };
   const generateId = vi.fn(() => "participant-1");
   const now = vi.fn(() => 1234);
 
@@ -42,7 +42,7 @@ function createHandler() {
   } as unknown as Logger;
 
   const sandboxHandler = createSandboxHandler({
-    repository: repository as unknown as MessageRepository,
+    messageRepository: repository as unknown as MessageRepository,
     eventRepository: repository as unknown as EventRepository,
     participantRepository: repository as unknown as ParticipantRepository,
     artifactRepository,

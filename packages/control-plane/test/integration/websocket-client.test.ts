@@ -97,36 +97,17 @@ describe("Client WebSocket (via SELF.fetch)", () => {
     ws.close();
   });
 
-  it("subscribe hydrates dashboard URL when provider object id exists", async () => {
-    const dashboardUrl =
-      "https://modal.com/apps/test-workspace/main/deployed/open-inspect?activeTab=sandboxes&sandboxId=provider-obj-123";
-    const cases = [
-      {
-        status: "connecting",
-        providerObjectId: "provider-obj-123",
-        expectedDashboardUrl: dashboardUrl,
-      },
-      {
-        status: "spawning",
-        providerObjectId: "provider-obj-123",
-        expectedDashboardUrl: dashboardUrl,
-      },
-      { status: "spawning", providerObjectId: null, expectedDashboardUrl: null },
-      { status: "stale", providerObjectId: "provider-obj-123", expectedDashboardUrl: dashboardUrl },
-      {
-        status: "stopped",
-        providerObjectId: "provider-obj-123",
-        expectedDashboardUrl: dashboardUrl,
-      },
-      {
-        status: "failed",
-        providerObjectId: "provider-obj-123",
-        expectedDashboardUrl: dashboardUrl,
-      },
-    ];
-
-    for (const [index, testCase] of cases.entries()) {
-      const name = `ws-client-dashboard-url-${testCase.status}-${testCase.providerObjectId ? "with-id" : "without-id"}-${Date.now()}-${index}`;
+  it.each([
+    { status: "connecting", providerObjectId: "provider-obj-123" },
+    { status: "spawning", providerObjectId: "provider-obj-123" },
+    { status: "spawning", providerObjectId: null },
+    { status: "stale", providerObjectId: "provider-obj-123" },
+    { status: "stopped", providerObjectId: "provider-obj-123" },
+    { status: "failed", providerObjectId: "provider-obj-123" },
+  ])(
+    "subscribe hydrates dashboard URL for $status sandbox with provider object id $providerObjectId",
+    async ({ status, providerObjectId }) => {
+      const name = `ws-client-dashboard-url-${status}-${providerObjectId ? "with-id" : "without-id"}-${Date.now()}`;
       const { stub } = await initNamedSession(name);
       // Wait for init's fire-and-forget warmSandbox to fail (no Modal in test env)
       // before forcing each status, otherwise it can race and overwrite the row.
@@ -136,20 +117,24 @@ describe("Client WebSocket (via SELF.fetch)", () => {
         `UPDATE sandbox
            SET status = ?, modal_object_id = ?
          WHERE id = (SELECT id FROM sandbox LIMIT 1)`,
-        testCase.status,
-        testCase.providerObjectId
+        status,
+        providerObjectId
       );
 
       const { ws, messages } = await openClientWs(name, { subscribe: true });
       const subscribed = messages!.find((m) => m.type === "subscribed") as Record<string, unknown>;
       const state = subscribed.session as Record<string, unknown>;
 
-      expect(state.sandboxStatus).toBe(testCase.status);
-      expect(state.sandboxDashboardUrl).toBe(testCase.expectedDashboardUrl);
+      expect(state.sandboxStatus).toBe(status);
+      expect(state.sandboxDashboardUrl).toBe(
+        providerObjectId
+          ? "https://modal.com/apps/test-workspace/main/deployed/open-inspect?activeTab=sandboxes&sandboxId=provider-obj-123"
+          : null
+      );
 
       ws.close();
     }
-  });
+  );
 
   it("subscribe with invalid token closes socket 4001", async () => {
     const name = `ws-client-badtoken-${Date.now()}`;

@@ -3,10 +3,12 @@ import { NextResponse } from "next/server";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 
-type ProxyMethod = "GET" | "PUT" | "DELETE";
+type ProxyMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 const METHOD_VERBS: Record<ProxyMethod, string> = {
   GET: "fetch",
+  POST: "create",
+  PATCH: "update",
   PUT: "update",
   DELETE: "delete",
 };
@@ -16,18 +18,22 @@ type RouteHandler<P> = (
   context: { params: Promise<P> }
 ) => Promise<NextResponse>;
 
-/**
- * The GET/PUT/DELETE handler trio for a BFF route that proxies an
- * settings scope (global, per-repo, per-environment) to the control plane.
- * Each scope's route file only supplies its control-plane path
- * (from already-decoded segments — encode them) and a label for error
- * messages; auth-first (session → 401 before any control-plane call), body
- * forwarding, and error translation live here once.
- */
+type ProxyHandlers<P> = Record<ProxyMethod, RouteHandler<P>>;
+
+async function proxyResponse(response: Response): Promise<NextResponse> {
+  const text = await response.text();
+  const init = {
+    status: response.status,
+    headers: { "Cache-Control": "private, no-store" },
+  };
+  return text ? NextResponse.json(JSON.parse(text), init) : new NextResponse(null, init);
+}
+
+/** Creates the requested BFF route handlers for an authenticated control-plane resource. */
 export function settingsProxy<P>(
-  buildPath: (params: P) => string,
+  buildPath: (params: P, request: NextRequest) => string,
   label: string
-): { GET: RouteHandler<P>; PUT: RouteHandler<P>; DELETE: RouteHandler<P> } {
+): ProxyHandlers<P> {
   const proxy = async (
     request: NextRequest,
     context: { params: Promise<P> },
@@ -41,17 +47,17 @@ export function settingsProxy<P>(
     const params = await context.params;
 
     try {
-      const response = await controlPlaneUserFetch(
-        buildPath(params),
-        method === "GET"
-          ? undefined
-          : {
-              method,
-              ...(method === "PUT" ? { body: JSON.stringify(await request.json()) } : {}),
-            }
-      );
-      const data = await response.json();
-      return NextResponse.json(data, { status: response.status });
+      // The revision ID is an opaque CAS token; forwarding it unchanged keeps
+      // stale web editors from replacing content and assignments.
+      const ifMatch = request.headers.get("if-match");
+      let init: RequestInit | undefined;
+      if (method !== "GET") {
+        init = { method };
+        if (method !== "DELETE") init.body = JSON.stringify(await request.json());
+        if (ifMatch) init.headers = { "If-Match": ifMatch };
+      }
+      const response = await controlPlaneUserFetch(buildPath(params, request), init);
+      return proxyResponse(response);
     } catch (error) {
       console.error(`Failed to ${METHOD_VERBS[method]} ${label}:`, error);
       return NextResponse.json(
@@ -61,9 +67,16 @@ export function settingsProxy<P>(
     }
   };
 
+  const handler =
+    (method: ProxyMethod): RouteHandler<P> =>
+    (request, context) =>
+      proxy(request, context, method);
+
   return {
-    GET: (request, context) => proxy(request, context, "GET"),
-    PUT: (request, context) => proxy(request, context, "PUT"),
-    DELETE: (request, context) => proxy(request, context, "DELETE"),
+    GET: handler("GET"),
+    POST: handler("POST"),
+    PATCH: handler("PATCH"),
+    PUT: handler("PUT"),
+    DELETE: handler("DELETE"),
   };
 }
