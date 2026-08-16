@@ -34,7 +34,7 @@ export function usePromptInput(
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const sessionAttachments = useSessionAttachments();
-  const hasAttachments = sessionAttachments.hasAttachments;
+  const hasDraftAttachments = sessionAttachments.hasAttachments;
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
@@ -165,11 +165,11 @@ export function usePromptInput(
       restoreQueuedPrompt({
         content,
         currentPrompt: promptRef.current,
-        hasAttachments: hasAttachments(),
+        hasAttachments: hasDraftAttachments(),
         setPrompt,
         input: inputRef.current,
       }),
-    [hasAttachments, setPrompt]
+    [hasDraftAttachments, setPrompt]
   );
 
   return {

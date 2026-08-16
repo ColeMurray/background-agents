@@ -31,10 +31,6 @@ export function PromptSkillSuggestionPanel({
 }: PromptSkillSuggestionPanelProps) {
   return (
     <div
-      id={id}
-      role="listbox"
-      aria-label="Managed skills"
-      aria-busy={source.status === "loading"}
       data-testid="prompt-skill-suggestions"
       className="absolute bottom-full left-0 right-0 z-50 mb-3 overflow-hidden rounded-xl border border-border bg-background p-2 shadow-2xl"
     >
@@ -52,7 +48,14 @@ export function PromptSkillSuggestionPanel({
                 : ""}
         </span>
       </div>
-      <div ref={listRef} className="max-h-[min(22rem,50vh)] overflow-y-auto">
+      <div
+        ref={listRef}
+        id={id}
+        role="listbox"
+        aria-label="Managed skills"
+        aria-busy={source.status === "loading"}
+        className="max-h-[min(22rem,50vh)] overflow-y-auto"
+      >
         {source.status === "loading" ? (
           <div className="flex items-center gap-3 rounded-lg px-3 py-4 text-sm text-muted-foreground">
             <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
@@ -69,6 +72,7 @@ export function PromptSkillSuggestionPanel({
               id={optionId(skill.skillId)}
               type="button"
               role="option"
+              tabIndex={-1}
               aria-selected={skill.skillId === activeSkillId}
               data-skill-id={skill.skillId}
               onPointerMove={() => onActivate(skill.skillId)}

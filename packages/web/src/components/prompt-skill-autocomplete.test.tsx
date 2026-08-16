@@ -60,6 +60,8 @@ describe("PromptSkillTextarea", () => {
     await user.type(input, "$re");
     expect(screen.getByRole("listbox", { name: "Managed skills" })).toBeInTheDocument();
     expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(screen.getAllByRole("option")[0]).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByTestId("prompt-skill-suggestions")).not.toHaveAttribute("role");
     expect(input).toHaveAttribute("aria-autocomplete", "list");
     expect(input).toHaveAttribute("aria-expanded", "true");
 
