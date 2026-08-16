@@ -94,7 +94,9 @@ describe("MCP Servers API", () => {
 
     it.each([
       ["non-string URL", { url: 42 }],
+      ["malformed URL", { url: "not a url" }],
       ["non-string environment value", { env: { DEBUG: true } }],
+      ["environment on a remote server", { env: { TOKEN: "secret" } }],
       ["non-object headers", { headers: ["Authorization"] }],
       ["non-boolean enabled", { enabled: "yes" }],
       ["unknown fields", { unexpected: true }],
@@ -106,6 +108,20 @@ describe("MCP Servers API", () => {
           type: "remote",
           url: "https://test.example.com",
           ...invalidField,
+        }),
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 400 for headers on a local server", async () => {
+      const response = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({
+          name: "invalid-local-headers",
+          type: "local",
+          command: ["npx", "x"],
+          headers: { Authorization: "secret" },
         }),
       });
 
@@ -274,7 +290,9 @@ describe("MCP Servers API", () => {
     it.each([
       ["invalid type", { type: "stdio" }],
       ["non-string URL", { url: 42 }],
+      ["malformed URL", { url: "not a url" }],
       ["non-object environment", { env: ["DEBUG=1"] }],
+      ["environment on a remote server", { env: { DEBUG: "1" } }],
       ["non-string header value", { headers: { Authorization: 123 } }],
       ["non-boolean enabled", { enabled: 1 }],
       ["unknown fields", { id: "replacement" }],
@@ -292,6 +310,21 @@ describe("MCP Servers API", () => {
       const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
         method: "PUT",
         body: JSON.stringify(patch),
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it("returns 400 for headers on an existing local server", async () => {
+      const createRes = await serviceFetch("https://test.local/mcp-servers", {
+        method: "POST",
+        body: JSON.stringify({ name: "local-update", type: "local", command: ["npx", "x"] }),
+      });
+      const created = await createRes.json<McpServerMetadata>();
+
+      const response = await serviceFetch(`https://test.local/mcp-servers/${created.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ headers: { Authorization: "secret" } }),
       });
 
       expect(response.status).toBe(400);

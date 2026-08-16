@@ -1,8 +1,8 @@
 import type {
-  CreateMcpServerInput,
   McpServerConfig,
   McpServerMetadata,
-  UpdateMcpServerInput,
+  ValidatedCreateMcpServerInput,
+  ValidatedUpdateMcpServerInput,
 } from "@open-inspect/shared/types/integrations";
 import { encryptToken, decryptToken } from "../auth/crypto";
 import { createLogger } from "../logger";
@@ -152,7 +152,7 @@ export class McpServerStore {
     return row ? rowToMetadata(row) : null;
   }
 
-  async create(config: CreateMcpServerInput): Promise<McpServerMetadata> {
+  async create(config: ValidatedCreateMcpServerInput): Promise<McpServerMetadata> {
     const id = generateId();
     const now = Date.now();
 
@@ -177,8 +177,8 @@ export class McpServerStore {
           id,
           config.name,
           config.type,
-          config.command ? JSON.stringify(config.command) : null,
-          config.url ?? null,
+          config.type === "local" ? JSON.stringify(config.command) : null,
+          config.type === "remote" ? config.url : null,
           encryptedEnv,
           config.repoScopes?.length
             ? JSON.stringify(config.repoScopes.map((r) => r.toLowerCase()))
@@ -202,12 +202,23 @@ export class McpServerStore {
     return created;
   }
 
-  async update(id: string, patch: UpdateMcpServerInput): Promise<McpServerMetadata | null> {
+  async update(
+    id: string,
+    patch: ValidatedUpdateMcpServerInput
+  ): Promise<McpServerMetadata | null> {
     const row = await this.db
       .prepare("SELECT * FROM mcp_servers WHERE id = ?")
       .bind(id)
       .first<McpServerRow>();
     if (!row) return null;
+
+    const mergedType = patch.type ?? (row.type as "local" | "remote");
+    if (mergedType === "local" && (patch.url !== undefined || patch.headers !== undefined)) {
+      throw new McpServerValidationError("Local MCP servers do not support url or headers");
+    }
+    if (mergedType === "remote" && (patch.command !== undefined || patch.env !== undefined)) {
+      throw new McpServerValidationError("Remote MCP servers do not support command or env");
+    }
 
     const credentialsChanged =
       patch.env !== undefined || patch.headers !== undefined || patch.type !== undefined;
@@ -225,7 +236,6 @@ export class McpServerStore {
       encryptedEnv = row.env;
     }
 
-    const mergedType = patch.type ?? (row.type as "local" | "remote");
     const mergedCommand =
       patch.command !== undefined ? patch.command : safeJsonParseCommand(row.command);
     const mergedUrl = patch.url !== undefined ? patch.url : (row.url ?? undefined);

@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import type { ValidatedCreateMcpServerInput } from "@open-inspect/shared/types/integrations";
 import { McpServerStore, McpServerValidationError } from "./mcp-servers";
 
 // ─── Fake D1 helpers ────────────────────────────────────────────────────────
@@ -180,23 +181,34 @@ describe("McpServerStore", () => {
     it("throws McpServerValidationError for local server without command", async () => {
       const { db } = createFakeD1();
       const store = new McpServerStore(db);
-      await expect(store.create({ name: "test", type: "local", enabled: true })).rejects.toThrow(
-        McpServerValidationError
-      );
+      const invalid = {
+        name: "test",
+        type: "local",
+        enabled: true,
+      } as unknown as ValidatedCreateMcpServerInput;
+      await expect(store.create(invalid)).rejects.toThrow(McpServerValidationError);
     });
 
     it("throws McpServerValidationError for remote server without url", async () => {
       const { db } = createFakeD1({ firstResult: remoteRow });
       const store = new McpServerStore(db);
-      await expect(store.create({ name: "test", type: "remote", enabled: true })).rejects.toThrow(
-        McpServerValidationError
-      );
+      const invalid = {
+        name: "test",
+        type: "remote",
+        enabled: true,
+      } as unknown as ValidatedCreateMcpServerInput;
+      await expect(store.create(invalid)).rejects.toThrow(McpServerValidationError);
     });
 
     it("throws McpServerValidationError (not generic Error) so routes can return 400", async () => {
       const { db } = createFakeD1();
       const store = new McpServerStore(db);
-      const err = await store.create({ name: "x", type: "local", enabled: true }).catch((e) => e);
+      const invalid = {
+        name: "x",
+        type: "local",
+        enabled: true,
+      } as unknown as ValidatedCreateMcpServerInput;
+      const err = await store.create(invalid).catch((e) => e);
       expect(err).toBeInstanceOf(McpServerValidationError);
       expect(err).toBeInstanceOf(Error);
     });
