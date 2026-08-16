@@ -495,6 +495,91 @@ describe("SandboxLifecycleManager", () => {
       ).toBe(true);
     });
 
+    it.each(["spawn", "restore"] as const)(
+      "stops the prior provider sandbox before %s overwrites its handle",
+      async (kind) => {
+        const calls: string[] = [];
+        const sandbox = createMockSandbox({
+          status: kind === "spawn" ? "pending" : "stopped",
+          snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+          created_at: Date.now() - 60000,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        vi.mocked(storage.updateSandboxForSpawn).mockImplementation(() => {
+          calls.push("overwrite");
+        });
+        const stopSandbox = vi.fn(async () => {
+          calls.push("stop");
+          return { success: true };
+        });
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox,
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+
+        await manager.spawnSandbox();
+
+        expect(calls.slice(0, 2)).toEqual(["stop", "overwrite"]);
+        expect(stopSandbox).toHaveBeenCalledWith({
+          providerObjectId: "modal-obj-123",
+          sessionId: "test-session",
+          reason: "respawn",
+        });
+      }
+    );
+
+    it.each(["spawn", "restore"] as const)(
+      "continues %s when stopping the prior provider sandbox fails",
+      async (kind) => {
+        const sandbox = createMockSandbox({
+          status: kind === "spawn" ? "pending" : "stopped",
+          snapshot_image_id: kind === "restore" ? "img-abc123" : null,
+          created_at: Date.now() - 60000,
+        });
+        const storage = createMockStorage(createMockSession(), sandbox);
+        const provider = createMockProvider({
+          capabilities: { supportsExplicitStop: true },
+          stopSandbox: vi.fn(async () => {
+            throw new Error("provider unavailable");
+          }),
+        });
+        const manager = new SandboxLifecycleManager(
+          provider,
+          storage,
+          createMockBroadcaster(),
+          createMockWebSocketManager(false),
+          createMockAlarmScheduler(),
+          createMockIdGenerator(),
+          createTestConfig()
+        );
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        await manager.spawnSandbox();
+
+        expect(storage.updateSandboxForSpawn).toHaveBeenCalledOnce();
+        expect(
+          kind === "spawn" ? provider.createSandbox : provider.restoreFromSnapshot
+        ).toHaveBeenCalledOnce();
+        expect(storage.updateSandboxStatus).toHaveBeenCalledWith("connecting");
+        expect(parseStructuredLogs(warnSpy)).toContainEqual(
+          expect.objectContaining({
+            msg: "Provider stop failed before sandbox replacement",
+            error: "provider unavailable",
+          })
+        );
+        warnSpy.mockRestore();
+      }
+    );
+
     it("stores VNC access without publishing it before the sandbox is ready", async () => {
       const sandbox = createMockSandbox({ status: "pending", created_at: Date.now() - 60000 });
       const storage = createMockStorage(createMockSession({ vnc_enabled: 1 }), sandbox);

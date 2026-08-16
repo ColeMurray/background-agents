@@ -429,6 +429,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const hasRepository = sessionHasRepository(session);
       let expectedSandboxId = buildSandboxIdForSession(session, now);
 
+      await this.stopPriorProviderSandbox();
+
       // Store expected sandbox ID and auth token BEFORE calling provider
       this.storage.updateSandboxForSpawn({
         status: "spawning",
@@ -744,6 +746,8 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
       const sandboxAuthTokenHash = await hashToken(sandboxAuthToken);
       const expectedSandboxId = buildSandboxIdForSession(session, now);
 
+      await this.stopPriorProviderSandbox();
+
       // Store expected sandbox ID and auth token
       this.storage.updateSandboxForSpawn({
         status: "spawning",
@@ -1043,6 +1047,23 @@ export class SandboxLifecycleManager implements SandboxLifecycle {
    */
   private usesProviderManagedStop(): boolean {
     return this.canStopProviderSandbox() && !!this.provider.capabilities.supportsPersistentResume;
+  }
+
+  /**
+   * Stop a sandbox that is about to be replaced before its provider handle is cleared.
+   */
+  private async stopPriorProviderSandbox(): Promise<void> {
+    if (!this.canStopProviderSandbox()) {
+      return;
+    }
+
+    try {
+      await this.stopProviderSandbox("respawn");
+    } catch (error) {
+      this.log.warn("Provider stop failed before sandbox replacement", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
