@@ -10,6 +10,7 @@ import {
 import { generateId } from "../../auth/crypto";
 import type { Logger } from "../../logger";
 import type { SessionMessenger } from "../messenger";
+import { SandboxDeliveryUnavailableError } from "../connections";
 import type { SessionCoreRepository } from "../session-core-repository";
 import { repoIdentityEquals, type SessionRepositoryEntry } from "../repository-target";
 import {
@@ -160,8 +161,11 @@ export class SessionDiffService {
   async requestRefresh(): Promise<void> {
     try {
       await this.messenger.sendToSandbox({ type: "refresh_diff" });
-    } catch {
-      throw new SandboxNotConnectedError();
+    } catch (error) {
+      if (error instanceof SandboxDeliveryUnavailableError) {
+        throw new SandboxNotConnectedError();
+      }
+      throw error;
     }
   }
 

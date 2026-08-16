@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Logger } from "../../logger";
+import { SandboxDeliveryUnavailableError } from "../connections";
 import type { SessionMessenger } from "../messenger";
 import type { SessionCoreRepository } from "../session-core-repository";
 import type { SqlResult, SqlStorage } from "../sql-storage";
@@ -206,7 +207,10 @@ describe("SessionDiffService", () => {
     await service.requestRefresh();
     expect(messenger.sendToSandbox).toHaveBeenCalledWith({ type: "refresh_diff" });
 
-    vi.mocked(messenger.sendToSandbox).mockRejectedValue(new Error("disconnected"));
+    vi.mocked(messenger.sendToSandbox).mockRejectedValue(new SandboxDeliveryUnavailableError());
     await expect(service.requestRefresh()).rejects.toThrow(SandboxNotConnectedError);
+
+    vi.mocked(messenger.sendToSandbox).mockRejectedValue(new TypeError("adapter bug"));
+    await expect(service.requestRefresh()).rejects.toThrow(TypeError);
   });
 });

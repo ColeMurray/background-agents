@@ -26,6 +26,37 @@ export interface DisconnectReason {
   reason: string;
 }
 
+export class SandboxDeliveryUnavailableError extends Error {
+  constructor(message = "No sandbox connected") {
+    super(message);
+    this.name = "SandboxDeliveryUnavailableError";
+  }
+}
+
+/** Project one participant per identity from one or more browser connections. */
+export function projectConnectedParticipants(
+  connections: Iterable<ConnectedParticipant>
+): ConnectedParticipant[] {
+  const participants = new Map<string, ConnectedParticipant>();
+  for (const connection of connections) {
+    const existing = participants.get(connection.participantId);
+    if (!existing) {
+      participants.set(connection.participantId, {
+        participantId: connection.participantId,
+        userId: connection.userId,
+        name: connection.name,
+        avatar: connection.avatar,
+        status: connection.status,
+        lastSeen: connection.lastSeen,
+      });
+      continue;
+    }
+    if (connection.status === "active") existing.status = "active";
+    if (connection.lastSeen > existing.lastSeen) existing.lastSeen = connection.lastSeen;
+  }
+  return Array.from(participants.values());
+}
+
 /** Platform-neutral connection and fan-out boundary consumed by the session engine. */
 export interface SessionConnections {
   registerBrowser(input: BrowserConnection): Promise<void>;
@@ -59,7 +90,7 @@ export class InMemorySessionConnections implements SessionConnections {
   }
 
   sendToSandbox(message: SandboxCommand): Promise<void> {
-    if (!this.sandbox) return Promise.reject(new Error("No sandbox connected"));
+    if (!this.sandbox) return Promise.reject(new SandboxDeliveryUnavailableError());
     this.sandboxMessages.get(this.sandbox.connectionId)!.push(message);
     return Promise.resolve();
   }
@@ -78,16 +109,11 @@ export class InMemorySessionConnections implements SessionConnections {
   }
 
   listParticipants(): Promise<ConnectedParticipant[]> {
-    const participants = new Map<string, ConnectedParticipant>();
-    for (const { participant } of this.browsers.values()) {
-      const existing = participants.get(participant.participantId);
-      const isActive = existing?.status === "active" || participant.status === "active";
-      if (!existing || participant.lastSeen > existing.lastSeen) {
-        participants.set(participant.participantId, { ...participant });
-      }
-      if (isActive) participants.get(participant.participantId)!.status = "active";
-    }
-    return Promise.resolve(Array.from(participants.values()));
+    return Promise.resolve(
+      projectConnectedParticipants(
+        Array.from(this.browsers.values(), ({ participant }) => participant)
+      )
+    );
   }
 
   getBrowserMessages(connectionId: string): readonly ServerMessage[] {

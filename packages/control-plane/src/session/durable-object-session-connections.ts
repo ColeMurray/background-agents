@@ -6,6 +6,7 @@ import type {
   SandboxConnection,
   SessionConnections,
 } from "./connections";
+import { projectConnectedParticipants, SandboxDeliveryUnavailableError } from "./connections";
 import type { SandboxCommand } from "./types";
 import type { SessionWebSocketManager } from "./websocket-manager";
 
@@ -69,10 +70,10 @@ export class DurableObjectSessionConnections implements SessionConnections {
 
   sendToSandbox(message: SandboxCommand): Promise<void> {
     const ws = this.wsManager.getSandboxSocket();
-    if (!ws) return Promise.reject(new Error("No sandbox connected"));
+    if (!ws) return Promise.reject(new SandboxDeliveryUnavailableError());
     return this.wsManager.send(ws, message)
       ? Promise.resolve()
-      : Promise.reject(new Error("Failed to send message to sandbox"));
+      : Promise.reject(new SandboxDeliveryUnavailableError("Failed to send message to sandbox"));
   }
 
   broadcastToBrowsers(message: ServerMessage): Promise<void> {
@@ -88,35 +89,6 @@ export class DurableObjectSessionConnections implements SessionConnections {
   }
 
   listParticipants(): Promise<ConnectedParticipant[]> {
-    const participants = new Map<string, ConnectedParticipant>();
-    for (const client of this.wsManager.getAuthenticatedClients()) {
-      const participant: ConnectedParticipant = {
-        participantId: client.participantId,
-        userId: client.userId,
-        name: client.name,
-        avatar: client.avatar,
-        status: client.status,
-        lastSeen: client.lastSeen,
-      };
-      const existing = participants.get(client.participantId);
-      const isActive = existing?.status === "active" || participant.status === "active";
-      if (!existing || participant.lastSeen > existing.lastSeen) {
-        participants.set(client.participantId, participant);
-      }
-      if (isActive) participants.get(client.participantId)!.status = "active";
-    }
-
-    this.wsManager.forEachClientSocket("authenticated_only", (ws) => {
-      const mapping = this.wsManager.recoverClientMapping(ws);
-      if (!mapping || participants.has(mapping.participant_id)) return;
-      participants.set(mapping.participant_id, {
-        participantId: mapping.participant_id,
-        userId: mapping.canonical_user_id ?? mapping.user_id,
-        name: mapping.scm_name ?? mapping.auth_name ?? mapping.scm_login ?? mapping.user_id,
-        status: "active",
-        lastSeen: Date.now(),
-      });
-    });
-    return Promise.resolve(Array.from(participants.values()));
+    return Promise.resolve(projectConnectedParticipants(this.wsManager.getAuthenticatedClients()));
   }
 }
