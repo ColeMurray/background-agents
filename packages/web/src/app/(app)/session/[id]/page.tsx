@@ -51,7 +51,6 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
-import { restorePromptFocusIfUnclaimed } from "@/lib/session-prompt-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
 import {
@@ -801,7 +800,9 @@ function usePromptInput(
       setIsSubmitting(false);
       if (restoreFocusAfterSubmitRef.current) {
         restoreFocusAfterSubmitRef.current = false;
-        requestAnimationFrame(() => restorePromptFocusIfUnclaimed(inputRef.current));
+        requestAnimationFrame(() => {
+          if (document.activeElement === document.body) inputRef.current?.focus();
+        });
       }
     }
   };
