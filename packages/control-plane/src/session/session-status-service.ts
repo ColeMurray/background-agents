@@ -17,14 +17,14 @@ import type { SessionCoreRepository } from "./session-core-repository";
 import type { MessageRepository } from "./message-repository";
 import type { ArtifactRepository } from "./artifact-repository";
 import type { SessionMessenger } from "./messenger";
-import type { BackgroundTaskContext } from "../platform-ports";
+import type { BackgroundJobDispatcher } from "../platform-ports";
 
 /** Statuses that indicate a session is finished — metrics are synced to D1 on these transitions. */
 const TERMINAL_STATUSES: SessionStatus[] = ["completed", "failed", "cancelled"];
 
 export class SessionStatusService {
   constructor(
-    private readonly ctx: BackgroundTaskContext,
+    private readonly backgroundJobs: BackgroundJobDispatcher,
     private readonly log: Logger,
     private readonly repository: SessionCoreRepository,
     private readonly messageRepository: MessageRepository,
@@ -141,7 +141,7 @@ export class SessionStatusService {
     const parentDoId = this.parentSessions.idFromName(parentId);
     const parentStub = this.parentSessions.get(parentDoId);
 
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       parentStub
         .fetch(
           new Request(buildSessionInternalUrl(SessionInternalPaths.childSessionUpdate), {
@@ -217,7 +217,7 @@ export class SessionStatusService {
     const artifacts = this.artifactRepository.listArtifacts();
     const prCount = artifacts.filter((a) => a.type === "pr").length;
 
-    this.ctx.waitUntil(
+    this.backgroundJobs.submit(
       this.sessionIndex
         .updateMetrics(sessionId, {
           totalCost: session.total_cost ?? 0,

@@ -7,6 +7,11 @@ export interface BackgroundTaskContext {
   waitUntil(promise: Promise<unknown>): void;
 }
 
+/** Platform-neutral boundary for work that may outlive the current request or event. */
+export interface BackgroundJobDispatcher {
+  submit(job: Promise<unknown>): void;
+}
+
 // Keep platform compatibility checked at the boundary rather than widening every consumer.
 type _AssertExtends<A extends B, B> = A;
 type _FetcherSatisfiesFetchClient = _AssertExtends<Fetcher, FetchClient>;

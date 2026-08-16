@@ -69,7 +69,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
         };
 
   const waitUntil = vi.fn();
-  const ctx = { waitUntil };
+  const backgroundJobs = { submit: waitUntil };
 
   const parentFetch = vi.fn(async (_request: Request) => new Response(null, { status: 200 }));
   const parentStub = { fetch: parentFetch };
@@ -87,7 +87,7 @@ function harness(options: { session?: SessionRow | null; sessionIndex?: null } =
   };
 
   const service = new SessionStatusService(
-    ctx,
+    backgroundJobs,
     log as unknown as Logger,
     repository as unknown as SessionCoreRepository,
     repository as unknown as MessageRepository,
@@ -212,7 +212,7 @@ describe("SessionStatusService.transition", () => {
     expect(h.waitUntil).not.toHaveBeenCalled();
   });
 
-  it("notifies the parent session fire-and-forget via ctx.waitUntil", async () => {
+  it("submits the parent notification as a background job", async () => {
     const h = harness({
       session: createSession({ status: "active", parent_session_id: "parent-1" }),
     });

@@ -75,6 +75,7 @@ function createProcessor() {
   const updateLastActivity = vi.fn();
   const applySessionTitleUpdate = vi.fn((title: string) => ({ ok: true as const, title }));
   const waitUntil = vi.fn();
+  const backgroundJobs = { submit: waitUntil };
   const log = {
     debug: vi.fn(),
     info: vi.fn(),
@@ -84,7 +85,7 @@ function createProcessor() {
   };
 
   const processor = new SessionSandboxEventProcessor(
-    { waitUntil },
+    backgroundJobs,
     () => log,
     repository as unknown as SessionCoreRepository,
     repository as unknown as SandboxRepository,
