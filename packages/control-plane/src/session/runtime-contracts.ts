@@ -1,7 +1,7 @@
 export interface SessionRuntimeClient {
   participantId: string;
   userId: string;
-  lastFetchHistoryAt?: number;
+  lastFetchHistoryAtMs?: number;
 }
 
 export type SessionConnectionKind =

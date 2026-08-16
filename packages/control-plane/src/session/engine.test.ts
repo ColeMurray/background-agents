@@ -9,7 +9,7 @@ import { SessionSocketProtocol, type SessionSocketProtocolDeps } from "./socket-
 interface TestClient {
   participantId: string;
   userId: string;
-  lastFetchHistoryAt?: number;
+  lastFetchHistoryAtMs?: number;
 }
 
 function createHarness() {
@@ -234,8 +234,9 @@ describe("SessionEngine", () => {
     const { engine, protocolDeps, setNow } = createHarness();
     const cursor = { timestamp: 10, id: "event-1", sequence: 2 };
 
+    setNow(0);
     await engine.webSocketMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
-    setNow(1100);
+    setNow(100);
     await engine.webSocketMessage("client", JSON.stringify({ type: "fetch_history", cursor }));
 
     expect(protocolDeps.getHistoryPage).toHaveBeenCalledOnce();

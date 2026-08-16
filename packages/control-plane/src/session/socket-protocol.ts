@@ -150,8 +150,8 @@ export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClie
 
     const now = this.deps.now();
     if (
-      client.lastFetchHistoryAt &&
-      now - client.lastFetchHistoryAt < FETCH_HISTORY_MIN_INTERVAL_MS
+      client.lastFetchHistoryAtMs !== undefined &&
+      now - client.lastFetchHistoryAtMs < FETCH_HISTORY_MIN_INTERVAL_MS
     ) {
       this.deps.send(connection, {
         type: "error",
@@ -160,7 +160,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionRuntimeClie
       });
       return;
     }
-    client.lastFetchHistoryAt = now;
+    client.lastFetchHistoryAtMs = now;
 
     const page = this.deps.getHistoryPage({ cursor: data.cursor, limit: data.limit });
     this.deps.send(connection, { type: "history_page", ...page });
