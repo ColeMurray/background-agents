@@ -23,6 +23,9 @@ import type {
   GitPushSpec,
   GitPushAuthContext,
   CredentialHelperAuth,
+  ResolvedCommit,
+  RepositoryTree,
+  RepositoryTreeEntry,
 } from "../types";
 import { SourceControlProviderError, parseProviderResponse } from "../errors";
 import type { GitLabProviderConfig } from "./types";
@@ -33,6 +36,12 @@ const GITLAB_API_BASE = "https://gitlab.com/api/v4";
 
 /** Default per_page for paginated GitLab API requests (GitLab API maximum). */
 const PER_PAGE = 100;
+
+/**
+ * Pages of a recursive tree listing to follow before reporting truncation.
+ * Bounds the work one import can force; skill directories are far smaller.
+ */
+const MAX_TREE_PAGES = 20;
 
 /** Timeout for GitLab API requests in milliseconds. */
 const GITLAB_FETCH_TIMEOUT_MS = 15_000;
@@ -149,6 +158,32 @@ const gitlabBranchHeadSchema = z.object({
 
 /** Wire shape of list-branches results, limited to the branch name. */
 const gitlabBranchListSchema = z.array(z.object({ name: z.string() }));
+
+/** Wire shape of GET /projects/:id/repository/commits/:ref, limited to the SHA. */
+const gitlabCommitSchema = z.object({ id: z.string().min(1) });
+
+/** Wire shape of GET /projects/:id/repository/tree. */
+const gitlabTreeSchema = z.array(
+  z.object({
+    id: z.string(),
+    path: z.string(),
+    type: z.string(),
+    mode: z.string(),
+  })
+);
+
+/** Build a classified provider error from a non-OK GitLab response. */
+async function gitlabResponseError(
+  response: Response,
+  operation: string
+): Promise<SourceControlProviderError> {
+  const body = await response.text();
+  return SourceControlProviderError.fromFetchError(
+    `Failed to ${operation}: ${response.status} ${body}`,
+    new Error(body),
+    response.status
+  );
+}
 
 /** Parse a GitLab ISO-8601 timestamp into epoch ms; undefined when absent/invalid. */
 function parseProviderTimestamp(value: string | null | undefined): number | undefined {
@@ -566,6 +601,80 @@ export class GitLabSourceControlProvider implements SourceControlProvider {
       if (error instanceof SourceControlProviderError) throw error;
       throw SourceControlProviderError.fromFetchError(
         `Failed to resolve branch head: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  async resolveCommit(
+    config: GetRepositoryConfig & { ref: string }
+  ): Promise<ResolvedCommit | null> {
+    const projectPath = encodeProjectPath(config.owner, config.name);
+    const response = await this.patFetch(
+      `/projects/${projectPath}/repository/commits/${encodeURIComponent(config.ref)}`,
+      "resolve commit"
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) throw await gitlabResponseError(response, "resolve commit");
+    const data = await parseProviderResponse(
+      response,
+      gitlabCommitSchema,
+      "Failed to resolve commit"
+    );
+    return { sha: data.id };
+  }
+
+  async listTree(config: GetRepositoryConfig & { commitSha: string }): Promise<RepositoryTree> {
+    const projectPath = encodeProjectPath(config.owner, config.name);
+    const entries: RepositoryTreeEntry[] = [];
+    for (let page = 1; page <= MAX_TREE_PAGES; page++) {
+      const response = await this.patFetch(
+        `/projects/${projectPath}/repository/tree?ref=${encodeURIComponent(
+          config.commitSha
+        )}&recursive=true&per_page=${PER_PAGE}&page=${page}`,
+        "list repository tree"
+      );
+      if (!response.ok) throw await gitlabResponseError(response, "list repository tree");
+      const data = await parseProviderResponse(
+        response,
+        gitlabTreeSchema,
+        "Failed to list repository tree"
+      );
+      for (const entry of data) {
+        entries.push({
+          path: entry.path,
+          type: entry.type === "blob" ? "file" : entry.type === "tree" ? "directory" : "other",
+          blobId: entry.id,
+          sizeBytes: null,
+          executable: entry.mode === "100755",
+        });
+      }
+      if (response.headers.get("x-next-page")?.trim() === "" || data.length < PER_PAGE) {
+        return { entries, truncated: false };
+      }
+    }
+    return { entries, truncated: true };
+  }
+
+  async readBlob(config: GetRepositoryConfig & { blobId: string }): Promise<Uint8Array> {
+    const projectPath = encodeProjectPath(config.owner, config.name);
+    const response = await this.patFetch(
+      `/projects/${projectPath}/repository/blobs/${encodeURIComponent(config.blobId)}/raw`,
+      "read blob"
+    );
+    if (!response.ok) throw await gitlabResponseError(response, "read blob");
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /** PAT-authenticated GitLab API request with transport failures classified. */
+  private async patFetch(path: string, operation: string): Promise<Response> {
+    try {
+      return await fetchWithTimeout(`${GITLAB_API_BASE}${path}`, {
+        headers: this.headers(this.accessToken),
+      });
+    } catch (error) {
+      throw SourceControlProviderError.fromFetchError(
+        `Failed to ${operation}: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

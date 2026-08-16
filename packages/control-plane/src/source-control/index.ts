@@ -20,6 +20,9 @@ export type {
   CreatePullRequestResult,
   PullRequestSnapshot,
   RepositoryAccessResult,
+  ResolvedCommit,
+  RepositoryTree,
+  RepositoryTreeEntry,
 } from "./types";
 
 // Errors

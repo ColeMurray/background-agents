@@ -3,6 +3,8 @@ import { NextRequest } from "next/server";
 import { controlPlaneUserFetch } from "@/lib/control-plane";
 import { getServerAuthSession } from "@/lib/server-auth-session";
 import { DELETE, PUT } from "./[id]/route";
+import { POST as REIMPORT } from "./[id]/reimport/route";
+import { POST as IMPORT_PREVIEW } from "./import/preview/route";
 
 vi.mock("@/lib/control-plane", () => ({ controlPlaneUserFetch: vi.fn() }));
 vi.mock("@/lib/server-auth-session", () => ({ getServerAuthSession: vi.fn() }));
@@ -43,6 +45,45 @@ describe("managed skills BFF routes", () => {
     expect(response.status).toBe(200);
     expect(controlPlaneUserFetch).toHaveBeenCalledWith("/skills/skill%2Fone", {
       method: "PUT",
+      body: JSON.stringify(body),
+      headers: { "If-Match": "revision-3" },
+    });
+  });
+
+  it("rejects unauthenticated import previews", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue(null);
+    const request = new NextRequest("http://localhost/api/skills/import/preview", {
+      method: "POST",
+      body: JSON.stringify({ source: { repository: { repoOwner: "acme", repoName: "skills" } } }),
+    });
+
+    const response = await IMPORT_PREVIEW(request, { params: Promise.resolve({}) });
+
+    expect(response.status).toBe(401);
+    expect(controlPlaneUserFetch).not.toHaveBeenCalled();
+  });
+
+  it("forwards a re-import with its revision precondition", async () => {
+    vi.mocked(getServerAuthSession).mockResolvedValue({ user: { id: "user-1" } } as never);
+    vi.mocked(controlPlaneUserFetch).mockResolvedValue(
+      Response.json({ skill: { id: "skill-1" }, revisionCreated: true }, { status: 200 })
+    );
+    const body = {
+      ref: "main",
+      expectedCommitSha: "a".repeat(40),
+      expectedSourceSha256: "b".repeat(64),
+    };
+    const request = new NextRequest("http://localhost/api/skills/skill-1/reimport", {
+      method: "POST",
+      headers: { "If-Match": "revision-3" },
+      body: JSON.stringify(body),
+    });
+
+    const response = await REIMPORT(request, { params: Promise.resolve({ id: "skill-1" }) });
+
+    expect(response.status).toBe(200);
+    expect(controlPlaneUserFetch).toHaveBeenCalledWith("/skills/skill-1/reimport", {
+      method: "POST",
       body: JSON.stringify(body),
       headers: { "If-Match": "revision-3" },
     });

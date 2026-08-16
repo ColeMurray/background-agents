@@ -5,16 +5,22 @@ import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
 import {
   listSkillProfilesResponseSchema,
   listSkillsResponseSchema,
+  reimportSkillResponseSchema,
+  skillImportPreviewResponseSchema,
   skillProfileResponseSchema,
   skillResolutionPreviewResponseSchema,
   skillResponseSchema,
 } from "@open-inspect/shared/types/skills";
 import type {
   CreateSkillInput,
+  ImportSkillInput,
+  ReimportSkillInput,
   ReplaceSkillContentAndAssignmentsInput,
   SetSkillEnabledInput,
   Skill,
   SkillContentInput,
+  SkillImportPreviewInput,
+  SkillImportPreviewResponse,
   SkillProfile,
 } from "@open-inspect/shared/types/skills";
 import type { skillResolutionPreviewInputSchema } from "@open-inspect/shared/types/skills";
@@ -133,6 +139,46 @@ export async function previewSkill(
   return apiRequest(`${SKILLS_KEY}/preview`, skillContentPreviewSchema, {
     method: "POST",
     body: JSON.stringify({ name, content }),
+  });
+}
+
+export async function previewSkillImport(
+  input: SkillImportPreviewInput
+): Promise<SkillImportPreviewResponse> {
+  return apiRequest(`${SKILLS_KEY}/import/preview`, skillImportPreviewResponseSchema, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function importSkill(input: ImportSkillInput): Promise<Skill> {
+  return (
+    await apiRequest(`${SKILLS_KEY}/import`, skillResponseSchema, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  ).skill;
+}
+
+export async function previewSkillReimport(
+  id: string,
+  ref: string | null
+): Promise<SkillImportPreviewResponse> {
+  return apiRequest(`${SKILLS_KEY}/${id}/reimport/preview`, skillImportPreviewResponseSchema, {
+    method: "POST",
+    body: JSON.stringify({ ref }),
+  });
+}
+
+export async function reimportSkill(
+  id: string,
+  revisionId: string,
+  input: ReimportSkillInput
+): Promise<{ skill: Skill; revisionCreated: boolean }> {
+  return apiRequest(`${SKILLS_KEY}/${id}/reimport`, reimportSkillResponseSchema, {
+    method: "POST",
+    headers: { "If-Match": revisionId },
+    body: JSON.stringify(input),
   });
 }
 

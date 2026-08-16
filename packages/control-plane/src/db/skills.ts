@@ -8,6 +8,8 @@ import {
   type SkillAssignmentInput,
   type SkillContentInput,
   type SkillFile,
+  type SkillImportProvenance,
+  type SkillImportSource,
   type SkillSummary,
 } from "@open-inspect/shared/types/skills";
 import { generateId } from "../auth/crypto";
@@ -65,6 +67,20 @@ interface FileRow {
   executable: number;
 }
 
+interface ImportSourceRow {
+  revision_id: string;
+  skill_id: string;
+  provider: string;
+  repo_owner: string;
+  repo_name: string;
+  requested_ref: string | null;
+  resolved_ref: string;
+  commit_sha: string;
+  subdirectory: string | null;
+  source_sha256: string;
+  imported_at: number;
+}
+
 export class SkillConflictError extends Error {}
 export class SkillValidationError extends Error {}
 interface ApplicableSkill extends SkillSummary {
@@ -84,8 +100,14 @@ export class SkillStore {
       )
       .all<SkillRow>();
     const rows = result.results ?? [];
-    const assignments = await this.assignmentsForSkills(rows.map((row) => row.id));
-    return Promise.all(rows.map((row) => this.toSummary(row, assignments.get(row.id) ?? [])));
+    const ids = rows.map((row) => row.id);
+    const [assignments, sources] = await Promise.all([
+      this.assignmentsForSkills(ids),
+      this.sourcesForSkills(ids),
+    ]);
+    return Promise.all(
+      rows.map((row) => this.toSummary(row, assignments.get(row.id) ?? [], sources.get(row.id)))
+    );
   }
 
   async get(id: string): Promise<Skill | null> {
@@ -111,7 +133,15 @@ export class SkillStore {
     };
   }
 
-  async create(input: CreateSkillInput, actorUserId: string): Promise<Skill> {
+  /**
+   * @param source - Provenance to record when the content came from a
+   *   repository import; omitted for editor-authored skills.
+   */
+  async create(
+    input: CreateSkillInput,
+    actorUserId: string,
+    source?: SkillImportSource
+  ): Promise<Skill> {
     if (RESERVED_SKILL_NAMES.has(input.name)) {
       throw new SkillConflictError("Skill name is reserved by the sandbox runtime");
     }
@@ -141,6 +171,7 @@ export class SkillStore {
           .prepare("UPDATE skills SET current_revision_id = ? WHERE id = ?")
           .bind(revisionId, id),
         ...this.assignmentInserts(id, input.assignments, actorUserId, now),
+        ...(source ? [this.importSourceInsert(revisionId, id, source, now)] : []),
         this.bumpGeneration(),
       ]);
     } catch (error) {
@@ -261,6 +292,71 @@ export class SkillStore {
     return this.get(id);
   }
 
+  /**
+   * Add a revision carrying re-imported content, leaving assignments alone.
+   *
+   * Byte-identical content is a no-op: no revision, no new provenance row, and
+   * `revisionCreated` false. The recorded source keeps pointing at the commit
+   * that produced the stored bytes, which is still where they came from.
+   */
+  async applyImportedRevision(
+    id: string,
+    content: SkillContentInput,
+    source: SkillImportSource,
+    actorUserId: string,
+    expectedRevisionId: string
+  ): Promise<{ skill: Skill; revisionCreated: boolean } | null> {
+    const current = await this.get(id);
+    if (!current) return null;
+    if (expectedRevisionId !== current.currentRevisionId) {
+      throw new SkillConflictError(`Current revision is ${current.currentRevisionId}`);
+    }
+    const revision = await buildValidatedSkillRevision(current.name, content);
+    if (revision.revisionSha256 === current.revisionSha256) {
+      return { skill: current, revisionCreated: false };
+    }
+    const now = Date.now();
+    const revisionId = `skillrev_${generateId()}`;
+    const statements: SqlStatement[] = [
+      this.revisionInsert(
+        revisionId,
+        id,
+        current.revisionNumber + 1,
+        content,
+        revision,
+        actorUserId,
+        now,
+        expectedRevisionId
+      ),
+      ...this.fileInserts(revisionId, revision.files),
+    ];
+    const updateResultIndex = statements.length;
+    statements.push(
+      this.db
+        .prepare(
+          `UPDATE skills SET current_revision_id = ?, updated_by = ?, updated_at = ?
+           WHERE id = ? AND current_revision_id = ? AND deleted_at IS NULL`
+        )
+        .bind(revisionId, actorUserId, now, id, expectedRevisionId),
+      this.importSourceInsert(revisionId, id, source, now),
+      this.bumpGeneration(id, revisionId)
+    );
+    let results: Awaited<ReturnType<SqlDatabase["batch"]>>;
+    try {
+      results = await this.db.batch(statements);
+    } catch (error) {
+      const latest = await this.get(id);
+      if (latest && latest.currentRevisionId !== expectedRevisionId) {
+        throw new SkillConflictError("Skill changed concurrently");
+      }
+      throw error;
+    }
+    if ((results[updateResultIndex]?.meta.changes ?? 0) === 0) {
+      throw new SkillConflictError("Skill changed concurrently");
+    }
+    return { skill: (await this.get(id))!, revisionCreated: true };
+  }
+
   async delete(id: string, actorUserId: string): Promise<boolean> {
     const now = Date.now();
     const results = await this.db.batch([
@@ -273,6 +369,19 @@ export class SkillStore {
       this.bumpGeneration(),
     ]);
     return (results[0]?.meta.changes ?? 0) > 0;
+  }
+
+  /**
+   * Whether a canonical name can still be claimed. Matches what `create`
+   * enforces: reserved names and names held by deleted skills stay taken.
+   */
+  async nameAvailable(name: string): Promise<boolean> {
+    if (RESERVED_SKILL_NAMES.has(name)) return false;
+    const existing = await this.db
+      .prepare("SELECT id FROM skills WHERE lower(name) = lower(?)")
+      .bind(name)
+      .first<{ id: string }>();
+    return existing === null;
   }
 
   /**
@@ -389,7 +498,11 @@ export class SkillStore {
             LEFT JOIN users revision_author ON revision_author.id = r.created_by`;
   }
 
-  private async toSummary(row: SkillRow, assignments?: SkillAssignment[]): Promise<SkillSummary> {
+  private async toSummary(
+    row: SkillRow,
+    assignments?: SkillAssignment[],
+    source?: SkillImportProvenance | null
+  ): Promise<SkillSummary> {
     return {
       id: row.id,
       name: row.name,
@@ -403,11 +516,88 @@ export class SkillStore {
       lastEditorDisplayName: row.last_editor_display_name,
       revisionAuthorDisplayName: row.revision_author_display_name,
       assignments: assignments ?? (await this.assignmentsForSkill(row.id)),
+      source: source === undefined ? await this.latestImportSource(row.id) : source,
       createdBy: row.created_by,
       updatedBy: row.updated_by,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  /**
+   * The skill's most recent import, or null when it was authored in the editor.
+   * Reported from the newest import rather than the current revision so a hand
+   * edit after an import does not erase where the skill came from.
+   */
+  async latestImportSource(skillId: string): Promise<SkillImportProvenance | null> {
+    return (await this.sourcesForSkills([skillId])).get(skillId) ?? null;
+  }
+
+  private async sourcesForSkills(
+    skillIds: string[]
+  ): Promise<Map<string, SkillImportProvenance | null>> {
+    const sources = new Map<string, SkillImportProvenance | null>();
+    for (const skillId of skillIds) sources.set(skillId, null);
+    if (skillIds.length === 0) return sources;
+    const placeholders = skillIds.map(() => "?").join(", ");
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM (
+           SELECT *, ROW_NUMBER() OVER (
+             PARTITION BY skill_id ORDER BY imported_at DESC, rowid DESC
+           ) AS recency
+           FROM skill_import_sources WHERE skill_id IN (${placeholders})
+         ) WHERE recency = 1`
+      )
+      .bind(...skillIds)
+      .all<ImportSourceRow>();
+    for (const row of result.results ?? []) {
+      sources.set(row.skill_id, {
+        provider: row.provider,
+        repoOwner: row.repo_owner,
+        repoName: row.repo_name,
+        requestedRef: row.requested_ref,
+        resolvedRef: row.resolved_ref,
+        commitSha: row.commit_sha,
+        subdirectory: row.subdirectory,
+        sourceSha256: row.source_sha256,
+        importedAt: row.imported_at,
+        revisionId: row.revision_id,
+      });
+    }
+    return sources;
+  }
+
+  /** Record where a revision's content was imported from. */
+  private importSourceInsert(
+    revisionId: string,
+    skillId: string,
+    source: SkillImportSource,
+    now: number
+  ): SqlStatement {
+    return this.db
+      .prepare(
+        `INSERT INTO skill_import_sources
+          (revision_id, skill_id, provider, repo_owner, repo_name, requested_ref,
+           resolved_ref, commit_sha, subdirectory, source_sha256, imported_at)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM skill_revisions WHERE id = ? AND skill_id = ?)`
+      )
+      .bind(
+        revisionId,
+        skillId,
+        source.provider,
+        source.repoOwner,
+        source.repoName,
+        source.requestedRef,
+        source.resolvedRef,
+        source.commitSha,
+        source.subdirectory,
+        source.sourceSha256,
+        now,
+        revisionId,
+        skillId
+      );
   }
 
   private async assignmentsForSkill(skillId: string): Promise<SkillAssignment[]> {
