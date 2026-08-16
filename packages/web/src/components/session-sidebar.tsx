@@ -23,7 +23,7 @@ import { useEnvironments } from "@/hooks/use-environments";
 import { SessionWithChildren } from "@/components/session-with-children";
 import { UserMenu } from "@/components/sidebar-user-menu";
 
-export type { Session as SessionItem } from "@open-inspect/shared/types/sessions";
+export type { SessionItem } from "@/hooks/use-sidebar-sessions";
 
 export { MOBILE_LONG_PRESS_MS } from "@/components/session-list-item";
 
@@ -86,6 +86,7 @@ export function SessionSidebar({
     childrenMap,
     loading,
     sessionsError,
+    refreshSnapshot,
     sectionPagination,
     sessionCreatorFilter,
     setSessionCreatorFilter,
@@ -283,13 +284,19 @@ export function SessionSidebar({
           </div>
         ) : (
           <>
-            {needsAttention.length === 0 &&
-            running.length === 0 &&
-            recent.length === 0 &&
-            !hasSessionListError ? (
-              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                {emptyMessage}
-              </div>
+            {needsAttention.length === 0 && running.length === 0 && recent.length === 0 ? (
+              hasSessionListError ? (
+                <div className="flex items-center justify-between gap-2 px-4 py-8 text-sm text-destructive">
+                  <span>Unable to load sessions</span>
+                  <Button variant="ghost" size="sm" onClick={() => void refreshSnapshot()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : (
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                  {emptyMessage}
+                </div>
+              )
             ) : (
               <>
                 {renderSessionGroup(

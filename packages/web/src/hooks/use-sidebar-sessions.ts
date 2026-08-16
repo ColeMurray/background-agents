@@ -6,6 +6,7 @@ import { useAuthSession } from "@/lib/auth-session";
 import useSWR, { mutate, useSWRConfig } from "swr";
 import type {
   SessionInboxCategory,
+  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
   SessionListItem,
@@ -15,7 +16,11 @@ import {
   buildSessionInboxSnapshotKey,
   isSessionInboxKey,
 } from "@/lib/session-inbox-api";
-import { markLatestMessageRead, reconcileSessionReadState } from "@/lib/session-read-state";
+import {
+  markLatestMessageRead,
+  reconcileSessionReadState,
+  readStateFromResult,
+} from "@/lib/session-read-state";
 
 const VISIBLE_INBOX_POLL_MS = 30_000;
 export const SESSION_CREATOR_FILTER_STORAGE_KEY = "open-inspect-sidebar-session-creator-filter";
@@ -126,6 +131,28 @@ function useCategoryPagination(
     [error, paginationRequest, refreshSnapshot, retryPage]
   );
 
+  // Archive and read-state mutations revalidate the head snapshot, but pages
+  // loaded through `Load more` live only in this retained state — reconcile
+  // them in place or they keep rendering the pre-mutation rows.
+  const updateRetainedItems = useCallback(
+    (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
+      setAdditionalPagesState((state) => ({
+        ...state,
+        pages: state.pages.map(({ page, sequence }) => ({
+          sequence,
+          page: {
+            ...page,
+            items: page.items.flatMap((item) => {
+              const updated = update(item);
+              return updated ? [updated] : [];
+            }),
+          },
+        })),
+      }));
+    },
+    []
+  );
+
   return {
     firstPageItems: firstPage?.items ?? [],
     additionalPages,
@@ -135,6 +162,7 @@ function useCategoryPagination(
     loadingMore,
     loadMore,
     retry,
+    updateRetainedItems,
   };
 }
 
@@ -297,22 +325,63 @@ export function useSidebarSessions() {
     return result;
   }, [inboxItems]);
 
+  const updateAttentionRetained = attention.updateRetainedItems;
+  const updateInProgressRetained = inProgress.updateRetainedItems;
+  const updateFinishedRetained = finished.updateRetainedItems;
+  const updateAllRetainedItems = useCallback(
+    (update: (item: SessionInboxItem) => SessionInboxItem | null) => {
+      updateAttentionRetained(update);
+      updateInProgressRetained(update);
+      updateFinishedRetained(update);
+    },
+    [updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
+  );
+
   const handleSessionArchived = useCallback(
-    async (_sessionId: string) => {
+    async (sessionId: string) => {
+      updateAllRetainedItems((item) =>
+        item.rootSession.id === sessionId
+          ? null
+          : {
+              ...item,
+              descendantSessions: item.descendantSessions.filter(
+                (session) => session.id !== sessionId
+              ),
+            }
+      );
       void refreshInbox().catch((error) => {
         console.error("Failed to refresh session inbox after archive", error);
       });
     },
-    [refreshInbox]
+    [refreshInbox, updateAllRetainedItems]
   );
 
   const handleMarkLatestMessageRead = useCallback(
     async (sessionId: string) => {
       const result = await markLatestMessageRead(sessionId);
       await reconcileSessionReadState(result);
+      const readState = readStateFromResult(result);
+      const applyReadState = (item: SessionInboxItem): SessionInboxItem => ({
+        rootSession:
+          item.rootSession.id === sessionId ? { ...item.rootSession, readState } : item.rootSession,
+        descendantSessions: item.descendantSessions.map((session) =>
+          session.id === sessionId ? { ...session, readState } : session
+        ),
+      });
+      // Attention membership is unread-driven, so a hierarchy whose last unread
+      // session was just read no longer belongs in a retained attention page.
+      updateAttentionRetained((item) => {
+        const updated = applyReadState(item);
+        return updated.rootSession.readState.unread ||
+          updated.descendantSessions.some((session) => session.readState.unread)
+          ? updated
+          : null;
+      });
+      updateInProgressRetained(applyReadState);
+      updateFinishedRetained(applyReadState);
       await refreshInbox();
     },
-    [refreshInbox]
+    [refreshInbox, updateAttentionRetained, updateFinishedRetained, updateInProgressRetained]
   );
 
   return {
@@ -322,6 +391,7 @@ export function useSidebarSessions() {
     childrenMap,
     loading: sessionCreatorFilter === null || isLoading,
     sessionsError: snapshotError ?? categoryResults.find((result) => result.error)?.error,
+    refreshSnapshot,
     sectionPagination: {
       needsAttention: attention,
       running: inProgress,

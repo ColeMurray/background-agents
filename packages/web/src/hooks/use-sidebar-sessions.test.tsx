@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SWRConfig } from "swr";
 import type { ReactNode } from "react";
 import type {
+  SessionInboxItem,
   SessionInboxPage,
   SessionInboxSnapshot,
 } from "@open-inspect/shared/types/session-inbox";
@@ -13,6 +14,20 @@ import { useSidebarSessions } from "./use-sidebar-sessions";
 vi.mock("@/lib/auth-session", () => ({
   useAuthSession: () => ({ data: { user: { id: "github:123", name: "Test User" } } }),
 }));
+
+vi.mock("@/lib/session-read-state", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    markLatestMessageRead: async (sessionId: string) => ({
+      sessionId,
+      outcome: "marked_read" as const,
+      unread: false,
+      latestMessageId: "msg-1",
+    }),
+    reconcileSessionReadState: async () => undefined,
+  };
+});
 
 function item(id: string) {
   return {
@@ -31,6 +46,14 @@ function item(id: string) {
       readState: { latestMessageId: null, unread: false as const },
     },
     descendantSessions: [],
+  };
+}
+
+function unreadItem(id: string): SessionInboxItem {
+  const base = item(id);
+  return {
+    ...base,
+    rootSession: { ...base.rootSession, readState: { latestMessageId: "msg-0", unread: true } },
   };
 }
 
@@ -81,6 +104,9 @@ function deferred<T>() {
 }
 
 afterEach(() => {
+  // Vitest globals are disabled, so Testing Library never registers its own
+  // afterEach cleanup — unmount explicitly or the 30s poll leaks across tests.
+  cleanup();
   localStorage.clear();
   setVisibility("visible");
   vi.restoreAllMocks();
@@ -374,5 +400,45 @@ describe("useSidebarSessions", () => {
       ])
     );
     expect(paginationRequests).toBe(2);
+  });
+
+  it("removes an archived session from retained pages", async () => {
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? page(["tail-a", "tail-b"])
+        : snapshot({ needs_attention: page(["attention"], "next") })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(3));
+
+    await act(async () => result.current.handleSessionArchived("tail-a"));
+
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-b"]);
+  });
+
+  it("reconciles read state on retained pages when a session is marked read", async () => {
+    const fetcher = vi.fn(async (key: string) =>
+      key.includes("category=")
+        ? {
+            items: [unreadItem("tail-unread"), unreadItem("tail-other")],
+            hasMore: false,
+            nextCursor: null,
+          }
+        : snapshot({ needs_attention: page(["attention"], "next") })
+    );
+    const { result } = renderHook(() => useSidebarSessions(), { wrapper: wrapper(fetcher) });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.sectionPagination.needsAttention.loadMore());
+    await waitFor(() => expect(result.current.needsAttention).toHaveLength(3));
+
+    await act(async () => result.current.handleMarkLatestMessageRead("tail-unread"));
+
+    // The freshly read hierarchy leaves the retained attention page; the still
+    // unread one stays with its read state intact.
+    expect(result.current.needsAttention.map(({ id }) => id)).toEqual(["attention", "tail-other"]);
+    const remainingTail = result.current.needsAttention.find(({ id }) => id === "tail-other");
+    expect(remainingTail?.readState.unread).toBe(true);
   });
 });

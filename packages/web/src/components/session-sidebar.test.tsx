@@ -65,13 +65,13 @@ beforeEach(() => {
   const child = session("child", "Checking tests", running.id);
   const recent = { ...session("recent", "Finished work"), status: "completed" as const };
   mockHook.mockReturnValue({
-    sessions: [attention, running, child, recent],
     needsAttention: [attention],
     running: [running],
     recent: [recent],
     childrenMap: new Map([[running.id, [child]]]),
     loading: false,
     sessionsError: undefined,
+    refreshSnapshot: vi.fn(async () => undefined),
     sectionPagination: {
       needsAttention: noPagination,
       running: noPagination,
@@ -141,5 +141,25 @@ describe("SessionSidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: "Running" })).toBeInTheDocument();
+  });
+
+  it("surfaces a retryable error when the initial snapshot fails", () => {
+    const value = mockHook();
+    const refreshSnapshot = vi.fn(async () => undefined);
+    mockHook.mockReturnValue({
+      ...value,
+      needsAttention: [],
+      running: [],
+      recent: [],
+      childrenMap: new Map(),
+      sessionsError: new Error("snapshot unavailable"),
+      refreshSnapshot,
+    });
+    render(<SessionSidebar />);
+
+    expect(screen.getByText("Unable to load sessions")).toBeInTheDocument();
+    expect(screen.queryByText("No sessions yet")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(refreshSnapshot).toHaveBeenCalledOnce();
   });
 });
