@@ -268,17 +268,6 @@ describe("session index routes", () => {
     expect(mockSessionIndexStore.list).not.toHaveBeenCalled();
   });
 
-  it("requires a human user for read-state mutations", async () => {
-    const response = await patchReadState(JSON.stringify({ action: "mark_latest_message_read" }), {
-      kind: "service",
-      service: "linear-bot",
-      actor: null,
-    });
-
-    expect(response.status).toBe(403);
-    expect(mockSessionIndexStore.updateReadState).not.toHaveBeenCalled();
-  });
-
   it("requires a session ID for read-state mutations", async () => {
     const { match } = getHandler("PATCH", "/sessions/session-1/read-state");
     const response = await patchReadState(

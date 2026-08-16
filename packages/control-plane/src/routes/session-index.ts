@@ -12,9 +12,10 @@ import {
   json,
   parseJsonBody,
   parsePattern,
-  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
   type RequestContext,
   type Route,
+  type UserRouteContext,
 } from "./shared";
 import type { Env } from "../types";
 import { createLogger } from "../logger";
@@ -103,11 +104,8 @@ async function handlePatchReadState(
   request: Request,
   _env: Env,
   match: RegExpMatchArray,
-  ctx: RequestContext
+  ctx: UserRouteContext
 ): Promise<Response> {
-  if (ctx.principal?.kind !== "user") {
-    return error("Human user authentication required", 403);
-  }
   const sessionId = match.groups?.id;
   if (!sessionId) return error("Session ID required");
 
@@ -159,7 +157,7 @@ export const sessionIndexRoutes: Route[] = [
     pattern: parsePattern("/sessions"),
     handler: handleListSessions,
   }),
-  defineRoute(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, {
+  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "PATCH",
     pattern: parsePattern("/sessions/:id/read-state"),
     handler: handlePatchReadState,

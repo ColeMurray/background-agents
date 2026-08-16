@@ -124,14 +124,14 @@ describe("retired browser-auth routes", () => {
 
 describe("managed skill browser authentication", () => {
   it.each([
-    ["GET", "/skills"],
-    ["POST", "/skills/preview"],
-    ["GET", "/skills/skill_1"],
-    ["GET", "/skill-profiles"],
-    ["PATCH", "/skill-profiles/profile_1"],
-    ["GET", "/sessions/session_1/skills"],
-  ])("requires Better Auth user authentication for %s %s", (method, path) => {
-    expect(routeFor(method, path)?.authentication.kind).toBe("user-or-service");
+    ["GET", "/skills", "user-or-service"],
+    ["POST", "/skills/preview", "user-or-service"],
+    ["GET", "/skills/skill_1", "user-or-service"],
+    ["GET", "/skill-profiles", "user-or-service"],
+    ["PATCH", "/skill-profiles/profile_1", "user-or-service"],
+    ["GET", "/sessions/session_1/skills", "user"],
+  ])("owns the browser authentication class for %s %s", (method, path, expectedKind) => {
+    expect(routeFor(method, path)?.authentication.kind).toBe(expectedKind);
   });
 });
 

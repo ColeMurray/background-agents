@@ -47,7 +47,7 @@ describe("session runtime proxy routes", () => {
   it.each([
     ["snapshot", "/sessions/session-1", SessionInternalPaths.snapshot],
     ["sandbox access", "/sessions/session-1/sandbox-access", SessionInternalPaths.sandboxAccess],
-  ])("forwards %s for users and rejects service principals", async (_name, path, internalPath) => {
+  ])("forwards %s for users", async (_name, path, internalPath) => {
     const requests: Request[] = [];
     const fetch = vi.fn(async (request: Request) => {
       requests.push(request);
@@ -64,17 +64,6 @@ describe("session runtime proxy routes", () => {
 
     expect(response.status).toBe(200);
     expect(new URL(requests[0].url).pathname).toBe(internalPath);
-    const serviceCtx = createCtx();
-    serviceCtx.principal = { kind: "service", service: "slack-bot", actor: null };
-
-    const rejected = await handler(
-      new Request(`https://test.local${path}`),
-      createEnv(fetch),
-      match,
-      serviceCtx
-    );
-
-    expect(rejected.status).toBe(403);
     expect(fetch).toHaveBeenCalledOnce();
   });
 

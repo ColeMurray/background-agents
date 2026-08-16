@@ -1,25 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
-import { assertRouteTableComplete, enforceRoutePrincipal, handleRequest, routes } from "./router";
+import { enforceRoutePrincipal, handleRequest, routes } from "./router";
 import { TEST_BACKGROUND_TASK_CONTEXT } from "./router.test-support";
-import type { Route } from "./routes/shared";
 
 function routeFor(method: string, path: string) {
   return routes.find((route) => route.method === method && route.pattern.test(path));
 }
 
 describe("route policy table", () => {
-  it("has complete metadata and valid sandbox session bindings", () => {
-    expect(() => assertRouteTableComplete()).not.toThrow();
+  it("has complete metadata", () => {
     expect(routes.length).toBeGreaterThan(0);
-
-    const invalid = {
-      method: "GET",
-      pattern: /^\/sessions\/[^/]+\/invalid$/,
-      authentication: { kind: "sandbox" },
-      supportedScmProviders: ["github"],
-      handler: async () => new Response(),
-    } as Route;
-    expect(() => assertRouteTableComplete([invalid])).toThrow("does not bind sandbox session");
+    expect(
+      routes.every(
+        (route) =>
+          route.authentication &&
+          (route.supportedScmProviders === "all" || route.supportedScmProviders.length > 0)
+      )
+    ).toBe(true);
   });
 
   it.each([
@@ -48,9 +44,12 @@ describe("route policy table", () => {
     ["PUT", "/sessions/session-1/diff"],
     ["POST", "/sessions/session-1/diff/failure"],
   ])("allows user/service auth with sandbox fallback for %s %s", (method, path) => {
-    expect(routeFor(method, path)?.authentication).toEqual({
-      kind: "user-or-service-with-sandbox-fallback",
-    });
+    const route = routeFor(method, path);
+    const match = path.match(route!.pattern)!;
+    expect(route?.authentication.kind).toBe("user-or-service-with-sandbox-fallback");
+    if (route?.authentication.kind === "user-or-service-with-sandbox-fallback") {
+      expect(route.authentication.getSessionId(match)).toBe("session-1");
+    }
   });
 
   it.each([
@@ -61,9 +60,23 @@ describe("route policy table", () => {
     ["POST", "/sessions/session-1/xai-token-refresh"],
     ["GET", "/sessions/session-1/sandbox-skills"],
   ])("requires the bound sandbox for %s %s", (method, path) => {
-    expect(routeFor(method, path)?.authentication).toEqual({
-      kind: "sandbox",
-    });
+    const route = routeFor(method, path);
+    const match = path.match(route!.pattern)!;
+    expect(route?.authentication.kind).toBe("sandbox");
+    if (route?.authentication.kind === "sandbox") {
+      expect(route.authentication.getSessionId(match)).toBe(
+        path.includes("/children/") ? "parent-1" : "session-1"
+      );
+    }
+  });
+
+  it.each([
+    ["GET", "/sessions/session-1"],
+    ["GET", "/sessions/session-1/sandbox-access"],
+    ["PATCH", "/sessions/session-1/read-state"],
+    ["GET", "/sessions/session-1/skills"],
+  ])("owns the human-user restriction for %s %s", (method, path) => {
+    expect(routeFor(method, path)?.authentication.kind).toBe("user");
   });
 
   it("keeps diff authentication method-specific", () => {

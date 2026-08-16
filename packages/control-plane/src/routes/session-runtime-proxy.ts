@@ -38,7 +38,6 @@ type SimpleProxyRouteConfig = {
   method: string;
   routePath: string;
   internalPath: SessionInternalPath;
-  userOnly?: boolean;
   runtimeMethod?: string;
   forwardSearch?: boolean;
   notFoundMessage?: string;
@@ -60,9 +59,6 @@ function simpleProxyRoute(config: SimpleProxyRouteConfig): Route {
       method: config.method,
       pattern: parsePattern(config.routePath),
       handler: async (request, _env, match, ctx) => {
-        if (config.userOnly && ctx.principal?.kind !== "user") {
-          return error("Human user authentication required", 403);
-        }
         const sessionId = getSessionId(match);
         if (sessionId instanceof Response) return sessionId;
 
@@ -255,7 +251,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     method: "GET",
     routePath: "/sessions/:id/sandbox-access",
     internalPath: SessionInternalPaths.sandboxAccess,
-    userOnly: true,
   }),
   simpleProxyRoute({
     policy: SCM_AGNOSTIC_HUMAN_USER_ROUTE,
@@ -263,7 +258,6 @@ export const sessionRuntimeProxyRoutes: Route[] = [
     routePath: "/sessions/:id",
     internalPath: SessionInternalPaths.snapshot,
     notFoundMessage: "Session not found",
-    userOnly: true,
   }),
   simpleProxyRoute({
     policy: GITHUB_USER_OR_SERVICE_ROUTE,

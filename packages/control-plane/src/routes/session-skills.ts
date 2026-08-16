@@ -8,9 +8,10 @@ import {
   json,
   parsePattern,
   SCM_AGNOSTIC_SANDBOX_ROUTE,
-  SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE,
-  type RequestContext,
+  SCM_AGNOSTIC_HUMAN_USER_ROUTE,
+  type SandboxRouteContext,
   type Route,
+  type UserRouteContext,
 } from "./shared";
 
 function sessionId(match: RegExpMatchArray): string | Response {
@@ -21,9 +22,8 @@ async function handleSessionSkillsView(
   _request: Request,
   _env: Env,
   match: RegExpMatchArray,
-  ctx: RequestContext
+  ctx: UserRouteContext
 ): Promise<Response> {
-  if (ctx.principal?.kind !== "user") return error("User authentication required", 403);
   const id = sessionId(match);
   if (id instanceof Response) return id;
   if (!(await new SessionIndexStore(ctx.db).getVisibleForUser(id, ctx.principal.userId))) {
@@ -40,13 +40,10 @@ async function handleSandboxInstallation(
   _request: Request,
   _env: Env,
   match: RegExpMatchArray,
-  ctx: RequestContext
+  ctx: SandboxRouteContext
 ): Promise<Response> {
   const id = sessionId(match);
   if (id instanceof Response) return id;
-  if (ctx.principal?.kind !== "sandbox" || ctx.principal.sessionId !== id) {
-    return error("Sandbox authentication required", 403);
-  }
   const manifest = await new SessionSkillStore(ctx.db).getSandboxInstallation(id);
   // Sessions created before managed-skills shipped have no pinned row. Treat
   // them as an empty legacy manifest so snapshot restores remain bootable.
@@ -67,7 +64,7 @@ async function handleSandboxInstallation(
 }
 
 export const sessionSkillRoutes: Route[] = [
-  defineRoute(SCM_AGNOSTIC_USER_OR_SERVICE_ROUTE, {
+  defineRoute(SCM_AGNOSTIC_HUMAN_USER_ROUTE, {
     method: "GET",
     pattern: parsePattern("/sessions/:id/skills"),
     handler: handleSessionSkillsView,

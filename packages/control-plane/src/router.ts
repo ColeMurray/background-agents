@@ -21,6 +21,8 @@ import {
   type Route,
   type RouteAuthentication,
   type RequestContext,
+  defineRoute,
+  GITHUB_SANDBOX_FALLBACK_ROUTE,
   parsePattern,
   json,
   error,
@@ -258,13 +260,11 @@ export const routes: Route[] = [
   // Session management
   ...sessionRoutes,
   // Agent-initiated Slack notification (sandbox-authenticated)
-  {
-    authentication: { kind: "user-or-service-with-sandbox-fallback" },
-    supportedScmProviders: ["github"],
+  defineRoute(GITHUB_SANDBOX_FALLBACK_ROUTE, {
     method: "POST",
     pattern: parsePattern("/sessions/:id/slack-notify"),
     handler: handleSlackNotify,
-  },
+  }),
 
   // Repository management
   ...reposRoutes,
@@ -306,27 +306,6 @@ export const routes: Route[] = [
   // Webhooks (public routes — auth handled per-route)
   ...webhookRoutes,
 ];
-
-export function assertRouteTableComplete(routeTable: readonly Route[] = routes): void {
-  for (const route of routeTable) {
-    if (
-      !route.authentication ||
-      (route.supportedScmProviders !== "all" && route.supportedScmProviders.length === 0)
-    ) {
-      throw new Error(`Incomplete route policy for ${route.method} ${route.pattern.source}`);
-    }
-    const bindsSandbox =
-      route.authentication.kind === "sandbox" ||
-      route.authentication.kind === "user-or-service-with-sandbox-fallback";
-    if (bindsSandbox && !route.pattern.source.includes("(?<id>")) {
-      throw new Error(
-        `Route ${route.method} ${route.pattern.source} does not bind sandbox session parameter 'id'`
-      );
-    }
-  }
-}
-
-assertRouteTableComplete();
 
 /**
  * Match request to route and execute handler.
@@ -406,7 +385,7 @@ export async function handleRequest(
     const sandboxSessionId =
       authentication.kind === "sandbox" ||
       authentication.kind === "user-or-service-with-sandbox-fallback"
-        ? (matchedRoute.match.groups?.id ?? null)
+        ? authentication.getSessionId(matchedRoute.match)
         : null;
 
     if (authentication.kind === "sandbox") {
