@@ -51,6 +51,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useBrowserLayoutStorage } from "@/hooks/use-browser-layout-storage";
 import { focusSessionDetailsTrigger } from "@/lib/session-details-focus";
+import { restorePromptFocusIfUnclaimed } from "@/lib/session-prompt-focus";
 import { useSessionParticipantProfiles } from "@/hooks/use-session-participant-profiles";
 import { useSessionDetailsSidebar } from "@/hooks/use-session-details-sidebar";
 import {
@@ -710,6 +711,7 @@ function usePromptInput(
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const submitInFlightRef = useRef(false);
+  const restoreFocusAfterSubmitRef = useRef(false);
   const retryRequestRef = useRef<PromptRequestIdentity | null>(null);
   const attachmentDraftSignature = sessionAttachments.attachments
     .map((attachment) => attachment.id)
@@ -744,6 +746,7 @@ function usePromptInput(
     }
 
     submitInFlightRef.current = true;
+    restoreFocusAfterSubmitRef.current = document.activeElement === inputRef.current;
     setIsSubmitting(true);
     setSubmitError(null);
     try {
@@ -796,6 +799,10 @@ function usePromptInput(
     } finally {
       submitInFlightRef.current = false;
       setIsSubmitting(false);
+      if (restoreFocusAfterSubmitRef.current) {
+        restoreFocusAfterSubmitRef.current = false;
+        requestAnimationFrame(() => restorePromptFocusIfUnclaimed(inputRef.current));
+      }
     }
   };
 
