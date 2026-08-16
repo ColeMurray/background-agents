@@ -1,4 +1,4 @@
-import useSWR from "swr";
+import useSWR, { mutate as mutateSWR } from "swr";
 import { z } from "zod";
 import { useAuthSession } from "@/lib/auth-session";
 import { browserApiFetch, type BrowserApiPath } from "@/lib/browser-api-fetch";
@@ -36,6 +36,13 @@ const errorResponseSchema = z.object({ error: z.string() });
 
 const SKILLS_KEY = "/api/skills";
 const SKILL_PROFILES_KEY = "/api/skill-profiles";
+export const SKILL_CATALOG_PAGE_SIZE = 25;
+
+function skillCatalogPageKey(cursor: string | null): BrowserApiPath {
+  const searchParams = new URLSearchParams({ limit: String(SKILL_CATALOG_PAGE_SIZE) });
+  if (cursor) searchParams.set("cursor", cursor);
+  return `${SKILLS_KEY}?${searchParams.toString()}`;
+}
 
 async function fetchSkillCatalog(): Promise<z.infer<typeof listSkillsResponseSchema>["skills"]> {
   const skills: z.infer<typeof listSkillsResponseSchema>["skills"] = [];
@@ -85,6 +92,24 @@ export function useSkills() {
     error,
     mutate,
   };
+}
+
+export function useSkillCatalogPage(cursor: string | null) {
+  const { data: session, status } = useAuthSession();
+  const { data, isLoading, error } = useSWR(session ? skillCatalogPageKey(cursor) : null, (path) =>
+    validatedFetcher(path, listSkillsResponseSchema)
+  );
+  return {
+    skills: data?.skills ?? [],
+    hasMore: data?.hasMore ?? false,
+    nextCursor: data?.nextCursor ?? null,
+    loading: status === "loading" || isLoading,
+    error,
+  };
+}
+
+export function revalidateSkillCatalogPage(cursor: string | null): Promise<unknown> {
+  return mutateSWR(skillCatalogPageKey(cursor));
 }
 
 export function useSkill(id: string | null) {
