@@ -135,10 +135,11 @@ import { SessionDiffsHandler } from "./http/handlers/session-diffs.handler";
 import { SessionMessengerImpl, type SessionMessenger } from "./messenger";
 import { SessionStatusService } from "./session-status-service";
 import { parseArtifactMetadataJson } from "./artifact-metadata";
-import { SessionEngine } from "./engine";
+import { SessionServer } from "./server";
 import { SessionHttpDispatcher } from "./http/dispatcher";
-import { SessionSocketProtocol } from "./socket-protocol";
-import { SessionConnectionLifecycle } from "./connection-lifecycle";
+import { SessionMessageRouter, type SessionClientCommands } from "./message-router";
+import { SessionDisconnectHandler } from "./disconnect-handler";
+import type { Clock, SandboxDisconnectMonitor, SessionBroadcaster, SocketRegistry } from "./ports";
 
 /**
  * Timeout for WebSocket authentication (in milliseconds).
@@ -233,7 +234,7 @@ export class SessionDO extends DurableObject<Env> {
   // Session status service (lazily initialized)
   private _statusService: SessionStatusService | null = null;
   private _terminalMessageProjection: SessionTerminalMessageProjection | null = null;
-  private readonly engine: SessionEngine<WebSocket, ClientInfo>;
+  private readonly server: SessionServer<WebSocket, ClientInfo>;
 
   // Internal HTTP route table (transport wiring only; handlers remain on SessionDO).
   private readonly routes = createSessionInternalRoutes({
@@ -309,48 +310,65 @@ export class SessionDO extends DurableObject<Env> {
       ctx.storage.transactionSync(closure)
     );
     this.log = createLogger("session-do", {}, parseLogLevel(env.LOG_LEVEL));
-    // Cloudflare composition root: adapt DO callbacks and hibernating sockets to the engine.
-    this.engine = new SessionEngine({
-      initialize: () => this.ensureInitialized(),
+    const ensureInitialized = () => this.ensureInitialized();
+    const clock: Clock = {
+      nowMs: () => Date.now(),
+      monotonicNowMs: () => performance.now(),
+    };
+    const sockets: SocketRegistry<WebSocket, ClientInfo> = {
+      classify: (ws) => this.wsManager.classify(ws),
+      send: (ws, message) => this.safeSend(ws, message),
+      getClient: (ws) => this.getClientInfo(ws),
+      close: (ws, code, reason) => this.wsManager.close(ws, code, reason),
+      clearSandboxIfMatch: (ws) => this.wsManager.clearSandboxSocketIfMatch(ws),
+      removeClient: (ws) => this.wsManager.removeClient(ws),
+      hasParticipant: (participantId) =>
+        Array.from(this.wsManager.getAuthenticatedClients()).some(
+          (client) => client.participantId === participantId
+        ),
+    };
+    const clientCommands: SessionClientCommands<WebSocket, ClientInfo> = {
+      subscribe: (ws, message) => this.handleSubscribe(ws, message),
+      submitPrompt: (ws, client, message) => this.handlePromptMessage(ws, client, message),
+      cancelPrompt: (ws, message) => this.messageQueue.cancelQueuedPrompt(ws, message),
+      stopExecution: () => this.stopExecution(),
+      notifyTyping: () => this.presenceService.handleTyping(),
+      updatePresence: (client, message) => this.presenceService.updatePresence(client, message),
+      getHistoryPage: (message) => this.eventStream.getHistoryPage(message),
+    };
+    const sandboxDisconnects: SandboxDisconnectMonitor = {
+      getStatus: () => this.getSandbox()?.status,
+      scheduleCheck: () => this.lifecycleManager.scheduleDisconnectCheck(),
+    };
+    const broadcaster: SessionBroadcaster = {
+      broadcastPresence: () => this.presenceService.broadcastPresence(),
+      broadcast: (message) => this.broadcast(message),
+    };
+    // Cloudflare composition root: adapt DO callbacks and hibernating sockets to the server.
+    this.server = new SessionServer({
+      ensureInitialized,
       http: new SessionHttpDispatcher({
+        ensureInitialized,
         getLogger: () => this.log,
         routes: this.routes,
         handleWebSocketUpgrade: (request, url, log) =>
           this.handleWebSocketUpgrade(request, url, log),
-        monotonicNow: () => performance.now(),
+        clock,
       }),
-      socketProtocol: new SessionSocketProtocol({
+      messages: new SessionMessageRouter({
         getLogger: () => this.log,
-        classifyConnection: (ws) => this.wsManager.classify(ws),
-        send: (ws, message) => this.safeSend(ws, message),
-        getClient: (ws) => this.getClientInfo(ws),
-        handleSubscribe: (ws, message) => this.handleSubscribe(ws, message),
-        handlePrompt: (ws, client, message) => this.handlePromptMessage(ws, client, message),
-        cancelPrompt: (ws, message) => this.messageQueue.cancelQueuedPrompt(ws, message),
-        stopExecution: () => this.stopExecution(),
-        handleTyping: () => this.presenceService.handleTyping(),
-        updatePresence: (client, message) => this.presenceService.updatePresence(client, message),
-        getHistoryPage: (message) => this.eventStream.getHistoryPage(message),
+        sockets,
+        clientCommands,
         processSandboxEvent: (event) => this.processSandboxEvent(event),
-        now: () => Date.now(),
+        clock,
       }),
-      connectionLifecycle: new SessionConnectionLifecycle({
+      disconnects: new SessionDisconnectHandler({
         getLogger: () => this.log,
-        classifyConnection: (ws) => this.wsManager.classify(ws),
-        close: (ws, code, reason) => this.wsManager.close(ws, code, reason),
-        closeOnError: (ws) => this.wsManager.close(ws, 1011, "Internal error"),
-        clearSandboxConnectionIfMatch: (ws) => this.wsManager.clearSandboxSocketIfMatch(ws),
-        getSandboxStatus: () => this.getSandbox()?.status,
-        scheduleDisconnectCheck: () => this.lifecycleManager.scheduleDisconnectCheck(),
-        removeClient: (ws) => this.wsManager.removeClient(ws),
-        hasAuthenticatedParticipant: (participantId) =>
-          Array.from(this.wsManager.getAuthenticatedClients()).some(
-            (client) => client.participantId === participantId
-          ),
-        broadcastPresence: () => this.presenceService.broadcastPresence(),
-        broadcast: (message) => this.broadcast(message),
+        sockets,
+        sandbox: sandboxDisconnects,
+        broadcaster,
       }),
-      handleAlarm: () => this.alarmHandler.handle(),
+      handleScheduledDeadline: () => this.alarmHandler.handle(),
     });
     // Note: session_id context is set in ensureInitialized() once DB is ready
   }
@@ -1061,7 +1079,7 @@ export class SessionDO extends DurableObject<Env> {
    * Handle incoming HTTP requests.
    */
   async fetch(request: Request): Promise<Response> {
-    return this.engine.fetch(request);
+    return this.server.onRequest(request);
   }
 
   /**
@@ -1195,7 +1213,7 @@ export class SessionDO extends DurableObject<Env> {
    * Handle WebSocket message (with hibernation support).
    */
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    await this.engine.webSocketMessage(ws, message);
+    await this.server.onMessage(ws, message);
   }
 
   /**
@@ -1207,14 +1225,14 @@ export class SessionDO extends DurableObject<Env> {
     reason: string,
     wasClean: boolean
   ): Promise<void> {
-    await this.engine.webSocketClose(ws, code, reason, wasClean);
+    await this.server.onClose(ws, code, reason, wasClean);
   }
 
   /**
    * Handle WebSocket error.
    */
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
-    this.engine.webSocketError(ws, error);
+    this.server.onError(ws, error);
   }
 
   /**
@@ -1226,7 +1244,7 @@ export class SessionDO extends DurableObject<Env> {
    * is already dead and handleAlarm() returns early.
    */
   async alarm(): Promise<void> {
-    await this.engine.alarm();
+    await this.server.onScheduledDeadline();
   }
 
   /**

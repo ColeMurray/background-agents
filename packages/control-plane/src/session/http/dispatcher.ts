@@ -1,21 +1,23 @@
 import type { Logger } from "../../logger";
+import type { Clock } from "../ports";
 import type { SessionInternalRoute } from "./routes";
 
 export interface SessionHttpDispatcherDeps {
+  ensureInitialized: () => void;
   getLogger: () => Logger;
   routes: readonly SessionInternalRoute[];
   handleWebSocketUpgrade: (request: Request, url: URL, log: Logger) => Promise<Response>;
-  monotonicNow: () => number;
+  clock: Clock;
 }
 
 /** Dispatches the platform-neutral HTTP surface for one session. */
 export class SessionHttpDispatcher {
   constructor(private readonly deps: SessionHttpDispatcherDeps) {}
 
-  async fetch(request: Request, initialize: () => void): Promise<Response> {
-    const fetchStart = this.deps.monotonicNow();
-    initialize();
-    const initMs = this.deps.monotonicNow() - fetchStart;
+  async dispatch(request: Request): Promise<Response> {
+    const fetchStart = this.deps.clock.monotonicNowMs();
+    this.deps.ensureInitialized();
+    const initMs = this.deps.clock.monotonicNowMs() - fetchStart;
     const log = this.requestLogger(request);
     const url = new URL(request.url);
     const path = url.pathname;
@@ -30,7 +32,7 @@ export class SessionHttpDispatcher {
     );
     if (!route) return new Response("Not Found", { status: 404 });
 
-    const handlerStart = this.deps.monotonicNow();
+    const handlerStart = this.deps.clock.monotonicNowMs();
     let status = 500;
     let outcome: "success" | "error" = "error";
     try {
@@ -43,8 +45,8 @@ export class SessionHttpDispatcher {
       outcome = "error";
       throw error;
     } finally {
-      const handlerMs = this.deps.monotonicNow() - handlerStart;
-      const totalMs = this.deps.monotonicNow() - fetchStart;
+      const handlerMs = this.deps.clock.monotonicNowMs() - handlerStart;
+      const totalMs = this.deps.clock.monotonicNowMs() - fetchStart;
       log.info("do.request", {
         event: "do.request",
         http_method: request.method,

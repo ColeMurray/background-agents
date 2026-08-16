@@ -8,20 +8,12 @@
 
 import type { Logger } from "../logger";
 import type { ClientInfo } from "../types";
+import type { ConnectionClassification } from "./ports";
 import type { SandboxRepository } from "./sandbox-repository";
 import type {
   WsClientMappingRepository,
   WsClientMappingResult,
 } from "./ws-client-mapping-repository";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/** Result of parsing a WebSocket's Cloudflare hibernation tags. */
-export type ParsedTags =
-  | { kind: "sandbox"; sandboxId?: string }
-  | { kind: "client"; wsId?: string };
 
 /** Configuration for the WebSocket manager. */
 export interface WebSocketManagerConfig {
@@ -43,7 +35,7 @@ export interface SessionWebSocketManager {
   acceptAndSetSandboxSocket(ws: WebSocket, sandboxId?: string): { replaced: boolean };
 
   /** Parse a WebSocket's tags to determine its kind and identity. */
-  classify(ws: WebSocket): ParsedTags;
+  classify(ws: WebSocket): ConnectionClassification;
 
   /**
    * Get the active sandbox socket, recovering from hibernation if needed.
@@ -139,7 +131,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
   // Classification
   // -------------------------------------------------------------------------
 
-  classify(ws: WebSocket): ParsedTags {
+  classify(ws: WebSocket): ConnectionClassification {
     const tags = this.ctx.getTags(ws);
     if (tags.includes("sandbox")) {
       const sidTag = tags.find((t) => t.startsWith("sid:"));
@@ -329,7 +321,7 @@ export class SessionWebSocketManagerImpl implements SessionWebSocketManager {
    * Check whether a client socket has authentication evidence,
    * either in-memory or via persisted DB mapping (post-hibernation).
    */
-  private isAuthenticated(ws: WebSocket, parsed: ParsedTags): boolean {
+  private isAuthenticated(ws: WebSocket, parsed: ConnectionClassification): boolean {
     if (this.clients.has(ws)) return true;
     if (parsed.kind === "client" && parsed.wsId) {
       return this.wsClientMappingRepository.hasWsClientMapping(parsed.wsId);

@@ -1,10 +1,9 @@
 import { sandboxEventSchema, type SandboxEvent } from "@open-inspect/shared/types/sandbox-events";
-import type { ServerMessage } from "@open-inspect/shared/types/server-messages";
 import { clientRequestIdSchema } from "@open-inspect/shared/types/prompts";
 import { clientMessageSchema, type ClientMessage } from "@open-inspect/shared/types/websocket";
 import type { Logger } from "../logger";
-import type { SessionClientConnectionState, SessionConnectionKind } from "./connection-types";
 import type { SessionHistoryPage } from "./event-stream";
+import type { Clock, ConnectedClient, SocketRegistry } from "./ports";
 
 const FETCH_HISTORY_MIN_INTERVAL_MS = 200;
 
@@ -23,37 +22,36 @@ type BoundarySchema<T> = {
 // Retain valid JSON on schema failure so correlated errors do not parse the payload twice.
 type ParsedMessage<T> = { valid: true; data: T } | { valid: false; raw?: unknown };
 
-export interface SessionSocketProtocolDeps<
-  Connection,
-  Client extends SessionClientConnectionState,
-> {
-  getLogger: () => Logger;
-  classifyConnection: (connection: Connection) => SessionConnectionKind;
-  send: (connection: Connection, message: ServerMessage) => boolean;
-  getClient: (connection: Connection) => Client | null;
-  handleSubscribe: (connection: Connection, message: ClientSubscribe) => Promise<void>;
-  handlePrompt: (connection: Connection, client: Client, message: ClientPrompt) => Promise<void>;
+export interface SessionClientCommands<Connection, Client extends ConnectedClient> {
+  subscribe: (connection: Connection, message: ClientSubscribe) => Promise<void>;
+  submitPrompt: (connection: Connection, client: Client, message: ClientPrompt) => Promise<void>;
   cancelPrompt: (connection: Connection, message: ClientCancelPrompt) => Promise<void>;
   stopExecution: () => Promise<void>;
-  handleTyping: () => Promise<void>;
+  notifyTyping: () => Promise<void>;
   updatePresence: (client: Client, message: ClientPresence) => void;
   getHistoryPage: (message: {
     cursor: NonNullable<FetchHistory["cursor"]>;
     limit?: number;
   }) => SessionHistoryPage;
-  processSandboxEvent: (event: SandboxEvent) => Promise<void>;
-  now: () => number;
 }
 
-/** Validates and dispatches the session WebSocket protocol. */
-export class SessionSocketProtocol<Connection, Client extends SessionClientConnectionState> {
-  constructor(private readonly deps: SessionSocketProtocolDeps<Connection, Client>) {}
+export interface SessionMessageRouterDeps<Connection, Client extends ConnectedClient> {
+  getLogger: () => Logger;
+  sockets: SocketRegistry<Connection, Client>;
+  clientCommands: SessionClientCommands<Connection, Client>;
+  processSandboxEvent: (event: SandboxEvent) => Promise<void>;
+  clock: Clock;
+}
 
-  async handleMessage(connection: Connection, message: string | ArrayBuffer): Promise<void> {
+/** Validates incoming messages and routes them to session capabilities. */
+export class SessionMessageRouter<Connection, Client extends ConnectedClient> {
+  constructor(private readonly deps: SessionMessageRouterDeps<Connection, Client>) {}
+
+  async route(connection: Connection, message: string | ArrayBuffer): Promise<void> {
     // The wire protocol is JSON text; binary frames have always been ignored.
     if (typeof message !== "string") return;
 
-    if (this.deps.classifyConnection(connection).kind === "sandbox") {
+    if (this.deps.sockets.classify(connection).kind === "sandbox") {
       await this.handleSandboxMessage(message);
     } else {
       await this.handleClientMessage(connection, message);
@@ -78,7 +76,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionClientConne
       const parsed = this.parseMessage(message, "client", clientMessageSchema);
       if (!parsed.valid) {
         const invalidRequest = this.readInvalidCorrelatedRequest(parsed.raw);
-        this.deps.send(connection, {
+        this.deps.sockets.send(connection, {
           type: "error",
           code: invalidRequest?.type === "prompt" ? "INVALID_PROMPT" : "INVALID_MESSAGE",
           message:
@@ -93,35 +91,35 @@ export class SessionSocketProtocol<Connection, Client extends SessionClientConne
       const data = parsed.data;
       // Ping and subscribe are the only messages valid before client authentication.
       if (data.type === "ping") {
-        this.deps.send(connection, { type: "pong", timestamp: this.deps.now() });
+        this.deps.sockets.send(connection, { type: "pong", timestamp: this.deps.clock.nowMs() });
         return;
       }
       if (data.type === "subscribe") {
-        await this.deps.handleSubscribe(connection, data);
+        await this.deps.clientCommands.subscribe(connection, data);
         return;
       }
 
-      const client = this.deps.getClient(connection);
+      const client = this.deps.sockets.getClient(connection);
       if (!client) return;
 
       switch (data.type) {
         case "prompt":
-          await this.deps.handlePrompt(connection, client, data);
+          await this.deps.clientCommands.submitPrompt(connection, client, data);
           break;
         case "cancel_prompt":
-          await this.deps.cancelPrompt(connection, data);
+          await this.deps.clientCommands.cancelPrompt(connection, data);
           break;
         case "stop":
-          await this.deps.stopExecution();
+          await this.deps.clientCommands.stopExecution();
           break;
         case "typing":
-          await this.deps.handleTyping();
+          await this.deps.clientCommands.notifyTyping();
           break;
         case "fetch_history":
           this.handleFetchHistory(connection, client, data);
           break;
         case "presence":
-          this.deps.updatePresence(client, data);
+          this.deps.clientCommands.updatePresence(client, data);
           break;
         default:
           // Adding a shared ClientMessage variant must also add an explicit handler here.
@@ -131,7 +129,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionClientConne
       this.deps.getLogger().error("Error processing client message", {
         error: error instanceof Error ? error : String(error),
       });
-      this.deps.send(connection, {
+      this.deps.sockets.send(connection, {
         type: "error",
         code: "INVALID_MESSAGE",
         message: "Failed to process message",
@@ -147,7 +145,7 @@ export class SessionSocketProtocol<Connection, Client extends SessionClientConne
       (data.cursor.sequence !== undefined &&
         (!Number.isSafeInteger(data.cursor.sequence) || data.cursor.sequence < 0))
     ) {
-      this.deps.send(connection, {
+      this.deps.sockets.send(connection, {
         type: "error",
         code: "INVALID_CURSOR",
         message: "Invalid cursor",
@@ -155,12 +153,12 @@ export class SessionSocketProtocol<Connection, Client extends SessionClientConne
       return;
     }
 
-    const now = this.deps.now();
+    const now = this.deps.clock.nowMs();
     if (
       client.lastFetchHistoryAtMs !== undefined &&
       now - client.lastFetchHistoryAtMs < FETCH_HISTORY_MIN_INTERVAL_MS
     ) {
-      this.deps.send(connection, {
+      this.deps.sockets.send(connection, {
         type: "error",
         code: "RATE_LIMITED",
         message: "Too many requests",
@@ -169,8 +167,11 @@ export class SessionSocketProtocol<Connection, Client extends SessionClientConne
     }
     client.lastFetchHistoryAtMs = now;
 
-    const page = this.deps.getHistoryPage({ cursor: data.cursor, limit: data.limit });
-    this.deps.send(connection, { type: "history_page", ...page });
+    const page = this.deps.clientCommands.getHistoryPage({
+      cursor: data.cursor,
+      limit: data.limit,
+    });
+    this.deps.sockets.send(connection, { type: "history_page", ...page });
   }
 
   private parseMessage<T>(
