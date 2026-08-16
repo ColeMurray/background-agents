@@ -17,6 +17,8 @@ import {
 } from "@/lib/prompt-request-id";
 import { restoreQueuedPrompt } from "@/lib/restore-queued-prompt";
 
+const TYPING_DEBOUNCE_MS = 300;
+
 /** Prompt state and handlers for submission, keyboard shortcuts, and typing indicators. */
 export function usePromptInput(
   sessionId: string,
@@ -151,7 +153,7 @@ export function usePromptInput(
     clearTypingTimeout();
     typingTimeoutRef.current = setTimeout(() => {
       sendTyping();
-    }, 300);
+    }, TYPING_DEBOUNCE_MS);
   };
 
   const restorePrompt = useCallback(
