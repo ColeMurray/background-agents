@@ -42,12 +42,14 @@ function ComposerHarness({
   isUploading = false,
   status = "active",
   submitError = null,
+  withSkill = false,
 }: {
   initialValue?: string;
   isProcessing?: boolean;
   isUploading?: boolean;
   status?: "active" | "archived" | "cancelled";
   submitError?: string | null;
+  withSkill?: boolean;
 }) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -68,10 +70,26 @@ function ComposerHarness({
         submitError,
         inputRef,
         onSubmit: vi.fn(),
-        onChange: (event) => setValue(event.target.value),
+        onValueChange: setValue,
         onKeyDown: vi.fn(),
         onStopExecution: vi.fn(),
       }}
+      skills={
+        withSkill
+          ? [
+              {
+                skillId: "skill-1",
+                revisionId: "revision-1",
+                name: "review-pr",
+                description: "Review a pull request",
+                revisionNumber: 1,
+                revisionSha256: "abc",
+                totalBytes: 10,
+                assignmentSources: [],
+              },
+            ]
+          : []
+      }
       attachments={{
         items: [],
         error: null,
@@ -160,6 +178,17 @@ describe("SessionPromptComposer", () => {
     render(<ComposerHarness initialValue="Keep me" submitError="The prompt queue is full" />);
     expect(screen.getByRole("alert")).toHaveTextContent("The prompt queue is full");
     expect(screen.getByDisplayValue("Keep me")).toBeInTheDocument();
+  });
+
+  it("offers pinned skills in the follow-up textarea", async () => {
+    render(<ComposerHarness withSkill />);
+    const input = screen.getByPlaceholderText("Ask or build anything");
+
+    fireEvent.change(input, { target: { value: "$rev", selectionStart: 4, selectionEnd: 4 } });
+    fireEvent.focus(input);
+    fireEvent.select(input, { target: { selectionStart: 4, selectionEnd: 4 } });
+
+    expect(await screen.findByRole("option", { name: /review-pr/i })).toBeInTheDocument();
   });
 
   it("removes the action bar row and spacing below md", () => {

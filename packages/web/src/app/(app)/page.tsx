@@ -13,6 +13,7 @@ import { SHORTCUT_LABELS } from "@/lib/keyboard-shortcuts";
 import { isUnarchivedSessionListKey } from "@/lib/session-list";
 import { APP_NAME } from "@/lib/site-config";
 import type { SessionAttachmentReference } from "@open-inspect/shared/types/session-attachments";
+import { MAX_WEB_PROMPT_CHARS } from "@open-inspect/shared/types/websocket";
 import {
   DEFAULT_MODEL,
   getDefaultReasoningEffort,
@@ -36,8 +37,13 @@ import { ReasoningEffortPills } from "@/components/reasoning-effort-pills";
 import { ModelIcon, PaperclipIcon, SendIcon } from "@/components/ui/icons";
 import { Combobox, type ComboboxGroup } from "@/components/ui/combobox";
 import { SessionSkillSelector } from "@/components/session-skill-selector";
+import { PromptSkillAutocomplete } from "@/components/prompt-skill-autocomplete";
 import type { SessionSkillSelection } from "@open-inspect/shared/types/skills";
-import type { SkillResolutionPreviewInput } from "@/hooks/use-managed-skills";
+import {
+  useSkillResolutionPreview,
+  type SkillResolutionPreviewInput,
+  type SkillResolutionPreviewResponse,
+} from "@/hooks/use-managed-skills";
 import type { SessionTargetRequestFields } from "@/lib/session-target";
 
 const LAST_SELECTED_MODEL_STORAGE_KEY = "open-inspect-last-selected-model";
@@ -94,6 +100,12 @@ export default function Home() {
   } | null>(null);
   const hasHydratedModelPreferencesRef = useRef(false);
   const { enabledModels, enabledModelOptions, loading: loadingEnabledModels } = useEnabledModels();
+  const currentSkillPreviewTarget = session ? skillPreviewTarget(buildRequestFields()) : null;
+  const {
+    preview: skillPreview,
+    loading: skillPreviewLoading,
+    error: skillPreviewError,
+  } = useSkillResolutionPreview(currentSkillPreviewTarget, skillSelection);
 
   useEffect(() => {
     if (hasHydratedModelPreferencesRef.current) return;
@@ -340,7 +352,10 @@ export default function Home() {
       modelOptions={enabledModelOptions}
       skillSelection={skillSelection}
       setSkillSelection={setSkillSelection}
-      skillPreviewTarget={skillPreviewTarget(buildRequestFields())}
+      skillPreviewTarget={currentSkillPreviewTarget}
+      skillPreview={skillPreview}
+      skillPreviewLoading={skillPreviewLoading}
+      skillPreviewError={Boolean(skillPreviewError)}
     />
   );
 }
@@ -363,6 +378,9 @@ function HomeContent({
   skillSelection,
   setSkillSelection,
   skillPreviewTarget,
+  skillPreview,
+  skillPreviewLoading,
+  skillPreviewError,
 }: {
   isAuthenticated: boolean;
   picker: SessionTargetSelection;
@@ -387,6 +405,9 @@ function HomeContent({
   skillSelection: SessionSkillSelection;
   setSkillSelection: (value: SessionSkillSelection) => void;
   skillPreviewTarget: Omit<SkillResolutionPreviewInput, "selection"> | null;
+  skillPreview: SkillResolutionPreviewResponse | null;
+  skillPreviewLoading: boolean;
+  skillPreviewError: boolean;
 }) {
   const { isOpen } = useSidebarContext();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -464,17 +485,33 @@ function HomeContent({
                 />
                 {/* Text input area */}
                 <div className="relative">
-                  <textarea
-                    ref={inputRef}
+                  <PromptSkillAutocomplete
                     value={prompt}
-                    onChange={(e) => handlePromptChange(e.target.value)}
+                    skills={skillPreview?.skills ?? []}
+                    inputRef={inputRef}
+                    onValueChange={handlePromptChange}
                     onKeyDown={handleKeyDown}
-                    placeholder="What do you want to build?"
-                    autoComplete="off"
+                    direction="up"
+                    loadState={
+                      skillPreviewLoading ? "loading" : skillPreviewError ? "error" : "ready"
+                    }
+                    maxLength={MAX_WEB_PROMPT_CHARS}
                     disabled={creating}
-                    className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
-                    rows={3}
-                  />
+                  >
+                    {(autocompleteProps) => (
+                      <textarea
+                        {...autocompleteProps}
+                        ref={inputRef}
+                        value={prompt}
+                        placeholder="What do you want to build?"
+                        autoComplete="off"
+                        maxLength={MAX_WEB_PROMPT_CHARS}
+                        disabled={creating}
+                        className="w-full resize-none bg-transparent px-4 pt-4 pb-12 focus:outline-none text-foreground placeholder:text-secondary-foreground disabled:opacity-50"
+                        rows={3}
+                      />
+                    )}
+                  </PromptSkillAutocomplete>
                   {/* Submit button */}
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     {isCreatingSession && (
@@ -555,6 +592,8 @@ function HomeContent({
                       value={skillSelection}
                       onChange={setSkillSelection}
                       target={skillPreviewTarget}
+                      preview={skillPreview}
+                      previewLoading={skillPreviewLoading}
                       disabled={creating}
                     />
                   </div>

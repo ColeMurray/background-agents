@@ -5,6 +5,7 @@ import { mutate } from "swr";
 import useSWRMutation from "swr/mutation";
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSessionSocket } from "@/hooks/use-session-socket";
+import { useSessionSkills } from "@/hooks/use-session-skills";
 import { SessionTimeline } from "@/components/session-timeline";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { SessionHeader } from "@/components/session-header";
@@ -101,6 +102,11 @@ export default function SessionPage() {
     participants,
     events
   );
+  const {
+    provenance: sessionSkills,
+    loading: sessionSkillsLoading,
+    error: sessionSkillsError,
+  } = useSessionSkills(sessionId);
 
   const fallbackSessionInfo = {
     repoOwner: initialSnapshot.session.repoOwner,
@@ -125,7 +131,7 @@ export default function SessionPage() {
     submitError,
     setSubmitError,
     handleSubmit,
-    handleInputChange,
+    handleInputValueChange,
     handleKeyDown,
     restorePrompt,
   } = usePromptInput(
@@ -363,10 +369,13 @@ export default function SessionPage() {
           submitError,
           inputRef,
           onSubmit: handleSubmit,
-          onChange: handleInputChange,
+          onValueChange: handleInputValueChange,
           onKeyDown: handleKeyDown,
           onStopExecution: stopExecution,
         }}
+        skills={sessionSkills?.skills ?? []}
+        skillsLoading={sessionSkillsLoading}
+        skillsError={Boolean(sessionSkillsError)}
         attachments={{
           items: sessionAttachments.attachments,
           error: sessionAttachments.attachmentError,
@@ -816,9 +825,9 @@ function usePromptInput(
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    promptRef.current = e.target.value;
-    setPrompt(e.target.value);
+  const handleInputValueChange = (value: string) => {
+    promptRef.current = value;
+    setPrompt(value);
     setSubmitError(null);
     retryRequestRef.current = null;
 
@@ -852,7 +861,7 @@ function usePromptInput(
     submitError,
     setSubmitError,
     handleSubmit,
-    handleInputChange,
+    handleInputValueChange,
     handleKeyDown,
     restorePrompt,
   };
